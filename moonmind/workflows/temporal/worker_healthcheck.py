@@ -37,6 +37,15 @@ class WorkerHealthState:
     pollers_started: bool = False
     readiness_metadata: dict[str, Any] = field(default_factory=dict)
     startup_error: str | None = None
+    # Startup-recorded code identity (MoonLadderStudios/MoonMind#4224): the git
+    # revision (or package digest) of the modules this process imported. It is
+    # compared with the checkout on disk on every /readyz request so a
+    # bind-mounted worker running stale modules reports ``stale_code`` instead
+    # of ready. ``None`` means the identity was never recorded and the worker
+    # reports ``unknown``, never healthy.
+    code_revision: str | None = None
+    code_digest: str | None = None
+    code_identity_source: str = "unknown"
 
     @property
     def ready(self) -> bool:
@@ -46,6 +55,41 @@ class WorkerHealthState:
             and self.pollers_started
             and self.startup_error is None
         )
+
+    def code_identity(self) -> dict[str, Any]:
+        """Return this worker's startup-recorded code identity payload."""
+        from moonmind.workflows.temporal.worker_code_identity import (
+            UNKNOWN,
+            WorkerCodeIdentity,
+            compare_code_identities,
+            resolve_checkout_code_identity,
+        )
+
+        startup = WorkerCodeIdentity(
+            revision=(self.code_revision or "").strip() or None,
+            digest=(self.code_digest or "").strip() or None,
+            source=(self.code_identity_source or "").strip() or UNKNOWN,
+        )
+        current = resolve_checkout_code_identity()
+        status = compare_code_identities(startup, current)
+        payload: dict[str, Any] = {
+            "codeRevision": startup.revision or UNKNOWN,
+            "codeDigest": startup.digest or UNKNOWN,
+            "codeIdentitySource": startup.source,
+            "codeIdentityStatus": status,
+            "checkoutRevision": current.revision or UNKNOWN,
+        }
+        if status == "stale":
+            payload["reasonCode"] = "stale_code"
+            payload["staleCode"] = {
+                "worker": (self.readiness_metadata.get("fleet") if isinstance(self.readiness_metadata, dict) else None)
+                or os.environ.get("TEMPORAL_WORKER_FLEET", "unknown"),
+                "startupRevision": startup.revision or UNKNOWN,
+                "currentRevision": current.revision or UNKNOWN,
+            }
+        elif status == UNKNOWN:
+            payload["reasonCode"] = "code_identity_unknown"
+        return payload
 
 
 def _is_enabled() -> bool:
@@ -73,14 +117,20 @@ def _build_response_body(
     uptime = int(time.monotonic() - _start_time)
 
     if not readiness:
+        from moonmind.workflows.temporal.worker_code_identity import UNKNOWN
+
         body: dict[str, Any] = {
             "status": "ok",
             "live": True,
             "fleet": fleet,
             "uptime_seconds": uptime,
+            "codeRevision": (state.code_revision if state else None) or UNKNOWN,
+            "codeIdentitySource": (state.code_identity_source if state else None)
+            or UNKNOWN,
         }
     else:
         current = state or WorkerHealthState()
+        code_identity = current.code_identity()
         body = {
             **current.readiness_metadata,
             "status": "ready" if current.ready else "not_ready",
@@ -92,9 +142,15 @@ def _build_response_body(
                 "workersConstructed": current.workers_constructed,
                 "pollersStarted": current.pollers_started,
             },
+            **code_identity,
         }
         if current.startup_error:
             body["reasonCode"] = "worker_startup_failed"
+        # A worker running stale modules must not look ready: mixed-version
+        # deployments silently admit work under old rules and finalize it
+        # under new ones (MoonLadderStudios/MoonMind#4224).
+        if code_identity.get("codeIdentityStatus") == "stale" and "reasonCode" not in body:
+            body["reasonCode"] = "stale_code"
     return json.dumps(body).encode("utf-8")
 
 
@@ -118,9 +174,17 @@ async def _handle_connection(
         path = parts[1] if len(parts) >= 2 else "/healthz"
         readiness = path == "/readyz"
         payload = _build_response_body(state, readiness=readiness)
-        status = (
-            b"200 OK" if not readiness or state.ready else b"503 Service Unavailable"
-        )
+        if readiness:
+            try:
+                body_json = json.loads(payload.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                body_json = {}
+            stale = body_json.get("codeIdentityStatus") == "stale"
+            status = (
+                b"200 OK" if state.ready and not stale else b"503 Service Unavailable"
+            )
+        else:
+            status = b"200 OK"
 
         response = (
             b"HTTP/1.1 " + status + b"\r\n"

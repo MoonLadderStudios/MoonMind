@@ -95,6 +95,9 @@ async def test_search_publication_recovers_missing_pr_before_status(
 
     def github_http(request):
         operations.append((request.method, request.url.path))
+        if "/comments" in request.url.path:
+            # Live comment readability gate expects a GitHub comment list.
+            return httpx.Response(200, json=[])
         if request.method == "PATCH":
             assert operations[0][0] == "repo.create_pr"
             issue.update(json.loads(request.content))

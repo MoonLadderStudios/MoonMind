@@ -424,6 +424,7 @@ RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v
 RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH = "run-checkpoint-recovery-state-machine-v1"
 RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH = "run-pr-resolver-owned-continuation-v1"
 RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH = "run-pr-resolver-continuation-identity-v1"
+RUN_PR_RESOLVER_VERDICT_PROPAGATION_PATCH = "run-pr-resolver-verdict-propagation-v1"
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset({"jira-implement", *JIRA_BACKED_AGENT_SKILLS})
 _PLAIN_TEXT_BLOCKED_OUTCOME_PATTERN = re.compile(
@@ -625,6 +626,15 @@ RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH = "run-assessment-consumer-handoff-v1"
 RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = "run-assessment-attachment-handoff-v1"
 RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = "run-issue-brief-attachment-handoff-v1"
 RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
+# MoonLadderStudios/MoonMind#4099: automatic "<base>: #<number>" display-title
+# enrichment for opt-in issue-search presets. Gated so in-flight histories
+# replay without the new memo/search-attribute commands.
+RUN_ISSUE_SEARCH_TITLE_ENRICHMENT_PATCH = "run-issue-search-title-enrichment-v1"
+# MoonLadderStudios/MoonMind#4099: gate the repaired legacy title-update path
+# so in-flight histories that already recorded the old command-free
+# ``update_title`` update replay without the new memo/search-attribute
+# commands.
+RUN_LEGACY_TITLE_UPDATE_TRANSITION_PATCH = "run-legacy-title-update-transition-v1"
 RUN_MOONSPEC_VERIFY_ATTACHMENT_HANDOFF_PATCH = (
     "run-moonspec-verify-attachment-handoff-v1"
 )
@@ -665,6 +675,14 @@ RUN_TERMINAL_CONTINUATION_AUTHORITY_INSTRUCTIONS_PATCH = (
 # the prior provider-only decision. New executions use validated terminal
 # contract provenance to avoid repeating completed resolver mutations.
 RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH = "run-terminal-contract-retry-decision-v1"
+# ``_map_agent_run_result`` flattens ``AgentRunResult.metadata`` into the step
+# outputs, so the terminal-contract decision fields live at the top level of
+# ``outputs``. Histories recorded before this patch looked for a nested
+# ``metadata`` mapping that production never produced and therefore retried
+# validated manual-review verdicts (MoonLadderStudios/MoonMind#4221).
+RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH = (
+    "run-terminal-contract-retry-flattened-outputs-v1"
+)
 # Merge-automation dispositions that are *continuations*: they only have meaning
 # when a MoonMind.MergeAutomation gate re-enters and finalizes the merge. A
 # standalone (ungated) resolver run that ends in one of these states has not
@@ -685,6 +703,14 @@ GATED_CONTINUATION_GATE_REGISTRY: Mapping[str, frozenset[str]] = {
 # authority payload.
 RUN_PR_RESOLVER_REVIEW_REQUEST_AUTHORITY_PATCH = (
     "run-pr-resolver-review-request-authority-v1"
+)
+# A validated continuation (reenter_gate/request_review) or validated
+# manual_review/failed verdict legitimately publishes nothing. New histories
+# mark publication not_required from the terminal-contract evaluation result
+# before the auto-publish evidence check; replayed histories keep the recorded
+# auto_publish_evidence_missing failure (MoonLadderStudios/MoonMind#4227).
+RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH = (
+    "run-defer-publication-on-terminal-continuation-v1"
 )
 RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
 RUN_PREPUBLICATION_FAILURE_BLOCKS_REPAIR_PATCH = (
@@ -1565,6 +1591,17 @@ class MoonMindRunWorkflow:
         self._runtime_inheritance_parameters: dict[str, Any] = {}
         self._close_status: Optional[str] = None
         self._title: Optional[str] = None
+        # MoonLadderStudios/MoonMind#4099: shared title-transition state.
+        # _title_base is the frozen generated label, _title_provenance is
+        # "user_explicit" (protected) or "generated" (enrichment-eligible),
+        # _title_revision orders title decisions, _title_target holds compact
+        # accepted-issue provenance (repo/number refs, never bodies).
+        self._title_base: Optional[str] = None
+        self._title_provenance: str = "generated"
+        self._title_revision: int = 0
+        self._title_target: dict[str, Any] | None = None
+        self._title_source: Optional[str] = None
+        self._title_confidence: Optional[str] = None
         self._summary: str = "Execution initialized."
         self._correlation_id: Optional[str] = None
         self._pull_request_url: Optional[str] = None
@@ -1611,6 +1648,15 @@ class MoonMindRunWorkflow:
         self._merge_automation_head_sha: Optional[str] = None
         self._gated_continuation_request: Optional[dict[str, Any]] = None
         self._gated_continuation_execution_ref: Optional[str] = None
+        # Validated pr-resolver terminal verdict facts (MoonLadderStudios/MoonMind#4223).
+        # Projected from the flattened terminal-contract outputs without
+        # reinterpreting Skill semantics; consumed by the owning
+        # MoonMind.MergeAutomation gate for typed next_step routing.
+        self._pr_resolver_status: Optional[str] = None
+        self._pr_resolver_reason: Optional[str] = None
+        self._pr_resolver_next_step: Optional[str] = None
+        self._terminal_contract_evidence_ref: Optional[str] = None
+        self._pr_resolver_retry_after_seconds: Optional[int] = None
         self._report_created: bool = False
         self._report_ref: Optional[str] = None
         # MM-880: compact reference to the versioned ResiliencePolicy envelope
@@ -4092,6 +4138,22 @@ class MoonMindRunWorkflow:
             published_head = self._publish_context.get("acceptedPublishedHead")
             if isinstance(published_head, Mapping):
                 continuation["acceptedPublishedHead"] = dict(published_head)
+        if self._patched_or_false_outside_workflow(
+            RUN_ISSUE_SEARCH_TITLE_ENRICHMENT_PATCH
+        ):
+            # MoonLadderStudios/MoonMind#4099: carry the shared title-transition
+            # state across Continue-As-New (Temporal does not inherit memo), so
+            # an enriched or renamed title survives the new run. Compact refs
+            # only; the key is additive so old histories still restore.
+            continuation["titleTransition"] = {
+                "base": self._title_base,
+                "display": self._title,
+                "provenance": self._title_provenance,
+                "revision": self._title_revision,
+                "target": dict(self._title_target) if self._title_target else None,
+                "source": self._title_source,
+                "confidence": self._title_confidence,
+            }
         if workflow.patched(RUN_REMEDIATION_ISSUE_AUTHORITY_CONTINUATION_PATCH):
             continuation["assessmentContext"] = {
                 key: value
@@ -7096,6 +7158,17 @@ class MoonMindRunWorkflow:
         exc: Exception,
         updated_at: datetime,
     ) -> None:
+        if self._patched_or_false_outside_workflow(
+            RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
+        ):
+            deferred_reason = self._stored_terminal_publication_deferred_reason()
+            if deferred_reason is not None:
+                self._apply_deferred_publication(
+                    reason=deferred_reason,
+                    logical_step_id=logical_step_id,
+                    updated_at=updated_at,
+                )
+                return
         row = self._step_ledger_row_for(logical_step_id)
         if not isinstance(row, dict):
             return
@@ -9828,6 +9901,164 @@ class MoonMindRunWorkflow:
         if context:
             self._trusted_issue_context = context
 
+    def _maybe_enrich_title_from_trusted_issue(
+        self, outputs: Mapping[str, Any]
+    ) -> bool:
+        """Enrich the display title from the accepted GitHub resolver result.
+
+        MoonLadderStudios/MoonMind#4099: metadata-only transition shared with
+        manual ``SetTitle``. Scoped to opt-in presets (pinned
+        ``titleEnrichment`` declaration); search text, failures, no-match,
+        invalid, or unrelated results never trigger. Idempotent for duplicate
+        accepted results. Returns True when the title changed.
+        """
+        from moonmind.workflows.executions.title_derivation import (
+            TITLE_PROVENANCE_GENERATED,
+            TITLE_PROVENANCE_USER_EXPLICIT,
+            TitleTransitionState,
+            apply_issue_enrichment_title,
+        )
+
+        if not self._issue_title_enrichment_enabled():
+            return False
+        if not isinstance(outputs, Mapping):
+            return False
+        if (
+            str(outputs.get("trustedSource") or "").strip()
+            != "moonmind.github.get_issue"
+        ):
+            return False
+        repository = outputs.get("repository")
+        if isinstance(repository, Mapping):
+            repository = repository.get("name") or repository.get("full_name")
+        repository_text = str(repository or "").strip()
+        if not repository_text:
+            # Production success payloads nest both repository and number
+            # under outputs["issue"] (story_output_tools builds that object
+            # with no top-level repository); read the same nested mapping
+            # used for the issue number so enrichment actually runs.
+            for nested_key in ("issue", "githubIssue", "github_issue"):
+                nested = outputs.get(nested_key)
+                if not isinstance(nested, Mapping):
+                    continue
+                nested_repo = nested.get("repository", nested.get("repo"))
+                if isinstance(nested_repo, Mapping):
+                    nested_repo = nested_repo.get("name") or nested_repo.get(
+                        "full_name"
+                    )
+                nested_text = str(nested_repo or "").strip()
+                if nested_text:
+                    repository_text = nested_text
+                    break
+        raw_number = outputs.get("issueNumber", outputs.get("issue_number"))
+        if raw_number is None and isinstance(outputs.get("issue"), Mapping):
+            issue_map = outputs.get("issue")
+            raw_number = issue_map.get("number", issue_map.get("issueNumber"))
+        if raw_number is None and isinstance(outputs.get("githubIssue"), Mapping):
+            issue_map = outputs.get("githubIssue")
+            raw_number = issue_map.get("number", issue_map.get("issueNumber"))
+        try:
+            issue_number = int(raw_number) if not isinstance(raw_number, bool) else 0
+        except (TypeError, ValueError):
+            return False
+        if not repository_text or issue_number <= 0:
+            return False
+        if not (self._title_base or self._title):
+            return False
+        # Evaluate eligibility at the authoritative mutation point so a stale
+        # accepted result cannot overwrite a newer (explicit) title decision.
+        current = TitleTransitionState(
+            base_title=self._title_base or self._title,
+            display_title=self._title,
+            provenance=self._title_provenance
+            if self._title_provenance
+            in (TITLE_PROVENANCE_USER_EXPLICIT, TITLE_PROVENANCE_GENERATED)
+            else TITLE_PROVENANCE_GENERATED,
+            revision=self._title_revision or 0,
+        )
+        transition = apply_issue_enrichment_title(
+            current,
+            issue_number,
+            expected_revision=current.revision,
+        )
+        if not transition.changed:
+            return False
+        self._title_base = transition.state.base_title
+        self._title = transition.state.display_title
+        self._title_provenance = transition.state.provenance
+        self._title_revision = transition.state.revision
+        self._title_source = "integration_target"
+        self._title_confidence = "high"
+        self._title_target = {
+            "provider": "github",
+            "repository": repository_text[:200],
+            "issueNumber": issue_number,
+            "source": "moonmind.github.get_issue",
+        }
+        self._update_memo()
+        self._update_search_attributes()
+        return True
+
+    def _issue_title_enrichment_enabled(self) -> bool:
+        """Whether the pinned plan opts into automatic title enrichment."""
+        try:
+            parameters: Mapping[str, Any] = {}
+            original = getattr(self, "_original_input_payload", None)
+            if isinstance(original, Mapping):
+                maybe_params = original.get("initialParameters") or original.get(
+                    "initial_parameters"
+                )
+                if isinstance(maybe_params, Mapping):
+                    parameters = maybe_params
+            candidates: list[Mapping[str, Any]] = []
+            for payload in (
+                parameters,
+                parameters.get("workflow")
+                if isinstance(parameters.get("workflow"), Mapping)
+                else None,
+                parameters.get("task")
+                if isinstance(parameters.get("task"), Mapping)
+                else None,
+            ):
+                if isinstance(payload, Mapping):
+                    candidates.append(payload)
+                    task_payload = payload.get("workflow")
+                    if isinstance(task_payload, Mapping):
+                        candidates.append(task_payload)
+                    task_payload = payload.get("task")
+                    if isinstance(task_payload, Mapping):
+                        candidates.append(task_payload)
+            for candidate in candidates:
+                enrichment = candidate.get("titleEnrichment") or candidate.get(
+                    "title_enrichment"
+                )
+                if isinstance(enrichment, Mapping):
+                    enabled = enrichment.get("enabled", enrichment.get("enable"))
+                    if enabled is True:
+                        return True
+            slugs: set[str] = set()
+            try:
+                task_payload: Mapping[str, Any] = {}
+                workflow_payload = parameters.get("workflow")
+                if isinstance(workflow_payload, Mapping):
+                    task_payload = workflow_payload
+                elif isinstance(parameters.get("task"), Mapping):
+                    task_payload = parameters.get("task")  # type: ignore[assignment]
+                slugs = self._task_applied_template_slugs(parameters, task_payload)
+                template = task_payload.get("taskTemplate") or task_payload.get(
+                    "task_template"
+                )
+                if isinstance(template, Mapping):
+                    for key in ("slug", "name", "id"):
+                        value = self._coerce_text(template.get(key), max_chars=120)
+                        if value:
+                            slugs.add(value.lower())
+            except Exception:
+                slugs = set()
+            return "github-issue-search-and-implement" in slugs
+        except Exception:
+            return False
+
     @staticmethod
     def _patched_or_false_outside_workflow(patch_id: str) -> bool:
         try:
@@ -11112,6 +11343,14 @@ class MoonMindRunWorkflow:
                 non_retryable=True,
             )
 
+        if self._gated_continuation_request and workflow.patched(
+            "run-completion-disposition-visibility-v1"
+        ):
+            output_message = (
+                "Execution handed off to its owning workflow; "
+                "the requested outcome remains pending."
+            )
+
         terminal_state = (
             STATE_NO_COMMIT if output_status == "no_commit" else STATE_COMPLETED
         )
@@ -11172,6 +11411,29 @@ class MoonMindRunWorkflow:
                 output["headSha"] = gated_continuation.get("headSha")
         if self._merge_automation_head_sha:
             output["headSha"] = self._merge_automation_head_sha
+        if workflow.patched(RUN_PR_RESOLVER_VERDICT_PROPAGATION_PATCH):
+            if self._pr_resolver_status:
+                output["prResolverStatus"] = self._pr_resolver_status
+            if self._pr_resolver_reason:
+                output["prResolverReason"] = self._pr_resolver_reason
+            if self._pr_resolver_next_step:
+                output["prResolverNextStep"] = self._pr_resolver_next_step
+            if self._terminal_contract_evidence_ref:
+                output["terminalContractEvidenceRef"] = (
+                    self._terminal_contract_evidence_ref
+                )
+            if self._pr_resolver_retry_after_seconds is not None:
+                output["retryAfterSeconds"] = self._pr_resolver_retry_after_seconds
+            verdict_summary = self._coerce_text(
+                self._publish_context.get("prResolverStatus")
+                and self._last_step_summary,
+                max_chars=1600,
+            )
+            if verdict_summary and self._merge_automation_disposition in {
+                "manual_review",
+                "failed",
+            }:
+                output["prResolverVerdictSummary"] = verdict_summary
         return output
 
     def _initialize_from_payload(
@@ -11201,6 +11463,85 @@ class MoonMindRunWorkflow:
             input_payload,
             "title",
         )
+        # MoonLadderStudios/MoonMind#4099: rehydrate shared title-transition
+        # state from memo (fresh runs start generated at revision 0).
+        memo_snapshot = workflow.memo() or {}
+        self._title_base = (
+            self._optional_string(memo_snapshot, "titleBase", "title_base")
+            or self._title
+        )
+        raw_provenance = self._optional_string(
+            memo_snapshot, "titleProvenance", "title_provenance"
+        ) or (
+            "user_explicit"
+            if memo_snapshot.get("titleSource") == "user_explicit"
+            else "generated"
+        )
+        self._title_provenance = (
+            raw_provenance
+            if raw_provenance in ("user_explicit", "generated")
+            else "generated"
+        )
+        self._title_source = self._optional_string(
+            memo_snapshot, "titleSource", "title_source"
+        ) or (
+            "user_explicit"
+            if self._title_provenance == "user_explicit"
+            else "preset_template"
+        )
+        self._title_confidence = self._optional_string(
+            memo_snapshot, "titleConfidence", "title_confidence"
+        ) or ("high" if self._title_provenance == "user_explicit" else "medium")
+        try:
+            self._title_revision = int(
+                memo_snapshot.get(
+                    "titleRevision", memo_snapshot.get("title_revision", 0)
+                )
+                or 0
+            )
+        except (TypeError, ValueError):
+            self._title_revision = 0
+        self._title_target = None
+        if (
+            "titleRevision" not in memo_snapshot
+            and "title_revision" not in memo_snapshot
+        ):
+            # MoonLadderStudios/MoonMind#4099: Continue-As-New starts with an
+            # empty memo; restore the carried title-transition snapshot so the
+            # new run keeps the enriched/renamed title. Fresh runs have no
+            # continuation snapshot and keep the memo-derived defaults above.
+            carried = (self._remediation_loop_continuation or {}).get(
+                "titleTransition"
+            )
+            if isinstance(carried, Mapping):
+                carried_base = carried.get("base")
+                carried_display = carried.get("display")
+                if isinstance(carried_base, str) and carried_base.strip():
+                    self._title_base = carried_base
+                    self._title = (
+                        carried_display
+                        if isinstance(carried_display, str) and carried_display.strip()
+                        else carried_base
+                    )
+                carried_provenance = carried.get("provenance")
+                if carried_provenance in ("user_explicit", "generated"):
+                    self._title_provenance = carried_provenance
+                try:
+                    self._title_revision = int(carried.get("revision") or 0)
+                except (TypeError, ValueError):
+                    # Keep the memo-derived revision when the carried snapshot
+                    # has a missing/non-numeric revision; the title stays usable.
+                    pass
+                carried_target = carried.get("target")
+                if isinstance(carried_target, Mapping):
+                    self._title_target = dict(carried_target)
+                for attr, key in (
+                    ("_title_source", "source"),
+                    ("_title_confidence", "confidence"),
+                ):
+                    value = carried.get(key)
+                    if isinstance(value, str) and value.strip():
+                        setattr(self, attr, value)
         self._summary = workflow.memo().get("summary") or "Execution initialized."
         self._owner_type, self._owner_id = self._trusted_owner_metadata()
 
@@ -13696,72 +14037,104 @@ class MoonMindRunWorkflow:
                 self._update_memo()
                 break
             publish_status_before = self._publish_status
-            remediation_checkpoint_required = (
-                workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
-                and self._remediation_loop_spec is not None
-                and (
-                    workflow_owned_remediation_head
-                    or self._moonspec_step_role(node) == "moonspec-verification-gate"
-                )
-            )
-            if remediation_checkpoint_required:
-                prepublication_checkpoint_failed = (
-                    await self._record_prepublication_checkpoint(
-                        node_id,
-                        publish_mode=publish_mode,
-                        updated_at=workflow.now(),
-                        required_for_remediation=True,
-                    )
-                )
-            else:
-                # Preserve the historical internal invocation shape for replayed
-                # paths and test/runtime adapters that predate remediation-owned
-                # checkpoint admission.
-                prepublication_checkpoint_failed = (
-                    await self._record_prepublication_checkpoint(
-                        node_id,
-                        publish_mode=publish_mode,
-                        updated_at=workflow.now(),
-                    )
-                )
-            if prepublication_checkpoint_failed:
-                break
-            if workflow_owned_remediation_head:
-                self._advance_remediation_workspace_head(
-                    node=node,
-                    node_inputs=node_inputs,
-                    execution_result=execution_result,
-                    step_execution_id=(
-                        f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
-                        f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
-                    ),
-                )
-            publication_raised = False
-            try:
-                await self._record_publish_result_from_execution(
-                    parameters=parameters,
-                    execution_result=execution_result,
-                )
-            except Exception as exc:
-                if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
-                    raise
-                self._record_publication_finalization_failure(
-                    node_id,
-                    exc=exc,
-                    updated_at=workflow.now(),
-                )
-                publication_raised = True
-            if (
-                not publication_raised
-                and self._publish_status == "failed"
-                and publish_status_before != "failed"
-                and workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH)
+            terminal_deferred_reason: str | None = None
+            if self._patched_or_false_outside_workflow(
+                RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
             ):
-                self._record_publication_finalization_failure(
-                    node_id,
-                    exc=RuntimeError(self._publish_reason or "Publish failed"),
+                terminal_deferred_reason = self._terminal_publication_deferred_reason(
+                    self._effective_result_outputs(execution_result)
+                ) or self._stored_terminal_publication_deferred_reason()
+            if terminal_deferred_reason is not None:
+                # An accepted terminal handoff publishes nothing: record the
+                # deferred outcome before any pre-publication checkpoint so a
+                # required checkpoint failure cannot mask the handoff as
+                # FINALIZATION_CHECKPOINT_FAILED.
+                self._apply_deferred_publication(
+                    reason=terminal_deferred_reason,
+                    logical_step_id=node_id,
                     updated_at=workflow.now(),
                 )
+                prepublication_checkpoint_failed = False
+                publication_raised = False
+            else:
+                remediation_checkpoint_required = (
+                    workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
+                    and self._remediation_loop_spec is not None
+                    and (
+                        workflow_owned_remediation_head
+                        or self._moonspec_step_role(node) == "moonspec-verification-gate"
+                    )
+                )
+                if remediation_checkpoint_required:
+                    prepublication_checkpoint_failed = (
+                        await self._record_prepublication_checkpoint(
+                            node_id,
+                            publish_mode=publish_mode,
+                            updated_at=workflow.now(),
+                            required_for_remediation=True,
+                        )
+                    )
+                else:
+                    # Preserve the historical internal invocation shape for replayed
+                    # paths and test/runtime adapters that predate remediation-owned
+                    # checkpoint admission.
+                    prepublication_checkpoint_failed = (
+                        await self._record_prepublication_checkpoint(
+                            node_id,
+                            publish_mode=publish_mode,
+                            updated_at=workflow.now(),
+                        )
+                    )
+                if prepublication_checkpoint_failed:
+                    break
+                if workflow_owned_remediation_head:
+                    self._advance_remediation_workspace_head(
+                        node=node,
+                        node_inputs=node_inputs,
+                        execution_result=execution_result,
+                        step_execution_id=(
+                            f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
+                            f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
+                        ),
+                    )
+                publication_raised = False
+                try:
+                    await self._record_publish_result_from_execution(
+                        parameters=parameters,
+                        execution_result=execution_result,
+                    )
+                except Exception as exc:
+                    if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                        raise
+                    self._record_publication_finalization_failure(
+                        node_id,
+                        exc=exc,
+                        updated_at=workflow.now(),
+                    )
+                    publication_raised = True
+                if (
+                    not publication_raised
+                    and self._publish_status == "failed"
+                    and publish_status_before != "failed"
+                    and workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH)
+                ):
+                    self._record_publication_finalization_failure(
+                        node_id,
+                        exc=RuntimeError(self._publish_reason or "Publish failed"),
+                        updated_at=workflow.now(),
+                    )
+                if self._patched_or_false_outside_workflow(
+                    RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
+                ):
+                    deferred_reason = self._terminal_publication_deferred_reason(
+                        self._effective_result_outputs(execution_result)
+                    ) or self._stored_terminal_publication_deferred_reason()
+                    if deferred_reason is not None:
+                        self._apply_deferred_publication(
+                            reason=deferred_reason,
+                            logical_step_id=node_id,
+                            updated_at=workflow.now(),
+                        )
             if workflow.patched(RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH):
                 outputs_for_gate = self._get_from_result(execution_result, "outputs")
                 if isinstance(
@@ -14197,6 +14570,25 @@ class MoonMindRunWorkflow:
                     )
                 ):
                     self._record_trusted_issue_context(outputs_for_story_output)
+                    if (
+                        agent_request_for_context is None
+                        and tool_name in ISSUE_BRIEF_LOADER_TOOL_NAMES
+                        and workflow.patched(RUN_ISSUE_SEARCH_TITLE_ENRICHMENT_PATCH)
+                    ):
+                        # MoonLadderStudios/MoonMind#4099: opt-in automatic
+                        # display-title enrichment from the accepted typed
+                        # resolver result. Direct internal transition (no extra
+                        # agent step, no self HTTP call). Cosmetic failures are
+                        # contained and never mask the business outcome.
+                        try:
+                            self._maybe_enrich_title_from_trusted_issue(
+                                outputs_for_story_output
+                            )
+                        except Exception as exc:
+                            self._get_logger().warning(
+                                "Issue title enrichment skipped",
+                                extra={"error": str(exc)},
+                            )
                 previous_step_outputs = outputs_for_story_output
                 story_output_result = outputs_for_story_output.get("storyOutput")
                 if isinstance(story_output_result, Mapping):
@@ -14687,10 +15079,6 @@ class MoonMindRunWorkflow:
         if failure_message in {"user_error", "permanent"}:
             return False
 
-        metadata = outputs.get("metadata")
-        if not isinstance(metadata, Mapping):
-            metadata = {}
-
         # A validated resolver terminal disposition belongs to the selected
         # Skill, not generic provider recovery. Retrying manual-review or failed
         # terminal evidence can repeat mutations. A rejected typed continuation
@@ -14699,15 +15087,32 @@ class MoonMindRunWorkflow:
         # bounded retry classification. Missing or malformed terminal evidence
         # also stays retryable so the repair path can recover it.
         if self._workflow_patch_enabled(RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH):
+            if self._workflow_patch_enabled(
+                RUN_TERMINAL_CONTRACT_RETRY_FLATTENED_OUTPUTS_PATCH
+            ):
+                terminal_fields: Mapping[str, Any] = outputs
+            else:
+                # Replay-only: pre-patch histories read a nested mapping that
+                # the production mapper never emits, so they always retried.
+                nested_metadata = outputs.get("metadata")
+                terminal_fields = (
+                    nested_metadata if isinstance(nested_metadata, Mapping) else {}
+                )
             terminal_contract_outcome = (
-                str(metadata.get("terminalContractOutcome") or "").strip().lower()
+                str(terminal_fields.get("terminalContractOutcome") or "")
+                .strip()
+                .lower()
             )
             merge_automation_disposition = (
-                str(metadata.get("mergeAutomationDisposition") or "").strip().lower()
+                str(terminal_fields.get("mergeAutomationDisposition") or "")
+                .strip()
+                .lower()
             )
             if (
                 terminal_contract_outcome == "terminal_failure"
                 and merge_automation_disposition in {"manual_review", "failed"}
+                and terminal_fields.get("terminalContractRecoveryOutcome")
+                == "skill_terminal_verdict"
             ):
                 return False
             if (
@@ -16568,6 +16973,20 @@ class MoonMindRunWorkflow:
         parameters: Mapping[str, Any],
         execution_result: Any,
     ) -> None:
+        if self._patched_or_false_outside_workflow(
+            RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
+        ):
+            deferred_reason = self._terminal_publication_deferred_reason(
+                self._effective_result_outputs(execution_result)
+            )
+            if deferred_reason is not None:
+                if self._has_required_failed_finalization():
+                    # A required after-execution checkpoint already failed:
+                    # keep the authoritative failure instead of deferring.
+                    return
+                self._publish_status = "not_required"
+                self._publish_reason = deferred_reason
+                return
         if self._publish_mode(parameters) == "auto":
             await self._resolve_auto_publish_evidence_ref(execution_result)
             if self._publish_status == "failed" and str(
@@ -16639,7 +17058,176 @@ class MoonMindRunWorkflow:
             return
         self._publish_context["autoPublishEvidence"] = evidence_payload
 
+    def _terminal_publication_deferred_reason(
+        self, outputs: Mapping[str, Any] | None
+    ) -> str | None:
+        """Return why publication is not owed from the contract result.
+
+        Derived from the flattened terminal-contract evaluation fields
+        (``terminalContractOutcome`` / ``terminalContractRecoveryOutcome`` /
+        ``mergeAutomationDisposition``), never from the skill name. A
+        ``continuation_requested`` outcome defers publication only for an
+        accepted handoff (``durable_parent_handoff`` recovery plus an allowed
+        continuation disposition ``reenter_gate``/``request_review``); rejected
+        or unowned continuations (``continuation_rejected_*``) and reserved
+        fields arriving through a direct executable must fail closed. A
+        validated ``manual_review``/``failed`` verdict
+        (``skill_terminal_verdict``) legitimately publishes nothing.
+        """
+
+        if not isinstance(outputs, Mapping):
+            return None
+        outcome_raw = outputs.get("terminalContractOutcome")
+        if outcome_raw is None:
+            outcome_raw = outputs.get("terminal_contract_outcome")
+        outcome = (
+            str(outcome_raw).strip().lower()
+            if isinstance(outcome_raw, str)
+            else ""
+        )
+        disposition_raw = outputs.get("mergeAutomationDisposition")
+        if disposition_raw is None:
+            disposition_raw = outputs.get("merge_automation_disposition")
+        disposition = (
+            self._normalize_gate_type(str(disposition_raw))
+            if isinstance(disposition_raw, str) and str(disposition_raw).strip()
+            else ""
+        )
+        recovery_raw = outputs.get("terminalContractRecoveryOutcome")
+        if recovery_raw is None:
+            recovery_raw = outputs.get("terminal_contract_recovery_outcome")
+        recovery = (
+            str(recovery_raw).strip().lower()
+            if isinstance(recovery_raw, str)
+            else ""
+        )
+        if outcome == "continuation_requested":
+            if (
+                recovery != "durable_parent_handoff"
+                or disposition not in {"reenter_gate", "request_review"}
+            ):
+                return None
+            label = disposition or "continuation"
+            return (
+                f"publication deferred to gate owner for {label} terminal "
+                "(continuation_requested)"
+            )
+        if (
+            outcome == "terminal_failure"
+            and recovery == "skill_terminal_verdict"
+            and disposition in {"manual_review", "failed"}
+        ):
+            return (
+                f"publication not required for {disposition} terminal "
+                "(skill_terminal_verdict)"
+            )
+        return None
+
+    def _stored_terminal_publication_deferred_reason(self) -> str | None:
+        """Return the deferred reason from stored workflow state.
+
+        Used on paths without the step outputs (e.g. the ``auto`` fallback in
+        ``_determine_publish_completion``). The stored fields are written by
+        ``_record_execution_context`` from the same flattened contract result.
+        """
+
+        stored_outcome = self._coerce_text(
+            self._publish_context.get("terminalContractOutcome"), max_chars=80
+        )
+        stored_recovery = self._coerce_text(
+            self._publish_context.get("terminalContractRecoveryOutcome"),
+            max_chars=80,
+        )
+        stored_disposition = self._normalize_gate_type(
+            self._merge_automation_disposition
+        )
+        outputs: dict[str, Any] = {}
+        if stored_outcome:
+            outputs["terminalContractOutcome"] = stored_outcome
+        if stored_recovery:
+            outputs["terminalContractRecoveryOutcome"] = stored_recovery
+        if stored_disposition:
+            outputs["mergeAutomationDisposition"] = stored_disposition
+        if not outputs:
+            return None
+        return self._terminal_publication_deferred_reason(outputs)
+
+    def _has_required_failed_finalization(self) -> bool:
+        for row in self._step_ledger_rows:
+            if not isinstance(row, dict):
+                continue
+            outcome = row.get("finalizationOutcome")
+            if (
+                isinstance(outcome, Mapping)
+                and outcome.get("status") == "failed"
+                and outcome.get("criticality") == "required"
+            ):
+                return True
+        return False
+
+    def _apply_deferred_publication(
+        self,
+        *,
+        reason: str,
+        logical_step_id: str | None = None,
+        updated_at: datetime | None = None,
+    ) -> None:
+        if logical_step_id is not None:
+            row = self._step_ledger_row_for(logical_step_id)
+            if (
+                isinstance(row, dict)
+                and isinstance(row.get("finalizationOutcome"), Mapping)
+                and row["finalizationOutcome"].get("status") == "failed"
+                and row["finalizationOutcome"].get("criticality") == "required"
+            ):
+                # A required checkpoint or publication failure is authoritative:
+                # a later validated continuation must not replace it with a
+                # deferred outcome, otherwise the real failure is masked.
+                return
+        elif self._has_required_failed_finalization():
+            return
+        self._publish_status = "not_required"
+        self._publish_reason = reason
+        if logical_step_id is not None:
+            row = self._step_ledger_row_for(logical_step_id)
+            if isinstance(row, dict):
+                try:
+                    timestamp = (
+                        updated_at.isoformat()
+                        if updated_at is not None
+                        else workflow.now().isoformat()
+                    )
+                except Exception as exc:
+                    if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+                        from datetime import timezone as _timezone
+
+                        timestamp = datetime.now(_timezone.utc).isoformat()
+                    else:
+                        raise
+                row["finalizationOutcome"] = {
+                    "status": "unsupported",
+                    "phase": "publication",
+                    "criticality": "unsupported",
+                    "failureCode": None,
+                    "terminalFailureCode": None,
+                    "retryCount": 0,
+                    "message": reason,
+                    "updatedAt": timestamp,
+                }
+
     def _record_auto_publish_result(self, execution_result: Any) -> None:
+        if self._patched_or_false_outside_workflow(
+            RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
+        ):
+            deferred_reason = self._terminal_publication_deferred_reason(
+                self._effective_result_outputs(execution_result)
+            )
+            if deferred_reason is not None:
+                if self._has_required_failed_finalization():
+                    return
+                self._publish_status = "not_required"
+                self._publish_reason = deferred_reason
+                return
         resolver_ref_contract = workflow.patched(
             RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH
         )
@@ -16988,6 +17576,28 @@ class MoonMindRunWorkflow:
             )
         else:
             self._publish_context.pop("mergeAutomationDisposition", None)
+        terminal_contract_outcome = self._coerce_text(
+            outputs.get("terminalContractOutcome")
+            or outputs.get("terminal_contract_outcome"),
+            max_chars=80,
+        )
+        if terminal_contract_outcome:
+            self._publish_context["terminalContractOutcome"] = (
+                terminal_contract_outcome
+            )
+        else:
+            self._publish_context.pop("terminalContractOutcome", None)
+        terminal_contract_recovery = self._coerce_text(
+            outputs.get("terminalContractRecoveryOutcome")
+            or outputs.get("terminal_contract_recovery_outcome"),
+            max_chars=80,
+        )
+        if terminal_contract_recovery:
+            self._publish_context["terminalContractRecoveryOutcome"] = (
+                terminal_contract_recovery
+            )
+        else:
+            self._publish_context.pop("terminalContractRecoveryOutcome", None)
         merge_automation_head_sha = self._coerce_text(
             outputs.get("headSha")
             or outputs.get("head_sha")
@@ -16997,6 +17607,13 @@ class MoonMindRunWorkflow:
         )
         if merge_automation_head_sha:
             self._merge_automation_head_sha = merge_automation_head_sha
+        # Guard the verdict-state mutation behind the propagation patch so
+        # histories recorded before run-pr-resolver-verdict-propagation-v1
+        # replay without emitting different memo/finalization arguments.
+        if self._patched_or_false_outside_workflow(
+            RUN_PR_RESOLVER_VERDICT_PROPAGATION_PATCH
+        ):
+            self._record_pr_resolver_verdict_context(outputs)
 
         publish_branch = self._coerce_text(
             outputs.get("push_branch") or outputs.get("branch"),
@@ -17063,6 +17680,118 @@ class MoonMindRunWorkflow:
         self._record_accepted_published_head(outputs)
 
         self._record_report_result(execution_result)
+
+    def _record_pr_resolver_verdict_context(
+        self, outputs: Mapping[str, Any]
+    ) -> None:
+        """Project validated pr-resolver verdict facts for the owning gate.
+
+        Only the terminal verdict facts the Skill wrote (status, reason,
+        next step, evidence ref, retry delay) are carried; MoonMind does not
+        reinterpret them. Skill semantic authority stays with the resolved
+        Skill bundle.
+        """
+
+        terminal_contract_id = str(
+            outputs.get("terminalContractId")
+            or outputs.get("terminal_contract_id")
+            or ""
+        ).strip()
+        merge_disposition = str(
+            outputs.get("mergeAutomationDisposition")
+            or outputs.get("merge_automation_disposition")
+            or ""
+        ).strip()
+        status = self._coerce_text(
+            outputs.get("prResolverStatus")
+            or outputs.get("pr_resolver_status"),
+            max_chars=80,
+        )
+        is_pr_resolver_terminal = (
+            status is not None
+            or terminal_contract_id == "pr_resolver_terminal.v1"
+            or merge_disposition in {"manual_review", "failed"}
+        )
+        if status is None and is_pr_resolver_terminal:
+            status = self._coerce_text(
+                outputs.get("status"),
+                max_chars=80,
+            )
+        reason = self._coerce_text(
+            outputs.get("prResolverReason")
+            or outputs.get("pr_resolver_reason")
+            or (
+                outputs.get("final_reason") or outputs.get("finalReason")
+                if is_pr_resolver_terminal
+                else None
+            ),
+            max_chars=500,
+        )
+        next_step = self._coerce_text(
+            outputs.get("prResolverNextStep")
+            or outputs.get("pr_resolver_next_step")
+            or (
+                outputs.get("next_step") or outputs.get("nextStep")
+                if is_pr_resolver_terminal
+                else None
+            ),
+            max_chars=80,
+        )
+        evidence_ref = self._coerce_text(
+            outputs.get("terminalContractEvidenceRef")
+            or outputs.get("terminal_contract_evidence_ref"),
+            max_chars=200,
+        )
+        retry_after: int | None = None
+        for key in (
+            "retryAfterSeconds",
+            "retry_after_seconds",
+            "prResolverRetryAfterSeconds",
+        ):
+            raw = outputs.get(key)
+            if raw is None:
+                continue
+            if isinstance(raw, bool):
+                continue
+            try:
+                candidate = int(raw) if not isinstance(raw, int) else raw
+            except (TypeError, ValueError):
+                continue
+            if candidate >= 1:
+                retry_after = candidate
+                break
+        # A gated continuation may also carry the Skill-supplied delay.
+        if retry_after is None:
+            continuation = self._gated_continuation_request
+            if isinstance(continuation, Mapping):
+                raw = continuation.get("retryAfterSeconds")
+                if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 1:
+                    retry_after = raw
+        self._pr_resolver_status = status or None
+        self._pr_resolver_reason = reason or None
+        self._pr_resolver_next_step = next_step or None
+        self._terminal_contract_evidence_ref = evidence_ref or None
+        self._pr_resolver_retry_after_seconds = retry_after
+        if status:
+            self._publish_context["prResolverStatus"] = status
+        else:
+            self._publish_context.pop("prResolverStatus", None)
+        if reason:
+            self._publish_context["prResolverReason"] = reason
+        else:
+            self._publish_context.pop("prResolverReason", None)
+        if next_step:
+            self._publish_context["prResolverNextStep"] = next_step
+        else:
+            self._publish_context.pop("prResolverNextStep", None)
+        if evidence_ref:
+            self._publish_context["terminalContractEvidenceRef"] = evidence_ref
+        else:
+            self._publish_context.pop("terminalContractEvidenceRef", None)
+        if retry_after is not None:
+            self._publish_context["prResolverRetryAfterSeconds"] = retry_after
+        else:
+            self._publish_context.pop("prResolverRetryAfterSeconds", None)
 
     def _record_publish_metadata_context(self, source: Mapping[str, Any]) -> None:
         raw_metadata = source.get("prMetadata") or source.get("pr_metadata")
@@ -18183,6 +18912,37 @@ class MoonMindRunWorkflow:
             self._publish_status = "failed"
             self._publish_reason = missing_outcome
             return ("failed", missing_outcome, True)
+
+        if self._patched_or_false_outside_workflow(
+            RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
+        ):
+            deferred_reason = self._stored_terminal_publication_deferred_reason()
+            if deferred_reason is not None and self._publish_status is None:
+                self._publish_status = "not_required"
+                self._publish_reason = deferred_reason
+                if self._report_requested(parameters) and not self._report_created:
+                    return (
+                        "failed",
+                        "reportOutput requested but no final report was created",
+                        True,
+                    )
+                if self._is_canonical_no_commit_outcome(parameters):
+                    return (
+                        "no_commit",
+                        self._compose_success_completion_message(
+                            publish_detail=self._publish_reason,
+                            publish_mode=publish_mode,
+                        ),
+                        False,
+                    )
+                return (
+                    "success",
+                    self._compose_success_completion_message(
+                        publish_detail=self._publish_reason,
+                        publish_mode=publish_mode,
+                    ),
+                    False,
+                )
 
         if publish_mode == "auto" and self._publish_status is None:
             self._publish_status = "failed"
@@ -23635,7 +24395,24 @@ class MoonMindRunWorkflow:
         memo_dict: dict[str, Any] = {
             "title": self._title or "Run",
             "summary": self._summary,
+            # MoonLadderStudios/MoonMind#4099: shared title-transition state so
+            # manual renames, automatic enrichment, and refreshes stay
+            # consistent (base label, explicit-vs-generated provenance, and
+            # revision guard; compact target refs only, never issue bodies).
+            "titleBase": self._title_base or self._title or "Run",
+            "titleProvenance": self._title_provenance,
+            "titleRevision": self._title_revision,
+            "titleSource": self._title_source
+            or (
+                "user_explicit"
+                if self._title_provenance == "user_explicit"
+                else "preset_template"
+            ),
+            "titleConfidence": self._title_confidence
+            or ("high" if self._title_provenance == "user_explicit" else "medium"),
         }
+        if self._title_target:
+            memo_dict["titleTarget"] = dict(self._title_target)
         if isinstance(self._step_count, int) and self._step_count > 0:
             memo_dict["mm_current_step_order"] = self._step_count
         if workflow.patched("run-memo-runtime-skill-visibility"):
@@ -23667,6 +24444,13 @@ class MoonMindRunWorkflow:
             memo_dict["incident_reconstruction_ref"] = self._incident_reconstruction_ref
         if self._pull_request_url:
             memo_dict["pull_request_url"] = self._pull_request_url
+        if (
+            workflow.patched("run-completion-disposition-visibility-v1")
+            and self._state == STATE_COMPLETED
+            and self._gated_continuation_request
+        ):
+            memo_dict["completionDisposition"] = "gated_continuation"
+
         merge_automation_summary = self._merge_automation_summary_from_context()
         if merge_automation_summary:
             memo_dict["merge_automation"] = merge_automation_summary
@@ -24281,9 +25065,71 @@ class MoonMindRunWorkflow:
         self._update_memo()
         return True
 
-    @workflow.update
-    def update_title(self, new_title: str) -> None:
-        self._title = new_title
+    # MoonLadderStudios/MoonMind#4099: repair the public SetTitle path. The
+    # canonical API name is ``SetTitle`` with an object payload
+    # ``{"title": ...}``; the workflow owns the single shared title
+    # transition (manual rename + automatic issue enrichment).
+    @workflow.update(name="SetTitle")
+    def update_title(self, payload: Any = None) -> dict[str, Any]:
+        from moonmind.workflows.executions.title_derivation import (
+            TITLE_PROVENANCE_GENERATED,
+            TITLE_PROVENANCE_USER_EXPLICIT,
+            TitleTransitionState,
+            apply_manual_title,
+            normalize_display_title,
+        )
+
+        if isinstance(payload, Mapping):
+            raw_title = payload.get("title", payload.get("new_title"))
+        else:
+            raw_title = payload
+        normalized = normalize_display_title(raw_title)
+        if normalized is None:
+            raise ValueError("title is required and must be display-safe text")
+        current = TitleTransitionState(
+            base_title=self._title_base or self._title or normalized,
+            display_title=self._title,
+            provenance=self._title_provenance
+            if self._title_provenance
+            in (TITLE_PROVENANCE_USER_EXPLICIT, TITLE_PROVENANCE_GENERATED)
+            else TITLE_PROVENANCE_GENERATED,
+            revision=self._title_revision or 0,
+        )
+        transition = apply_manual_title(current, normalized)
+        if not transition.changed:
+            return {"accepted": True, "applied": "immediate", "title": self._title}
+        self._title_base = transition.state.base_title
+        self._title = transition.state.display_title
+        self._title_provenance = transition.state.provenance
+        self._title_revision = transition.state.revision
+        self._title_source = "user_explicit"
+        self._title_confidence = "high"
+        self._update_memo()
+        self._update_search_attributes()
+        return {"accepted": True, "applied": "immediate", "title": self._title}
+
+    @workflow.update(name="update_title")
+    def update_title_legacy(self, new_title: str) -> None:
+        """Legacy alias for the pre-repair unnamed update.
+
+        Preserved so in-flight callers using the old method name keep working.
+        Histories that already recorded the legacy command-free assignment
+        replay that exact behavior; only patched histories forward through
+        the repaired shared transition as ``SetTitle``.
+        """
+        from moonmind.workflows.executions.title_derivation import (
+            normalize_display_title,
+        )
+
+        if not self._patched_or_false_outside_workflow(
+            RUN_LEGACY_TITLE_UPDATE_TRANSITION_PATCH
+        ):
+            # Replay-compatible legacy behavior: the original handler only
+            # assigned the title with no memo/search-attribute commands.
+            normalized = normalize_display_title(new_title)
+            self._title = normalized if normalized is not None else new_title
+            return
+        self.update_title(new_title)
 
     @workflow.update
     def update_parameters(self, new_parameters: dict[str, Any]) -> None:

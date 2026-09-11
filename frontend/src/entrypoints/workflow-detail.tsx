@@ -31,7 +31,6 @@ import {
   compileContextRetrievalParameters,
   defaultContextRetrievalAuthoring,
   hasAuthoredContextRetrieval,
-  retrievalCeilingsFromRuntimeConfig,
 } from '../lib/contextRetrievalAuthoring';
 import {
   DashboardToastProvider,
@@ -65,6 +64,7 @@ import {
 } from '../components/workflows/WorkflowWorkspaceSidebar';
 import { workflowWorkspaceRowFromDetail } from '../lib/workflowWorkspaceList';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
+import { IssueLifecyclePanel, issueLifecycleEvidenceFromExecution } from '../components/IssueLifecyclePanel';
 import { WorkflowChatNative } from './WorkflowChatNative';
 import {
   buildWorkflowActionMenuItems,
@@ -124,7 +124,6 @@ type DashboardConfig = {
     temporal?: Record<string, string>;
     agentRuns?: Record<string, string>;
   };
-  system?: { retrievalAuthoring?: Record<string, unknown> };
 };
 
 type LiveLogsSessionTimelineRollout = 'off' | 'internal' | 'codex_managed' | 'all_managed';
@@ -883,6 +882,7 @@ const ExecutionDetailSchema = z
     summary: z.string(),
     taskInstructions: z.string().nullable().optional(),
     status: z.string(),
+    completionDisposition: z.string().nullable().optional(),
     state: z.string(),
     rawState: z.string().optional(),
     temporalStatus: z.string().optional(),
@@ -2240,6 +2240,41 @@ function RepositoryFact({ repository }: { repository: string }) {
       ) : content}
     </span>
   );
+}
+
+export function normalizeStartingBranch(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+export type WorkflowSourceBranchState = 'branch' | 'not-recorded' | 'not-applicable';
+
+export type WorkflowSourceContext = {
+  repository: string | null;
+  startingBranch: string | null;
+  hasRepository: boolean;
+  startingBranchState: WorkflowSourceBranchState;
+};
+
+// Single normalized source-context authority for Workflow Detail (MoonLadderStudios/MoonMind#4228).
+// Reads only the selected execution's recorded `repository` / `startingBranch`.
+// Never derives from target, generated work, checkpoint, publication, or PR base branches.
+// A recorded "<branch> (default)" value is preserved verbatim as resolved-default evidence;
+// a missing branch on a repository-backed execution is `not-recorded`, never a guessed `main`.
+export function resolveWorkflowSourceContext(execution: {
+  repository?: string | null | undefined;
+  startingBranch?: string | null | undefined;
+} | null | undefined): WorkflowSourceContext {
+  const repository = normalizeStartingBranch(execution?.repository);
+  const startingBranch = normalizeStartingBranch(execution?.startingBranch);
+  const hasRepository = Boolean(repository);
+  const startingBranchState: WorkflowSourceBranchState = startingBranch
+    ? 'branch'
+    : hasRepository
+      ? 'not-recorded'
+      : 'not-applicable';
+  return { repository, startingBranch, hasRepository, startingBranchState };
 }
 
 function renderProviderProfileSummary(
@@ -4914,7 +4949,6 @@ function BranchExplorerPanel({
   latestCompare,
   onSelectBranch,
   onBranchAction,
-  retrievalCeilings,
 }: {
   apiBase: string;
   workflowId: string;
@@ -4931,7 +4965,6 @@ function BranchExplorerPanel({
   latestCompare: z.infer<typeof CheckpointBranchCompareSchema> | null;
   onSelectBranch: (branchId: string) => void;
   onBranchAction: (request: BranchMutationRequest) => void;
-  retrievalCeilings: ReturnType<typeof retrievalCeilingsFromRuntimeConfig>;
 }) {
   const profilesQuery = useQuery({
     queryKey: ['checkpoint-branch', 'profiles'],
@@ -5256,7 +5289,6 @@ function BranchExplorerPanel({
             <ContextRetrievalControls
               value={branchContextRetrieval}
               onChange={setBranchContextRetrieval}
-              ceilings={retrievalCeilings}
               showInitialControls={false}
               disabled={busy}
               description="Continue/fork turns inherit the parent run's retrieval policy. Set an override here to narrow in-session follow-up retrieval for the new turn within deployment ceilings."
@@ -8726,9 +8758,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const toast = useDashboardToast();
   const cfg = readDashboardConfig(payload);
-  const retrievalCeilings = retrievalCeilingsFromRuntimeConfig(
-    cfg?.system?.retrievalAuthoring,
-  );
   const agentRunRoutes = readAgentRunRouteTemplates(cfg);
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
@@ -9893,6 +9922,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const historicalModel = modelTierResolution?.resolvedModel?.trim() || execution?.model;
   const historicalEffort = modelTierResolution?.resolvedEffort?.trim() || execution?.effort;
   const historicalProfileId = modelTierResolution?.providerProfileId?.trim() || execution?.profileId;
+  const sourceContext = resolveWorkflowSourceContext(execution);
   return (
     <div className="stack workflow-detail-page">
       <div className="toolbar">
@@ -9902,6 +9932,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             <p className="page-meta">Workflow {taskId || '—'}</p>
             {execution ? (
               <WorkflowLifecycleStatusPill
+                completionDisposition={execution.completionDisposition}
                 status={resolveWorkflowDisplayStatus(
                   execution.rawState,
                   execution.state,
@@ -10028,6 +10059,30 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 {instructionsExpanded ? 'Hide Workflow Inputs' : 'Show Workflow Inputs'}
               </button>
             </div>
+            {sourceContext.hasRepository || sourceContext.startingBranch ? (
+              <dl className="td-source-context" aria-label="Workflow source context">
+                {sourceContext.repository ? (
+                  <div className="td-source-context-item">
+                    <dt>Repository</dt>
+                    <dd>
+                      <RepositoryFact repository={sourceContext.repository} />
+                    </dd>
+                  </div>
+                ) : null}
+                <div className="td-source-context-item">
+                  <dt>Starting Branch</dt>
+                  <dd>
+                    {sourceContext.startingBranch ? (
+                      <code className="text-xs break-all" title={sourceContext.startingBranch}>
+                        {sourceContext.startingBranch}
+                      </code>
+                    ) : (
+                      <span className="td-source-context-empty">Not recorded</span>
+                    )}
+                  </dd>
+                </div>
+              </dl>
+            ) : null}
             {instructionsExpanded ? (
               <div id="workflow-inputs-panel" className="td-instructions-panel">
                 {hasTaskInstructions ? (
@@ -10049,6 +10104,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 workflowTitle={workflowSubject}
                 statusPill={
                   <WorkflowLifecycleStatusPill
+                    completionDisposition={execution.completionDisposition}
                     status={resolveWorkflowDisplayStatus(
                       execution.rawState,
                       execution.state,
@@ -10238,9 +10294,9 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
               ) : null}
 
               <FactGroup title="Git & Publish">
-                {execution.repository ? (
+                {sourceContext.repository ? (
                   <Fact label="Repo">
-                    <RepositoryFact repository={execution.repository} />
+                    <RepositoryFact repository={sourceContext.repository} />
                   </Fact>
                 ) : null}
                 {execution.publishMode ? (
@@ -10248,11 +10304,21 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                     {formatPublishModeLabel(execution.publishMode)}
                   </Fact>
                 ) : null}
-                {execution.startingBranch ? (
+                {sourceContext.startingBranch ? (
                   <Fact label="Starting Branch">
-                    <code className="text-xs break-all">{execution.startingBranch}</code>
+                    <code className="text-xs break-all" title={sourceContext.startingBranch}>
+                      {sourceContext.startingBranch}
+                    </code>
                   </Fact>
-                ) : null}
+                ) : sourceContext.hasRepository ? (
+                  <Fact label="Starting Branch">
+                    <span className="td-source-context-empty">Not recorded</span>
+                  </Fact>
+                ) : (
+                  <Fact label="Starting Branch">
+                    <span className="td-source-context-empty">Not applicable</span>
+                  </Fact>
+                )}
                 {execution.targetBranch ? (
                   <Fact label="Target Branch">
                     <code className="text-xs break-all">{execution.targetBranch}</code>
@@ -10587,6 +10653,10 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             <MergeAutomationPanel mergeAutomation={displayedMergeAutomation} />
           ) : null}
 
+          {overviewTabActive ? (
+            <IssueLifecyclePanel apiBase={payload.apiBase} evidence={issueLifecycleEvidenceFromExecution(execution)} />
+          ) : null}
+
           {stepsTabActive ? (
             hasStepsEndpoint ? (
             <section className="stack td-steps-region td-evidence-region">
@@ -10655,7 +10725,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                       setActionError(null);
                       checkpointBranchMutation.mutate(request);
                     }}
-                    retrievalCeilings={retrievalCeilings}
                   />
                 </>
               ) : (

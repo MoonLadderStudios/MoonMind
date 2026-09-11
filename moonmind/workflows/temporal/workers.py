@@ -199,6 +199,10 @@ class WorkerSpec:
             "buildId": self.build_id,
             "buildSha": self.build_sha,
             "imageDigest": self.image_digest,
+            # Executing-worker code identity (MoonLadderStudios/MoonMind#4224):
+            # the revision the worker process must report in its heartbeat and
+            # /readyz projection so stale bind-mounted modules are detectable.
+            "workerCodeRevision": self.build_sha or self.build_id,
             "deploymentId": self.deployment_id,
             "registryFingerprint": self.registry_fingerprint,
             "taskQueues": list(self.task_queues),

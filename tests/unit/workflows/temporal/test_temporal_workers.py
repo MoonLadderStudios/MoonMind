@@ -144,6 +144,7 @@ def test_registered_workflow_types_exclude_retired_manifest_ingest():
         "MoonMind.MergeAutomation",
         "MoonMind.PRResolver",
         "MoonMind.PublicationRecoveryV1",
+        "MoonMind.GitHubIssueReconcile",
     )
 
 

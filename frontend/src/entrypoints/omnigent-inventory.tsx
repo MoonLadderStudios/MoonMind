@@ -7,7 +7,6 @@ import { ContextRetrievalControls } from '../components/ContextRetrievalControls
 import {
   type ContextRetrievalAuthoring,
   defaultContextRetrievalAuthoring,
-  retrievalCeilingsFromRuntimeConfig,
 } from '../lib/contextRetrievalAuthoring';
 
 type InventoryKind = 'agents' | 'policies';
@@ -234,10 +233,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
   const queryKey = kind === 'agents' ? 'omnigent_agents_q' : 'omnigent_policies_q';
   const params = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const filter = params.get(queryKey) ?? '';
-  const initialData = payload.initialData as { uiEndpoints?: Record<string, unknown>; dashboardConfig?: { system?: { retrievalAuthoring?: Record<string, unknown> } } } | undefined;
-  const retrievalCeilings = retrievalCeilingsFromRuntimeConfig(
-    initialData?.dashboardConfig?.system?.retrievalAuthoring,
-  );
+  const initialData = payload.initialData as { uiEndpoints?: Record<string, unknown>; dashboardConfig?: { system?: Record<string, unknown> } } | undefined;
   const endpoints = initialData?.uiEndpoints;
   const enabled = payload.features?.[featureKey] === true;
   const discoveredEndpoint = endpoints?.[kind === 'agents' ? 'omnigentAgents' : 'omnigentPolicies'];
@@ -514,7 +510,6 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
               <summary>Context retrieval (RAG) defaults</summary>
               <ContextRetrievalControls
                 value={retrieval.value}
-                ceilings={retrievalCeilings}
                 onChange={(next) =>
                   setEditor({
                     ...editor,

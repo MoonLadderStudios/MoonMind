@@ -104,10 +104,11 @@ _RETIRED_TOOL_DESCRIPTOR_RE = re.compile(
     r"qdrant|followUpRetrieval|follow_up_retrieval", re.IGNORECASE
 )
 
-# The native Qdrant volume is retained through the recovery window (#4115) and
-# ``moonmind_retrieval_state`` is classified by #4107. Any other
-# vector-named volume is a reintroduction.
-_KNOWN_VECTOR_FREE_VOLUMES = {"qdrant-storage", "moonmind_retrieval_state"}
+# MoonLadderStudios/MoonMind#4110: the native Qdrant volume declaration is
+# removed; only ``moonmind_retrieval_state`` (classified by #4107) is an
+# allowed vector-named volume. Any other vector-named volume is a
+# reintroduction.
+_KNOWN_VECTOR_FREE_VOLUMES = {"moonmind_retrieval_state"}
 
 
 def _env_items(service: dict) -> list[str]:
@@ -124,8 +125,7 @@ def check_compose_vector_free(compose: dict) -> list[str]:
     for name, service in services.items():
         service = service or {}
         if _VECTOR_SERVICE_NAME_RE.search(str(name)):
-            # The historical ``qdrant-storage`` *volume* is allowed; a live
-            # *service* with a vector name is never allowed.
+            # A live *service* with a vector name is never allowed.
             problems.append(f"service {name!r} carries a vector service name")
         image = str(service.get("image", ""))
         if _VECTOR_IMAGE_RE.search(image):
@@ -399,9 +399,16 @@ def test_compose_rejects_canonical_vector_store_images() -> None:
         )
 
 
-def test_compose_allows_retained_recovery_volume() -> None:
+def test_compose_has_no_qdrant_storage_volume() -> None:
+    """#4110: the Qdrant volume declaration is removed, not retained."""
     compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text())
-    assert "qdrant-storage" in (compose.get("volumes", {}) or {})
+    assert "qdrant-storage" not in (compose.get("volumes", {}) or {})
+    assert any(
+        "reintroduces vector state" in problem
+        for problem in check_compose_vector_free(
+            {"services": {}, "volumes": {"qdrant-storage": {}}}
+        )
+    )
     fixture = {"services": {}, "volumes": {"pgvector-data": {}}}
     assert any(
         "reintroduces vector state" in problem
@@ -635,16 +642,26 @@ def test_cli_help_advertises_no_manifest_command_group() -> None:
 def test_topology_matrix_gaps_are_explicit() -> None:
     """Pin the verification boundary: hermetic guards are not live proof.
 
-    The following rows require protected deployment evidence owned with the
-    cutover child and sibling removals (#4106-#4113), and are NOT claimed
-    qualified by this module: real startup (fresh Compose prerequisites,
-    init-db/Alembic, API/worker readiness, dashboard bootstrap, repeated
-    startup), runtime x capability x authority-handoff journeys,
-    follow-up/chat manifests against live builds, ingestion fail-before-
-    effects on real writers, memory/finalization ordering under failure,
-    cross-tenant security probes, recovery/upgrade rehearsal, and browser
-    journeys. This test exists so future edits cannot silently widen the
-    claim without updating the mapping above.
+    Hermetic coverage owned by this module (real production boundaries exercised
+    without live services): Compose/topology render, init-SQL enumeration,
+    dependency/import scans, migration SQL scan, settings stale-env tolerance,
+    admission wiring (execution contract, checkpoint branch models,
+    AgentExecutionRequest), retry input-reuse, capability-manifest source scan,
+    worker-registry Manifest absence, drain-gate predicate logic, and
+    docs/operations surfaces.
+
+    The following rows still require protected deployment evidence owned with
+    the cutover child and sibling removals (#4106-#4113), and are NOT claimed
+    qualified by this module: live fresh/upgraded startup against real
+    Compose prerequisites (init-db/Alembic run, API/worker readiness,
+    dashboard bootstrap, repeated startup), live runtime x capability x
+    authority-handoff journeys on supported hosts, live follow-up/chat
+    manifests against real builds, ingestion fail-before-effects on real
+    writers, memory/finalization ordering under real failure, cross-tenant
+    security probes, recovery/upgrade rehearsal on real boundaries, browser
+    journeys, and per-deployment image-layer/observation evidence. This test
+    exists so future edits cannot silently widen the claim without updating
+    the mapping above.
     """
     protected = {
         "real-startup",
@@ -657,3 +674,348 @@ def test_topology_matrix_gaps_are_explicit() -> None:
         "browser-journeys",
     }
     assert len(protected) == 8
+
+
+# ---------------------------------------------------------------------------
+# Clean dependencies: live-import scan (no Qdrant SDK, no Manifest product).
+# ---------------------------------------------------------------------------
+
+
+def _python_sources_under(*roots: str) -> list[Path]:
+    sources: list[Path] = []
+    for root in roots:
+        base = REPO_ROOT / root
+        if not base.is_dir():
+            continue
+        sources.extend(sorted(base.rglob("*.py")))
+    return sources
+
+
+def test_clean_imports_have_no_live_qdrant_sdk() -> None:
+    """No shipped first-party module imports the retired Qdrant SDK.
+
+    Retirement notices, drain/cutover tooling, and the hermetic regression
+    guards themselves may name Qdrant; a live ``import qdrant_client`` /
+    ``from qdrant_client`` outside those owners is a reintroduction.
+    """
+    offenders: list[str] = []
+    for path in _python_sources_under("moonmind", "api_service", "services"):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if re.match(
+                r"(import\s+qdrant_client|from\s+qdrant_client\s+import)",
+                stripped,
+            ):
+                offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}")
+    assert offenders == [], f"live Qdrant SDK imports: {offenders}"
+
+
+def test_no_live_manifest_product_imports() -> None:
+    """No shipped module imports the removed native Manifest product package.
+
+    ``moonmind/manifest/*``, the execution ``manifest_contract``, and the
+    Temporal ``manifest_ingest`` modules were removed by #4192; a live import
+    of any of them is a reintroduction. Drain-gate, cutover-rehearsal, and
+    retirement-guard modules may reference the retired names in prose.
+    """
+    offender_pattern = re.compile(
+        r"^\s*(import\s+moonmind\.manifest|from\s+moonmind\.manifest[\s.]"
+        r"|from\s+moonmind\.workflows\.executions\.manifest_contract\s+import"
+        r"|from\s+moonmind\.workflows\.temporal(\.workflows)?\.manifest_ingest\s+import"
+        r"|import\s+moonmind\.workflows\.temporal(\.workflows)?\.manifest_ingest)",
+    )
+    allowed_name_res = (
+        re.compile(r"manifest_ingest_drain"),
+        re.compile(r"qdrant_cutover_rehearsal"),
+        re.compile(r"test_vector_free_regression_4114"),
+        re.compile(r"test_manifest_retirement_qualification_4193"),
+        re.compile(r"test_manifest_ingest_drain"),
+    )
+    offenders: list[str] = []
+    for path in _python_sources_under("moonmind", "api_service", "services"):
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        if any(rx.search(rel) for rx in allowed_name_res):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if offender_pattern.match(line):
+                offenders.append(f"{rel}:{lineno}")
+    assert offenders == [], f"live Manifest product imports: {offenders}"
+
+
+def test_poetry_lock_has_no_qdrant_distribution_transitive() -> None:
+    """Every Qdrant distribution spelling stays out of the resolved lockfile.
+
+    Case-insensitive negative control: ``Qdrant-Client`` (transitive casing
+    variant) must fail the same guard as the canonical ``qdrant-client`` pin.
+    """
+    assert check_dependency_vector_free(["Qdrant-Client"]) != []
+    lock = (REPO_ROOT / "poetry.lock").read_text(encoding="utf-8")
+    assert not re.search(r'name\s*=\s*"qdrant[^"]*"', lock, re.IGNORECASE)
+
+
+# ---------------------------------------------------------------------------
+# Real startup (hermetic slice): migrations, settings, entrypoints.
+# ---------------------------------------------------------------------------
+
+
+def test_migrations_carry_no_vector_sql() -> None:
+    """Alembic migrations install no vector extension or vector index."""
+    versions = REPO_ROOT / "api_service/migrations/versions"
+    assert versions.is_dir(), "expected Alembic versions directory"
+    scripts = sorted(versions.glob("*.py"))
+    assert scripts, "expected Alembic migration scripts to enumerate"
+    offenders: list[str] = []
+    for script in scripts:
+        text = script.read_text(encoding="utf-8")
+        code_lines = [
+            line
+            for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        if _VECTOR_SQL_RE.search("\n".join(code_lines)):
+            offenders.append(script.name)
+    assert offenders == [], f"migrations install vector SQL: {offenders}"
+
+
+def test_settings_model_declares_no_vector_backend_fields() -> None:
+    """Settings declare no Qdrant/vector backend fields; stale env is inert.
+
+    The only ``qdrant`` mention in ``settings.py`` is the #4109 retirement
+    notice explaining why hosted Mem0 cannot parse. No model field wires a
+    ``QDRANT_*`` / ``VECTOR_STORE_*`` / ``*_EMBEDDING_*`` setting, so old
+    deployments carrying those keys stay inert (``extra="ignore"``).
+    """
+    text = (REPO_ROOT / "moonmind/config/settings.py").read_text(encoding="utf-8")
+    mentions = [
+        (lineno, line)
+        for lineno, line in enumerate(text.splitlines(), start=1)
+        if re.search(r"qdrant", line, re.IGNORECASE)
+    ]
+    assert mentions, "expected the retirement notice to be present"
+    for _, line in mentions:
+        assert re.search(
+            r"Mem0|mandatorily requires|retired|4109|4115",
+            line,
+            re.IGNORECASE,
+        ), f"unexpected live qdrant reference in settings: {line!r}"
+    assert not re.search(
+        r'(?m)^\s*(qdrant_\w+|vector_store_\w+)\s*[:=]',
+        text,
+        re.IGNORECASE,
+    )
+
+
+def test_init_entrypoints_do_not_require_vector_env() -> None:
+    """Init/API entrypoints demand no Qdrant/vector environment."""
+    for rel in ("init_db/init_db_entrypoint.sh", "api_service/entrypoint.sh"):
+        path = REPO_ROOT / rel
+        if not path.is_file():
+            continue
+        code_lines = [
+            line
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        code = "\n".join(code_lines)
+        assert not re.search(r"QDRANT_", code)
+        assert not re.search(r"\bqdrant\b", code, re.IGNORECASE)
+
+
+# ---------------------------------------------------------------------------
+# Admission matrix wiring: checkpoint models and AgentExecutionRequest.
+# ---------------------------------------------------------------------------
+
+
+def _checkpoint_branch_source() -> dict:
+    return {
+        "runId": "run-1",
+        "checkpointBoundary": "before_execution",
+        "checkpointRef": "artifact://tenant/repo/branch.json",
+    }
+
+
+def test_checkpoint_branch_create_rejects_retired_retrieval() -> None:
+    """Checkpoint branch admission rejects explicit retired retrieval."""
+    from pydantic import ValidationError
+
+    from moonmind.schemas.checkpoint_branch_models import (
+        CheckpointBranchCreateRequest,
+    )
+
+    base: dict = {
+        "source": _checkpoint_branch_source(),
+        "label": "branch",
+        "instructions": {"text": "do work"},
+        "workspacePolicy": "continue_from_previous_execution",
+        "idempotencyKey": "idem-branch-1",
+        "followUpRetrieval": {"enabled": True, "collections": ["repo"]},
+    }
+    with pytest.raises(ValidationError, match="4105|retired|vector"):
+        CheckpointBranchCreateRequest.model_validate(base)
+    # Absent/disabled residue still parses so historical payloads load.
+    ok = CheckpointBranchCreateRequest.model_validate(
+        {**base, "followUpRetrieval": {"enabled": False}}
+    )
+    assert ok.follow_up_retrieval == {"enabled": False}
+
+
+def test_checkpoint_branch_continue_rejects_retired_retrieval() -> None:
+    """Checkpoint continue/fork admission rejects retired retrieval."""
+    from pydantic import ValidationError
+
+    from moonmind.schemas.checkpoint_branch_models import (
+        CheckpointBranchContinueRequest,
+    )
+
+    base: dict = {
+        "label": "continue",
+        "instructions": {"text": "continue work"},
+        "idempotencyKey": "idem-continue-1",
+        "followUpRetrieval": {"enabled": True},
+    }
+    with pytest.raises(ValidationError, match="4105|retired|vector"):
+        CheckpointBranchContinueRequest.model_validate(base)
+
+
+def test_agent_execution_request_rejects_retired_parameters() -> None:
+    """AgentExecutionRequest admission rejects explicit retired parameters."""
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    with pytest.raises(ValueError, match="4105|retired|vector"):
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-4114",
+            idempotencyKey="idem-4114",
+            parameters={"rag": {"collections": ["docs"], "required": True}},
+        )
+
+
+def test_agent_execution_request_accepts_vector_free_explicit_inputs() -> None:
+    """Scoped explicit inputs/Skills/artifacts admit with no vector settings."""
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-4114-free",
+        idempotencyKey="idem-4114-free",
+        parameters={"instructions": "summarize"},
+        skill={"name": "document-update"},
+        inputRefs=["artifact://tenant/repo/input.md"],
+    )
+    dumped = request.model_dump(by_alias=True)
+    assert dumped["parameters"] == {"instructions": "summarize"}
+    assert "rag" not in dumped["parameters"]
+    assert "followUpRetrieval" not in dumped["parameters"]
+
+
+def test_retry_reuses_exact_input_without_duplicate_delivery() -> None:
+    """Absent-field stripping is idempotent and never mutates caller inputs.
+
+    Retry must reuse the exact admitted input: stripping absent/disabled
+    residue twice yields the same mapping, and the caller's dict keeps its
+    original keys (the helper operates on the admitted copy).
+    """
+    admitted = {
+        "instructions": "summarize",
+        "rag": {},
+        "followUpRetrieval": {"enabled": False},
+    }
+    first = strip_absent_vector_fields(dict(admitted))
+    second = strip_absent_vector_fields(dict(first))
+    assert first == {"instructions": "summarize"}
+    assert second == first
+    assert set(admitted) == {
+        "instructions",
+        "rag",
+        "followUpRetrieval",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Chat/tools (hermetic slice): capability-manifest sources issue no retired
+# tool or credential.
+# ---------------------------------------------------------------------------
+
+
+def test_capability_sources_issue_no_retired_tool_descriptor() -> None:
+    """Capability-manifest sources carry no retired tool descriptor or cred."""
+    candidates = [
+        REPO_ROOT / "moonmind/omnigent/effective_capabilities.py",
+        REPO_ROOT / "moonmind/omnigent/harness_platform/capabilities.py",
+        REPO_ROOT / "api_service/retrieval_capabilities.py",
+    ]
+    checked = 0
+    for path in candidates:
+        if not path.is_file():
+            continue
+        checked += 1
+        text = path.read_text(encoding="utf-8")
+        assert check_tool_manifest_vector_free([text]) == [] or (
+            "qdrant" not in text.lower()
+            and "followUpRetrieval" not in text
+            and "follow_up_retrieval" not in text
+        ), f"capability source {path} leaks retired tool descriptor"
+        assert not re.search(r"qdrant_search", text, re.IGNORECASE), (
+            f"capability source {path} issues retired qdrant_search tool"
+        )
+    assert checked, "expected capability-manifest sources to enumerate"
+
+
+# ---------------------------------------------------------------------------
+# Manifest retirement (Sep 9 correction): absence + drain-gate predicate.
+# ---------------------------------------------------------------------------
+
+
+def test_worker_catalog_has_no_manifest_workflow_or_activity() -> None:
+    """New worker/catalog registers no Manifest workflow or Activity."""
+    registry = (
+        REPO_ROOT / "moonmind/workflows/temporal/workflow_registry.py"
+    ).read_text(encoding="utf-8")
+    code_lines = [
+        line for line in registry.splitlines() if not line.lstrip().startswith("#")
+    ]
+    code = "\n".join(code_lines)
+    assert "ManifestIngest" not in code
+    assert "manifest_ingest" not in code
+    assert "manifest.compile" not in code
+    assert "manifest.write_summary" not in code
+    assert not (REPO_ROOT / "moonmind/manifest").exists()
+    assert not list(
+        (REPO_ROOT / "moonmind/workflows/temporal/workflows").glob(
+            "*manifest_ingest*"
+        )
+    )
+    assert not list((REPO_ROOT / "api_service/api/routers").glob("*manifest*"))
+
+
+def test_manifest_drain_gate_blocks_on_open_histories() -> None:
+    """Drain predicate allows removal only when every dimension drains to zero.
+
+    Hermetic predicate logic (live counts stay protected): zero open
+    histories/tasks/schedules is removable; any nonzero dimension retains the
+    old release. Fixture replay never authorizes deployment drainage.
+    """
+    from moonmind.gates.manifest_ingest_drain import (
+        ManifestIngestDrainUsage,
+        evaluate_manifest_ingest_drain,
+    )
+
+    drained = evaluate_manifest_ingest_drain(ManifestIngestDrainUsage(0, 0, 0))
+    assert drained.may_deploy_removal is True
+    assert drained.outstanding == 0
+    blocked = evaluate_manifest_ingest_drain(ManifestIngestDrainUsage(1, 0, 0))
+    assert blocked.may_deploy_removal is False
+    assert blocked.outstanding == 1
+    assert "open_manifest_ingest_histories" in blocked.blocking_dimensions

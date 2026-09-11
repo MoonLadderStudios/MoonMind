@@ -53,6 +53,7 @@ from api_service.api.routers.executions import (
     _optional_temporal_search_attributes_cache,
     get_temporal_client,
     _serialize_execution,
+    _serialize_execution_list_item,
     _verified_output_branch,
     router,
     update_execution as update_execution_route,
@@ -19411,3 +19412,28 @@ async def test_mm3835_step_runtime_override_is_allowed_while_the_class_admits() 
     )
 
     assert steps[0]["runtime"]["mode"] == "claude_code"
+
+
+@pytest.mark.parametrize(
+    "serializer", [_serialize_execution, _serialize_execution_list_item]
+)
+@pytest.mark.parametrize(
+    "state", [MoonMindWorkflowState.COMPLETED, MoonMindWorkflowState.FAILED]
+)
+@pytest.mark.parametrize("disposition", [None, "gated_continuation", "unknown"])
+def test_completion_disposition_does_not_change_terminal_lifecycle(
+    serializer, state, disposition
+):
+    record = _build_execution_record(state=state)
+    record.close_status = TemporalExecutionCloseStatus.COMPLETED
+    record.memo["completionDisposition"] = disposition
+    payload = serializer(record).model_dump(by_alias=True, mode="json")
+    expected = (
+        "gated_continuation"
+        if state == MoonMindWorkflowState.COMPLETED
+        and disposition == "gated_continuation"
+        else None
+    )
+    assert payload["completionDisposition"] == expected
+    assert payload["temporalStatus"] == "completed"
+    assert payload["state"] == state.value
