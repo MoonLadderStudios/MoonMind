@@ -424,6 +424,7 @@ RUN_AUTO_PUBLISH_METADATA_EVIDENCE_PATCH = "run-auto-publish-metadata-evidence-v
 RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH = "run-checkpoint-recovery-state-machine-v1"
 RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH = "run-pr-resolver-owned-continuation-v1"
 RUN_PR_RESOLVER_CONTINUATION_IDENTITY_PATCH = "run-pr-resolver-continuation-identity-v1"
+RUN_PR_RESOLVER_VERDICT_PROPAGATION_PATCH = "run-pr-resolver-verdict-propagation-v1"
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset({"jira-implement", *JIRA_BACKED_AGENT_SKILLS})
 _PLAIN_TEXT_BLOCKED_OUTCOME_PATTERN = re.compile(
@@ -1627,6 +1628,15 @@ class MoonMindRunWorkflow:
         self._merge_automation_head_sha: Optional[str] = None
         self._gated_continuation_request: Optional[dict[str, Any]] = None
         self._gated_continuation_execution_ref: Optional[str] = None
+        # Validated pr-resolver terminal verdict facts (MoonLadderStudios/MoonMind#4223).
+        # Projected from the flattened terminal-contract outputs without
+        # reinterpreting Skill semantics; consumed by the owning
+        # MoonMind.MergeAutomation gate for typed next_step routing.
+        self._pr_resolver_status: Optional[str] = None
+        self._pr_resolver_reason: Optional[str] = None
+        self._pr_resolver_next_step: Optional[str] = None
+        self._terminal_contract_evidence_ref: Optional[str] = None
+        self._pr_resolver_retry_after_seconds: Optional[int] = None
         self._report_created: bool = False
         self._report_ref: Optional[str] = None
         # MM-880: compact reference to the versioned ResiliencePolicy envelope
@@ -11207,6 +11217,29 @@ class MoonMindRunWorkflow:
                 output["headSha"] = gated_continuation.get("headSha")
         if self._merge_automation_head_sha:
             output["headSha"] = self._merge_automation_head_sha
+        if workflow.patched(RUN_PR_RESOLVER_VERDICT_PROPAGATION_PATCH):
+            if self._pr_resolver_status:
+                output["prResolverStatus"] = self._pr_resolver_status
+            if self._pr_resolver_reason:
+                output["prResolverReason"] = self._pr_resolver_reason
+            if self._pr_resolver_next_step:
+                output["prResolverNextStep"] = self._pr_resolver_next_step
+            if self._terminal_contract_evidence_ref:
+                output["terminalContractEvidenceRef"] = (
+                    self._terminal_contract_evidence_ref
+                )
+            if self._pr_resolver_retry_after_seconds is not None:
+                output["retryAfterSeconds"] = self._pr_resolver_retry_after_seconds
+            verdict_summary = self._coerce_text(
+                self._publish_context.get("prResolverStatus")
+                and self._last_step_summary,
+                max_chars=1600,
+            )
+            if verdict_summary and self._merge_automation_disposition in {
+                "manual_review",
+                "failed",
+            }:
+                output["prResolverVerdictSummary"] = verdict_summary
         return output
 
     def _initialize_from_payload(
@@ -17282,6 +17315,7 @@ class MoonMindRunWorkflow:
         )
         if merge_automation_head_sha:
             self._merge_automation_head_sha = merge_automation_head_sha
+        self._record_pr_resolver_verdict_context(outputs)
 
         publish_branch = self._coerce_text(
             outputs.get("push_branch") or outputs.get("branch"),
@@ -17348,6 +17382,118 @@ class MoonMindRunWorkflow:
         self._record_accepted_published_head(outputs)
 
         self._record_report_result(execution_result)
+
+    def _record_pr_resolver_verdict_context(
+        self, outputs: Mapping[str, Any]
+    ) -> None:
+        """Project validated pr-resolver verdict facts for the owning gate.
+
+        Only the terminal verdict facts the Skill wrote (status, reason,
+        next step, evidence ref, retry delay) are carried; MoonMind does not
+        reinterpret them. Skill semantic authority stays with the resolved
+        Skill bundle.
+        """
+
+        terminal_contract_id = str(
+            outputs.get("terminalContractId")
+            or outputs.get("terminal_contract_id")
+            or ""
+        ).strip()
+        merge_disposition = str(
+            outputs.get("mergeAutomationDisposition")
+            or outputs.get("merge_automation_disposition")
+            or ""
+        ).strip()
+        status = self._coerce_text(
+            outputs.get("prResolverStatus")
+            or outputs.get("pr_resolver_status"),
+            max_chars=80,
+        )
+        is_pr_resolver_terminal = (
+            status is not None
+            or terminal_contract_id == "pr_resolver_terminal.v1"
+            or merge_disposition in {"manual_review", "failed"}
+        )
+        if status is None and is_pr_resolver_terminal:
+            status = self._coerce_text(
+                outputs.get("status"),
+                max_chars=80,
+            )
+        reason = self._coerce_text(
+            outputs.get("prResolverReason")
+            or outputs.get("pr_resolver_reason")
+            or (
+                outputs.get("final_reason") or outputs.get("finalReason")
+                if is_pr_resolver_terminal
+                else None
+            ),
+            max_chars=500,
+        )
+        next_step = self._coerce_text(
+            outputs.get("prResolverNextStep")
+            or outputs.get("pr_resolver_next_step")
+            or (
+                outputs.get("next_step") or outputs.get("nextStep")
+                if is_pr_resolver_terminal
+                else None
+            ),
+            max_chars=80,
+        )
+        evidence_ref = self._coerce_text(
+            outputs.get("terminalContractEvidenceRef")
+            or outputs.get("terminal_contract_evidence_ref"),
+            max_chars=200,
+        )
+        retry_after: int | None = None
+        for key in (
+            "retryAfterSeconds",
+            "retry_after_seconds",
+            "prResolverRetryAfterSeconds",
+        ):
+            raw = outputs.get(key)
+            if raw is None:
+                continue
+            if isinstance(raw, bool):
+                continue
+            try:
+                candidate = int(raw) if not isinstance(raw, int) else raw
+            except (TypeError, ValueError):
+                continue
+            if candidate >= 1:
+                retry_after = candidate
+                break
+        # A gated continuation may also carry the Skill-supplied delay.
+        if retry_after is None:
+            continuation = self._gated_continuation_request
+            if isinstance(continuation, Mapping):
+                raw = continuation.get("retryAfterSeconds")
+                if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 1:
+                    retry_after = raw
+        self._pr_resolver_status = status or None
+        self._pr_resolver_reason = reason or None
+        self._pr_resolver_next_step = next_step or None
+        self._terminal_contract_evidence_ref = evidence_ref or None
+        self._pr_resolver_retry_after_seconds = retry_after
+        if status:
+            self._publish_context["prResolverStatus"] = status
+        else:
+            self._publish_context.pop("prResolverStatus", None)
+        if reason:
+            self._publish_context["prResolverReason"] = reason
+        else:
+            self._publish_context.pop("prResolverReason", None)
+        if next_step:
+            self._publish_context["prResolverNextStep"] = next_step
+        else:
+            self._publish_context.pop("prResolverNextStep", None)
+        if evidence_ref:
+            self._publish_context["terminalContractEvidenceRef"] = evidence_ref
+        else:
+            self._publish_context.pop("terminalContractEvidenceRef", None)
+        if retry_after is not None:
+            self._publish_context["prResolverRetryAfterSeconds"] = retry_after
+        else:
+            self._publish_context.pop("prResolverRetryAfterSeconds", None)
 
     def _record_publish_metadata_context(self, source: Mapping[str, Any]) -> None:
         raw_metadata = source.get("prMetadata") or source.get("pr_metadata")
