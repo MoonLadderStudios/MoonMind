@@ -490,6 +490,136 @@ async def test_mixed_labels_block_transition(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
+async def test_finalize_mixed_with_pr_steers_to_needs_attention(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """MoonLadderStudios/MoonMind#4225: finalize with published PR steers to attention."""
+    service = _LifecycleFakeService(initial_labels=["status: in-progress", "status: code-review"])
+    _install(monkeypatch, service)
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/4210"}',
+        encoding="utf-8",
+    )
+    verify_artifact = tmp_path / "verify.json"
+    verify_artifact.write_text('{"verdict": "FULLY_IMPLEMENTED"}', encoding="utf-8")
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 4176,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "verificationArtifactPath": str(verify_artifact),
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "attention"
+    assert result.outputs["degraded"] is True
+    assert result.outputs["reasonCode"] == "reconciliation_required"
+    assert result.outputs["previousLifecycleSettled"] == "blocked_mixed"
+    assert result.outputs["pullRequestUrl"] == "https://github.com/MoonLadderStudios/MoonMind/pull/4210"
+    assert result.outputs["observedLabels"] == ["status: in-progress", "status: code-review"]
+    # Add-only steering: needs-attention added, no existing label removed.
+    assert ("add", "status: needs-attention") in service.operations
+    assert [op for op in service.operations if op[0] == "remove"] == []
+    confirmed = [label.lower() for label in result.outputs["confirmedLabels"]]
+    assert "status: needs-attention" in confirmed
+    assert "status: in-progress" in confirmed
+    assert "status: code-review" in confirmed
+    # PR handoff comment posted with the PR URL visible.
+    assert "comment" in result.outputs["appliedActions"]
+    posted_bodies = [str(kwargs.get("json") or "") for _url, kwargs in _LifecycleHttpClient.posts]
+    assert any(
+        "https://github.com/MoonLadderStudios/MoonMind/pull/4210" in body
+        for body in posted_bodies
+    )
+    # Degraded outcome is surfaced for run summary / Workflow Detail projection.
+    assert "degraded" in result.outputs["summary"].lower()
+    assert "needs-attention" in result.outputs["summary"].lower()
+    assert result.outputs["transition"]["toTarget"] == "to_needs_attention"
+    assert result.outputs["sideEffect"]["operation"] == "github.issue.update"
+
+
+@pytest.mark.asyncio
+async def test_finalize_mixed_without_pr_stays_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same mixed labels with no PR artifact keep FAILED/blocked (replay shape)."""
+    service = _LifecycleFakeService(initial_labels=["status: in-progress", "status: code-review"])
+    _install(monkeypatch, service)
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 4176,
+            "mode": "finalize_after_pr_or_done",
+            "requireVerification": False,
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["reasonCode"] == "reconciliation_required"
+    assert result.outputs["lifecycleSettled"] == "blocked_mixed"
+    assert service.operations == []
+    assert _LifecycleHttpClient.posts == []
+
+
+@pytest.mark.asyncio
+async def test_finalize_unknown_with_pr_steers_to_needs_attention(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    service = _LifecycleFakeService(initial_labels=["status: frobnicate"])
+    _install(monkeypatch, service)
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/4210"}',
+        encoding="utf-8",
+    )
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 4176,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "requireVerification": False,
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "attention"
+    assert result.outputs["previousLifecycleSettled"] == "blocked_unknown"
+    assert [op for op in service.operations if op[0] == "remove"] == []
+    assert "status: needs-attention" in [label.lower() for label in result.outputs["confirmedLabels"]]
+
+
+@pytest.mark.asyncio
+async def test_finalize_open_done_with_pr_stays_blocked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """blocked_open_done is not steered: it stays FAILED even with a PR."""
+    service = _LifecycleFakeService(initial_labels=["status: done"])
+    _install(monkeypatch, service)
+    pr_artifact = tmp_path / "pr.json"
+    pr_artifact.write_text(
+        '{"pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/4210"}',
+        encoding="utf-8",
+    )
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 4176,
+            "mode": "finalize_after_pr_or_done",
+            "pullRequestArtifactPath": str(pr_artifact),
+            "requireVerification": False,
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["reasonCode"] == "reconciliation_required"
+    assert service.operations == []
+
+
+@pytest.mark.asyncio
 async def test_unknown_status_blocks_transition(monkeypatch: pytest.MonkeyPatch) -> None:
     service = _LifecycleFakeService(initial_labels=["status: ready"])
     _install(monkeypatch, service)

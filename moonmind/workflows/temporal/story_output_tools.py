@@ -5817,6 +5817,336 @@ async def _github_issue_label_present(
     return label.strip().lower() in present
 
 
+async def _finalize_blocked_to_needs_attention(
+    *,
+    repository: str,
+    issue_number: int,
+    issue_ref: str,
+    issue: Mapping[str, Any],
+    current_labels: Sequence[str],
+    interpretation: Any,
+    pull_request_url: str,
+    assessment_verdict: str,
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    service: Any,
+    headers: Mapping[str, str],
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> ToolResult:
+    """Steer a finalize blocked by mixed/unknown labels to needs-attention.
+
+    Applies an add-only ``status: needs-attention`` transition (existing
+    canonical labels are preserved per design section 2.1), posts the PR-link
+    handoff comment, and returns ``COMPLETED``/``attention`` so the workflow
+    completes as degraded instead of failed. GitHub write denials or missing
+    terminal evidence keep the ``FAILED``/``blocked`` outcome.
+    """
+    from moonmind.workflows.temporal.github_issue_attempts import redacted_error_summary as _redacted_summary
+
+    destination = "status: needs-attention"
+    observed_labels = [str(label) for label in (current_labels or [])]
+    blocked_reason = str(getattr(interpretation, "blocked_reason", "") or "")
+    previous_settled = str(getattr(interpretation, "settled", "") or "")
+    reason = (
+        f"Finalize steered to needs-attention for {issue_ref}: {blocked_reason} "
+        f"Pull request {pull_request_url} was already published."
+    ).strip()
+    readiness = await service.check_issue_label_readiness(
+        repo=repository,
+        issue_number=issue_number,
+        required_labels=[destination],
+    )
+    if not readiness.get("ready"):
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "lifecycleSettled": previous_settled,
+                "observedLabels": observed_labels,
+                "pullRequestUrl": pull_request_url,
+                "reasonCode": str(readiness.get("reasonCode") or "readiness_failed"),
+                "summary": (
+                    f"Skipped GitHub issue finalize steering for {issue_ref}: "
+                    f"{readiness.get('summary')}"
+                ),
+            },
+        )
+    applied: list[str] = []
+    warnings: list[str] = []
+    present = {str(name).strip().lower() for name in observed_labels}
+    mutation_outcome = "already_applied"
+    if destination.lower() not in present:
+        add_result = await service.add_issue_labels(
+            repo=repository,
+            issue_number=issue_number,
+            labels=[destination],
+        )
+        if not add_result.get("ok"):
+            if add_result.get("reasonCode") == "outcome_unknown":
+                confirmed = await _github_issue_label_present(
+                    repository=repository,
+                    issue_number=issue_number,
+                    label=destination,
+                    github_service_factory=github_service_factory,
+                )
+                if confirmed is True:
+                    warnings.append(
+                        f"Label add for {destination} confirmed on read-back after "
+                        f"ambiguous result: {add_result.get('summary')}"
+                    )
+                    applied.append(f"add_label:{destination}")
+                    mutation_outcome = "applied"
+                else:
+                    return ToolResult(
+                        status="FAILED",
+                        outputs={
+                            "issueRef": issue_ref,
+                            "decision": "blocked",
+                            "lifecycleSettled": previous_settled,
+                            "observedLabels": observed_labels,
+                            "pullRequestUrl": pull_request_url,
+                            "appliedActions": applied,
+                            "mutationOutcome": "outcome_unknown",
+                            "reasonCode": "mutation_unknown",
+                            "summary": (
+                                f"GitHub issue finalize steering for {issue_ref} has no "
+                                f"authoritative terminal evidence: {add_result.get('summary')}"
+                            ),
+                        },
+                    )
+            else:
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "decision": "blocked",
+                        "lifecycleSettled": previous_settled,
+                        "observedLabels": observed_labels,
+                        "pullRequestUrl": pull_request_url,
+                        "appliedActions": applied,
+                        "mutationOutcome": "denied",
+                        "reasonCode": str(add_result.get("reasonCode") or "mutation_denied"),
+                        "summary": (
+                            f"GitHub issue finalize steering denied for {issue_ref}: "
+                            f"{add_result.get('summary')}"
+                        ),
+                    },
+                )
+        else:
+            applied.append(f"add_label:{destination}")
+            mutation_outcome = "applied"
+    read_back_data, read_back_error = await _fetch_github_issue(
+        repository=repository,
+        issue_number=issue_number,
+        github_service_factory=github_service_factory,
+    )
+    if read_back_data is None:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "lifecycleSettled": previous_settled,
+                "observedLabels": observed_labels,
+                "pullRequestUrl": pull_request_url,
+                "appliedActions": applied,
+                "mutationOutcome": "outcome_unknown",
+                "reasonCode": "mutation_unknown",
+                "summary": (
+                    f"GitHub issue finalize steering for {issue_ref} has no authoritative "
+                    f"terminal evidence ({read_back_error or 'response loss'})."
+                ),
+            },
+        )
+    updated_issue = _github_issue_payload(read_back_data, repository)
+    confirmed_labels = [str(label) for label in updated_issue.get("labels") or []]
+    confirmed_present = {label.strip().lower() for label in confirmed_labels}
+    if destination.lower() not in confirmed_present:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "issueUrl": updated_issue.get("url") or issue.get("url"),
+                "appliedActions": applied,
+                "confirmedState": updated_issue.get("state"),
+                "confirmedLabels": confirmed_labels,
+                "lifecycleSettled": previous_settled,
+                "observedLabels": observed_labels,
+                "pullRequestUrl": pull_request_url,
+                "mutationOutcome": "incomplete",
+                "reasonCode": "mutation_incomplete",
+                "summary": (
+                    f"GitHub issue finalize steering for {issue_ref} did not observe "
+                    f"{destination} on read-back."
+                ),
+            },
+        )
+    # Existing canonical labels are deliberately preserved (add-only steering);
+    # no removal is attempted here.
+    handoff = _github_attempt_handoff_for_transition(
+        mode="needs_attention",
+        repository=repository,
+        issue_number=issue_number,
+        inputs=inputs,
+        context=context,
+        pull_request_url=pull_request_url,
+        assessment_verdict=assessment_verdict,
+    )
+    comment_body = render_attempt_comment(handoff)
+    if pull_request_url and pull_request_url not in comment_body:
+        comment_body = f"{comment_body.rstrip()}\n\nImplementation pull request: {pull_request_url}"
+    attempt_comment_id: Any = None
+    if comment_body and hasattr(service, "list_issue_comments"):
+        try:
+            listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
+        except Exception:
+            listed = {"ok": False, "comments": []}
+        observed = listed.get("comments") if isinstance(listed, Mapping) else []
+        if isinstance(observed, list):
+            reconciliation = reconcile_uncertain_creation(observed, handoff.attempt_id)
+            if reconciliation.outcome == "already_created" and reconciliation.comment_id:
+                warnings.append(reconciliation.summary)
+                applied.append("comment")
+                attempt_comment_id = reconciliation.comment_id
+                comment_body = ""
+    if comment_body and hasattr(service, "create_issue_comment"):
+        create_result = await service.create_issue_comment(
+            repo=repository, issue_number=issue_number, body=comment_body
+        )
+        if create_result.get("ok"):
+            applied.append("comment")
+            attempt_comment_id = create_result.get("commentId")
+            comment_body = ""
+        elif str(create_result.get("reasonCode") or "") == "outcome_unknown":
+            warnings.append(
+                "GitHub needs-attention status was updated, but the PR handoff comment "
+                "result could not be confirmed; reconcile by stable attempt "
+                "marker before retrying creation."
+            )
+            comment_body = ""
+        else:
+            summary_text = _redacted_summary(str(create_result.get("summary") or "comment rejected"))
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "issueUrl": updated_issue.get("url") or issue.get("url"),
+                    "decision": "blocked",
+                    "appliedActions": applied,
+                    "confirmedState": updated_issue.get("state"),
+                    "confirmedLabels": confirmed_labels,
+                    "lifecycleSettled": previous_settled,
+                    "observedLabels": observed_labels,
+                    "pullRequestUrl": pull_request_url,
+                    "commentStatus": "rejected",
+                    "reasonCode": str(create_result.get("reasonCode") or "comment_denied"),
+                    "summary": (
+                        "GitHub issue finalize steering was updated, but the PR handoff "
+                        f"comment failed. {summary_text}"
+                    ).strip(),
+                },
+            )
+    if comment_body:
+        async with httpx.AsyncClient(timeout=_GITHUB_ISSUE_MUTATION_TIMEOUT_SECONDS) as client:
+            try:
+                comment_response = await client.post(
+                    f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
+                    headers=dict(headers),
+                    json={"body": comment_body},
+                )
+                comment_response.raise_for_status()
+                applied.append("comment")
+                comment_body = ""
+            except httpx.HTTPStatusError as exc:
+                summary = service._github_permission_summary(exc.response)
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "issueRef": issue_ref,
+                        "issueUrl": updated_issue.get("url") or issue.get("url"),
+                        "decision": "blocked",
+                        "appliedActions": applied,
+                        "confirmedState": updated_issue.get("state"),
+                        "confirmedLabels": confirmed_labels,
+                        "lifecycleSettled": previous_settled,
+                        "observedLabels": observed_labels,
+                        "pullRequestUrl": pull_request_url,
+                        "commentStatus": "rejected",
+                        "reasonCode": "comment_denied",
+                        "summary": (
+                            "GitHub issue finalize steering was updated, but the PR handoff "
+                            f"comment failed with HTTP {exc.response.status_code}. {summary}"
+                        ).strip(),
+                    },
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                warnings.append(
+                    "GitHub needs-attention status was updated, but the PR handoff comment "
+                    f"result could not be confirmed after {exc.__class__.__name__}; "
+                    "the comment was not retried to avoid a duplicate."
+                )
+    confirmed_settled = previous_settled
+    try:
+        confirmed_settled = interpret_issue(updated_issue).settled
+    except Exception:
+        pass
+    transition = {
+        "allowed": True,
+        "fromSettled": previous_settled,
+        "toTarget": "to_needs_attention",
+        "reason": reason,
+        "reasonCode": "finalize_attention_steering",
+        "requiredEvidence": ["blocking_reason", "pr_url_verified"],
+        "missingEvidence": [],
+        "summary": (
+            f"Finalize steered {previous_settled} -> to_needs_attention after PR publication; "
+            "existing labels preserved pending reconciliation."
+        ),
+    }
+    summary = (
+        f"GitHub issue {issue_ref} completed degraded: finalize observed conflicting "
+        f"labels {sorted(observed_labels)} ({blocked_reason}) after publishing {pull_request_url}; "
+        f"added {destination} (existing labels preserved) and posted the PR handoff comment. "
+        "Operator reconciliation is required before automatic work continues."
+    )
+    outputs: dict[str, Any] = {
+        "issueRef": issue_ref,
+        "issueUrl": updated_issue.get("url") or issue.get("url"),
+        "decision": "attention",
+        "degraded": True,
+        "lifecycleSettled": confirmed_settled,
+        "previousLifecycleSettled": previous_settled,
+        "observedLabels": observed_labels,
+        "blockingReason": blocked_reason,
+        "pullRequestUrl": pull_request_url,
+        "appliedActions": applied,
+        "confirmedState": updated_issue.get("state"),
+        "confirmedLabels": confirmed_labels,
+        "transition": transition,
+        "mutationOutcome": mutation_outcome,
+        "reasonCode": "reconciliation_required",
+        "summary": summary,
+        "attemptId": handoff.attempt_id if handoff is not None else "",
+        "deploymentId": handoff.deployment_id if handoff is not None else "",
+        "attemptActivity": handoff.activity if handoff is not None else "",
+        "attemptCommentId": attempt_comment_id,
+        "attemptHandoff": handoff.to_dict() if handoff is not None else None,
+        "sideEffect": {
+            "effectClass": "external_non_idempotent",
+            "kind": "github",
+            "operation": "github.issue.update",
+            "target": updated_issue.get("url") or issue.get("url"),
+            "summary": summary,
+        },
+    }
+    if warnings:
+        outputs["warnings"] = warnings
+        outputs["commentStatus"] = "unconfirmed"
+    return ToolResult(status="COMPLETED", outputs=outputs)
+
+
 async def update_github_issue_status(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -5825,6 +6155,8 @@ async def update_github_issue_status(
 ) -> ToolResult:
     repository, issue_number = _github_issue_inputs(inputs)
     mode = _github_status_mode(inputs)
+    requested_mode = mode
+    was_finalize_after_pr = requested_mode == "finalize_after_pr_or_done"
     assessment_verdict, assessment_available = (
         await _augment_assessment_verdict_with_ref(
             _assessment_verdict_from_artifact(inputs, _context),
@@ -6013,6 +6345,26 @@ async def update_github_issue_status(
             },
         )
     if interpretation.settled in {"blocked_mixed", "blocked_unknown", "blocked_open_done"}:
+        if (
+            was_finalize_after_pr
+            and interpretation.settled in {"blocked_mixed", "blocked_unknown"}
+            and pull_request_url
+        ):
+            return await _finalize_blocked_to_needs_attention(
+                repository=repository,
+                issue_number=issue_number,
+                issue_ref=issue_ref,
+                issue=issue,
+                current_labels=current_labels,
+                interpretation=interpretation,
+                pull_request_url=pull_request_url,
+                assessment_verdict=assessment_verdict,
+                inputs=inputs,
+                context=_context,
+                service=service,
+                headers=headers,
+                github_service_factory=github_service_factory,
+            )
         return ToolResult(
             status="FAILED",
             outputs={
