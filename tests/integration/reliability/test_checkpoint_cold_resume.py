@@ -94,7 +94,9 @@ async def test_managed_codex_checkpoint_cold_resume_uses_only_durable_state(
         run_store=run_store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, content_type: str, _kind: str, link: object = None
+    ) -> str:
         return artifact_store.put_bytes(payload, content_type=content_type).artifact_ref
 
     activities._put_managed_checkpoint_artifact = put

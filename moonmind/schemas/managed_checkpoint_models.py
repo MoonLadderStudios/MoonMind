@@ -107,3 +107,8 @@ class ManagedWorkspaceCheckpointCaptureResult(BaseModel):
     idempotency_key: str = Field(..., alias="idempotencyKey")
     failure_code: str | None = Field(None, alias="failureCode", max_length=100)
     summary: str | None = Field(None, max_length=1000)
+    # Saved-work manifest index (#4015): compact reference to the verified
+    # immutable manifest committing this capture. Optional so historical
+    # records without a saved-work manifest still validate.
+    saved_work_ref: str | None = Field(None, alias="savedWorkRef", max_length=500)
+    saved_work_digest: str | None = Field(None, alias="savedWorkDigest", max_length=200)
