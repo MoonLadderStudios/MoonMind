@@ -1084,7 +1084,36 @@ async def get_omnigent_codex_catalog_readiness(
             # A busy profile that queues can still accept new work, so it is
             # not saturated from the admission surface's point of view.
             saturated_by_profile[row.profile_id] = busy and not queue_when_busy
-        if compatible and readiness["launch_ready"] and (not busy or queue_when_busy):
+        # MoonLadderStudios/MoonMind#4021 req-4/req-5: the credentialless free
+        # route additionally needs the recorded per-policy-version data-use
+        # authorization from the existing Settings authority. Default
+        # deployments accept, so they observe no change; an explicit operator
+        # decline surfaces here through the normal Runtime/Profile UI with the
+        # evaluated privacy reason instead of fabricated pricing/capability
+        # axes. A blocked default is structural, never capacity pressure, so
+        # it stays out of the saturation bookkeeping below.
+        free_route_blocked_reason: str | None = None
+        if (
+            compatible
+            and bool(readiness["launch_ready"])
+            and runtime_id == "opencode"
+            and str(getattr(row, "provider_id", "") or "") == "opencode"
+        ):
+            from moonmind.omnigent.bootstrap.free_model_eligibility import (
+                zen_free_route_blocked_reason,
+            )
+
+            free_route_blocked_reason = zen_free_route_blocked_reason(
+                str(getattr(row, "provider_id", "") or "")
+            )
+        if free_route_blocked_reason is not None:
+            saturated_by_profile.pop(row.profile_id, None)
+        if (
+            compatible
+            and readiness["launch_ready"]
+            and free_route_blocked_reason is None
+            and (not busy or queue_when_busy)
+        ):
             eligible_by_runtime[runtime_id] = eligible_by_runtime.get(runtime_id, 0) + 1
             eligible.append(
                 EligibleProviderProfile(
@@ -1104,15 +1133,25 @@ async def get_omnigent_codex_catalog_readiness(
                 and "profile_capacity_unavailable" not in codes
             ):
                 codes.append("profile_capacity_unavailable")
+            gate_reasons: list[GateReason]
+            if free_route_blocked_reason is not None:
+                # The profile is launch-ready but the free-route data-use
+                # policy blocks it: show exactly that reason, not the generic
+                # validation fallback.
+                gate_reasons = [
+                    free_model_gate_reason({"privacy": free_route_blocked_reason})
+                ]
+            else:
+                gate_reasons = [
+                    _reason(code)
+                    for code in codes or ["profile_validation_required"]
+                ]
             ineligible.append(
                 IneligibleProviderProfile(
                     profileId=row.profile_id,
                     label=label,
                     runtimeId=runtime_id,
-                    gateReasons=[
-                        _reason(code)
-                        for code in codes or ["profile_validation_required"]
-                    ],
+                    gateReasons=gate_reasons,
                 )
             )
 

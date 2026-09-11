@@ -324,6 +324,30 @@ def zen_free_data_use_decision_from_settings(
     )
 
 
+def zen_free_route_blocked_reason(
+    provider_id: str | None,
+    *,
+    env: Mapping[str, Any] | None = None,
+) -> str | None:
+    """Return the blocking privacy reason for the credentialless free route.
+
+    MoonLadderStudios/MoonMind#4021 req-4: production admission paths call
+    this with the selected provider ID. It reuses the existing Settings/policy
+    authority (:func:`zen_free_data_use_decision_from_settings`), never a
+    marketplace or a new consent subsystem. Returns ``None`` when the route
+    is not the credentialless free route or when the recorded per-version
+    authorization exists, so default-accepted deployments observe no change.
+    Only the evaluated privacy axis is ever reported; pricing/capability
+    axes need the trusted feed that has no production source yet and are
+    never fabricated here.
+    """
+    if str(provider_id or "").strip() != FREE_PROVIDER_ID:
+        return None
+    if zen_free_data_use_decision_from_settings(env=env) is not None:
+        return None
+    return "privacy:unaccepted_terms:" + ZEN_FREE_TERMS_VERSION
+
+
 def build_eligibility_input(
     *,
     qualified_id: str,
@@ -637,4 +661,5 @@ __all__ = [
     "recheck_frozen_attempt",
     "resolve_free_default_model",
     "zen_free_data_use_decision_from_settings",
+    "zen_free_route_blocked_reason",
 ]
