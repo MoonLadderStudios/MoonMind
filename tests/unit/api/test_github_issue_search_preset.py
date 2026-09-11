@@ -57,6 +57,12 @@ def activity_boundary(monkeypatch):
 
     def handler(request):
         requests.append(request)
+        if "/comments" in request.url.path:
+            # Live comment readability gate expects a GitHub comment list.
+            # GET returns the list; POST creates one comment.
+            if request.method == "GET":
+                return httpx.Response(200, json=[])
+            return httpx.Response(200, json={"id": 1})
         if request.method == "POST" and request.url.path.endswith("/labels"):
             for label in json.loads(request.content)["labels"]:
                 if {"name": label} not in detail["labels"]:
