@@ -4203,10 +4203,18 @@ def _serialize_execution(
 
     publish_payload = _normalize_publish_payload(task_payload.get("publish"))
 
-    # Precedence: task.git.startingBranch > task.git.branch >
-    # task.startingBranch > params.startingBranch
+    # MoonLadderStudios/MoonMind#4228: the Create page submits repository and
+    # branch only in the structured top-level payload.repository mapping,
+    # which the API persists as parameters["repository"]. Project that
+    # canonical target before scalar fallbacks; _coerce_temporal_scalar
+    # deliberately returns "" for mappings.
+    repository_target = params.get("repository")
+
+    # Precedence: canonical repository target branch > task.git.startingBranch
+    # > task.git.branch > task.startingBranch > params.startingBranch
     starting_branch = (
-        _coerce_temporal_scalar(git_payload.get("startingBranch"))
+        repository_branch_from_value(repository_target)
+        or _coerce_temporal_scalar(git_payload.get("startingBranch"))
         or _coerce_temporal_scalar(git_payload.get("branch"))
         or _coerce_temporal_scalar(task_payload.get("startingBranch"))
         or _coerce_temporal_scalar(params.get("startingBranch"))
@@ -4218,10 +4226,14 @@ def _serialize_execution(
         for k in ("startingBranch", "targetBranch", "defaultBranch", "branch")
     )
     if not starting_branch and has_git_context:
-        default_branch = str(
-            git_payload.get("defaultBranch") or params.get("defaultBranch") or "main"
+        # MoonLadderStudios/MoonMind#4228: use only recorded default-branch
+        # evidence. Never fabricate `main` when no default was recorded; the
+        # detail UI renders that case explicitly as "Not recorded".
+        recorded_default = str(
+            git_payload.get("defaultBranch") or params.get("defaultBranch") or ""
         ).strip()
-        starting_branch = f"{default_branch} (default)"
+        if recorded_default:
+            starting_branch = f"{recorded_default} (default)"
 
     # Precedence: task.git.targetBranch > task.targetBranch > params.targetBranch
     target_branch = str(
@@ -4232,7 +4244,8 @@ def _serialize_execution(
     ).strip() or None
 
     repository = (
-        _coerce_temporal_scalar(git_payload.get("repository"))
+        repository_name_from_value(repository_target)
+        or _coerce_temporal_scalar(git_payload.get("repository"))
         or _coerce_temporal_scalar(task_payload.get("repository"))
         or _coerce_temporal_scalar(params.get("repository"))
         or _coerce_temporal_scalar(params.get("repo"))

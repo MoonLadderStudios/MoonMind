@@ -12775,7 +12775,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "not_started" | "succeeded" | "retry_pending" | "failed" | "degraded" | "unsupported" | "deferred" | "not_required";
+            status: "not_started" | "succeeded" | "retry_pending" | "failed" | "degraded" | "unsupported";
             /** Phase */
             phase?: string | null;
             /**
