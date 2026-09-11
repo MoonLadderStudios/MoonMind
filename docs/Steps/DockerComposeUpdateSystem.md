@@ -686,6 +686,42 @@ The workflow releases the deployment lock and writes a structured result contain
 - command log artifact ref
 - verification artifact ref
 
+## 10.10 Bind-mounted checkouts: a host `git pull` alone is not a deployment
+
+Development Compose deployments bind-mount `./moonmind:/app/moonmind:ro` (and
+similar source mounts) into long-lived worker containers. A host `git pull`
+rewrites the files on disk while the running Python processes keep the old
+imported modules, silently creating a mixed-version deployment: one run can be
+admitted under old rules and finalized under new ones
+(MoonLadderStudios/MoonMind#4224).
+
+Operator rule: **a host `git pull` alone is not a deployment.** After pulling
+source changes on the host, the operator must prove the running workers match
+the checkout before new runs are admitted:
+
+1. Check the readiness detail: each Temporal worker exposes its
+   startup-recorded code identity on `/readyz` (`codeRevision`,
+   `codeIdentityStatus`, and — when stale — `reasonCode: stale_code` with the
+   worker name plus both revisions). The API aggregates the same detail under
+   `/healthz` → `workerCodeFreshness` (per-worker entries plus a `staleCode`
+   list when any worker is stale).
+2. Or run the CLI from the checkout: `moonmind worker code-readiness`
+   (uses `MOONMIND_WORKER_READINESS_URLS` / `TEMPORAL_WORKFLOW_READINESS_URL`;
+   exits non-zero with `reasonCode=stale_code` naming each stale worker and
+   both revisions).
+3. Restart stale workers: the deployment update path
+   (`deployment.update_compose_stack`) probes worker `/readyz` endpoints after
+   recreating services, restarts idle stale workers immediately, drains busy
+   ones (bounded graceful restart — never killed mid-activity), and fails the
+   update loudly with `reasonCode=stale_code` when a stale worker cannot be
+   restarted (for example the excluded deployment-control runner itself, which
+   must be recreated separately). New `MoonMind.UserWorkflow` admissions are
+   refused with `stale_code` while every known worker serving the queue is
+   stale.
+4. Every worker records its startup code identity in AgentRun/UserWorkflow
+   metadata (`workerCodeRevision`) so post-incident analysis can tell which
+   revision executed each step.
+
 ---
 
 ## 11. Updater runner execution model
