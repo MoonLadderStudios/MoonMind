@@ -154,6 +154,7 @@ with deterministic workflow code, not Temporal Local Activities.
 | `execution.dependency_status_snapshot` | `artifacts` | `mm.activity.artifacts` |
 | `execution.notify_completion` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `execution.record_terminal_state` | `artifacts` | `mm.activity.artifacts` |
+| `github_issue.finalize_failed_attempt` | `integrations` | `mm.activity.integrations` |
 | `integration.codex_cloud.cancel` | `integrations` | `mm.activity.integrations` |
 | `integration.codex_cloud.fetch_result` | `integrations` | `mm.activity.integrations` |
 | `integration.codex_cloud.start` | `integrations` | `mm.activity.integrations` |
