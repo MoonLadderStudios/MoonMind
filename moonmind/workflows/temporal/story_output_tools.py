@@ -38,7 +38,12 @@ from moonmind.workflows.temporal.github_issue_attempts import (
 )
 from moonmind.workflows.temporal.github_issue_admission import (
     ENTRYPOINT_EXPLICIT,
+    ENTRYPOINT_SEARCH,
+    ENTRYPOINTS,
     admit_for_entrypoint,
+    contender_quiesce_decision,
+    revalidate_for_mutation,
+    should_stop_on_resume,
 )
 from moonmind.workflows.temporal.github_issue_lifecycle import (
     attempt_evidence_blocks_admission,
@@ -4552,6 +4557,11 @@ async def load_github_issue_preset_brief(
                 github_service=github_service_factory(),
                 blockers_from_issue=blockers_for_issue,
                 recovery_handoff=recovery_handoff or None,
+                # Same shared exact-issue admission boundary as explicit /
+                # orchestration / continuation paths (issue #4178): the
+                # selector admits the search entrypoint with this pinned
+                # identity plus supplied attempt evidence.
+                attempt_context=_github_status_attempt_context(inputs, _context),
             )
         except ValueError as exc:
             return ToolResult(status="FAILED", outputs={"error": str(exc)})
@@ -4609,18 +4619,19 @@ async def load_github_issue_preset_brief(
         or not is_lifecycle_selectable_candidate(
             issue_data, _github_status_attempt_context(inputs, _context)
         )
-        or not admit_for_entrypoint(
-            ENTRYPOINT_EXPLICIT,
+        or not _github_shared_admission_decision(
+            inputs=inputs,
+            context=_context,
             repository=repository,
             issue_number=issue_number,
             issue=issue_data,
-            attempt_context=_github_status_attempt_context(inputs, _context),
         ).allowed
     ):
         # Direct issue loads run the same admission policy as search: an
         # explicit issue reference is not a bypass around lifecycle state.
         # Both paths route through the one shared exact-issue admission
-        # boundary (issue #4178); search uses ENTRYPOINT_SEARCH instead.
+        # boundary (issue #4178) with the full Req-1 evidence bundle; search
+        # selections use ENTRYPOINT_SEARCH instead.
         return ToolResult(
             status="FAILED",
             outputs={
@@ -5513,6 +5524,143 @@ def _github_status_attempt_context(
     return collected
 
 
+def _github_admission_entrypoint(
+    inputs: Mapping[str, Any],
+    *,
+    search_selected: bool = False,
+) -> str:
+    """Select the pinned admission entrypoint for one GitHub issue boundary call.
+
+    Search-selected work, explicit implementation/orchestration, retries, and
+    operator continuations invoke the same shared admission boundary with
+    pinned identities (issue #4178). A caller-supplied entrypoint is honored
+    only when it names that shared boundary; otherwise direct loads use
+    explicit admission and search selections use search admission. There are no
+    preset-name exemptions: an unknown entrypoint value falls back to the
+    path default and the boundary itself rejects unknown entrypoints.
+    """
+    explicit = _string(
+        inputs.get("entrypoint")
+        or inputs.get("admissionEntrypoint")
+        or inputs.get("admission_entrypoint")
+    )
+    if explicit in ENTRYPOINTS:
+        return explicit
+    return ENTRYPOINT_SEARCH if search_selected else ENTRYPOINT_EXPLICIT
+
+
+def _github_admission_bundle(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Collect caller-supplied Req-1 evidence for the shared admission boundary.
+
+    Sources are the trusted workflow input channel only (direct inputs,
+    previous step outputs, and workflow context) — never discovery results or
+    local caches. Absent evidence stays absent rather than becoming an empty
+    owner set: ``admit_exact_issue`` treats missing bundle entries as no
+    evidence, while an explicit ``reads_complete`` failure blocks admission as
+    unknown evidence. Known upstream producers: the blocker check step emits
+    ``blockingIssues`` for the later In Progress step, and resume/observation
+    signals arrive as explicit workflow inputs.
+    """
+    previous = _mapping(inputs.get("previousOutputs"))
+    context_previous = _mapping((context or {}).get("previousOutputs"))
+    sources: tuple[Any, ...] = (inputs, previous, context_previous, context or {})
+
+    def _first_list(*names: str) -> list[dict[str, Any]] | None:
+        for source in sources:
+            if not isinstance(source, Mapping):
+                continue
+            for name in names:
+                value = source.get(name)
+                if isinstance(value, list):
+                    return [dict(item) for item in value if isinstance(item, Mapping)]
+        return None
+
+    def _first_mapping(*names: str) -> dict[str, Any] | None:
+        for source in sources:
+            if not isinstance(source, Mapping):
+                continue
+            for name in names:
+                value = source.get(name)
+                if isinstance(value, Mapping):
+                    return dict(value)
+        return None
+
+    def _first_raw(*names: str) -> Any:
+        for source in sources:
+            if not isinstance(source, Mapping):
+                continue
+            for name in names:
+                if name in source:
+                    return source.get(name)
+        return None
+
+    bundle: dict[str, Any] = {}
+    blockers = _first_list("blockingIssues", "blocking_issues", "blockers")
+    if blockers is not None:
+        bundle["blockers"] = blockers
+    pr_identities = _first_list("prIdentities", "pr_identities", "pullRequests", "pull_requests")
+    if pr_identities is not None:
+        bundle["pr_identities"] = pr_identities
+    retry_policy = _first_mapping("retryPolicy", "retry_policy")
+    if retry_policy is not None:
+        bundle["retry_policy"] = retry_policy
+    reads_complete = _first_mapping("readsComplete", "reads_complete")
+    if reads_complete is not None:
+        bundle["reads_complete"] = reads_complete
+    active_comments = _first_list("activeAttemptComments", "active_attempt_comments")
+    if active_comments is not None:
+        bundle["active_attempt_comments"] = active_comments
+    contenders = _first_list("observedContenders", "observed_contenders")
+    if contenders is not None:
+        bundle["observed_contenders"] = contenders
+    for key, names in (
+        ("known_successor_attempt_id", ("knownSuccessorAttemptId", "known_successor_attempt_id")),
+        ("released", ("released",)),
+        ("superseded", ("superseded",)),
+        ("operator_hold", ("operatorHold", "operator_hold")),
+        ("contradictory_evidence", ("contradictoryEvidence", "contradictory_evidence")),
+        ("own_attempt_id", ("attemptId", "attempt_id")),
+    ):
+        value = _first_raw(*names)
+        if value is not None:
+            bundle[key] = value
+    return bundle
+
+
+def _github_shared_admission_decision(
+    *,
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    repository: str,
+    issue_number: int,
+    issue: Mapping[str, Any] | None,
+    search_selected: bool = False,
+) -> Any:
+    """Invoke the one shared exact-issue admission boundary (issue #4178).
+
+    Forwards the pinned identity plus the full Req-1 evidence bundle collected
+    from the trusted input channel. Callers keep their existing
+    prerequisite/authority/readiness checks intact; this boundary only adds the
+    shared ownership/conflict decision.
+    """
+    bundle = _github_admission_bundle(inputs, context)
+    return admit_for_entrypoint(
+        _github_admission_entrypoint(inputs, search_selected=search_selected),
+        repository=repository,
+        issue_number=issue_number,
+        issue=issue,
+        attempt_context=_github_status_attempt_context(inputs, context),
+        blockers=bundle.get("blockers"),
+        pr_identities=bundle.get("pr_identities"),
+        retry_policy=bundle.get("retry_policy"),
+        reads_complete=bundle.get("reads_complete"),
+        active_attempt_comments=bundle.get("active_attempt_comments"),
+    )
+
+
 def _github_status_transition_reason(
     mode: str,
     inputs: Mapping[str, Any],
@@ -6324,28 +6472,63 @@ async def update_github_issue_status(
     # evidence. The start transition additionally revalidates through the one
     # shared exact-issue admission boundary (issue #4178).
     attempt_context = _github_status_attempt_context(inputs, _context)
-    if target == "to_in_progress":
-        shared_admission = admit_for_entrypoint(
-            ENTRYPOINT_EXPLICIT,
-            repository=repository,
-            issue_number=issue_number,
-            issue={"state": issue.get("state", "open"), "labels": current_labels},
-            attempt_context=attempt_context,
+    admission_bundle = _github_admission_bundle(inputs, _context)
+    own_attempt_id = _string(admission_bundle.get("own_attempt_id"))
+    if target == "to_in_progress" and (
+        admission_bundle.get("released")
+        or admission_bundle.get("superseded")
+        or admission_bundle.get("known_successor_attempt_id")
+        or admission_bundle.get("operator_hold")
+    ):
+        # Req 5 resume gate: a paused/reconnected attempt that observed a
+        # release, a successor, or an operator hold performs no new shared
+        # mutation. Only explicit resume signals trigger this gate; ordinary
+        # starts pass through to the retained checks below.
+        resume_gate = should_stop_on_resume(
+            own_attempt_id=own_attempt_id,
+            released=bool(admission_bundle.get("released")),
+            superseded=bool(admission_bundle.get("superseded")),
+            known_successor_attempt_id=_string(admission_bundle.get("known_successor_attempt_id")),
+            operator_hold=bool(admission_bundle.get("operator_hold")),
         )
-        if not shared_admission.allowed and shared_admission.reason_code in {
-            "active_attempt_conflict",
-            "missing_label_with_active_attempt",
-            "manual_in_progress_without_trusted_owner",
-        }:
+        if resume_gate["stop"]:
             return ToolResult(
                 status="FAILED",
                 outputs={
                     "issueRef": issue_ref,
                     "decision": "blocked",
                     "lifecycleSettled": interpretation.settled,
-                    "reasonCode": shared_admission.reason_code,
+                    "reasonCode": resume_gate["reasonCode"],
                     "summary": (
-                        f"Skipped GitHub issue update for {issue_ref}: {shared_admission.summary}"
+                        f"Skipped GitHub issue update for {issue_ref}: {resume_gate['summary']}"
+                    ),
+                },
+            )
+    if target == "to_in_progress" and (
+        admission_bundle.get("observed_contenders")
+        or admission_bundle.get("contradictory_evidence")
+    ):
+        # Req 4 contender gate: an observed competing preparing/active
+        # attempt or contradictory evidence stops shared publication through
+        # this existing tool boundary. Output is preserved in the FAILED
+        # result; no timestamp winner is selected and no other attempt's
+        # in-progress status is cleared (this path only skips its own write).
+        quiesce_gate = contender_quiesce_decision(
+            own_attempt_id=own_attempt_id,
+            observed_contenders=admission_bundle.get("observed_contenders"),
+            operator_hold=bool(admission_bundle.get("operator_hold")),
+            contradictory_evidence=bool(admission_bundle.get("contradictory_evidence")),
+        )
+        if quiesce_gate["quiesce"]:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "decision": "blocked",
+                    "lifecycleSettled": interpretation.settled,
+                    "reasonCode": quiesce_gate["reasonCode"],
+                    "summary": (
+                        f"Skipped GitHub issue update for {issue_ref}: {quiesce_gate['summary']}"
                     ),
                 },
             )
@@ -6384,6 +6567,45 @@ async def update_github_issue_status(
                 "summary": f"Abandoned obsolete GitHub issue update for {issue_ref}: {abandon_reason}.",
             },
         )
+    if target == "to_in_progress" and not caller_expected_settled:
+        # Shared exact-issue admission with the full Req-1 evidence bundle.
+        # Narrowed to denies with no retained downstream equivalent: the
+        # caller's expected-state path above owns abandon/idempotent
+        # already-applied outcomes, and mixed/unknown states stay with the
+        # reconciliation handler below (reasonCode reconciliation_required).
+        shared_admission = _github_shared_admission_decision(
+            inputs=inputs,
+            context=_context,
+            repository=repository,
+            issue_number=issue_number,
+            issue={"state": issue.get("state", "open"), "labels": current_labels},
+        )
+        if not shared_admission.allowed and shared_admission.reason_code in {
+            "active_attempt_conflict",
+            "missing_label_with_active_attempt",
+            "manual_in_progress_without_trusted_owner",
+            "blocked_prerequisite",
+            "ambiguous_pr_identity",
+            "retry_exhausted",
+            "operator_hold",
+            "lineage_gap",
+            "incompatible_policy_lineage",
+            "missing_policy_lineage",
+            "read_failure",
+            "closed_terminal",
+        }:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "decision": "blocked",
+                    "lifecycleSettled": interpretation.settled,
+                    "reasonCode": shared_admission.reason_code,
+                    "summary": (
+                        f"Skipped GitHub issue update for {issue_ref}: {shared_admission.summary}"
+                    ),
+                },
+            )
     if interpretation.settled in {"blocked_mixed", "blocked_unknown", "blocked_open_done"}:
         if (
             was_finalize_after_pr
@@ -6496,6 +6718,40 @@ async def update_github_issue_status(
     applied: list[str] = []
     warnings: list[str] = []
     comment_body = ""
+    if (
+        admission_bundle.get("released")
+        or admission_bundle.get("superseded")
+        or admission_bundle.get("known_successor_attempt_id")
+    ):
+        # Req 5 pre-mutation revalidation at the trusted publication
+        # boundary: a known released or superseded attempt cannot replay
+        # publication or stale cleanup, even for non-start targets that
+        # passed the guards above. Only explicit resume signals trigger this
+        # gate. GitHub label/comment operations offer no conditional
+        # ownership acquisition, so the remaining check-to-write race stays
+        # unfenced (see UNFENCED_CHECK_TO_WRITE_RACE_NOTE); revalidation
+        # rejects observable stale work but never claims to fence a delayed
+        # external request.
+        mutation_gate = revalidate_for_mutation(
+            own_attempt_id=own_attempt_id,
+            observed={"settled": interpretation.settled},
+            known_successor_attempt_id=_string(admission_bundle.get("known_successor_attempt_id")),
+            released=bool(admission_bundle.get("released")),
+            superseded=bool(admission_bundle.get("superseded")),
+        )
+        if not mutation_gate["allowed"]:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "decision": "blocked",
+                    "lifecycleSettled": interpretation.settled,
+                    "reasonCode": mutation_gate["reasonCode"],
+                    "summary": (
+                        f"Skipped GitHub issue update for {issue_ref}: {mutation_gate['summary']}"
+                    ),
+                },
+            )
     # Targeted additions/removals only: never replace the complete label list.
     # The destination status is added before any old blocking status is
     # removed. This is eventual reconciliation, not an atomic compare-and-swap

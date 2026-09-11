@@ -10,9 +10,12 @@ attempt propagation; and retained-history behavior.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from moonmind.workflows.temporal import github_issue_attempt as attempt_mod
+from moonmind.workflows.temporal import story_output_tools as story_tools
 from moonmind.workflows.temporal.github_issue_admission import (
     ENTRYPOINT_CONTINUATION,
     ENTRYPOINT_EXPLICIT,
@@ -335,6 +338,268 @@ def test_internal_retry_and_review_children_retain_controlling_attempt() -> None
 # ---------------------------------------------------------------------------
 # Acceptance F: real workflow/Activity shapes + retained history
 # ---------------------------------------------------------------------------
+
+
+class _AdmissionFakeService:
+    """Minimal trusted GitHub boundary: fetch + token only (no writes)."""
+
+    def __init__(self, labels: list[str] | None = None) -> None:
+        self.labels = list(labels) if labels is not None else []
+        self.operations: list[tuple[str, str]] = []
+
+    async def resolve_github_token(self, *, repo: str):
+        return "ghs-test", None
+
+    def _github_headers(self, token: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {token}"}
+
+    def _github_permission_summary(self, response) -> str:
+        return f"github status {response.status_code}"
+
+    async def check_issue_label_readiness(self, *, repo: str, issue_number: int,
+                                          required_labels: list[str], github_token: str | None = None):
+        return {"ready": True, "reasonCode": "ready", "summary": "ready"}
+
+    async def add_issue_labels(self, *, repo: str, issue_number: int,
+                               labels: list[str], github_token: str | None = None):
+        for label in labels:
+            self.operations.append(("add", label))
+            self.labels.append(label)
+        return {"ok": True, "reasonCode": "added", "summary": "added"}
+
+    async def remove_issue_label(self, *, repo: str, issue_number: int,
+                                 label: str, github_token: str | None = None):
+        self.operations.append(("remove", label))
+        self.labels = [existing for existing in self.labels if existing != label]
+        return {"ok": True, "reasonCode": "removed", "summary": "removed"}
+
+
+class _AdmissionFakeHttpResponse:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+class _AdmissionHttpClient:
+    """HTTP fake serving one issue payload (or search items) for admission tests."""
+
+    issue_payload: dict[str, Any] = {}
+    search_payload: dict[str, Any] = {}
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    async def get(self, url: str, **kwargs: Any):
+        if "search/issues" in url:
+            return _AdmissionFakeHttpResponse(dict(type(self).search_payload))
+        return _AdmissionFakeHttpResponse(dict(type(self).issue_payload))
+
+
+def _install_admission_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(story_tools.httpx, "AsyncClient", _AdmissionHttpClient)
+
+
+def _admission_issue_payload(number: int, labels: list[str]) -> dict[str, Any]:
+    return {
+        "number": number,
+        "title": "admission",
+        "body": "body",
+        "html_url": f"https://github.com/o/r/issues/{number}",
+        "state": "open",
+        "labels": [{"name": label} for label in labels],
+    }
+
+
+@pytest.mark.asyncio
+async def test_start_guard_blocks_threaded_blockers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Req-1 blocker bundle from the trusted channel blocks the start write."""
+    service = _AdmissionFakeService(labels=[])
+    _install_admission_http(monkeypatch)
+    _AdmissionHttpClient.issue_payload = _admission_issue_payload(4178, [])
+    result = await story_tools.update_github_issue_status(
+        {
+            "repository": "o/r",
+            "issueNumber": 4178,
+            "mode": "start",
+            "blockingIssues": [{"repository": "o/r", "number": 1}],
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["reasonCode"] == "blocked_prerequisite"
+    assert service.operations == []
+
+
+@pytest.mark.asyncio
+async def test_start_guard_blocks_incomplete_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit failed read is unknown evidence, never an empty owner set."""
+    service = _AdmissionFakeService(labels=[])
+    _install_admission_http(monkeypatch)
+    _AdmissionHttpClient.issue_payload = _admission_issue_payload(4178, [])
+    result = await story_tools.update_github_issue_status(
+        {
+            "repository": "o/r",
+            "issueNumber": 4178,
+            "mode": "start",
+            "readsComplete": {"labels": True, "comments": False},
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED"
+    assert result.outputs["reasonCode"] == "read_failure"
+    assert service.operations == []
+
+
+@pytest.mark.asyncio
+async def test_start_guard_blocks_exhausted_retry_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An invalid retry policy blocks automatic admission rather than assuming fresh."""
+    service = _AdmissionFakeService(labels=[])
+    _install_admission_http(monkeypatch)
+    _AdmissionHttpClient.issue_payload = _admission_issue_payload(4178, [])
+    result = await story_tools.update_github_issue_status(
+        {
+            "repository": "o/r",
+            "issueNumber": 4178,
+            "mode": "start",
+            "retryPolicy": {"maxAttempts": "many"},
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED"
+    assert result.outputs["reasonCode"] == "retry_exhausted"
+    assert service.operations == []
+
+
+@pytest.mark.asyncio
+async def test_resume_after_known_successor_stops_shared_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reconnection after a known successor performs no new shared mutation."""
+    service = _AdmissionFakeService(labels=[])
+    _install_admission_http(monkeypatch)
+    _AdmissionHttpClient.issue_payload = _admission_issue_payload(4178, [])
+    result = await story_tools.update_github_issue_status(
+        {
+            "repository": "o/r",
+            "issueNumber": 4178,
+            "mode": "start",
+            "attemptId": "att_" + "a" * 24,
+            "knownSuccessorAttemptId": "att_" + "b" * 24,
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED"
+    assert result.outputs["reasonCode"] == "resume_blocked"
+    assert service.operations == []
+
+
+@pytest.mark.asyncio
+async def test_observed_contender_quiesces_without_clearing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An observed competing attempt stops this write; its label is never cleared."""
+    service = _AdmissionFakeService(labels=["status: in-progress"])
+    _install_admission_http(monkeypatch)
+    _AdmissionHttpClient.issue_payload = _admission_issue_payload(4178, ["status: in-progress"])
+    result = await story_tools.update_github_issue_status(
+        {
+            "repository": "o/r",
+            "issueNumber": 4178,
+            "mode": "start",
+            "attemptId": "att_" + "a" * 24,
+            "observedContenders": [{"attemptId": "att_" + "b" * 24, "activity": "active"}],
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED"
+    assert result.outputs["reasonCode"] == "contender_observed"
+    assert service.operations == []
+    assert service.labels == ["status: in-progress"]
+
+
+@pytest.mark.asyncio
+async def test_search_admission_runs_without_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
+    """resolve_issue enforces the shared boundary on the production path (no resolver)."""
+    from moonmind.workflows.temporal import github_issue_search as search_tools
+    from moonmind.workflows.temporal.github_issue_search import resolve_issue
+
+    def _candidate(number: int, labels: list[str]) -> dict[str, Any]:
+        return {
+            "number": number,
+            "title": "candidate",
+            "body": "body",
+            "html_url": f"https://github.com/o/r/issues/{number}",
+            "state": "open",
+            "labels": [{"name": label} for label in labels],
+        }
+
+    _AdmissionHttpClient.search_payload = {
+        "incomplete_results": False,
+        "items": [_candidate(21, []), _candidate(22, [])],
+    }
+    monkeypatch.setattr(search_tools.httpx, "AsyncClient", _AdmissionHttpClient)
+    service = _AdmissionFakeService()
+
+    async def no_blockers(issue: dict[str, Any]) -> list[dict[str, Any]]:
+        return []
+
+    number, _ = await resolve_issue(
+        repository="o/r",
+        query="task",
+        github_service=service,  # type: ignore[arg-type]
+        blockers_from_issue=no_blockers,
+    )
+    assert number == 21
+
+    # Supplied unresolved attempt evidence blocks selection even when the
+    # in-progress label is missing — through the async search shape.
+    blocked, _ = await resolve_issue(
+        repository="o/r",
+        query="task",
+        github_service=service,  # type: ignore[arg-type]
+        blockers_from_issue=no_blockers,
+        attempt_context={"has_unresolved_active_attempt": True},
+    )
+    assert blocked is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_load_honors_entrypoint_and_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct loads route orchestration/continuation identities via the same boundary."""
+    service = _AdmissionFakeService(labels=[])
+    _install_admission_http(monkeypatch)
+    _AdmissionHttpClient.issue_payload = _admission_issue_payload(4178, [])
+    result = await story_tools.load_github_issue_preset_brief(
+        {
+            "repository": "o/r",
+            "issueNumber": 4178,
+            "entrypoint": "orchestration",
+            "blockingIssues": [{"repository": "o/r", "number": 1}],
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED"
+    assert "lifecycle admission" in result.outputs["error"]
+
+    admitted = await story_tools.load_github_issue_preset_brief(
+        {"repository": "o/r", "issueNumber": 4178, "entrypoint": "continuation"},
+        github_service_factory=lambda: service,
+    )
+    assert admitted.status == "COMPLETED"
 
 
 def test_real_transition_and_retry_shapes_preserved() -> None:
