@@ -376,7 +376,6 @@ async def _reconcile_one_issue(
                     recon.drop_pending_effect(state, repository=repository, issue_number=issue_number)
                     outcome.update(action=recon.ACTION_ABANDONED, reasonCode="successor_observed", summary=f"Repair abandoned on re-read: {abandon_reason}.")
                     return outcome
-                names = r_names
             # Targeted ops only, destination first (Req 5 / design 8.1).
             for label in mutation.get("labelsToAdd") or []:
                 added = await service.add_issue_labels(repo=repository, issue_number=issue_number, labels=[label])
