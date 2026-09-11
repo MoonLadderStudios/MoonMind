@@ -663,7 +663,26 @@ def render_next_action_comment(
     if failure_count:
         lines.append(f"Prior failed attempts preserved: {failure_count} (history is retained across launches).")
     if decision:
+        decision_map = _mapping(decision)
         lines.append(
-            f"Operator {_string(_mapping(decision).get('operator'))} recorded '{_string(_mapping(decision).get('action'))}': {_string(_mapping(decision).get('reason')) or 'no reason given'}."
+            f"Operator {_string(decision_map.get('operator'))} recorded '{_string(decision_map.get('action'))}': {_string(decision_map.get('reason')) or 'no reason given'}."
         )
+        # Auditable portable-handoff fields so a second deployment reading
+        # the GitHub comment can reconstruct the decision without a second
+        # result store: previous state, work disposition, retry-budget reset,
+        # and hold-release semantics.
+        previous = _string(decision_map.get("previous_state"))
+        disposition = _string(decision_map.get("work_disposition"))
+        if previous or disposition:
+            audit_bits = []
+            if previous:
+                audit_bits.append(f"previous state {previous}")
+            if disposition:
+                audit_bits.append(f"disposition {disposition}")
+            if bool(decision_map.get("retry_budget_reset")):
+                audit_bits.append("retry budget reset")
+            audit_bits.append(
+                "hold released" if _truthy(decision_map.get("hold_released")) else "hold retained"
+            )
+            lines.append(f"Decision record: {'; '.join(audit_bits)}.")
     return "\n".join(lines)

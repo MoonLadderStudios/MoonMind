@@ -223,7 +223,7 @@ export function IssueLifecyclePanel({
     setSubmitting(action);
     setActionResult(null);
     try {
-      const response = await fetch(`${apiBase}/api/v1/executions/issue-lifecycle/actions/validate`, {
+      const response = await fetch(`${apiBase}/api/v1/executions/issue-lifecycle/actions/submit`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -244,11 +244,24 @@ export function IssueLifecyclePanel({
           continue_variant: action === 'continue_work' ? continueVariant || undefined : undefined,
         }),
       });
-      const payload = (await response.json()) as { allowed: boolean; verdict?: { message?: string }; decision?: unknown };
+      const payload = (await response.json()) as {
+        allowed: boolean;
+        verdict?: { message?: string };
+        decision?: unknown;
+        publication?: { status?: string; detail?: string; commentId?: unknown } | null;
+      };
+      if (!payload.allowed) {
+        setActionResult(`Blocked by the server: ${asString(payload.verdict?.message) || action}.`);
+        return;
+      }
+      const publication = payload.publication;
+      const publicationNote = publication
+        ? publication.status === 'published'
+          ? ` Published as GitHub comment ${asString(publication.commentId) || 'created'}.`
+          : ` Publication ${asString(publication.status) || 'unknown'}: ${asString(publication.detail) || asString(publication.status) || 'see server detail'}.`
+        : '';
       setActionResult(
-        payload.allowed
-          ? `Accepted for server processing: ${asString(payload.verdict?.message) || action}.`
-          : `Blocked by the server: ${asString(payload.verdict?.message) || action}.`,
+        `Accepted and recorded: ${asString(payload.verdict?.message) || action}.${publicationNote}`,
       );
     } catch (submitError) {
       setActionResult(`Submission failed: ${submitError instanceof Error ? submitError.message : String(submitError)}.`);
