@@ -737,6 +737,7 @@ def plan_repair_mutation(
             name
             for name in names
             if lifecycle.normalize_lifecycle_label(name) in lifecycle.CANONICAL_OPEN_LABELS
+            or lifecycle.is_workflow_status_like(name)
         ]
         return plan_blocked_repair_mutation(canonical_present=canonical, to_target=to_target)
     decision = lifecycle.plan_transition(
@@ -875,6 +876,19 @@ def classify_repair_readback(
         return {
             "outcome": lifecycle.OUTCOME_INCOMPLETE,
             "detail": f"Destination observed but old status remains: {', '.join(remaining)}.",
+        }
+    # An unrecognized workflow-status label keeps the issue blocked_unknown
+    # even when the destination is present; never discard pending evidence
+    # while such a blocker remains.
+    blocking_unknown = [
+        name
+        for name in names
+        if name and lifecycle.is_workflow_status_like(name) and (destination is None or name.lower() != destination.lower())
+    ]
+    if blocking_unknown:
+        return {
+            "outcome": lifecycle.OUTCOME_INCOMPLETE,
+            "detail": f"Unknown workflow-status remains: {', '.join(sorted(set(blocking_unknown)))}.",
         }
     if destination is None:
         expected_settled = {
@@ -1025,8 +1039,14 @@ def record_pending_effect(
     intended_to_target: str,
     proposed_disposition: str,
     reason: str = "",
+    attempt_id: str = "",
 ) -> dict[str, Any]:
-    """Record recoverable pending-sync evidence surviving worker restart."""
+    """Record recoverable pending-sync evidence surviving worker restart.
+
+    Pending effects are bound to their originating attempt: callers pass the
+    current handoff attemptId so a successor taking ownership cannot complete
+    a predecessor's stale disposition.
+    """
     data = dict(store or {})
     effects = data.get("pendingEffects")
     if not isinstance(effects, list):
@@ -1044,6 +1064,7 @@ def record_pending_effect(
             "intendedToTarget": intended_to_target,
             "proposedDisposition": proposed_disposition,
             "reason": _string(reason),
+            "attemptId": _string(attempt_id),
         }
     )
     data["pendingEffects"] = effects
@@ -1118,7 +1139,21 @@ def merge_scan_results(
                 f"{examined} examined, {repaired} repaired, {surfaced} surfaced, "
                 f"{deferred} deferred. Result is partial, not clean."
             ),
-            "admissionAllowed": True,
+            "admissionAllowed": False,
+            "examined": examined,
+            "repaired": repaired,
+            "surfaced": surfaced,
+            "deferred": deferred,
+        }
+    if deferred > 0:
+        return {
+            "status": SCAN_PARTIAL,
+            "reasonCode": "deferred_partial",
+            "summary": (
+                f"Bounded scan examined {examined} issues with {deferred} deferred: "
+                f"{repaired} repaired, {surfaced} surfaced. Result is partial, not clean."
+            ),
+            "admissionAllowed": False,
             "examined": examined,
             "repaired": repaired,
             "surfaced": surfaced,

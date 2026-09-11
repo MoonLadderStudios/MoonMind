@@ -242,7 +242,7 @@ async def _reconcile_one_issue(
     scope = recon.classify_issue_for_scan(issue_view)
     if not scope["inScope"]:
         outcome.update(action=recon.ACTION_NO_ACTION, reasonCode=str(scope["reasonCode"]), summary=str(scope["summary"]))
-        recon.drop_pending_effect(state, repository=repository, issue_number=issue_number)
+        state.update(recon.drop_pending_effect(state, repository=repository, issue_number=issue_number))
         return outcome
 
     # Re-read attempt comments (bounded; unreadable != absent) (Req 6).
@@ -252,10 +252,22 @@ async def _reconcile_one_issue(
         return outcome
     comments_ok = isinstance(listed, Mapping) and bool(listed.get("ok"))
     comments: list[Mapping[str, Any]] = []
-    comments_incomplete = True
     if comments_ok and isinstance(listed.get("comments"), list):
-        comments = [c for c in listed["comments"] if isinstance(c, Mapping)][: recon.MAX_COMMENTS_PER_ISSUE]
-        comments_incomplete = bool(listed.get("incomplete")) or False
+        raw_comments = [c for c in listed["comments"] if isinstance(c, Mapping)]
+        # Service returns oldest-first: keep the newest slice so a successor
+        # or operator hold is never dropped while retaining the oldest prefix.
+        if len(raw_comments) > recon.MAX_COMMENTS_PER_ISSUE:
+            comments = raw_comments[-recon.MAX_COMMENTS_PER_ISSUE:]
+        else:
+            comments = raw_comments
+        comments_incomplete = bool(listed.get("incomplete")) or (len(raw_comments) > recon.MAX_COMMENTS_PER_ISSUE)
+        if comments_incomplete:
+            outcome.update(
+                action=recon.ACTION_DEFERRED_UNKNOWN,
+                reasonCode="comments_incomplete",
+                summary="Comment evidence incomplete or truncated; deferred without ownership decisions.",
+            )
+            return outcome
     elif _is_rate_limit(listed if isinstance(listed, Mapping) else {}):
         outcome.update(
             action=recon.ACTION_DEFERRED_UNKNOWN,
@@ -264,10 +276,30 @@ async def _reconcile_one_issue(
             rateLimited=True,
         )
         return outcome
+    else:
+        reason = ""
+        summary = "Comment read inconclusive; deferred without ownership decisions."
+        if isinstance(listed, Mapping):
+            reason = _string(listed.get("reasonCode") or "")
+            summary = _string(listed.get("summary")) or summary
+        outcome.update(
+            action=recon.ACTION_DEFERRED_UNKNOWN,
+            reasonCode=reason or "comments_unknown",
+            summary=summary,
+        )
+        return outcome
     handoffs, malformed = _validated_handoffs(comments)
     trusted = [h for h in handoffs if _string(h.get("attemptId"))]
     pending = recon.pending_effects_for_issue(state, repository=repository, issue_number=issue_number)
     known = pending[0] if pending else {}
+    # Bind pending effects to their originating attempt: a successor handoff
+    # invalidates a predecessor's stale disposition instead of completing it.
+    newest_candidate = trusted[-1] if trusted else {}
+    newest_attempt_id = _string(newest_candidate.get("attemptId"))
+    known_attempt_id = _string(known.get("attemptId"))
+    if known and newest_attempt_id and known_attempt_id and known_attempt_id != newest_attempt_id:
+        state.update(recon.drop_pending_effect(state, repository=repository, issue_number=issue_number))
+        known = {}
 
     # Derive repair evidence from the newest trusted handoff plus locally
     # persisted pending effects (crash between terminal comment and label
@@ -308,26 +340,53 @@ async def _reconcile_one_issue(
         mutation_evidence = {"push_outcome": "confirmed", "pr_outcome": "confirmed", "merge_outcome": "absent_na", "merge_outcome_absent": True}
     preservation_evidence: dict[str, Any] = {}
     if pr_url and pr_state.get("known"):
+        recorded_sha = _string(preserved.get("prHeadSha"))
+        current_sha = _string(pr_state.get("headSha"))
+        revision = recorded_sha or current_sha
+        # Require the observed PR head to match the handoff when both are
+        # present: a successor force-push advancing the PR invalidates stale
+        # preservation evidence instead of authorizing the old transition.
+        if recorded_sha and current_sha:
+            verified = recorded_sha == current_sha
+        else:
+            verified = bool(recorded_sha or current_sha)
         preservation_evidence = {
             "save_method": "pr_head_verified",
             "pr_url": pr_url,
-            "pr_head_sha": _string(preserved.get("prHeadSha")) or _string(pr_state.get("headSha")),
+            "pr_head_sha": revision,
             "pr_base": _string(preserved.get("prBase")),
-            "revision": _string(preserved.get("prHeadSha")) or _string(pr_state.get("headSha")),
-            "preservation_verified": bool(pr_state.get("known")) and bool(_string(preserved.get("prHeadSha")) or _string(pr_state.get("headSha"))),
+            "revision": revision,
+            "preservation_verified": bool(pr_state.get("known")) and verified,
+        }
+    elif _string(preserved.get("savedBranch")) and _string(preserved.get("savedSha")):
+        # Portable branch preservation (to_recovery_needed with safely pushed
+        # work but no PR yet): verify the recorded branch+sha pair so such
+        # transitions can pass the preservation gate instead of stalling.
+        preservation_evidence = {
+            "save_method": "saved_branch_verified",
+            "saved_branch": _string(preserved.get("savedBranch")),
+            "saved_sha": _string(preserved.get("savedSha")),
+            "revision": _string(preserved.get("savedSha")),
+            "preservation_verified": True,
         }
     elif _string(newest.get("outcome")) == "no-work":
         preservation_evidence = {"save_method": "explicit_no_work", "trustworthy_no_work": True}
     proposed_disposition = _string(newest.get("pendingDisposition")) or _string(known.get("proposedDisposition"))
     intended_to = _string(known.get("intendedToTarget"))
     if not intended_to and proposed_disposition:
+        normalized_disposition = proposed_disposition.strip().lower()
         intended_to = {
             "needs_attention": "to_needs_attention",
+            "to_needs_attention": "to_needs_attention",
             "recovery_needed": "to_recovery_needed",
+            "to_recovery_needed": "to_recovery_needed",
             "available": "to_available",
+            "to_available": "to_available",
             "code_review": "to_code_review",
+            "to_code_review": "to_code_review",
             "closed": "to_closed",
-        }.get(proposed_disposition.strip().lower(), "")
+            "to_closed": "to_closed",
+        }.get(normalized_disposition, "")
 
     manual = not trusted and not known
     decision = recon.decide_issue_reconciliation(
@@ -373,33 +432,54 @@ async def _reconcile_one_issue(
                     intended_from_settled=decision.from_settled, observed=r_observed
                 )
                 if abandon:
-                    recon.drop_pending_effect(state, repository=repository, issue_number=issue_number)
+                    state.update(recon.drop_pending_effect(state, repository=repository, issue_number=issue_number))
                     outcome.update(action=recon.ACTION_ABANDONED, reasonCode="successor_observed", summary=f"Repair abandoned on re-read: {abandon_reason}.")
                     return outcome
             # Targeted ops only, destination first (Req 5 / design 8.1).
+            # Reserve budget before each write; never send a mutation that
+            # would exceed the advertised bound, and never continue to the
+            # next stage after an unconfirmed or budget-exhausting write.
             for label in mutation.get("labelsToAdd") or []:
+                if budget["requests"] >= recon.MAX_SCAN_API_REQUESTS:
+                    outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted before repair add-label; deferred with pending evidence.")
+                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair add-label budget exhausted", attempt_id=newest_attempt_id))
+                    return outcome
                 added = await service.add_issue_labels(repo=repository, issue_number=issue_number, labels=[label])
                 if not _spend():
-                    break
+                    outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted on repair add-label; outcome retained as pending, next stages skipped.")
+                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair add-label budget exhausted", attempt_id=newest_attempt_id))
+                    return outcome
                 if not (isinstance(added, Mapping) and added.get("ok")):
                     outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="repair_write_unknown", summary=f"Repair add-label outcome unknown: {added.get('summary') if isinstance(added, Mapping) else 'transport'}. Pending evidence retained.")
-                    recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair add-label unknown")
+                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair add-label unknown", attempt_id=newest_attempt_id))
                     return outcome
             for label in mutation.get("labelsToRemove") or []:
+                if budget["requests"] >= recon.MAX_SCAN_API_REQUESTS:
+                    outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted before repair remove-label; deferred with pending evidence.")
+                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair remove-label budget exhausted", attempt_id=newest_attempt_id))
+                    return outcome
                 removed = await service.remove_issue_label(repo=repository, issue_number=issue_number, label=label)
                 if not _spend():
-                    break
+                    outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted on repair remove-label; deferred with pending evidence.")
+                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair remove-label budget exhausted", attempt_id=newest_attempt_id))
+                    return outcome
                 if not (isinstance(removed, Mapping) and removed.get("ok")):
                     outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="repair_write_unknown", summary="Repair remove-label outcome unknown. Pending evidence retained.")
-                    recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair remove-label unknown")
+                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair remove-label unknown", attempt_id=newest_attempt_id))
                     return outcome
             if mutation.get("closeIssue"):
+                if budget["requests"] >= recon.MAX_SCAN_API_REQUESTS:
+                    outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted before repair close; deferred with pending evidence.")
+                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair close budget exhausted", attempt_id=newest_attempt_id))
+                    return outcome
                 closed = await service.close_issue(repo=repository, issue_number=issue_number)
                 if not _spend():
-                    pass
+                    outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="request_budget_exhausted", summary="Budget exhausted on repair close; deferred with pending evidence.")
+                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair close budget exhausted", attempt_id=newest_attempt_id))
+                    return outcome
                 if not (isinstance(closed, Mapping) and closed.get("ok")):
                     outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="repair_write_unknown", summary="Repair close outcome unknown. Pending evidence retained.")
-                    recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair close unknown")
+                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="repair close unknown", attempt_id=newest_attempt_id))
                     return outcome
             # Read-back classification: only observed outcomes complete.
             verify = await _fetch_issue(service=service, repository=repository, issue_number=issue_number)
@@ -413,13 +493,13 @@ async def _reconcile_one_issue(
                     to_target=decision.to_target,
                 )
                 if classified["outcome"] in {lifecycle.OUTCOME_APPLIED, lifecycle.OUTCOME_ALREADY_APPLIED}:
-                    recon.drop_pending_effect(state, repository=repository, issue_number=issue_number)
+                    state.update(recon.drop_pending_effect(state, repository=repository, issue_number=issue_number))
                     outcome.update(action=recon.ACTION_COMPLETE, reasonCode="repaired", summary=f"Interrupted transition completed and observed: {classified['detail']}")
                 else:
-                    recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason=f"read-back {classified['outcome']}")
+                    state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason=f"read-back {classified['outcome']}"))
                     outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="repair_unobserved", summary=f"Repair not observed on read-back ({classified['detail']}); pending evidence retained.")
             else:
-                recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="read-back unknown")
+                state.update(recon.record_pending_effect(state, repository=repository, issue_number=issue_number, intended_from_settled=decision.from_settled, intended_to_target=decision.to_target, proposed_disposition=proposed_disposition, reason="read-back unknown", attempt_id=newest_attempt_id))
                 outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN, reasonCode="outcome_unknown", summary="Repair write sent but read-back unknown; pending evidence retained, never assumed applied.")
         return outcome
 
@@ -461,7 +541,7 @@ async def _reconcile_one_issue(
 
     # no_action / abandoned / deferred: drop obsolete pending, keep the rest.
     if decision.action == recon.ACTION_ABANDONED:
-        recon.drop_pending_effect(state, repository=repository, issue_number=issue_number)
+        state.update(recon.drop_pending_effect(state, repository=repository, issue_number=issue_number))
     return outcome
 
 
