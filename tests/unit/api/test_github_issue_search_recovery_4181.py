@@ -92,7 +92,7 @@ def test_seed_composes_recovery_aware_journey():
         "inherit cross-device retry/cooldown/hold history",
         "partial PR does not constitute",
         "code-review-handoff",
-        "durable failed-attempt boundary",
+        "durable failed-attempt finalization boundary",
         "success-ordered preset node",
     ]:
         assert phrase in text, phrase
@@ -128,6 +128,17 @@ def activity_boundary(monkeypatch):
             if request.method == "GET":
                 return httpx.Response(200, json=[])
             return httpx.Response(200, json={"id": 1})
+        if request.method == "DELETE" and "/labels/" in request.url.path:
+            # Simulate GitHub label removal so recovery-claim re-reads settle.
+            from urllib.parse import unquote
+
+            removed = unquote(request.url.path.rsplit("/labels/", 1)[1])
+            detail["labels"] = [
+                label
+                for label in detail["labels"]
+                if label.get("name") != removed
+            ]
+            return httpx.Response(200, json=detail["labels"])
         if request.method == "POST" and request.url.path.endswith("/labels"):
             for label in json.loads(request.content)["labels"]:
                 if {"name": label} not in detail["labels"]:
@@ -316,7 +327,7 @@ async def test_omitted_blank_and_nonblank_inputs_traverse_compiled_path(
         s for s in steps if s.get("title") == "Finalize resolved GitHub issue status"
     )
     assert finalize["tool"]["inputs"]["mode"] == "finalize_after_pr_or_done"
-    assert "durable failed-attempt boundary" in finalize["instructions"]
+    assert "durable failed-attempt finalization boundary" in finalize["instructions"]
     # Existing-PR continuation is an explicit journey step, not a hidden fork.
     resolve = next(
         s
