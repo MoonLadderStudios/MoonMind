@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from sqlalchemy import select
 
@@ -29,10 +26,13 @@ _MANAGED_GITHUB_TOKEN_SLUGS: tuple[str, ...] = (
     "GITHUB_TOKEN",
     "GITHUB_PAT",
 )
+# Registry endpoint this module's GHCR pull credentials are bound to. Returned
+# credentials must only be presented to this endpoint (or its exact image /
+# repository scope); never to arbitrary endpoints derived from image strings,
+# error messages, or workflow input.
+GHCR_REGISTRY = "ghcr.io"
 _MANAGED_GHCR_PULL_USER_SLUGS: tuple[str, ...] = ("GHCR_PULL_USER",)
 _MANAGED_GHCR_PULL_TOKEN_SLUGS: tuple[str, ...] = ("GHCR_PULL_TOKEN",)
-_GITHUB_API_TIMEOUT_SECONDS = 10.0
-_GITHUB_USER_RESPONSE_MAX_BYTES = 64 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -94,66 +94,47 @@ async def resolve_managed_github_token_from_store() -> str | None:
                 return candidate
     return None
 
-async def _resolve_first_active_managed_secret_slug(
-    slugs: Iterable[str],
-) -> str | None:
-    """Return the first active managed secret value for the provided slugs."""
+async def _resolve_managed_ghcr_pull_pair() -> tuple[str | None, str | None]:
+    """Read the ``GHCR_PULL_USER``/``GHCR_PULL_TOKEN`` managed slugs coherently.
+
+    Both slugs are read inside one managed-secret store session so the two
+    values form one selected configuration revision instead of two independent
+    reads that could straddle a rotation. Store outages propagate to the
+    caller (fail closed); they are never treated as "no credentials".
+    """
 
     from api_service.db.base import async_session_maker
     from api_service.db.models import ManagedSecret, SecretStatus
 
     async with async_session_maker() as session:
-        for slug in slugs:
-            normalized = str(slug or "").strip()
-            if not normalized:
-                continue
-            result = await session.execute(
-                select(ManagedSecret).where(
-                    ManagedSecret.slug == normalized,
-                    ManagedSecret.status == SecretStatus.ACTIVE,
+        user_value: str | None = None
+        token_value: str | None = None
+        for slugs, target in (
+            (_MANAGED_GHCR_PULL_USER_SLUGS, "user"),
+            (_MANAGED_GHCR_PULL_TOKEN_SLUGS, "token"),
+        ):
+            found: str | None = None
+            for slug in slugs:
+                normalized = str(slug or "").strip()
+                if not normalized:
+                    continue
+                result = await session.execute(
+                    select(ManagedSecret).where(
+                        ManagedSecret.slug == normalized,
+                        ManagedSecret.status == SecretStatus.ACTIVE,
+                    )
                 )
-            )
-            secret = result.scalar_one_or_none()
-            candidate = str(secret.ciphertext if secret else "").strip()
-            if candidate:
-                return candidate
-    return None
+                secret = result.scalar_one_or_none()
+                candidate = str(secret.ciphertext if secret else "").strip()
+                if candidate:
+                    found = candidate
+                    break
+            if target == "user":
+                user_value = found
+            else:
+                token_value = found
+    return user_value, token_value
 
-def _github_user_api_url() -> str:
-    api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").strip()
-    if not api_base:
-        api_base = "https://api.github.com"
-    return api_base.rstrip("/") + "/user"
-
-def _fetch_github_login_for_token(token: str) -> str | None:
-    request = Request(
-        _github_user_api_url(),
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "User-Agent": "MoonMind-GHCR-Pull-Auth",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-    with urlopen(request, timeout=_GITHUB_API_TIMEOUT_SECONDS) as response:
-        payload = json.loads(
-            response.read(_GITHUB_USER_RESPONSE_MAX_BYTES).decode("utf-8")
-        )
-    login = str(payload.get("login") or "").strip()
-    return login or None
-
-async def _resolve_github_login_for_token(token: str) -> str | None:
-    normalized = str(token or "").strip()
-    if not normalized:
-        return None
-    try:
-        return await asyncio.to_thread(_fetch_github_login_for_token, normalized)
-    except (HTTPError, URLError, TimeoutError, ValueError, OSError):
-        logger.warning(
-            "Failed to resolve GitHub username for GHCR pull authentication",
-            exc_info=True,
-        )
-        return None
 
 async def resolve_ghcr_pull_credentials_for_launch(
     environment: Mapping[str, str] | None = None,
@@ -162,21 +143,88 @@ async def resolve_ghcr_pull_credentials_for_launch(
 ) -> tuple[str, str] | None:
     """Resolve deployment-scoped GHCR pull credentials for launch boundaries.
 
-    The returned plaintext is for immediate Docker config materialization only.
-    Callers must not store it in workflow history, logs, or durable metadata.
+    MoonLadderStudios/MoonMind#4012: source repository/model credentials are
+    never implicit registry credentials. This resolver compiles authentication
+    only from trusted deployment configuration and never converts a source
+    GitHub PAT into pull credentials, never probes the GitHub username for a
+    token, and never falls back to another identity, ambient Docker login, or
+    an anonymous downgrade when a configured credential fails.
+
+    Production pull-boundary inventory (recorded here so deleting this helper
+    alone is never mistaken for removing every implicit credential path):
+
+    - managed sessions: DinD sidecar (``docker:27``-style stock image) plus
+      session images, launched via ``DockerCodexManagedSessionController``
+      against the deployment Docker backend; image selection is deployment
+      configuration, auth source is this helper (explicit pair) or ambient
+      daemon config for public images only.
+    - generic/profile-bound Omnigent: server/host images resolved to
+      digest-pinned refs by ``moonmind/omnigent/bootstrap/image_resolution.py``
+      (``_resolve_via_docker_pull`` / ``_image_build_identity``) via bare
+      ``docker pull`` against the deployment backend; no source PAT is passed.
+    - container jobs: ``container_job_backend.py`` + ``registry_auth_resolve.py``
+      (``registry_authorization`` with an explicit ``registryCredentialRef``,
+      per-job ephemeral ``--config`` auth dirs, immediate post-pull cleanup).
+    - Compose/bootstrap: ``docker-compose.yaml`` image refs and
+      ``api_service/services/omnigent_policies.py`` stock-image acquisition via
+      bare ``docker pull`` against the deployment backend; no source PAT.
+    - legacy worker container path: ``moonmind/agents/codex_worker/worker.py``
+      ``_ensure_container_image`` via bare ``docker pull``; no source PAT.
+
+    Explicit precedence (first fully-specified source wins as one selected
+    configuration):
+
+    1. SecretRef pair from deployment process environment
+       (``MOONMIND_GHCR_PULL_USER_SECRET_REF`` /
+       ``MOONMIND_GHCR_PULL_TOKEN_SECRET_REF`` or the ``WORKFLOW_`` equivalents).
+    2. Deployment plaintext pair from process environment (``GHCR_PULL_USER`` +
+       ``GHCR_PULL_TOKEN`` as set by the operator for the deployment).
+    3. Managed-secret slug pair (``GHCR_PULL_USER`` + ``GHCR_PULL_TOKEN``),
+       read coherently in one store session.
+    4. Omitted configuration: return ``None`` for the public-anonymous path,
+       which performs no registry authentication and queries no secret store
+       beyond the GHCR slug lookup above.
+
+    Outcomes: omitted/public-anonymous returns ``None``; explicitly configured
+    pairs return ``(user, token)`` bound to :data:`GHCR_REGISTRY`; incomplete
+    pairs, unresolvable SecretRefs, rotation/disable detected between the
+    paired reads, managed-store outage, and denied/revoked credentials raise
+    ``ValueError`` at the registry boundary. ``None`` is never a signal to try
+    another identity.
+
+    The ``environment`` launch mapping and ``github_credential`` descriptor are
+    accepted for signature compatibility but are never consulted for registry
+    secrets: agent-authored launch fields, source PATs, and GitHub actor
+    lookups are not registry authentication. SecretRef *names* are read from
+    the deployment process environment only, never from the launch mapping.
+
+    Public defaults: images that are publicly readable are acquired
+    anonymously (``None``) with no model/source credential, no managed-secret
+    access beyond the GHCR slug check, and no login helper. Explicit
+    private-registry setup selects one of the three sources above for
+    ``ghcr.io``. Obsolete implicit configuration (any ``GITHUB_TOKEN`` /
+    source-connection fallback or GitHub username probing) was removed and
+    must not be reintroduced. Safe recovery: reconfigure or restore the
+    selected deployment pair and retry the pull; removing the source coupling
+    requires no new PAT prompt for unaffected scratch/public work.
+
+    The returned plaintext is for immediate Docker config materialization only
+    (per-operation ephemeral config, restricted permissions/lifetime, never
+    mounted into the agent or included in snapshots). Callers must not store
+    it in workflow history, logs, labels, argv, inspectable runtime env,
+    heartbeats, error payloads, plans, or durable metadata.
     """
 
-    launch_environment = environment or {}
+    _ = environment
+    _ = github_credential
 
     user_ref = str(
-        launch_environment.get("GHCR_PULL_USER_SECRET_REF")
-        or os.environ.get("MOONMIND_GHCR_PULL_USER_SECRET_REF")
+        os.environ.get("MOONMIND_GHCR_PULL_USER_SECRET_REF")
         or os.environ.get("WORKFLOW_GHCR_PULL_USER_SECRET_REF")
         or ""
     ).strip()
     token_ref = str(
-        launch_environment.get("GHCR_PULL_TOKEN_SECRET_REF")
-        or os.environ.get("MOONMIND_GHCR_PULL_TOKEN_SECRET_REF")
+        os.environ.get("MOONMIND_GHCR_PULL_TOKEN_SECRET_REF")
         or os.environ.get("WORKFLOW_GHCR_PULL_TOKEN_SECRET_REF")
         or ""
     ).strip()
@@ -193,20 +241,30 @@ async def resolve_ghcr_pull_credentials_for_launch(
             token_ref,
             field_name="GHCR_PULL_TOKEN_SECRET_REF",
         )
-        if user.strip() and token.strip():
-            return user.strip(), token.strip()
-        return None
+        if not user.strip() or not token.strip():
+            raise ValueError(
+                "GHCR pull authentication secret refs resolved to an incomplete pair"
+            )
+        # Detect rotation/disable of db-backed refs between the paired reads
+        # through the existing Secrets System readiness check.
+        db_refs = [
+            ref
+            for ref in (user_ref, token_ref)
+            if ref.strip().startswith("db://")
+        ]
+        if db_refs:
+            broken = await inspect_managed_secret_refs_for_launch(db_refs)
+            if broken:
+                raise ValueError(
+                    "GHCR pull authentication secret refs are not active: "
+                    + "; ".join(
+                        f"{item.secret_ref}={item.status}" for item in broken
+                    )
+                )
+        return user.strip(), token.strip()
 
-    user = str(
-        launch_environment.get("GHCR_PULL_USER")
-        or os.environ.get("GHCR_PULL_USER")
-        or ""
-    ).strip()
-    token = str(
-        launch_environment.get("GHCR_PULL_TOKEN")
-        or os.environ.get("GHCR_PULL_TOKEN")
-        or ""
-    ).strip()
+    user = str(os.environ.get("GHCR_PULL_USER") or "").strip()
+    token = str(os.environ.get("GHCR_PULL_TOKEN") or "").strip()
     if user or token:
         if not user or not token:
             raise ValueError(
@@ -215,18 +273,14 @@ async def resolve_ghcr_pull_credentials_for_launch(
         return user, token
 
     try:
-        stored_user, stored_token = await asyncio.gather(
-            _resolve_first_active_managed_secret_slug(_MANAGED_GHCR_PULL_USER_SLUGS),
-            _resolve_first_active_managed_secret_slug(_MANAGED_GHCR_PULL_TOKEN_SLUGS),
-        )
+        stored_user, stored_token = await _resolve_managed_ghcr_pull_pair()
     except asyncio.CancelledError:
         raise
-    except Exception:
-        logger.warning(
-            "Failed to resolve GHCR pull credentials from managed secrets store",
-            exc_info=True,
-        )
-        stored_user, stored_token = None, None
+    except Exception as exc:
+        raise ValueError(
+            "GHCR pull credential store is unavailable; refusing to fall back "
+            "to another identity or anonymous acquisition"
+        ) from exc
 
     if stored_user or stored_token:
         if not stored_user or not stored_token:
@@ -235,18 +289,6 @@ async def resolve_ghcr_pull_credentials_for_launch(
             )
         return stored_user.strip(), stored_token.strip()
 
-    github_token = await resolve_github_token_for_launch(
-        launch_environment,
-        github_credential=github_credential,
-    )
-    if github_token:
-        github_user = await _resolve_github_login_for_token(github_token)
-        if github_user:
-            return github_user, github_token
-        logger.warning(
-            "GitHub token is configured but could not be converted into GHCR "
-            "pull credentials because the GitHub username could not be resolved"
-        )
     return None
 
 async def resolve_github_token_for_launch(
@@ -635,10 +677,12 @@ async def assert_managed_secret_refs_active_for_launch(
 
 __all__ = [
     "BrokenSecretRef",
+    "GHCR_REGISTRY",
     "SecretRefLaunchBlockedError",
     "assert_managed_secret_refs_active_for_launch",
     "build_github_credential_descriptor_for_launch",
     "inspect_managed_secret_refs_for_launch",
+    "resolve_ghcr_pull_credentials_for_launch",
     "resolve_github_token_for_launch",
     "resolve_managed_api_key_reference",
     "resolve_managed_github_token_from_store",

@@ -718,6 +718,26 @@ materialized in a per-job Docker config with restrictive permissions, redacted
 from observations, and removed on success, failure, cancellation, timeout, and
 orphan reconciliation.
 
+#### 11.6.1 Managed-session GHCR pull decoupling
+
+Public runtime images are acquired anonymously by default: no model or source
+credential, no managed-secret access beyond the GHCR slug check, and no login
+helper. An explicit private `ghcr.io` identity selects exactly one deployment
+configuration, in precedence order: the `MOONMIND_GHCR_PULL_*_SECRET_REF` (or
+`WORKFLOW_` equivalent) SecretRef pair, the deployment `GHCR_PULL_USER` +
+`GHCR_PULL_TOKEN` pair, or the `GHCR_PULL_USER` + `GHCR_PULL_TOKEN`
+managed-secret slug pair read coherently in one store session. The obsolete
+implicit configuration — converting a source `GITHUB_TOKEN` or model-profile
+PAT into pull credentials via GitHub username lookup, or reading
+`GHCR_PULL_*` plaintext from agent-authored launch fields — was removed under
+MoonLadderStudios/MoonMind#4012 and must not be reintroduced. Incomplete
+pairs, unresolvable SecretRefs, rotation/disable between the paired reads,
+managed-store outage, and denied/revoked credentials fail at the registry
+boundary without trying another identity, ambient Docker login, or an
+anonymous downgrade. Safe recovery is to restore the selected deployment pair
+and retry the pull; removing the source coupling requires no new PAT prompt
+for unaffected scratch or public-image work.
+
 ### 11.7 Image lifetime
 
 Images survive job, session, and workflow completion. Deployment-level retention
