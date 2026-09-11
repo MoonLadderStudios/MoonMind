@@ -94,6 +94,42 @@ def _merged_action_request(payload: OperatorActionRequest) -> dict[str, Any]:
     }
 
 
+def _live_target_mismatch(payload: OperatorActionRequest) -> dict[str, Any] | None:
+    """Bind the submitted target to live GitHub evidence before any side effect.
+
+    The request supplies repository/issue_number alongside purportedly live
+    evidence; without binding, any authenticated holder could forge live_issue
+    and make the deployment credential post to an arbitrary repository.
+    """
+    live = payload.live_issue if isinstance(payload.live_issue, dict) else None
+    if live is None:
+        return None
+    live_repo = str(live.get("repository") or "").strip()
+    if live_repo and live_repo != payload.repository:
+        return {"allowed": False, "code": "wrong_issue", "message": "Submitted repository does not match live issue evidence."}
+    live_number = live.get("number", live.get("issue_number"))
+    if live_number is not None:
+        try:
+            if int(live_number) != int(payload.issue_number):
+                return {"allowed": False, "code": "wrong_issue", "message": "Submitted issue number does not match live issue evidence."}
+        except (TypeError, ValueError):
+            return {"allowed": False, "code": "wrong_issue", "message": "Submitted issue number does not match live issue evidence."}
+    return None
+
+
+def _decision_field_error(payload: OperatorActionRequest) -> dict[str, Any] | None:
+    """Reject invalid decision fields before building the portable record."""
+    variant = payload.continue_variant
+    if payload.action == "continue_work" and variant is not None and variant not in surface.CONTINUE_VARIANTS:
+        return {"allowed": False, "code": "invalid_continue_variant", "message": f"Unknown continue variant '{variant}'."}
+    disposition = str(payload.work_disposition or "")
+    if payload.action == "abandon_work" and disposition != "abandoned":
+        return {"allowed": False, "code": "invalid_disposition", "message": "Abandonment requires an explicit 'abandoned' work disposition."}
+    if payload.action == "hold_processing" and disposition == "abandoned":
+        return {"allowed": False, "code": "invalid_disposition", "message": "Hold is not abandonment."}
+    return None
+
+
 def _build_allowed_decision(
     *,
     payload: OperatorActionRequest,
@@ -178,6 +214,9 @@ async def validate_operator_action(
     pending/unknown rather than a false successful remote update.
     """
     permissions = _permissions_for_user(user)
+    binding = _live_target_mismatch(payload)
+    if binding is not None:
+        return {"allowed": False, "verdict": binding, "decision": None}
     merged_request = _merged_action_request(payload)
     verdict = surface.validate_operator_action(
         action=payload.action,
@@ -192,7 +231,13 @@ async def validate_operator_action(
     )
     if not verdict.get("allowed"):
         return {"allowed": False, "verdict": verdict, "decision": None}
-    decision, comment = _build_allowed_decision(payload=payload, user=user)
+    field_error = _decision_field_error(payload)
+    if field_error is not None:
+        return {"allowed": False, "verdict": field_error, "decision": None}
+    try:
+        decision, comment = _build_allowed_decision(payload=payload, user=user)
+    except ValueError as exc:
+        return {"allowed": False, "verdict": {"allowed": False, "code": "invalid_disposition", "message": str(exc)}, "decision": None}
     return {"allowed": True, "verdict": verdict, "decision": decision, "comment": comment}
 
 
@@ -217,6 +262,9 @@ async def submit_operator_action(
     update. Duplicate idempotency-key replays never repeat effects.
     """
     permissions = _permissions_for_user(user)
+    binding = _live_target_mismatch(payload)
+    if binding is not None:
+        return {"allowed": False, "verdict": binding, "decision": None, "publication": None}
     merged_request = _merged_action_request(payload)
     verdict = surface.validate_operator_action(
         action=payload.action,
@@ -231,7 +279,13 @@ async def submit_operator_action(
     )
     if not verdict.get("allowed"):
         return {"allowed": False, "verdict": verdict, "decision": None, "publication": None}
-    decision, comment = _build_allowed_decision(payload=payload, user=user)
+    field_error = _decision_field_error(payload)
+    if field_error is not None:
+        return {"allowed": False, "verdict": field_error, "decision": None, "publication": None}
+    try:
+        decision, comment = _build_allowed_decision(payload=payload, user=user)
+    except ValueError as exc:
+        return {"allowed": False, "verdict": {"allowed": False, "code": "invalid_disposition", "message": str(exc)}, "decision": None, "publication": None}
     if verdict.get("duplicate"):
         return {
             "allowed": True,
