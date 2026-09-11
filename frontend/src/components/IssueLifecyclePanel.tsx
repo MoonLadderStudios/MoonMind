@@ -84,17 +84,29 @@ export function issueLifecycleEvidenceFromExecution(execution: unknown): IssueLi
   const root = asRecord(execution) ?? {};
   const inputParameters = asRecord(root.inputParameters ?? root.input_parameters) ?? {};
   const memo = asRecord(root.memo) ?? {};
+  // Normal preset executions nest GitHub inputs under workflow/task payloads
+  // (e.g. inputParameters.workflow.inputs.github_issue); unwrap those shapes
+  // using the same nesting as the execution backend before reading inputs.
+  const workflowInputs =
+    asRecord(asRecord(inputParameters.workflow)?.inputs ?? asRecord(inputParameters.workflow)?.inputParameters) ?? {};
+  const taskInputs = asRecord(asRecord(inputParameters.task)?.inputs) ?? {};
   const candidate =
     asRecord(inputParameters.github_issue ?? inputParameters.githubIssue) ??
+    asRecord(workflowInputs.github_issue ?? workflowInputs.githubIssue) ??
+    asRecord(taskInputs.github_issue ?? taskInputs.githubIssue) ??
     asRecord(memo.github_issue_lifecycle ?? memo.githubIssueLifecycle) ??
     null;
   if (!candidate) {
     const repository =
-      asString(inputParameters.repository || memo.repository || (asRecord(inputParameters.github) ?? {}).repository);
+      asString(inputParameters.repository || workflowInputs.repository || taskInputs.repository || memo.repository || (asRecord(inputParameters.github) ?? {}).repository);
     const rawNumber =
       inputParameters.github_issue_number ??
       inputParameters.githubIssueNumber ??
       inputParameters.issue_number ??
+      workflowInputs.github_issue_number ??
+      workflowInputs.issue_number ??
+      taskInputs.github_issue_number ??
+      taskInputs.issue_number ??
       memo.github_issue_number ??
       null;
     const issueNumber = typeof rawNumber === 'number' ? rawNumber : Number.parseInt(asString(rawNumber), 10);
@@ -139,6 +151,7 @@ export function IssueLifecyclePanel({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [continueVariant, setContinueVariant] = useState<string>('');
+  const [writerStoppedConfirmed, setWriterStoppedConfirmed] = useState(false);
   const [actionResult, setActionResult] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<string | null>(null);
 
@@ -175,7 +188,7 @@ export function IssueLifecyclePanel({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`${apiBase}/api/v1/executions/issue-lifecycle/context`, {
+    fetch(`${apiBase}/v1/executions/issue-lifecycle/context`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: requestBody,
@@ -223,7 +236,7 @@ export function IssueLifecyclePanel({
     setSubmitting(action);
     setActionResult(null);
     try {
-      const response = await fetch(`${apiBase}/api/v1/executions/issue-lifecycle/actions/submit`, {
+      const response = await fetch(`${apiBase}/v1/executions/issue-lifecycle/actions/submit`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -240,6 +253,12 @@ export function IssueLifecyclePanel({
           live_issue: evidence.issue ?? null,
           live_attempt: evidence.currentAttempt ?? null,
           live_pr: evidence.preservedPr ?? null,
+          // Continuation and retry require conclusive stop proof server-side;
+          // the operator supplies it explicitly instead of the UI omitting it.
+          stop_proof:
+            action === 'continue_work' || action === 'authorize_retry'
+              ? { writers_stopped: writerStoppedConfirmed }
+              : undefined,
           reason: '',
           continue_variant: action === 'continue_work' ? continueVariant || undefined : undefined,
         }),
@@ -361,20 +380,34 @@ export function IssueLifecyclePanel({
               </div>
             </fieldset>
           ) : null}
+          {actions.some((entry) => (entry.action === 'continue_work' || entry.action === 'authorize_retry') && entry.enabled) ? (
+            <label className="small">
+              <input
+                type="checkbox"
+                checked={writerStoppedConfirmed}
+                onChange={(event) => setWriterStoppedConfirmed(event.target.checked)}
+              />{' '}
+              Prior writer is conclusively stopped (required stop proof for continuation or retry)
+            </label>
+          ) : null}
           <div className="issue-lifecycle-actions">
-            {actions.map((entry) => (
-              <button
-                key={entry.action}
-                type="button"
-                className="secondary"
-                disabled={!entry.enabled || submitting !== null}
-                title={entry.enabled ? undefined : entry.disabled_reason || 'Unavailable'}
-                onClick={() => void submitAction(entry.action)}
-                aria-label={ACTION_LABELS[entry.action] ?? entry.action}
-              >
-                {submitting === entry.action ? 'Submitting…' : (ACTION_LABELS[entry.action] ?? entry.action)}
-              </button>
-            ))}
+            {actions.map((entry) => {
+              const needsStopProof = entry.action === 'continue_work' || entry.action === 'authorize_retry';
+              const blockedByMissingProof = needsStopProof && entry.enabled && !writerStoppedConfirmed;
+              return (
+                <button
+                  key={entry.action}
+                  type="button"
+                  className="secondary"
+                  disabled={!entry.enabled || blockedByMissingProof || submitting !== null}
+                  title={blockedByMissingProof ? 'Confirm prior writer stop proof first' : entry.enabled ? undefined : entry.disabled_reason || 'Unavailable'}
+                  onClick={() => void submitAction(entry.action)}
+                  aria-label={ACTION_LABELS[entry.action] ?? entry.action}
+                >
+                  {submitting === entry.action ? 'Submitting…' : (ACTION_LABELS[entry.action] ?? entry.action)}
+                </button>
+              );
+            })}
           </div>
           {actionResult ? (
             <div className="notice" role="status" aria-live="polite">

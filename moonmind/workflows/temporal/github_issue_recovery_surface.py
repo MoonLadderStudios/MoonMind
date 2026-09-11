@@ -28,6 +28,7 @@ operator action passes server-side revalidation.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping, Sequence
 
 from moonmind.workflows.temporal import github_issue_lifecycle as lifecycle
@@ -686,4 +687,26 @@ def render_next_action_comment(
                 "hold released" if _truthy(decision_map.get("hold_released")) else "hold retained"
             )
             lines.append(f"Decision record: {'; '.join(audit_bits)}.")
+    if decision:
+        # Stable marker plus fenced portable-handoff metadata so the existing
+        # attempt-handoff parser can observe hold/release fields without a
+        # second result store. The GitHub comment remains the durable
+        # cross-deployment record; the same portable handoff is returned for
+        # the caller to retain in existing workflow results (#4020).
+        decision_map = _mapping(decision)
+        metadata = {
+            "schema": "moonmind.github_issue_operator_decision.v1",
+            "action": _string(decision_map.get("action")),
+            "operator": _string(decision_map.get("operator")),
+            "previous_state": _string(decision_map.get("previous_state")),
+            "work_disposition": _string(decision_map.get("work_disposition")),
+            "retry_budget_reset": bool(decision_map.get("retry_budget_reset")),
+            "hold_released": bool(decision_map.get("hold_released")),
+        }
+        if _string(decision_map.get("continue_variant")):
+            metadata["continue_variant"] = _string(decision_map.get("continue_variant"))
+        lines.append("<!-- moonmind:issue-lifecycle-decision:v1 -->")
+        lines.append("```json")
+        lines.append(json.dumps(metadata, sort_keys=True))
+        lines.append("```")
     return "\n".join(lines)
