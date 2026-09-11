@@ -529,6 +529,7 @@ def validate_operator_action(
             if int(expected_seq) != int(live_seq):
                 return _deny("stale_attempt", "The attempt changed since the UI was rendered; reread live GitHub evidence before acting.")
         except (TypeError, ValueError):
+            # Non-numeric sequence values cannot prove staleness; skip the check.
             pass
 
     writer_id = _string(attempt.get("attempt_id") or attempt.get("attemptId"))
