@@ -372,6 +372,18 @@ def readiness_urls_from_env(
     return urls
 
 
+def _no_proxy_opener() -> urllib.request.OpenerDirector:
+    """Return a URL opener that bypasses proxy env for worker readiness URLs.
+
+    Worker ``/readyz`` endpoints are cluster-local (frequently 127.0.0.1 or a
+    Compose service name). Routing them through an egress HTTP proxy (squid)
+    makes localhost probes fail with ERR_ACCESS_DENIED and misreports worker
+    freshness as unknown instead of healthy/stale.
+    """
+
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def probe_worker_readiness(
     url: str,
     *,
@@ -380,7 +392,8 @@ def probe_worker_readiness(
     """Fetch one worker ``/readyz`` payload best-effort; ``None`` when unknown."""
 
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
+        request = urllib.request.Request(url, method="GET")
+        with _no_proxy_opener().open(request, timeout=timeout) as response:  # noqa: S310
             body = response.read()
         payload = json.loads(body.decode("utf-8"))
     except Exception:
