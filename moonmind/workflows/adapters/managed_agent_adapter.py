@@ -128,12 +128,18 @@ _AUTO_PUBLISH_ALLOWED_STATUSES = frozenset(
 def managed_run_status_metadata(record: ManagedRunRecord) -> dict[str, Any]:
     """Return compact status metadata that is safe for workflow history."""
 
+    from moonmind.workflows.temporal.worker_code_identity import (
+        current_worker_code_revision,
+    )
+
     capabilities = resolve_runtime_execution_capabilities(record.runtime_id)
     metadata: dict[str, Any] = {
         "runtimeId": capabilities.runtime_id,
         "capabilitySetVersion": capabilities.capability_set_version,
         "capabilityDigest": capabilities.capability_digest,
         "runtimeCapabilities": capabilities.model_dump(by_alias=True, mode="json"),
+        # Executing-worker code revision (MoonLadderStudios/MoonMind#4224).
+        "workerCodeRevision": current_worker_code_revision(),
     }
     if record.workspace_path:
         metadata["workspaceLocator"] = {

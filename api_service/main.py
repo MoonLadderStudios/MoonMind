@@ -1074,6 +1074,18 @@ health_router = APIRouter()
 
 _api_start_time = time.monotonic()
 
+# API-process startup code identity (MoonLadderStudios/MoonMind#4224): recorded
+# once at import so /healthz can report stale_code when a host git pull
+# rewrites the bind-mounted sources under a long-lived API process.
+try:
+    from moonmind.workflows.temporal.worker_code_identity import (
+        resolve_worker_code_identity as _resolve_api_code_identity,
+    )
+
+    _API_STARTUP_CODE_IDENTITY = _resolve_api_code_identity()
+except Exception:  # pragma: no cover - best-effort startup snapshot
+    _API_STARTUP_CODE_IDENTITY = None
+
 
 @health_router.get("/healthz")
 async def health_check():
@@ -1163,12 +1175,75 @@ async def health_check():
         db_reachable=db_reachable,
         secret_ready=True,
     )
+    # Worker code freshness (MoonLadderStudios/MoonMind#4224): compare the
+    # API process's startup-recorded identity and each reachable worker's
+    # /readyz identity with the checkout on disk. A host `git pull` alone is
+    # not a deployment — stale workers must be restarted before new runs are
+    # admitted (see docs/Steps/DockerComposeUpdateSystem.md).
+    code_freshness: dict[str, Any] = {}
+    try:
+        from moonmind.workflows.temporal.worker_code_identity import (
+            UNKNOWN as _CODE_UNKNOWN,
+        )
+        from moonmind.workflows.temporal.worker_code_identity import (
+            WorkerCodeIdentity as _WorkerCodeIdentity,
+        )
+        from moonmind.workflows.temporal.worker_code_identity import (
+            collect_worker_code_freshness,
+            evaluate_worker_freshness,
+            readiness_urls_from_env,
+            resolve_checkout_code_identity,
+        )
+
+        checkout = resolve_checkout_code_identity()
+        if _API_STARTUP_CODE_IDENTITY is not None:
+            api_freshness = evaluate_worker_freshness(
+                name="api",
+                startup=_API_STARTUP_CODE_IDENTITY,
+                current=checkout,
+            )
+        else:
+            # No startup snapshot (import-time failure): report unknown, never
+            # healthy — there is no evidence the modules match the checkout.
+            api_freshness = evaluate_worker_freshness(
+                name="api",
+                startup=_WorkerCodeIdentity(
+                    revision=None, digest=None, source=_CODE_UNKNOWN
+                ),
+                current=checkout,
+            )
+        code_freshness["api"] = api_freshness.to_payload()
+        workers = [
+            item.to_payload()
+            for item in collect_worker_code_freshness(
+                readiness_urls_from_env(), current=checkout
+            )
+        ]
+        code_freshness["workers"] = workers
+        stale = [
+            item for item in [api_freshness.to_payload(), *workers]
+            if item.get("status") == "stale"
+        ]
+        if stale:
+            code_freshness["reasonCode"] = "stale_code"
+            code_freshness["staleCode"] = [
+                {
+                    "worker": item.get("worker"),
+                    "startupRevision": item.get("startupRevision"),
+                    "currentRevision": item.get("currentRevision"),
+                }
+                for item in stale
+            ]
+    except Exception as exc:
+        logger.warning("Worker code freshness probe degraded: %s", exc)
     body = {
         "status": "ok" if db_reachable and not migration_required else "degraded",
         "db": db_status,
         "uptime_seconds": uptime,
         **readiness,
     }
+    if code_freshness:
+        body["workerCodeFreshness"] = code_freshness
     if not db_reachable or migration_required:
         return JSONResponse(status_code=503, content=body)
     return body
