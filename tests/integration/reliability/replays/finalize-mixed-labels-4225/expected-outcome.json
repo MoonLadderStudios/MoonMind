@@ -1,0 +1,12 @@
+{
+  "recordedFailedShapeReplays": true,
+  "recordedSettled": "blocked_mixed",
+  "recordedDecision": "blocked",
+  "recordedReasonCode": "reconciliation_required",
+  "withoutPrStaysBlocked": true,
+  "withPrSteersToAttention": true,
+  "attentionDecision": "attention",
+  "attentionDegraded": true,
+  "attentionTransition": "to_needs_attention",
+  "attentionAddsOnly": true
+}

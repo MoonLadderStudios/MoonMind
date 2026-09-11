@@ -53,6 +53,14 @@ from moonmind.omnigent.harness_platform.stores import (
     ExecutionPlanUsageIdentity,
     OmnigentExecutionPlanUsageStore,
 )
+from moonmind.omnigent.bootstrap.free_model_eligibility import (
+    FREE_PROFILE_ID,
+    FREE_PROVIDER_ID,
+    NO_ELIGIBLE_FREE_MODEL_CODE,
+    catalog_ids_from_evidence,
+    require_exact_catalog_match,
+    zen_free_route_blocked_reason,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.executions.model_resolver import resolve_model_effort
 
@@ -741,8 +749,71 @@ class OmnigentExecutionPlanningService:
                 "selected model does not belong to the Provider Profile route",
                 code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
             )
+        blocked_reason = zen_free_route_blocked_reason(
+            str(getattr(provider, "provider_id", "") or "")
+        )
+        if blocked_reason is not None:
+            # MoonLadderStudios/MoonMind#4021 req-4: the credentialless free
+            # route needs the recorded per-policy-version authorization from
+            # the existing Settings authority. Default deployments accept, so
+            # they observe no change; an explicit operator decline blocks new
+            # admission with a precise privacy reason instead of silently
+            # proceeding or substituting a paid fallback.
+            raise HarnessPlatformError(
+                f"the credentialless {FREE_PROFILE_ID} default is blocked "
+                f"({NO_ELIGIBLE_FREE_MODEL_CODE}: {blocked_reason}). Re-accept "
+                "contributor data use in Settings or choose an explicit valid "
+                "alternative.",
+                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+            )
         effort = str(resolved.effort or "").strip() or None
+        OmnigentExecutionPlanningService._enforce_free_route_exact_catalog(
+            provider, qualified
+        )
         return qualified, effort, provider.provider_id
+
+    @staticmethod
+    def _enforce_free_route_exact_catalog(provider: Any, qualified: str) -> None:
+        """Require the exact observed catalog ID before launching free-route.
+
+        MoonLadderStudios/MoonMind#4021 req-1/req-3: plan-time admission
+        threads the Provider Profile's persisted exact-host catalog
+        (``model_catalog_evidence_json``) into execution selection through
+        :func:`require_exact_catalog_match`, so punctuation-normalized
+        collisions and name/catalog-presence heuristics cannot qualify a
+        different model/provider. A profile with no persisted catalog yet
+        defers to exact-host qualification (non-blocking here); a persisted
+        catalog that lacks the selected ID fails closed with the
+        ``no_eligible_free_model`` availability axis instead of silently
+        substituting. Never selects a paid fallback.
+        """
+        if str(getattr(provider, "provider_id", "") or "") != FREE_PROVIDER_ID:
+            return
+        catalog_ids = catalog_ids_from_evidence(
+            getattr(provider, "model_catalog_evidence_json", None)
+        )
+        if not catalog_ids:
+            return
+        try:
+            require_exact_catalog_match(qualified, catalog_ids)
+        except Exception as exc:
+            from moonmind.omnigent.bootstrap.free_model_eligibility import (
+                FreeModelUnavailableError,
+                NoEligibleFreeModelError,
+            )
+
+            if isinstance(exc, FreeModelUnavailableError):
+                return
+            if isinstance(exc, NoEligibleFreeModelError):
+                raise HarnessPlatformError(
+                    f"the credentialless {FREE_PROFILE_ID} model {qualified!r} "
+                    f"is not in the exact observed catalog "
+                    f"({NO_ELIGIBLE_FREE_MODEL_CODE}: "
+                    f"{exc.details.get('reasons', {})}). Choose an explicit "
+                    "valid alternative.",
+                    code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+                ) from exc
+            raise
 
     @staticmethod
     def _require_durable_legacy_authority(document: Mapping[str, Any]) -> None:

@@ -103,6 +103,8 @@ from api_service.api.routers.system_operations import (
     router as system_operations_router,
 )
 from api_service.api.routers.proxy import router as proxy_router
+from api_service.api.routers.auth_advanced_4124 import router as auth_advanced_4124_router
+from api_service.api.routers.issue_lifecycle import router as issue_lifecycle_router
 from api_service.api.websockets import router as websockets_router
 from api_service.api.schemas import UserProfileUpdate
 from api_service.db.base import get_async_session_context
@@ -691,6 +693,25 @@ async def _maintain_omnigent_bootstrap_reconciliation() -> None:
             retry_delay_seconds = min(retry_delay_seconds * 2, 120)
 
 
+_OMNIGENT_INVENTORY_REFRESH_INTERVAL_SECONDS = 120
+
+
+async def _maintain_omnigent_inventory() -> None:
+    """Keep discovery fresh even while bootstrap waits on credential authority."""
+    from api_service.services.omnigent_agent_profile_service import (
+        refresh_upstream_inventory,
+    )
+
+    while True:
+        try:
+            await refresh_upstream_inventory()
+        except Exception as exc:
+            logger.warning(
+                "Omnigent inventory refresh deferred (%s)", type(exc).__name__
+            )
+        await asyncio.sleep(_OMNIGENT_INVENTORY_REFRESH_INTERVAL_SECONDS)
+
+
 async def _initialize_oidc_provider(app: FastAPI):
     """Validate the authentication selector; generic OIDC discovery lives in #4124."""
     # The bundled Keycloak integration was removed (#4129): retired selectors
@@ -943,6 +964,21 @@ async def _initialize_oidc_provider(app: FastAPI):
             )
         except Exception as exc:
             raise RuntimeError(str(exc)) from exc
+    # Advanced modes (#4124): shape-validate oidc/header operator config at
+    # startup (no outbound discovery fetch here; hermetic CI stays offline).
+    # Failures abort startup actionably instead of serving a half-configured
+    # login that would silently fall back to another mode.
+    if production_mode in ("oidc", "header"):
+        try:
+            from api_service.services.advanced_auth_service_4124 import (
+                validate_advanced_mode_config as _validate_advanced_config,
+            )
+
+            app.state.advanced_auth_config = _validate_advanced_config(
+                production_mode
+            )
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
     app.state.auth_production_mode = production_mode
     app.state.auth_classification = classification
     from moonmind.security.auth_modes_4120 import set_active_production_mode as _set_active_mode
@@ -976,21 +1012,23 @@ async def lifespan(app: FastAPI):
             _maintain_omnigent_bootstrap_reconciliation(),
             name="omnigent-bootstrap-reconciliation",
         )
+        app.state.omnigent_inventory_task = asyncio.create_task(
+            _maintain_omnigent_inventory(), name="omnigent-inventory-refresh"
+        )
     try:
         yield
     finally:
-        retry_task = getattr(
-            app.state,
-            "omnigent_bootstrap_reconciliation_task",
-            None,
-        )
-        if retry_task is not None and not retry_task.done():
-            retry_task.cancel()
-            try:
-                await retry_task
-            except asyncio.CancelledError:
-                # Shutdown owns this task, so cancellation is the expected outcome.
-                pass
+        maintenance_tasks = [
+            task
+            for name in (
+                "omnigent_bootstrap_reconciliation_task",
+                "omnigent_inventory_task",
+            )
+            if (task := getattr(app.state, name, None)) is not None
+        ]
+        for task in maintenance_tasks:
+            task.cancel()
+        await asyncio.gather(*maintenance_tasks, return_exceptions=True)
         # The pooled Omnigent HTTP/SSE transport lives for the process, so
         # this process closes it (MoonLadderStudios/MoonMind#3878).
         from moonmind.omnigent.production import close_omnigent_transport_pool
@@ -1057,6 +1095,22 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 health_router = APIRouter()
 
 _api_start_time = time.monotonic()
+
+# API-process startup code identity (MoonLadderStudios/MoonMind#4224): recorded
+# once at import so /healthz can report stale_code when a host git pull
+# rewrites the bind-mounted sources under a long-lived API process.
+try:
+    from moonmind.workflows.temporal.worker_code_identity import (
+        record_worker_startup_identity as _record_api_code_identity,
+    )
+
+    # Record through the shared process-wide startup identity so
+    # current_worker_code_revision() (used for AgentRun/UserWorkflow
+    # metadata) reports this process's actual import-time identity instead
+    # of lazily resolving a possibly newer on-disk checkout.
+    _API_STARTUP_CODE_IDENTITY = _record_api_code_identity()
+except Exception:  # pragma: no cover - best-effort startup snapshot
+    _API_STARTUP_CODE_IDENTITY = None
 
 
 @health_router.get("/healthz")
@@ -1147,12 +1201,77 @@ async def health_check():
         db_reachable=db_reachable,
         secret_ready=True,
     )
+    # Worker code freshness (MoonLadderStudios/MoonMind#4224): compare the
+    # API process's startup-recorded identity and each reachable worker's
+    # /readyz identity with the checkout on disk. A host `git pull` alone is
+    # not a deployment — stale workers must be restarted before new runs are
+    # admitted (see docs/Steps/DockerComposeUpdateSystem.md).
+    code_freshness: dict[str, Any] = {}
+    try:
+        from moonmind.workflows.temporal.worker_code_identity import (
+            UNKNOWN as _CODE_UNKNOWN,
+        )
+        from moonmind.workflows.temporal.worker_code_identity import (
+            WorkerCodeIdentity as _WorkerCodeIdentity,
+        )
+        from moonmind.workflows.temporal.worker_code_identity import (
+            collect_worker_code_freshness,
+            evaluate_worker_freshness,
+            readiness_urls_from_env,
+            resolve_checkout_code_identity,
+        )
+
+        checkout = await asyncio.to_thread(resolve_checkout_code_identity)
+        if _API_STARTUP_CODE_IDENTITY is not None:
+            api_freshness = evaluate_worker_freshness(
+                name="api",
+                startup=_API_STARTUP_CODE_IDENTITY,
+                current=checkout,
+            )
+        else:
+            # No startup snapshot (import-time failure): report unknown, never
+            # healthy — there is no evidence the modules match the checkout.
+            api_freshness = evaluate_worker_freshness(
+                name="api",
+                startup=_WorkerCodeIdentity(
+                    revision=None, digest=None, source=_CODE_UNKNOWN
+                ),
+                current=checkout,
+            )
+        code_freshness["api"] = api_freshness.to_payload()
+        workers = [
+            item.to_payload()
+            for item in await asyncio.to_thread(
+                collect_worker_code_freshness,
+                readiness_urls_from_env(),
+                current=checkout,
+            )
+        ]
+        code_freshness["workers"] = workers
+        stale = [
+            item for item in [api_freshness.to_payload(), *workers]
+            if item.get("status") == "stale"
+        ]
+        if stale:
+            code_freshness["reasonCode"] = "stale_code"
+            code_freshness["staleCode"] = [
+                {
+                    "worker": item.get("worker"),
+                    "startupRevision": item.get("startupRevision"),
+                    "currentRevision": item.get("currentRevision"),
+                }
+                for item in stale
+            ]
+    except Exception as exc:
+        logger.warning("Worker code freshness probe degraded: %s", exc)
     body = {
         "status": "ok" if db_reachable and not migration_required else "degraded",
         "db": db_status,
         "uptime_seconds": uptime,
         **readiness,
     }
+    if code_freshness:
+        body["workerCodeFreshness"] = code_freshness
     if not db_reachable or migration_required:
         return JSONResponse(status_code=503, content=body)
     return body
@@ -1187,6 +1306,7 @@ app.include_router(proxy_router, prefix="/api/v1")
 app.include_router(system_operations_router)
 app.include_router(deployment_operations_router)
 app.include_router(executions_router)
+app.include_router(issue_lifecycle_router)
 app.include_router(execution_integrations_router)
 app.include_router(automation_router)
 
@@ -1211,12 +1331,17 @@ app.include_router(workflow_console_router)
 app.include_router(presets_router)
 app.include_router(temporal_artifacts_router)
 app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
+# Advanced identity sources (#4124): generic OIDC + trusted-proxy journeys
+# through the shared auth boundary. Endpoints fail closed when the classified
+# production mode does not select them.
+app.include_router(auth_advanced_4124_router)
 if _ENABLE_TEST_UI_ROUTE:
     app.include_router(test_ui_router)
 
 # Legacy fastapi-users login/register/reset/verify/users routes were removed with
-# the bundled Keycloak integration (#4129). No /api/v1/auth/* application-login
-# route is mounted; supported modes authenticate through the #4124-era contracts
+# the bundled Keycloak integration (#4129). The only /api/v1/auth/* routes are
+# the #4124 advanced journeys above; supported modes authenticate through the
+# #4124-era contracts
 # (docs/Security/AuthenticationContracts.md), and `disabled` mode resolves the
 # persisted default user via get_current_user().
 
@@ -1923,6 +2048,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
                 "secret_refs": {},
                 "clear_env_keys": [
+                    "OPENCODE_API_KEY",
                     "OPENCODE_AUTH_CONTENT",
                     "OPENCODE_CONFIG",
                     "OPENCODE_CONFIG_CONTENT",

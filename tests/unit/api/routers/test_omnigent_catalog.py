@@ -1254,6 +1254,35 @@ def test_catalog_admits_the_credentialless_opencode_zen_profile(monkeypatch):
     assert body["ineligibleProviderProfiles"] == []
 
 
+def test_catalog_blocks_declined_free_route_with_precise_privacy_reason(monkeypatch):
+    """MoonLadderStudios/MoonMind#4021 req-4/req-5: an explicit operator
+    decline of contributor data use surfaces the credentialless default as
+    ineligible with the evaluated privacy reason, never a capacity wait or a
+    paid fallback."""
+
+    zen = _profile(
+        profile_id="opencode-zen-free",
+        account_label="OpenCode Zen Contributor Free",
+        provider_label="OpenCode Zen",
+        provider_id="opencode",
+        runtime_id="opencode",
+        credential_source=SimpleNamespace(value="none"),
+        runtime_materialization_mode=SimpleNamespace(value="composite"),
+    )
+    monkeypatch.setenv("OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE", "false")
+    app = _app(monkeypatch, session=_Session([zen]))
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["eligibleProviderProfiles"] == []
+    assert [item["profileId"] for item in body["ineligibleProviderProfiles"]] == [
+        "opencode-zen-free"
+    ]
+    reasons = body["ineligibleProviderProfiles"][0]["gateReasons"]
+    assert [reason["code"] for reason in reasons] == ["no_eligible_free_model"]
+    assert "privacy=privacy:unaccepted_terms:" in reasons[0]["message"]
+
+
 def test_catalog_still_rejects_an_unregistered_credentialless_runtime(monkeypatch):
     """`credential_source == "none"` is not a blanket eligibility escape hatch."""
 

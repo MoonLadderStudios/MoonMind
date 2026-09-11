@@ -79,12 +79,15 @@ from api_service.retrieval_capabilities import RetrievalCapabilityRegistry
 
 
 def get_capability_registry(request: Request) -> RetrievalCapabilityRegistry:
-    """Return the process-cached retrieval-authority registry.
+    """Return the process-cached drain-only retrieval-authority registry.
 
     MoonLadderStudios/MoonMind#4192: relocated here from the retired
-    ``retrieval_gateway`` router. The bridge keeps only session-authority
-    lifecycle (revocation on session teardown); no retrieval query path
-    remains.
+    ``retrieval_gateway`` router. MoonLadderStudios/MoonMind#4107: new
+    issuance is retired; the bridge keeps only scoped session-authority
+    drain (revocation on session teardown) plus historical-evidence reads
+    for already-issued capabilities. No retrieval query or issuance path
+    remains. Historical state drainage beyond scoped revocation is owned by
+    the epic cutover issue.
     """
 
     registry = getattr(request.app.state, "retrieval_capability_registry", None)
@@ -1565,7 +1568,13 @@ async def _revoke_session_retrieval_authority(
     store: OmnigentBridgeSessionStore,
     reason: str,
 ) -> list[str]:
-    """Close scoped retrieval authority before a destructive host boundary.
+    """Close scoped retired-retrieval authority before a destructive boundary.
+
+    MoonLadderStudios/MoonMind#4107: no new retrieval authority is issued;
+    this is the bounded drain for already-issued capabilities under the
+    epic cutover rule. Request/result correlation and durable artifacts are
+    preserved by the registry evidence readers; session retry never discovers
+    a changed tool set mid-work because new launches carry no retrieval tool.
 
     When the session cannot be scoped precisely — no bridge row, or a partially
     established one — the outcome depends on whether live authority still names

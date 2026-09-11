@@ -139,6 +139,19 @@ _STRATEGY_TABLE: dict[tuple[str, str, str], tuple[str, ...]] = {
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
     ),
+    # MoonLadderStudios/MoonMind#4021: the credentialless Zen route must still
+    # clear ambient model keys/auth caches at the launch boundary, including
+    # inherited OpenCode configuration and OPENCODE_API_KEY (which may only
+    # configure the separate keyed opencode-go profile, never rescue this
+    # attempt). An empty policy would clear nothing.
+    ("opencode", "opencode", "none"): (
+        "OPENCODE_API_KEY",
+        "OPENCODE_AUTH_CONTENT",
+        "OPENCODE_CONFIG",
+        "OPENCODE_CONFIG_CONTENT",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ),
     ("codex_cli", "openrouter", "api_key"): (
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
@@ -251,23 +264,40 @@ def derive_isolation_policy(
 ) -> IsolationPolicy | None:
     """Derive the canonical policy for a known strategy, or None if unknown.
 
-    ``authentication_method`` ``none`` (credential-free) derives an empty
-    policy. Unknown runtime/provider/method combinations return None so
-    callers fail closed instead of guessing.
+    Credential-free (``none``) strategies resolve through the same canonical
+    table so a credentialless launch still clears ambient keys (for example
+    the opencode/opencode/none Zen route). Unknown runtime/provider/method
+    combinations return None so callers fail closed instead of guessing.
     """
     runtime = _normalized(runtime_id)
     provider = _normalized(provider_id)
     method = _normalized(authentication_method)
-    if method == "none":
-        return IsolationPolicy(
-            keys=(),
-            strategy_id=f"{runtime}/{provider}/none",
-            explanations={},
-        )
-    # Credential-free materialization without an explicit none method still
-    # derives an empty policy when the contract is coherent.
-    if not method and _normalized(credential_source) == "none":
-        return IsolationPolicy(keys=(), strategy_id=f"{runtime}/{provider}/none", explanations={})
+    if method == "none" or (
+        not method and _normalized(credential_source) == "none"
+    ):
+        effective_method = "none"
+        if runtime and provider:
+            keys = _STRATEGY_TABLE.get((runtime, provider, effective_method))
+            if keys is not None:
+                return IsolationPolicy(
+                    keys=tuple(keys),
+                    strategy_id=f"{runtime}/{provider}/{effective_method}",
+                    explanations={
+                        k: _KEY_EXPLANATIONS.get(k, "Backend-owned launch isolation.")
+                        for k in keys
+                    },
+                )
+        # Unknown credential-free strategy: empty policy only when the
+        # contract is coherent, otherwise fail closed via None.
+        if not runtime or not provider:
+            return None
+        if _normalized(credential_source) in {"", "none"}:
+            return IsolationPolicy(
+                keys=(),
+                strategy_id=f"{runtime}/{provider}/none",
+                explanations={},
+            )
+        return None
     if not runtime or not provider or not method:
         return None
     keys = _STRATEGY_TABLE.get((runtime, provider, method))

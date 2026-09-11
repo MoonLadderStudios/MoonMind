@@ -63,6 +63,8 @@ MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_BASE = (
 )
 OMNIGENT_OAUTH_HOST_JANITOR_SCHEDULE_ID = "omnigent-oauth-host-janitor"
 OMNIGENT_OAUTH_HOST_JANITOR_WORKFLOW_ID_BASE = "omnigent-oauth-host-janitor-run"
+GITHUB_ISSUE_RECONCILE_SCHEDULE_ID = "mm-operational:github-issue-reconcile"
+GITHUB_ISSUE_RECONCILE_WORKFLOW_ID_BASE = "mm-operational:github-issue-reconcile"
 ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV = "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS"
 _WORKFLOW_UPDATE_ACCEPTED_TIMEOUT = timedelta(seconds=10)
 _WORKFLOW_CONTROL_CONCURRENCY = 10
@@ -769,7 +771,17 @@ class TemporalClientAdapter:
         schedule = Schedule(
             action=ScheduleActionStartWorkflow(
                 "MoonMind.ManagedSessionReconcile",
-                {},
+                # Self-monitoring input for #4226 schedule health: the
+                # reconcile activity describes these schedule IDs itself at
+                # the activity boundary and durably tracks SkippedOverlap
+                # counters/streaks across ticks. The reconcile schedule
+                # itself uses OverlapPolicy=Skip, so its own growth proves
+                # the operational sweeper is starving.
+                {
+                    "scheduleIdsToWatch": [
+                        MANAGED_SESSION_RECONCILE_SCHEDULE_ID,
+                    ]
+                },
                 id=MANAGED_SESSION_RECONCILE_WORKFLOW_ID_BASE,
                 task_queue=self._get_task_queue(),
                 typed_search_attributes=_build_typed_search_attributes(
@@ -979,6 +991,82 @@ class TemporalClientAdapter:
         except Exception as create_exc:
             raise ScheduleOperationError(
                 f"Failed to create Omnigent OAuth host janitor schedule: {create_exc}"
+            ) from create_exc
+
+    async def ensure_github_issue_reconcile_schedule(
+        self,
+        *,
+        cron_expression: str = "17 * * * *",
+        timezone: str = "UTC",
+        enabled: bool = True,
+        repository: str = "",
+    ) -> str:
+        """Create or replace the recurring GitHub issue reconcile schedule.
+
+        Registers ``MoonMind.GitHubIssueReconcile`` through the production
+        Temporal scheduling mechanism so the default hourly maintenance run
+        starts without manual invocation. Skip-on-overlap keeps duplicate
+        observations bounded without a global lock.
+        """
+
+        from temporalio.client import Schedule, ScheduleActionStartWorkflow, ScheduleUpdate
+        from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
+        from moonmind.workflows.temporal.schedule_mapping import (
+            build_schedule_policy,
+            build_schedule_spec,
+            build_schedule_state,
+        )
+
+        client = await self.get_client()
+
+        def _schedule() -> Schedule:
+            return Schedule(
+                action=ScheduleActionStartWorkflow(
+                    "MoonMind.GitHubIssueReconcile",
+                    {"repository": repository} if repository else {},
+                    id=GITHUB_ISSUE_RECONCILE_WORKFLOW_ID_BASE,
+                    task_queue=self._get_task_queue(),
+                    typed_search_attributes=_build_typed_search_attributes(
+                        {"mm_entry": ["operational"], "mm_state": ["scheduled"]}
+                    ),
+                    static_summary="GitHub issue reconcile",
+                    static_details=(
+                        "Recurring bounded reconciliation of interrupted issue handoffs"
+                    ),
+                ),
+                spec=build_schedule_spec(
+                    cron=cron_expression, timezone=timezone, jitter_seconds=0
+                ),
+                policy=build_schedule_policy(overlap_mode="skip", catchup_mode="last"),
+                state=build_schedule_state(
+                    enabled=enabled, note="GitHub issue handoff reconciliation"
+                ),
+            )
+
+        try:
+            handle = client.get_schedule_handle(GITHUB_ISSUE_RECONCILE_SCHEDULE_ID)
+
+            async def _replace(input: Any) -> ScheduleUpdate:  # noqa: A002
+                del input
+                return ScheduleUpdate(schedule=_schedule())
+
+            await handle.update(_replace)
+            return GITHUB_ISSUE_RECONCILE_SCHEDULE_ID
+        except Exception as update_exc:
+            if not _is_rpc_status(update_exc, "NOT_FOUND") and "not found" not in str(
+                update_exc
+            ).lower():
+                raise ScheduleOperationError(
+                    f"Failed to update GitHub issue reconcile schedule: {update_exc}"
+                ) from update_exc
+        try:
+            handle = await client.create_schedule(
+                GITHUB_ISSUE_RECONCILE_SCHEDULE_ID, _schedule()
+            )
+            return handle.id
+        except Exception as create_exc:
+            raise ScheduleOperationError(
+                f"Failed to create GitHub issue reconcile schedule: {create_exc}"
             ) from create_exc
 
     async def create_schedule(

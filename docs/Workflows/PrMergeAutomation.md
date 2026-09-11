@@ -313,6 +313,23 @@ The resolver artifact, normally `var/pr_resolver/result.json`, includes mergeAut
 
 Review-clean requires admitted fix_only, an exact remotely verified branch revision in unified repository evidence, a permitted non-merge publication action, and the resolver's own result plus a live PR observation proving that the PR remains unmerged. Contradictory merge evidence fails `UNAUTHORIZED_MERGE_EVIDENCE`; unverified remote revision fails the shared parser. The Skill's live check emits blocked `unmerged_pr_verification_unavailable` when merged or unreadable state prevents no-merge proof. Do not require the retired Auto schema's `merged` boolean in `moonmind.publish.repository.v1`; semantic merge/no-merge fields belong to the resolver result, while publication mechanics use the shared schema. Review-clean and merged may both exit zero, so structured evidence distinguishes them.
 
+Review and reaction collection must read every page with the supported GitHub
+CLI. A command failure, malformed page, or incomplete response is an evidence
+collection failure, never an empty review inventory or a pending review.
+
+Both `request_review` and `reenter_gate` consume the existing review loop's
+`maxConsecutiveNoProgressCycles` budget when their progress signature repeats.
+Historical handoffs without a signature use their head and reason to bound
+repetition. Changed work resets the counter; elapsed waits do not establish
+progress. Budget exhaustion preserves resolver evidence and reports an actionable
+blocker rather than creating additional identical agent runs.
+
+A resolver child whose validated terminal disposition is `gated_continuation`
+is displayed as **Handed off** in the workflow list and detail. Its Temporal
+execution remains completed; the owning workflow remains responsible for the
+requested PR outcome. Failed or canceled runs never acquire a successful
+handoff label. Older records without a disposition keep their recorded status.
+
 A reenter_gate result is a durable handoff, not proof the PR merged. It carries completionDisposition gated_continuation and normalized gatedContinuation. The gate waits until the Skill-authored notBefore; old handoffs without timing use fallbackPollSeconds. The exact review-grace deadline is not recomputed or extended by the gate. Same-session continuation support is irrelevant to this parent-owned handoff.
 
 Only the synthetic PR_RESOLVER_REENTER_GATE terminal-contract failure can be cleared by an authorized handoff. Provider, auth, rate-limit, infrastructure, timeout, cancellation, stale-evidence, and malformed-evidence failures remain their own failures.

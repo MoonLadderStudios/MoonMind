@@ -306,8 +306,34 @@ def attempt_evidence_blocks_admission(attempt_context: Mapping[str, Any] | None)
     the decision: exhausted budgets, operator holds, lineage gaps, and
     simultaneous-race approximations all block automatic admission rather
     than starting fresh.
+
+    When the context carries the reconciler's admission gate
+    (``reconciliationAdmissionAllowed: False`` or ``reconciliationBlocked:
+    True``, built by ``github_issue_reconciliation.admission_context_from_scan``
+    from the persisted last scan), an incomplete or failed reconciliation
+    scan blocks new admission until the next successful run. Activity
+    boundaries thread the persisted scan into the candidate context with one
+    ``admission_context_from_scan`` call; Search, Implement, and continuation
+    all route through this function so the gate is enforced on every shared
+    admission path.
     """
     context = attempt_context or {}
+    for key in (
+        "reconciliationAdmissionAllowed",
+        "reconciliation_admission_allowed",
+        "reconciliation_admissionAllowed",
+    ):
+        if key in context:
+            value = context.get(key)
+            if value is False or (isinstance(value, str) and value.strip().lower() in {"0", "false", "no"}):
+                return True
+    for key in (
+        "reconciliationBlocked",
+        "reconciliation_blocked",
+    ):
+        value = context.get(key)
+        if value is True or (isinstance(value, str) and value.strip().lower() in {"1", "true", "yes"}):
+            return True
     for key in (
         "hasUnresolvedActiveAttempt",
         "has_unresolved_active_attempt",
@@ -348,6 +374,54 @@ def is_selectable_candidate(
     if attempt_evidence_blocks_admission(attempt_context):
         return False, interpretation
     return True, interpretation
+
+
+def preserved_work_continuation(
+    *,
+    repository: str,
+    issue_number: int,
+    lineage_validated: bool,
+    lineage_pr_url: Any = "",
+    lineage_pr_head: Any = "",
+    lineage_pr_base: Any = "",
+    lineage_saved_branch: Any = "",
+    lineage_saved_sha: Any = "",
+    candidate_basis: Any = "attempt_lineage+github_read",
+    github_pr: Mapping[str, Any] | None = None,
+    gate_evidence: Mapping[str, Any] | None = None,
+    implementation_complete: bool = False,
+    verification_current: bool = False,
+    writable: bool = True,
+) -> dict[str, Any]:
+    """Route validated preserved-work evidence to its continuation phase.
+
+    Production lifecycle consumption of the portable prior-work
+    discovery/routing boundary (``github_issue_continuation``): recovery-needed
+    admission passes the validated attempt lineage and the direct GitHub PR
+    read, and receives the typed discovery result plus same-PR phase routing.
+    Deterministic and side-effect-free; GitHub reads stay at the trusted
+    Activity/service boundary.
+    """
+    from moonmind.workflows.temporal import (
+        github_issue_continuation as _continuation,
+    )
+
+    return _continuation.plan_issue_continuation(
+        repository=repository,
+        issue_number=issue_number,
+        lineage_validated=lineage_validated,
+        lineage_pr_url=lineage_pr_url,
+        lineage_pr_head=lineage_pr_head,
+        lineage_pr_base=lineage_pr_base,
+        lineage_saved_branch=lineage_saved_branch,
+        lineage_saved_sha=lineage_saved_sha,
+        candidate_basis=candidate_basis,
+        github_pr=github_pr,
+        gate_evidence=gate_evidence,
+        implementation_complete=implementation_complete,
+        verification_current=verification_current,
+        writable=writable,
+    )
 
 
 _SETTLED_TO_LABEL: dict[str, str | None] = {
@@ -505,14 +579,29 @@ def plan_transition(
         )
     required = _TRANSITION_REQUIREMENTS.get((from_settled, to_target))
     if required is None:
-        return TransitionDecision(
-            allowed=False,
-            from_settled=from_settled,
-            to_target=to_target,
-            reason=cleaned_reason,
-            reason_code="unsupported_transition",
-            summary=f"Transition {from_settled} -> {to_target} requires an explicit decision under the existing authority contracts.",
-        )
+        # Idempotent code-review retry: already in the desired state is
+        # success, not a workflow failure. A lost finalize retry, a re-run,
+        # or a losing contender that observed the winner's code-review label
+        # reconciles to already_applied (empty mutation plan) rather than
+        # failed_unrecoverable. Same evidence bar as a normal move to code
+        # review: do not claim already-in-review without verified PR
+        # evidence. All other unlisted pairs still require an explicit
+        # decision; in particular there is no reason-only release to
+        # Available that could publish false release evidence.
+        if (
+            from_settled == SETTLED_CODE_REVIEW
+            and to_target == TO_CODE_REVIEW
+        ):
+            required = ("gates_satisfied", "pr_url_verified")
+        else:
+            return TransitionDecision(
+                allowed=False,
+                from_settled=from_settled,
+                to_target=to_target,
+                reason=cleaned_reason,
+                reason_code="unsupported_transition",
+                summary=f"Transition {from_settled} -> {to_target} requires an explicit decision under the existing authority contracts.",
+            )
     missing = tuple(key for key in required if not _truthy_evidence(evidence_mapping.get(key)))
     if not cleaned_reason:
         missing = (*missing, "reason")
@@ -758,6 +847,7 @@ __all__ = [
     "interpret_issue",
     "attempt_evidence_blocks_admission",
     "is_selectable_candidate",
+    "preserved_work_continuation",
     "plan_transition",
     "plan_label_mutation",
     "classify_mutation_outcome",

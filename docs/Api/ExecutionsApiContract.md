@@ -260,6 +260,8 @@ Successful creation allocates workflow/run identity, starts `initializing` unles
 
 Title resolution is deterministic. A meaningful caller title wins. Otherwise combine the selected capability/preset label with up to two structured targets such as an issue, PR, branch, or failing check. Bookkeeping step IDs are not targets. A label without a target remains a fallback. Titles are bounded to 150 characters.
 
+Creation also freezes the generated base label and records the shared title-transition state in memo: `titleBase`, `titleProvenance` (`user_explicit` or `generated`), and the monotonic `titleRevision` ordering guard, alongside the existing `titleSource`/`titleConfidence` projection. Preset runtime resolvers that select their target after creation (such as `github-issue-search-and-implement` via its pinned `titleEnrichment` opt-in) enrich the display title to `<base>: #<number>` through the same workflow-owned transition, without touching workflow/run identity, plan, branches, checkpoints, artifacts, commits, or publication behavior.
+
 ### 9.6 Errors
 
 Domain create validation uses 422 `invalid_execution_request`, with field-addressable details for context/policy conflicts. Malformed bodies may use framework validation errors. Authentication uses the auth layer's 401/403 behavior. A conflicting idempotent intent is a distinct conflict, not a successful create. Error semantics and generated clients must be updated together when the new authoring boundary is enabled.
@@ -320,6 +322,8 @@ Derived per-step publication disposition does not create a step-authoring overri
 | idempotencyKey | Update reconciliation key |
 
 UpdateInputs replaces/adds refs and patches admitted parameters. No-op updates can succeed. Executing/awaiting-external work may accept supported changes for the next safe point; major changes may require a newly admitted run through the lifecycle owner. SetTitle changes display metadata immediately and does not change execution authority.
+
+SetTitle (`title` required) runs through the one shared workflow-owned title transition on both the service record and the production `MoonMind.UserWorkflow` update of the same name (object payload carrying `title`; the legacy `update_title` method name remains as a compatibility alias forwarding to it). Manual titles are validated and normalized with the shared display-safe policy (empty/whitespace-only or unsafe text is rejected with `invalid_update_request`); the same-text rename still flips provenance to explicit. The canonical record updates memo `title`/`titleBase`/`titleProvenance`/`titleRevision`/`titleSource` and recomputes the `mm_title` search tokens so state, memo, search, and UI stay consistent across refreshes. Genuine no-ops succeed without touching the record, bumping the revision, or emitting repeated metadata changes.
 
 RequestRerun requests a clean re-execution under the [run-history/rerun contract](../Temporal/WorkflowRunHistoryAndNewRunSemantics.md#7-new-run-semantics). A supported active workflow may Continue-As-New, retaining workflowId and allocating a new runId. For a terminal source, the service creates a fresh execution with a new workflowId and runId through normal admission, records the source workflow/run in `rerunSource`, and leaves the source closed. The same fresh-start path handles a source that closes before Temporal receives the update. Closed Temporal runs never process an ordinary rerun update.
 

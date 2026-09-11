@@ -176,6 +176,14 @@ def qualification_boundary(monkeypatch, tmp_path):
     import moonmind.omnigent.bootstrap.store as store_module
     from moonmind.omnigent.harness_platform import catalog_service
 
+    import moonmind.omnigent.bootstrap.controller as controller_module_for_fixture
+
+    monkeypatch.setattr(
+        controller_module_for_fixture,
+        "save_bootstrap_record",
+        lambda _record: None,
+    )
+
     state = SimpleNamespace(session=_Session(_version_row(_profile_document())))
 
     @asynccontextmanager
@@ -243,6 +251,35 @@ async def _qualify(
     provider_profile_ref: str = "opencode-go-default",
     qualified_model: str = "opencode-go/muse-spark-1.2-contributor",
 ) -> dict:
+    from moonmind.omnigent.bootstrap.models import BootstrapRecord
+
+    controller = controller_module.BootstrapController(
+        session_factory=state.session_factory
+    )
+    evidence, _record = await controller._qualify_and_publish(
+        provider_profile_ref=provider_profile_ref,
+        qualified_model=qualified_model,
+        effort="xhigh",
+        resolved=_resolved_state(),
+        record=BootstrapRecord(),
+    )
+    return evidence
+
+
+async def _qualify_with_record(
+    state,
+    *,
+    provider_profile_ref: str = "opencode-go-default",
+    qualified_model: str = "opencode-go/muse-spark-1.2-contributor",
+):
+    """Qualify while returning the updated bootstrap record.
+
+    MoonLadderStudios/MoonMind#4021 req-5: the credentialless route freezes
+    its eligibility evidence bundle on the admitted attempt; this helper
+    exposes the persisted record so tests can prove the bundle round-trips.
+    """
+    from moonmind.omnigent.bootstrap.models import BootstrapRecord
+
     controller = controller_module.BootstrapController(
         session_factory=state.session_factory
     )
@@ -251,7 +288,7 @@ async def _qualify(
         qualified_model=qualified_model,
         effort="xhigh",
         resolved=_resolved_state(),
-        record=SimpleNamespace(),
+        record=BootstrapRecord(),
     )
 
 
@@ -301,6 +338,47 @@ async def test_qualification_attests_the_selected_provider_route(
             normalizedOptions={},
         )
     )
+
+    # MoonLadderStudios/MoonMind#4021 req-5: the admitted credentialless
+    # attempt freezes its evidence bundle with the record through the real
+    # qualification path (exact-ID check + attach + recheck, no rewrite of
+    # active inputs).
+    from moonmind.omnigent.bootstrap.free_model_eligibility import (
+        SELECTION_POLICY_VERSION,
+        ZEN_FREE_TERMS_VERSION,
+        frozen_attempt_from_resolved,
+        recheck_frozen_attempt,
+    )
+
+    _evidence2, record = await _qualify_with_record(
+        qualification_boundary,
+        provider_profile_ref="opencode-zen-free",
+        qualified_model=qualified_model,
+    )
+    frozen = frozen_attempt_from_resolved(record.resolved)
+    assert frozen is not None
+    assert frozen.model_id == qualified_model
+    assert frozen.materializer_ref == "none@1"
+    assert frozen.data_use_version == ZEN_FREE_TERMS_VERSION
+    assert frozen.selection_policy_version == SELECTION_POLICY_VERSION
+    # The fixture profile carries no persisted catalog yet, so the bundle
+    # froze the observed empty evidence; rechecking identical evidence is
+    # current, changed evidence expires it without rewriting active inputs.
+    current, _ = recheck_frozen_attempt(
+        frozen,
+        catalog={"ids": []},
+        pricing={},
+        data_use_version=ZEN_FREE_TERMS_VERSION,
+    )
+    assert current is True
+    expired, expired_reason = recheck_frozen_attempt(
+        frozen,
+        catalog={"ids": [qualified_model]},
+        pricing={},
+        data_use_version=ZEN_FREE_TERMS_VERSION,
+    )
+    assert expired is False
+    assert "catalog" in expired_reason
 
 
 @pytest.mark.asyncio
@@ -555,6 +633,13 @@ async def test_requalification_follows_the_current_default_provider_profile(
         credential_source=ProviderCredentialSource.SECRET_REF,
         runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
         secret_refs={"opencode_api_key": "db://opencode-go-default-api-key"},
+        clear_env_keys=[
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ],
         default_model="opencode-go/muse-spark-1.2-contributor",
         default_effort="xhigh",
     )
@@ -566,6 +651,14 @@ async def test_requalification_follows_the_current_default_provider_profile(
         credential_source=ProviderCredentialSource.NONE,
         runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
         secret_refs={},
+        clear_env_keys=[
+            "OPENCODE_API_KEY",
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ],
         default_model="opencode/muse-spark-1.2-contributor-free",
         default_effort="xhigh",
     )
@@ -816,6 +909,14 @@ async def test_credentialless_default_initializes_deployment_qualification(
         credential_source=ProviderCredentialSource.NONE,
         runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
         secret_refs={},
+        clear_env_keys=[
+            "OPENCODE_API_KEY",
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ],
         command_behavior={
             "auth_readiness": {
                 "connected": True,
@@ -1379,7 +1480,9 @@ async def test_launchable_materializer_classes_are_qualified_once(
     controller = controller_module.BootstrapController(
         session_factory=lambda: _session_scope()
     )
-    qualify = AsyncMock(return_value={})
+    qualify = AsyncMock(
+        side_effect=lambda **kwargs: ({}, kwargs["record"])
+    )
     monkeypatch.setattr(controller, "_qualify_and_publish", qualify)
 
     record = _ready_bootstrap_record(agent_profile_ref="omnigent-opencode-default@8")

@@ -121,6 +121,10 @@ async def test_managed_capture_trusts_the_resolved_workspace_for_every_git_comma
             return SimpleNamespace(stdout="main\n")
         if operation[0] == "status":
             return SimpleNamespace(stdout="")
+        if operation[:3] == ["ls-tree", "-r", "--name-only"]:
+            return SimpleNamespace(stdout="")
+        if operation[0] == "diff":
+            return SimpleNamespace(stdout="")
         raise AssertionError(f"unexpected git command: {operation}")
 
     monkeypatch.setattr(activity_runtime_module, "_run_command", run_git)
@@ -128,7 +132,9 @@ async def test_managed_capture_trusts_the_resolved_workspace_for_every_git_comma
         run_store=object(), artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put
@@ -148,8 +154,25 @@ async def test_managed_capture_trusts_the_resolved_workspace_for_every_git_comma
     )
 
     assert result["workspace"]["archiveRef"].startswith("artifact://")
-    assert len(commands) == 4
+    assert result["savedWorkRef"].startswith("artifact://")
+    assert result["savedWorkDigest"].startswith("sha256:")
+    # Pre/post quiescence reads plus baseline/delta reads all use the same
+    # trusted workspace prefix; export never shells out to bundle, hooks,
+    # or external helpers.
+    assert len(commands) >= 8
     assert all(command[: len(expected_prefix)] == expected_prefix for command in commands)
+    operations = [command[len(expected_prefix) :][0] for command in commands]
+    assert "ls-tree" in operations
+    diff_commands = [
+        command[len(expected_prefix) :]
+        for command in commands
+        if command[len(expected_prefix) :][0] == "diff"
+    ]
+    assert diff_commands
+    for diff_command in diff_commands:
+        assert "--no-ext-diff" in diff_command
+        assert "--no-textconv" in diff_command
+    assert not any("bundle" in command for command in commands)
 
 
 @pytest.mark.asyncio
@@ -182,7 +205,9 @@ async def test_managed_capture_is_binary_safe_and_idempotent(tmp_path) -> None:
     )
     artifacts: dict[str, bytes] = {}
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         ref = "artifact://" + hashlib.sha256(payload).hexdigest()
         artifacts[ref] = payload
         return ref
@@ -278,7 +303,9 @@ async def test_managed_capture_coalesces_temporal_heartbeat_backpressure(
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         await asyncio.sleep(0.01)
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
@@ -341,7 +368,9 @@ async def test_managed_capture_heartbeats_during_slow_archive_file(
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     original_addfile = tarfile.TarFile.addfile
@@ -411,7 +440,9 @@ async def test_managed_capture_archive_digest_is_deterministic(tmp_path) -> None
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put
@@ -480,7 +511,9 @@ async def test_managed_capture_skips_deleted_sensitive_and_gitlink_paths(tmp_pat
     )
     artifacts: dict[str, bytes] = {}
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         ref = "artifact://" + hashlib.sha256(payload).hexdigest()
         artifacts[ref] = payload
         return ref
@@ -537,7 +570,9 @@ async def test_managed_capture_accepts_session_record_bound_to_parent_workflow(
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put
@@ -600,7 +635,9 @@ async def test_managed_capture_accepts_cross_step_workflow_session_baseline(
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put
@@ -667,7 +704,9 @@ async def test_managed_capture_accepts_terminal_prior_execution_as_retry_baselin
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put
@@ -729,7 +768,9 @@ async def test_managed_capture_accepts_terminal_verifier_as_remediation_baseline
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put

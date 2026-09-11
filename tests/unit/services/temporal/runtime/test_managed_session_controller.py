@@ -55,6 +55,28 @@ def _clear_managed_session_docker_policy_env(
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", raising=False)
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_MAX_AGE_SECONDS", raising=False)
     monkeypatch.delenv("MOONMIND_CONTROL_PLANE_NETWORK", raising=False)
+    # MoonLadderStudios/MoonMind#4012: GHCR pull resolution is deployment
+    # configuration. Default unit launches to public-anonymous (None) so they
+    # do not touch the managed-secret store; individual GHCR tests re-patch
+    # the resolver to return an explicit pair.
+    for var in (
+        "GHCR_PULL_USER",
+        "GHCR_PULL_TOKEN",
+        "MOONMIND_GHCR_PULL_USER_SECRET_REF",
+        "MOONMIND_GHCR_PULL_TOKEN_SECRET_REF",
+        "WORKFLOW_GHCR_PULL_USER_SECRET_REF",
+        "WORKFLOW_GHCR_PULL_TOKEN_SECRET_REF",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    async def _no_ghcr_creds() -> tuple[str, str] | None:
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller"
+        ".resolve_ghcr_pull_credentials_for_launch",
+        _no_ghcr_creds,
+    )
 
 
 def test_managed_session_network_uses_canonical_control_plane_setting(
@@ -7209,3 +7231,105 @@ def test_active_session_observations_merges_authoritative_intervention_journal()
         "approval_requested",
     ]
     assert observations[-1]["metadata"]["auditRef"] == "artifact://interventions/request-1"
+
+
+@pytest.mark.asyncio
+async def test_launch_session_uses_ephemeral_ghcr_config_for_private_image(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """MoonLadderStudios/MoonMind#4012: GHCR launches use ephemeral auth.
+
+    Explicit GHCR pairs materialize a per-launch DOCKER_CONFIG with a
+    ghcr.io entry; the directory is removed before launch returns and no
+    credential reaches container env or argv.
+    """
+
+    import base64
+
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    workspace_root = tmp_path / "agent_jobs"
+    session_store = ManagedSessionStore(tmp_path / "session-store")
+    session_supervisor = AsyncMock()
+    session_supervisor.emit_session_event = Mock()
+
+    async def _explicit_creds() -> tuple[str, str] | None:
+        return ("ghcr-user", "ghcr-token-value")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller"
+        ".resolve_ghcr_pull_credentials_for_launch",
+        _explicit_creds,
+    )
+
+    request = LaunchCodexManagedSessionRequest(
+        **dict(
+            agentRunId="task-ghcr-1",
+            workflowId="wf-ghcr-1",
+            sessionId="sess-ghcr-1",
+            threadId="logical-thread-ghcr-1",
+            workspacePath=str(workspace_root / "task-ghcr-1" / "repo"),
+            sessionWorkspacePath=str(workspace_root / "task-ghcr-1" / "session"),
+            artifactSpoolPath=str(workspace_root / "task-ghcr-1" / "artifacts"),
+            codexHomePath="/home/app/.codex",
+            imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+            turnCompletionTimeoutSeconds=1800,
+        )
+    )
+    seen_configs: list[dict[str, Any]] = []
+    seen_dirs: list[str] = []
+    seen_env: dict[str, str] = {}
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            docker_config = str((env or {}).get("DOCKER_CONFIG") or "")
+            assert docker_config, "GHCR launches must set ephemeral DOCKER_CONFIG"
+            seen_dirs.append(docker_config)
+            config_path = Path(docker_config) / "config.json"
+            seen_configs.append(json.loads(config_path.read_text()))
+            seen_env.update(env or {})
+            return 0, "ctr-ghcr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-ghcr-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-ghcr-1",
+                    "threadId": "logical-thread-ghcr-1",
+                },
+                "status": "ready",
+                "imageRef": "ghcr.io/moonladderstudios/moonmind:latest",
+                "controlUrl": "docker-exec://mm-codex-session-sess-ghcr-1",
+                "metadata": {},
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        moonmind_url="http://api:8000",
+        session_store=session_store,
+        session_supervisor=session_supervisor,
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    handle = await controller.launch_session(request)
+
+    assert handle.status == "ready"
+    assert len(seen_configs) == 1
+    expected_auth = base64.b64encode(b"ghcr-user:ghcr-token-value").decode("ascii")
+    assert seen_configs[0]["auths"]["ghcr.io"] == {"auth": expected_auth}
+    # Ephemeral config removed before return; never in container env.
+    assert seen_dirs and not Path(seen_dirs[0]).exists()
+    assert "ghcr-token-value" not in json.dumps(seen_env)
