@@ -21,8 +21,9 @@ from moonmind.omnigent.bootstrap.models import (
 from moonmind.omnigent.bootstrap.opencode import (
     DEFAULT_OPENCODE_MODEL_DISPLAY,
     DEFAULT_OPENCODE_QUALIFIED,
-    resolve_model_by_display,
+    resolve_bootstrap_model,
     validate_effort,
+    validate_effort_for_model,
 )
 from moonmind.omnigent.bootstrap.store import (
     load_bootstrap_record,
@@ -46,7 +47,11 @@ def _resolve_profile_model_effort(profile: Any) -> tuple[str, str]:
         require_launch_ready=False,
     )
     model = str(resolved.model or "").strip()
-    effort = validate_effort(str(resolved.effort or "xhigh").strip())
+    raw_effort = str(resolved.effort or "xhigh").strip()
+    # MoonLadderStudios/MoonMind#4021 req-3: validate effort against the
+    # selected model's actual supported values, never the seeded default.
+    # Unknown models fall back to the generic set inside the helper.
+    effort = validate_effort_for_model(raw_effort, model) if model else validate_effort(raw_effort)
     return model, effort
 
 
@@ -91,8 +96,9 @@ class BootstrapController:
                 "Contributor data-use acknowledgement is required for Muse Spark 1.3 Contributor"
             )
 
-        # Validate effort
-        eff = validate_effort(eff)
+        # Validate effort against the selected model's actual values
+        # (MoonLadderStudios/MoonMind#4021 req-3); unknown models use generic.
+        eff = validate_effort_for_model(eff, display) if display else validate_effort(eff)
 
         # Load or create record
         record = await self.get_state()
@@ -624,7 +630,7 @@ class BootstrapController:
                 all_materializers_ready = False
                 continue
             try:
-                evidence_payload = await self._qualify_and_publish(
+                evidence_payload, _refreshed_record = await self._qualify_and_publish(
                     provider_profile_ref=profile_ref,
                     qualified_model=qualified_model,
                     effort=effort,
@@ -705,21 +711,52 @@ class BootstrapController:
                         "or set OMNIGENT_OPENCODE_HOST_IMAGE_REF to a digest-pinned image."
                     )
             # Update record resolved
-            # Resolve model by friendly name (without live catalog for now, will validate later)
+            # Resolve model for image selection. Credentialless opencode/*
+            # qualified IDs require the exact observed catalog for execution
+            # selection, but image selection must not fail closed before
+            # catalog sync/qualification: defer exact-ID validation to
+            # _qualify_and_publish (exact-host authority via
+            # resolve_model_exact). Friendly display aliases remain valid
+            # here for image resolution only.
+            # Execution qualification still requires the exact catalog (step 7
+            # of OpenCodeHost §8) via resolve_model_exact before launch.
             try:
-                model_info = resolve_model_by_display(display)
+                model_info = resolve_bootstrap_model(display)
             except ValueError as exc:
-                record = record.model_copy(
-                    update={
-                        "state": BootstrapState.failed,
-                        "failure": {"code": "model_unavailable", "message": str(exc)},
+                text = display.strip()
+                prefix, sep, provider_model_id = text.partition("/")
+                if sep and prefix.strip() == "opencode" and provider_model_id.strip():
+                    # MoonLadderStudios/MoonMind#4021 P1: fresh
+                    # opencode-zen-free default stores its qualified
+                    # opencode/... model in desired with no catalog yet.
+                    # Use the qualified ID directly for image selection and
+                    # let _qualify_and_publish enforce exact-catalog
+                    # authority before launch.
+                    logger.info(
+                        "Deferring exact catalog validation for %r to "
+                        "qualification; using qualified ID for image "
+                        "selection.",
+                        text,
+                    )
+                    model_info = {
+                        "displayName": display,
+                        "providerModelId": provider_model_id.strip(),
+                        "qualifiedId": text,
                     }
-                )
-                save_bootstrap_record(record)
-                raise
+                else:
+                    record = record.model_copy(
+                        update={
+                            "state": BootstrapState.failed,
+                            "failure": {"code": "model_unavailable", "message": str(exc)},
+                        }
+                    )
+                    save_bootstrap_record(record)
+                    raise
 
             qualified = model_info["qualifiedId"]
             provider_model = model_info["providerModelId"]
+            # Effort uses the selected model's actual supported values.
+            eff = validate_effort_for_model(eff, qualified)
             resolved_model = BootstrapResolved(
                 modelId=provider_model,
                 qualifiedModelId=qualified,
@@ -778,7 +815,7 @@ class BootstrapController:
                 update={"state": BootstrapState.qualifying_runtime}
             )
             save_bootstrap_record(record)
-            evidence = await self._qualify_and_publish(
+            evidence, record = await self._qualify_and_publish(
                 provider_profile_ref=provider_ref,
                 qualified_model=qualified,
                 effort=eff,
@@ -1276,7 +1313,7 @@ class BootstrapController:
         effort: str,
         resolved: Any,
         record: BootstrapRecord,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], BootstrapRecord]:
         import hashlib
         from datetime import UTC, datetime
 
@@ -1285,6 +1322,16 @@ class BootstrapController:
             build_deployment_evidence,
             write_deployment_evidence,
         )
+        from moonmind.omnigent.bootstrap.free_model_eligibility import (
+            FREE_PROVIDER_ID,
+            ZEN_FREE_TERMS_VERSION,
+            attach_frozen_attempt_to_resolved,
+            catalog_ids_from_evidence,
+            freeze_attempt,
+            frozen_attempt_from_resolved,
+            recheck_frozen_attempt,
+        )
+        from moonmind.omnigent.bootstrap.opencode import resolve_model_exact
         from moonmind.omnigent.bootstrap.qualification import run_qualification
         from moonmind.omnigent.harness_platform.catalog_service import (
             DbHarnessCatalogRepository,
@@ -1324,6 +1371,82 @@ class BootstrapController:
                     f"credential materializer {materializer_ref} must declare one auth model"
                 )
             auth_model = auth_models[0]
+
+        # MoonLadderStudios/MoonMind#4021 req-3/req-5: execution selection
+        # uses the exact observed catalog ID, and the admitted credentialless
+        # attempt freezes its evidence bundle with the record. The persisted
+        # catalog evidence is re-read here (the instance above is detached)
+        # so the check observes current authority, not a stale copy.
+        async with async_session_maker() as session:
+            from api_service.db.models import (
+                ManagedAgentProviderProfile as _EvidenceProfileModel,
+            )
+
+            evidence_profile = await session.get(
+                _EvidenceProfileModel, provider_profile_ref
+            )
+            catalog_evidence: dict[str, Any] = (
+                dict(
+                    getattr(
+                        evidence_profile, "model_catalog_evidence_json", None
+                    )
+                    or {}
+                )
+                if evidence_profile is not None
+                else {}
+            )
+        catalog_ids = catalog_ids_from_evidence(catalog_evidence)
+        if catalog_ids:
+            try:
+                resolve_model_exact(
+                    qualified_model,
+                    [{"qualifiedId": qid} for qid in catalog_ids],
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"exact-host model authority rejected {qualified_model!r}: "
+                    f"{exc}"
+                ) from exc
+        # Authoritative recheck immediately before this renewed attempt: the
+        # frozen bundle is never rewritten in place and the provider/model is
+        # never swapped inside a billed request. Qualification is the
+        # explicitly authorized new attempt, so expiry only refreshes the
+        # bundle below while preserving saved work elsewhere.
+        existing_frozen = frozen_attempt_from_resolved(
+            getattr(record, "resolved", None)
+        )
+        if existing_frozen is not None:
+            current, recheck_reason = recheck_frozen_attempt(
+                existing_frozen,
+                catalog=catalog_evidence or {"ids": catalog_ids},
+                pricing=dict(catalog_evidence.get("pricing") or {}),
+                data_use_version=ZEN_FREE_TERMS_VERSION,
+            )
+            if not current:
+                logger.info(
+                    "Free-model frozen attempt expired (%s); qualifying a "
+                    "fresh explicitly authorized attempt preserving saved work.",
+                    recheck_reason,
+                )
+        if model_route_ref == FREE_PROVIDER_ID:
+            # No trusted pricing feed has a production source yet (req-2), so
+            # the bundle records exactly what was observed: the catalog
+            # evidence digest plus the pricing section actually present
+            # (empty when absent). It never fabricates a zero.
+            frozen = freeze_attempt(
+                qualified_id=qualified_model,
+                catalog=catalog_evidence or {"ids": catalog_ids},
+                pricing=dict(catalog_evidence.get("pricing") or {}),
+                data_use_version=ZEN_FREE_TERMS_VERSION,
+            )
+            record = record.model_copy(
+                update={
+                    "resolved": attach_frozen_attempt_to_resolved(
+                        record.resolved, frozen
+                    )
+                }
+            )
+            save_bootstrap_record(record)
 
         # Select host class
         harness = next(
@@ -1632,7 +1755,7 @@ class BootstrapController:
             resolved_state=resolved,
         )
         write_deployment_evidence(evidence)
-        return evidence
+        return evidence, record
 
 
 def normalize_display(name: str) -> str:

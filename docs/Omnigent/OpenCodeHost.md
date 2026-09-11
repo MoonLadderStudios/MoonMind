@@ -149,6 +149,7 @@ credentialMaterializers:
   - opencode-auth-json@1
   - none@1
 forbiddenAmbientEnvironment:
+  - OPENCODE_API_KEY
   - OPENCODE_AUTH_CONTENT
   - OPENCODE_CONFIG
   - OPENCODE_CONFIG_CONTENT
@@ -240,6 +241,7 @@ The materialization sequence is:
 The runtime script rejects or clears conflicting ambient credentials:
 
 ```text
+OPENCODE_API_KEY
 OPENCODE_AUTH_CONTENT
 OPENCODE_CONFIG
 OPENCODE_CONFIG_CONTENT
@@ -259,14 +261,22 @@ explicit `opencode-go` profile and must never be inherited by the Zen profile.
 
 Credential ownership is owned by [`SharedHostImage.md`](./SharedHostImage.md)
 §4. The OpenCode-specific isolation proof that remains here — exact-host
-conformance must prove:
+conformance must prove, for the selected materializer class:
 
 - `/home/app/.codex` is not mounted from a Codex Provider Profile
 - Claude credential paths are not mounted
 - no Codex or Claude API-key environment is inherited
 - the selected runtime pack is `opencode-native-pack@1`
-- the selected materializer is `opencode-auth-json@1`
+- the selected materializer is `opencode-auth-json@1` (keyed route) or
+  `none@1` (credentialless `opencode-zen-free` route)
 - only `opencode-native` is admitted by the selected Host Class
+- ambient `OPENCODE_API_KEY`, `OPENCODE_AUTH_CONTENT`, `OPENCODE_CONFIG`,
+  `OPENCODE_CONFIG_CONTENT`, `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY` are
+  absent from the credentialless `none@1` runtime; `OPENCODE_API_KEY` may only
+  configure the separate keyed `opencode-go` profile and never rescues the
+  credentialless attempt
+- the credentialless route requires no `auth.json` attachment; its startup
+  does not depend on an `auth.json` mount
 
 The presence of the other binaries is not a support or authorization signal.
 
@@ -292,6 +302,29 @@ The seed runs before the first bootstrap reconciliation. Startup validates the
 model against the exact pinned host and publishes the same deployment evidence
 required by key-backed profiles. An existing explicit operator disable remains
 authoritative.
+
+The seeded `defaultModel`/`defaultEffort` is a configured identity, not
+eligibility evidence. It distinguishes the configured seed from the observed
+exact-host catalog, the qualified runtime, the eligible pricing/privacy state,
+and temporary availability (MoonLadderStudios/MoonMind#4021):
+
+- configured seed: the persisted `opencode-zen-free` profile and its default
+  model/effort selection;
+- observed catalog: the exact-host model list for the `opencode` route;
+- qualified runtime: the pinned image, runtime pack, and `none@1`
+  materializer admission;
+- eligible pricing/privacy: the `free_model_eligibility` verdict from the
+  exact catalog plus trusted pricing/data-use evidence
+  (`SELECTION_POLICY_VERSION = free-model-selection.v1`), frozen with the
+  admitted attempt;
+- temporary availability: provider/host capacity is a wait state that never
+  requalifies a model, revokes eligibility, or selects a paid fallback.
+
+No live model availability, pricing, terms, or inference is implied by the
+seeded name. When no free candidate is eligible, launches surface
+`no_eligible_free_model` with separate availability, pricing, capability, and
+privacy reasons through the normal Runtime/Profile UI with a clear reason and
+an explicit valid alternative.
 
 The seed declares `isDefault: true`, so it holds runtime-default authority for
 `opencode` from first start rather than inheriting it only while it happens to
@@ -395,6 +428,45 @@ behavior as production:
 10. Persist only normalized model and runtime evidence.
 
 MoonMind does not substitute a configured model when the provider catalog is empty. It does not silently select another model when the prior default disappears.
+
+### Credentialless free-route admission (MoonLadderStudios/MoonMind#4021)
+
+The `opencode-zen-free`/`none@1` route is admitted through one first-result
+path that reuses the existing owners; no new free-model profile family, no
+marketplace, and no new consent subsystem exist:
+
+- plan-time admission (`_enforce_free_route_exact_catalog`) requires the
+  selected model to appear exactly in the Provider Profile's persisted
+  exact-host catalog before launch. A persisted catalog that lacks the ID
+  fails closed with the `no_eligible_free_model` availability axis; a profile
+  with no persisted catalog yet defers to exact-host qualification.
+- bootstrap qualification (`_qualify_and_publish`) resolves the selected
+  model with `resolve_model_exact` against the exact observed catalog, then
+  freezes model ID, route/materializer, catalog/pricing/data-use evidence,
+  and selection-policy version with the admitted attempt
+  (`FrozenFreeModelAttempt` on `BootstrapResolved.freeModelAttempt`).
+  A previously frozen bundle is rechecked before the renewed attempt without
+  rewriting active inputs; expiry only refreshes the bundle at qualification
+  time, never swaps provider/model inside a billed request.
+- catalog readiness (`free_model_gate_reasons_for_profile`) surfaces the
+  blocking axes through the normal Runtime/Profile UI with a clear reason and
+  an explicit valid alternative: availability (exact catalog presence),
+  capability (default effort against the model's actual supported values),
+  and privacy (the recorded per-policy-version authorization from Settings).
+  Saturated capacity stays on `omnigent_capacity_wait` /
+  `profile_capacity_unavailable` as a wait state.
+
+Explicit scope: no trusted pricing feed has a production source yet, so
+production admission never fabricates a zero price. Pricing-axis evaluation
+and multi-candidate approved-set ranking (`rank_approved_candidates`) run
+hermetically against inline fixtures until that feed exists; production
+admission is the single-route blocked check above. Likewise
+`build_live_qualification_record` defines the bounded, non-sensitive live
+record shape (exact model/image/runtime/materializer, evidence references,
+request bounds, blocked/unexecuted cases) for an explicitly authorized,
+budgeted qualification run; no live inference is claimed by hermetic tests.
+No extra mandatory free-model UI controls are added: the existing
+Runtime/Profile surfaces carry the reason.
 
 ## 9. Revalidation and freshness
 
