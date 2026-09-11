@@ -102,6 +102,13 @@ export type DashboardPreferences = {
   defaultProviderProfile: string;
   /** Preferred model default for the create page, where safe. */
   defaultModel: string;
+  /**
+   * Persistent workflow-list "Needs attention" quick filter (#4183). When
+   * true, the list shows only rows with `attentionRequired` or an
+   * intervention request. Attention state itself persists until an explicit
+   * resolution; acknowledgment alone leaves admission blocked.
+   */
+  workflowListNeedsAttentionOnly: boolean;
 };
 
 export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
@@ -128,6 +135,7 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   defaultRuntime: '',
   defaultProviderProfile: '',
   defaultModel: '',
+  workflowListNeedsAttentionOnly: false,
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -239,6 +247,10 @@ export function sanitizeDashboardPreferences(value: unknown): DashboardPreferenc
     defaultRuntime: sanitizeString(value.defaultRuntime),
     defaultProviderProfile: sanitizeString(value.defaultProviderProfile),
     defaultModel: sanitizeString(value.defaultModel),
+    workflowListNeedsAttentionOnly: sanitizeBoolean(
+      value.workflowListNeedsAttentionOnly,
+      DEFAULT_DASHBOARD_PREFERENCES.workflowListNeedsAttentionOnly,
+    ),
   };
 }
 

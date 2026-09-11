@@ -2411,6 +2411,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/executions/issue-lifecycle/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Project Lifecycle Context
+         * @description Derive the bounded issue-lifecycle projection for Workflow Detail.
+         */
+        post: operations["project_lifecycle_context_api_v1_executions_issue_lifecycle_context_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/executions/issue-lifecycle/actions/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Operator Action
+         * @description Server-side revalidation of one operator action submission.
+         *
+         *     Stale UI eligibility never grants a release: permission, staleness,
+         *     duplicate, wrong-issue, conflicting-PR, unknown-writer, stop-proof,
+         *     publication-intent, and retry-policy checks run on the server. On
+         *     success an auditable portable-handoff record is returned (to be
+         *     published through the existing authorized GitHub write boundary by
+         *     the caller); during a GitHub outage the decision reports
+         *     pending/unknown rather than a false successful remote update.
+         */
+        post: operations["validate_operator_action_api_v1_executions_issue_lifecycle_actions_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/executions/issue-lifecycle/actions/submit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Operator Action
+         * @description Validate, record, and publish one operator action submission.
+         *
+         *     The validated portable-handoff decision is published as a human-readable
+         *     GitHub issue comment through the existing authorized GitHub write
+         *     boundary (``GitHubService.create_issue_comment``), so the decision is
+         *     auditable and visible to another deployment through GitHub -- no second
+         *     result store is added. The GitHub comment is the durable
+         *     cross-deployment record; the same portable handoff is returned for the
+         *     caller to retain in existing workflow results (#4020).
+         *
+         *     During a GitHub outage (or when live issue evidence is missing) the
+         *     decision reports pending/unknown rather than a false successful remote
+         *     update. Duplicate idempotency-key replays never repeat effects.
+         */
+        post: operations["submit_operator_action_api_v1_executions_issue_lifecycle_actions_submit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/callbacks": {
         parameters: {
             query?: never;
@@ -9189,6 +9269,53 @@ export interface components {
              */
             isDefault: boolean;
         };
+        /** LifecycleContextRequest */
+        LifecycleContextRequest: {
+            /**
+             * Repository
+             * @description GitHub repository e.g. 'o/r'.
+             */
+            repository: string;
+            /**
+             * Issue Number
+             * @description GitHub issue number.
+             */
+            issue_number: number;
+            /** Issue */
+            issue?: {
+                [key: string]: unknown;
+            } | null;
+            /** Current Attempt */
+            current_attempt?: {
+                [key: string]: unknown;
+            } | null;
+            /** Predecessor Attempts */
+            predecessor_attempts?: {
+                [key: string]: unknown;
+            }[];
+            /** Deployment Id */
+            deployment_id?: string | null;
+            /** Preserved Pr */
+            preserved_pr?: {
+                [key: string]: unknown;
+            } | null;
+            /** Retry State */
+            retry_state?: {
+                [key: string]: unknown;
+            } | null;
+            /** Operator Hold */
+            operator_hold?: {
+                [key: string]: unknown;
+            } | null;
+            /** Sync State */
+            sync_state?: {
+                [key: string]: unknown;
+            } | null;
+            /** Local Facts */
+            local_facts?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /**
          * LinkArtifactRequest
          * @description Link an existing artifact to one execution reference.
@@ -9599,6 +9726,58 @@ export interface components {
             unavailableReason?: string | null;
             /** Rollbackaction */
             rollbackAction?: string | null;
+        };
+        /** OperatorActionRequest */
+        OperatorActionRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "continue_work" | "hold_processing" | "acknowledge_incident" | "resolve_conflict" | "authorize_retry" | "abandon_work";
+            /** Repository */
+            repository: string;
+            /** Issue Number */
+            issue_number: number;
+            /** Request */
+            request?: {
+                [key: string]: unknown;
+            };
+            /** Live Issue */
+            live_issue?: {
+                [key: string]: unknown;
+            } | null;
+            /** Live Attempt */
+            live_attempt?: {
+                [key: string]: unknown;
+            } | null;
+            /** Live Pr */
+            live_pr?: {
+                [key: string]: unknown;
+            } | null;
+            /** Seen Idempotency Keys */
+            seen_idempotency_keys?: string[];
+            /** Stop Proof */
+            stop_proof?: {
+                [key: string]: unknown;
+            } | null;
+            /** Retry Policy */
+            retry_policy?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Work Disposition */
+            work_disposition?: string | null;
+            /**
+             * Retry Budget Reset
+             * @default false
+             */
+            retry_budget_reset: boolean;
+            /** Continue Variant */
+            continue_variant?: string | null;
         };
         /** OutputDeclaration */
         OutputDeclaration: {
@@ -18336,6 +18515,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecoverFromFailedStepResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    project_lifecycle_context_api_v1_executions_issue_lifecycle_context_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LifecycleContextRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_operator_action_api_v1_executions_issue_lifecycle_actions_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperatorActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_operator_action_api_v1_executions_issue_lifecycle_actions_submit_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperatorActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
