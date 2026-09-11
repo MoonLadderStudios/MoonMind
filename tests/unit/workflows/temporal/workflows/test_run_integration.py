@@ -2929,6 +2929,69 @@ def test_deferred_publication_completion_is_not_a_failure(
 
 
 @pytest.mark.asyncio
+async def test_deferred_handoff_preserves_required_finalization_failure(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A required checkpoint failure survives a later validated continuation."""
+
+    _enable_continuation_defers_auto_publish(monkeypatch)
+    parameters = {"publishMode": "auto"}
+    execution_result = _reenter_gate_execution_result()
+    now = datetime.now(timezone.utc)
+    node_id = "resolver"
+    mock_run_workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": node_id, "inputs": {}}],
+        dependency_map={node_id: []},
+        updated_at=now,
+    )
+    row = mock_run_workflow._step_ledger_row_for(node_id)
+    assert isinstance(row, dict)
+    row["finalizationOutcome"] = {
+        "status": "failed",
+        "phase": "after_execution_checkpoint",
+        "criticality": "required",
+        "failureCode": "FINALIZATION_CHECKPOINT_FAILED",
+        "terminalFailureCode": "FINALIZATION_RETRY_EXHAUSTED",
+        "retryCount": 1,
+        "message": "Execution succeeded; finalization failed during the "
+        "after-execution checkpoint.",
+        "updatedAt": now.isoformat(),
+    }
+    mock_run_workflow._publish_status = "failed"
+    mock_run_workflow._publish_reason = (
+        "Execution succeeded; finalization failed during the "
+        "after-execution checkpoint."
+    )
+
+    await mock_run_workflow._record_publish_result_from_execution(
+        parameters=parameters,
+        execution_result=execution_result,
+    )
+
+    assert mock_run_workflow._publish_status == "failed"
+
+    mock_run_workflow._record_publication_deferred_finalization(
+        node_id,
+        reason="publication deferred to merge automation gate "
+        "(mergeAutomationDisposition=reenter_gate)",
+        updated_at=now,
+    )
+    outcome = mock_run_workflow._step_ledger_row_for(node_id)[
+        "finalizationOutcome"
+    ]
+    assert outcome["status"] == "failed"
+    assert outcome["criticality"] == "required"
+    assert outcome["phase"] == "after_execution_checkpoint"
+
+    status, _message, publish_failure = (
+        mock_run_workflow._determine_publish_completion(parameters=parameters)
+    )
+    assert status == "failed"
+    assert publish_failure is True
+
+
+@pytest.mark.asyncio
 async def test_auto_publish_evidence_ref_is_loaded_before_recording(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
