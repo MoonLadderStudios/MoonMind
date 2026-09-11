@@ -5305,70 +5305,29 @@ _ASSESSMENT_VERDICTS = frozenset(
 
 
 def _normalize_assessment_verdict(value: Any) -> str:
-    verdict = _string(value).upper()
-    return verdict if verdict in _ASSESSMENT_VERDICTS else ""
+    # Canonical implementation lives in assessment_verdict.py; this wrapper
+    # keeps one verdict path for GitHub/Jira callers in this module.
+    from moonmind.workflows.temporal.assessment_verdict import (
+        normalize_verdict as _canonical_normalize,
+    )
+
+    return _canonical_normalize(value)
 
 
 def _assessment_verdict_from_mapping(payload: Mapping[str, Any]) -> str:
-    for key in (
-        "assessmentVerdict",
-        "assessment_verdict",
-        "jiraAssessmentVerdict",
-        "jira_assessment_verdict",
-        "initialAssessmentVerdict",
-        "initial_assessment_verdict",
-        "verdict",
-    ):
-        verdict = _normalize_assessment_verdict(payload.get(key))
-        if verdict:
-            return verdict
-    for key in (
-        "assessment",
-        "jiraAssessment",
-        "jira_assessment",
-        "jiraImplementAssessment",
-        "jira_implement_assessment",
-    ):
-        nested = _mapping(payload.get(key))
-        verdict = _assessment_verdict_from_mapping(nested) if nested else ""
-        if verdict:
-            return verdict
-    return ""
+    from moonmind.workflows.temporal.assessment_verdict import (
+        verdict_from_mapping as _canonical_from_mapping,
+    )
+
+    return _canonical_from_mapping(payload)
 
 
 def _assessment_verdict_from_text(value: Any) -> str:
-    text = _string(value)
-    if not text:
-        return ""
-    verdict_pattern = (
-        r"(FULLY_IMPLEMENTED|PARTIALLY_IMPLEMENTED|NOT_IMPLEMENTED|BLOCKED)"
+    from moonmind.workflows.temporal.assessment_verdict import (
+        verdict_from_text as _canonical_from_text,
     )
-    verdict_prefix = r"[\s:`*_\"']*"
-    verdict_suffix = r"(?:_+(?!\w)|(?![-\w]))"
-    assessment_separator = r"[\s:.,;!?\-\u2010-\u2015`*_\"'\[\]\(\)]*"
-    issue_ref_pattern = r"`?[A-Z][A-Z0-9]+-\d+`?"
-    patterns = (
-        r"(?im)^\s*#{1,6}\s*verdict\s*[:\-]\s*"
-        rf"{verdict_prefix}{verdict_pattern}{verdict_suffix}",
-        r"(?im)^\s*verdict\s*[:\-]\s*"
-        rf"{verdict_prefix}{verdict_pattern}{verdict_suffix}",
-        r"(?is)\bassessment\s+complete\b"
-        rf"{assessment_separator}"
-        rf"(?:(?:for|on)\b{assessment_separator}"
-        rf"{issue_ref_pattern}{assessment_separator})?"
-        rf"(?:{issue_ref_pattern}{assessment_separator})?"
-        rf"(?:(?:is|was|has|verdict|status)\b{assessment_separator})?"
-        rf"{verdict_pattern}{verdict_suffix}",
-        r"(?is)\brecorded\s+verdict\b[^.\n:]*[:\s`]+"
-        rf"{verdict_prefix}{verdict_pattern}{verdict_suffix}",
-        r"(?is)['\"]verdict['\"]\s*:\s*['\"]"
-        rf"{verdict_pattern}['\"]",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return _normalize_assessment_verdict(match.group(1))
-    return ""
+
+    return _canonical_from_text(value)
 
 
 def _jira_assessment_verdict(
@@ -5556,14 +5515,62 @@ async def _resolve_jira_assessment_verdict(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
 ) -> tuple[str, bool]:
-    """Resolve the issue-implement assessment verdict, preferring durable sources.
+    """Resolve the issue-implement assessment verdict, preferring durable ref.
 
-    Shared by Jira and GitHub flows: tries the synchronous sources first
-    (compact ``assessmentVerdict`` in ``previousOutputs``, a locally resolvable
-    handoff file, then free text), then the published artifact ref. The ref is
-    the bridge-compatible channel when the assessment ran on an Omnigent host.
+    Shared by Jira and GitHub flows. When ``assessmentArtifactRef`` is present,
+    the durable artifact is read and preferred over compact
+    ``previousOutputs.assessmentVerdict`` projections, which can go stale across
+    replay / context restoration. Only when no usable durable verdict exists
+    does resolution fall back to synchronous sources (local handoff file,
+    compact mapping, free text). Histories carrying no ref behave identically
+    to before.
     """
 
+    ref = _assessment_artifact_ref(inputs, context)
+    if ref:
+        payload = await _read_json_artifact_by_ref(ref, context)
+        if payload is not None:
+            try:
+                from moonmind.workflows.temporal.assessment_verdict import (
+                    normalize_assessment_payload as _normalize_payload,
+                )
+            except Exception:  # pragma: no cover - import guard
+                _normalize_payload = None  # type: ignore[assignment]
+            if _normalize_payload is not None:
+                assistant_hint = ""
+                for source in (
+                    _mapping(inputs.get("previousOutputs")),
+                    _mapping(inputs.get("previous_outputs")),
+                    _mapping((context or {}).get("previousOutputs")),
+                    _mapping((context or {}).get("previous_outputs")),
+                ):
+                    for _k in (
+                        "lastAssistantText",
+                        "assistantText",
+                        "summary",
+                        "operator_summary",
+                    ):
+                        _v = source.get(_k)
+                        if isinstance(_v, str) and _v.strip():
+                            assistant_hint = _v
+                            break
+                    if assistant_hint:
+                        break
+                ref_verdict, _prov, _ev = _normalize_payload(
+                    payload,
+                    assistant_text=assistant_hint,
+                )
+                if ref_verdict:
+                    return ref_verdict, True
+            else:
+                ref_verdict = _normalize_assessment_verdict(
+                    payload.get("verdict") if isinstance(payload, Mapping) else ""
+                )
+                if ref_verdict:
+                    return ref_verdict, True
+        # Ref present but unreadable/unusable: fall through to sync sources so
+        # a valid compact verdict can still proceed; ultimate unavailable is
+        # decided by the sync path (which returns False when artifact path set).
     return await _augment_assessment_verdict_with_ref(
         _jira_assessment_verdict(inputs, context), inputs, context
     )

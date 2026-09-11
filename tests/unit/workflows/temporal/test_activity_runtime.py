@@ -4020,11 +4020,11 @@ async def test_agent_runtime_publish_artifacts_normalizes_missing_verdict(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Resilient fallback: unanimous met requirements recover missing verdict.
+    """Syntactic recovery: explicit verdict text recovers missing verdict key.
 
-    Mirrors mm:12352fc2 where the agent omitted the verdict key but marked every
-    requirement met. Publisher normalizes to FULLY_IMPLEMENTED with provenance
-    instead of failing the run on a minor schema difference.
+    The portable assessment Skill owns completion decisions, so unanimous
+    requirements alone never imply verdicts natively. Explicit verdict
+    statements (for example ``## Verdict: X``) are syntactic and recoverable.
     """
 
     async with temporal_db(tmp_path) as session_maker:
@@ -4046,7 +4046,7 @@ async def test_agent_runtime_publish_artifacts_normalizes_missing_verdict(
                         "issue_provider": "github",
                         "issue_ref": "MoonLadderStudios/MoonMind#4175",
                         "mode": "main",
-                        "summary": "Epic fully implemented on main",
+                        "summary": "## Verdict: FULLY_IMPLEMENTED",
                         "requirements": [
                             {"id": "a", "status": "met"},
                             {"id": "b", "status": "met"},
@@ -4114,7 +4114,7 @@ async def test_agent_runtime_publish_artifacts_normalizes_missing_verdict(
             )
             persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
             assert persisted["verdict"] == "FULLY_IMPLEMENTED"
-            assert persisted["verdictProvenance"] == "requirements_inferred"
+            assert persisted["verdictProvenance"] == "text_recovered"
 
 
 @pytest.mark.parametrize(

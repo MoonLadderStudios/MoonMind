@@ -8813,9 +8813,6 @@ class TemporalAgentRuntimeActivities:
                     "with keys issue_provider, issue_ref, issue_url, verdict, branch, "
                     "base_ref, mode, summary, and requirements."
                 )
-            verdict_value = ""
-            verdict_provenance = "declared"
-            verdict_evidence = "payload.verdict"
             normalized_payload = dict(payload)
             try:
                 from moonmind.workflows.temporal.assessment_verdict import (
@@ -8881,8 +8878,9 @@ class TemporalAgentRuntimeActivities:
                     f"verdict: {assessment_path}. The assessment step must write "
                     "verdict as exactly one of FULLY_IMPLEMENTED, "
                     "PARTIALLY_IMPLEMENTED, NOT_IMPLEMENTED, or BLOCKED, or "
-                    "provide unanimous requirements / assistant verdict text so "
-                    "the normalizer can recover it."
+                    "provide an explicit verdict statement (for example "
+                    "'## Verdict: FULLY_IMPLEMENTED') so the normalizer can "
+                    "recover it. Requirement statuses alone never imply completion."
                 )
             verdict_ref = await _write_json_artifact(
                 self._artifact_service,
