@@ -1049,6 +1049,7 @@ plans, not this target view. Durable-history compatibility is a contract:
 - New local/remote save behavior is enabled only with qualified preservation and compatible workers. Existing operations cannot bypass deployed recovery gates because this document proposes another mechanism.
 - New repository publication uses the unified provider evidence contract and actual admitted connection/client identity. Historical operation summaries remain readable but are not live publication-proof alternatives.
 - Definition/default changes cannot change scoped child policy, permit None recovery pushes, or turn an output branch into a newly authored target.
+- Private-only (local-only scope) checkpoints are never cross-device recovery points: the legacy cutover assessment reports them with their owner and requires owner recovery or an authorized portable handoff; see [GitHub Issue Legacy Cutover](GitHubIssueLegacyCutover.md).
 
 A bounded automated-exploration definition can declare triggers, maximum
 branches/turns, approval-gated promotion, workspace policy, and instruction
