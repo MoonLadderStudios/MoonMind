@@ -1,0 +1,41 @@
+{
+  "failureShapeId": "finalize-mixed-labels-4225",
+  "incident": "MoonLadderStudios/MoonMind#4225",
+  "incidentWorkflowId": "mm:1d72e336-30cc-434e-9443-c3f833c151bb-2026-09-10T18:00:00Z",
+  "historyShape": "finalize_tool_step_failed_after_pr",
+  "recordedHistory": {
+    "step08": {
+      "nodeId": "publish-pr",
+      "outputs": {
+        "pullRequestUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/4210",
+        "created": true,
+        "summary": "Implementation pull request created at 18:45Z."
+      }
+    },
+    "step09": {
+      "nodeId": "finalize-after-pr",
+      "tool": "github.update_issue_status",
+      "inputs": {
+        "repository": "MoonLadderStudios/MoonMind",
+        "issueNumber": 4177,
+        "mode": "finalize_after_pr_or_done"
+      },
+      "recordedResult": {
+        "status": "FAILED",
+        "outputs": {
+          "issueRef": "MoonLadderStudios/MoonMind#4177",
+          "decision": "blocked",
+          "lifecycleSettled": "blocked_mixed",
+          "reasonCode": "reconciliation_required",
+          "summary": "Skipped GitHub issue update for MoonLadderStudios/MoonMind#4177: Multiple canonical status labels block admission pending reconciliation."
+        }
+      }
+    },
+    "observedIssue": {
+      "number": 4177,
+      "state": "open",
+      "labels": ["status: in-progress", "status: code-review"]
+    }
+  },
+  "prePatchRecordedFailure": "FAILED/blocked/reconciliation_required"
+}
