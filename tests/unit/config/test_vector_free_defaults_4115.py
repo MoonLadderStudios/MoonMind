@@ -114,10 +114,12 @@ def test_compose_carries_no_qdrant_service_or_wiring() -> None:
         depends = service.get("depends_on", {})
         keys = depends.keys() if isinstance(depends, dict) else list(depends)
         assert "qdrant" not in keys, name
-    # The old volume is retained through the recovery window, distinctly
-    # from moonmind_retrieval_state (classified by #4107).
+    # MoonLadderStudios/MoonMind#4110: the Qdrant volume declaration is
+    # removed. Pre-cutover host data persists as an unmanaged orphan through
+    # the #4115 recovery window; only moonmind_retrieval_state (classified
+    # by #4107) remains declared.
     volumes = compose.get("volumes", {})
-    assert "qdrant-storage" in volumes
+    assert "qdrant-storage" not in volumes
     assert "moonmind_retrieval_state" in volumes
 
 
