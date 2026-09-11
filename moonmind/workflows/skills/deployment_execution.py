@@ -1275,7 +1275,8 @@ class DeploymentUpdateExecutor:
                 + " No stale-worker restarter is configured for this stack.",
                 retryable=False,
                 details={"stack": stack, "reasonCode": "stale_code",
-                         "staleWorkers": [item.to_payload() for item in freshness]},
+                         "staleWorkers": [item.to_payload() for item in freshness],
+                         "recoveryArtifactRef": recovery_ref},
             )
         outcome = dict(await self.stale_worker_restarter(actionable))
         recovery["recovery"] = outcome
@@ -1310,7 +1311,8 @@ class DeploymentUpdateExecutor:
                 retryable=False,
                 details={"stack": stack, "reasonCode": "stale_code",
                          "staleWorkers": [item.to_payload() for item in freshness],
-                         "recovery": outcome},
+                         "recovery": outcome,
+                         "recoveryArtifactRef": recovery_ref},
             )
         return recovery_ref
 
@@ -1520,11 +1522,12 @@ class DeploymentUpdateExecutor:
                     progress_events=progress_events,
                     write_evidence=write_evidence,
                 )
-                # The reconcile step mutates command_log after the first
-                # command-log write above: rewrite it so
-                # commandLogArtifactRef contains the workerCodeFreshness
-                # evidence instead of a pre-reconcile snapshot.
-                command_ref = await write_evidence("command-log", command_log)
+                if worker_code_recovery_ref is not None:
+                    # The reconcile step mutated command_log after the first
+                    # command-log write above: rewrite it so
+                    # commandLogArtifactRef contains the workerCodeFreshness
+                    # evidence instead of a pre-reconcile snapshot.
+                    command_ref = await write_evidence("command-log", command_log)
 
                 _add_progress(progress_events, "VERIFYING", "Verifying deployed state.")
                 verification = await self.runner.verify(
