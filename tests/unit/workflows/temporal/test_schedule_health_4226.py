@@ -93,6 +93,55 @@ def test_repeats_coalesce_for_same_skipped_counter() -> None:
     assert outcome["coalesced"] is True
 
 
+def test_first_observation_with_no_baseline_never_alerts() -> None:
+    """Unrelated historical skips seen for the first time must not fire."""
+
+    outcome = evaluate_schedule_skipped_overlap(
+        schedule_id="mm-schedule:abc",
+        description={"info": {"skippedOverlap": 49}},
+        previous_skipped=None,
+        threshold=SKIPPED_OVERLAP_DIAGNOSTIC_THRESHOLD,
+    )
+    assert outcome["diagnostic"] is None
+    assert outcome["coalesced"] is False
+    assert outcome["streak"] == 0
+
+
+def test_slow_drip_alerts_on_consecutive_streak() -> None:
+    """One skipped slot per tick across three ticks raises the diagnostic."""
+
+    streak = 0
+    previous = 10
+    outcome: dict[str, Any] = {}
+    for current in (11, 12, 13):
+        outcome = evaluate_schedule_skipped_overlap(
+            schedule_id="mm-schedule:abc",
+            description={"info": {"skippedOverlap": current}},
+            previous_skipped=previous,
+            threshold=SKIPPED_OVERLAP_DIAGNOSTIC_THRESHOLD,
+            previous_streak=streak,
+        )
+        previous = current
+        streak = int(outcome["streak"])
+    assert streak == 3
+    assert outcome["diagnostic"] is not None
+    assert outcome["diagnostic"]["code"] == "SCHEDULE_SKIPPED_OVERLAP"
+
+
+def test_successful_tick_resets_streak() -> None:
+    """A tick with no new skips resets the consecutive streak."""
+
+    outcome = evaluate_schedule_skipped_overlap(
+        schedule_id="mm-schedule:abc",
+        description={"info": {"skippedOverlap": 12}},
+        previous_skipped=12,
+        threshold=SKIPPED_OVERLAP_DIAGNOSTIC_THRESHOLD,
+        previous_streak=2,
+    )
+    assert outcome["diagnostic"] is None
+    assert outcome["streak"] == 0
+
+
 def test_reconcile_tick_reports_diagnostics_and_current_counters() -> None:
     summary = evaluate_reconcile_schedules(
         schedule_descriptions={
@@ -140,9 +189,10 @@ class _ReconcileController4226:
 async def test_reconcile_activity_surfaces_skipped_overlap_diagnostic() -> None:
     """Activity boundary: injected schedule descriptions yield the diagnostic.
 
-    The reconcile activity is intentionally injection-only for schedule
-    descriptions (it never describes Temporal schedules itself); the
-    scheduler injects ``scheduleDescriptions`` plus the previously observed
+    The reconcile activity prefers injected schedule descriptions (the pure,
+    testable decision path); when the scheduler supplies none it describes
+    the watched schedules itself at the activity boundary. The scheduler
+    injects ``scheduleDescriptions`` plus the previously observed
     counters. A growing counter (43 -> 49, the #4226 incident shape) must
     surface exactly one ``SCHEDULE_SKIPPED_OVERLAP`` diagnostic while the
     primary reattachment result is preserved.
@@ -191,3 +241,48 @@ async def test_reconcile_activity_coalesces_repeat_skipped_overlap_alert() -> No
     assert "scheduleSkippedOverlapDiagnostics" not in result
     assert result["scheduleHealth"]["coalesced"] == 1
     assert result["scheduleSkippedCurrent"] == {"mm-schedule:1d72e336": 49}
+
+
+class _DescribeAdapter4226:
+    """Fake client adapter serving one live schedule description."""
+
+    def __init__(self, counter: int) -> None:
+        self.counter = counter
+
+    async def describe_schedule(self, *, definition_id: Any) -> dict[str, Any]:
+        assert str(definition_id).strip() != ""
+        return {"info": {"skippedOverlap": self.counter}}
+
+
+@pytest.mark.asyncio
+async def test_reconcile_activity_describes_and_persists_without_injection(
+    tmp_path, monkeypatch
+) -> None:
+    """Activity boundary: a production `{}` tick self-describes and persists.
+
+    The first tick only establishes the baseline (no alert); the second
+    tick observes growth through the durable state file and raises exactly
+    one diagnostic without any injected schedule payload.
+    """
+
+    state_path = tmp_path / "schedule_health_state.json"
+    monkeypatch.setenv("MOONMIND_SCHEDULE_HEALTH_STATE_PATH", str(state_path))
+
+    first = TemporalAgentRuntimeActivities(
+        session_controller=_ReconcileController4226(),  # type: ignore[arg-type]
+        client_adapter=_DescribeAdapter4226(43),
+    )
+    baseline = await first.agent_runtime_reconcile_managed_sessions({})
+    assert baseline["managedSessionRecordsReconciled"] == 1
+    assert "scheduleSkippedOverlapDiagnostics" not in baseline
+    assert state_path.exists()
+
+    second = TemporalAgentRuntimeActivities(
+        session_controller=_ReconcileController4226(),  # type: ignore[arg-type]
+        client_adapter=_DescribeAdapter4226(49),
+    )
+    alerted = await second.agent_runtime_reconcile_managed_sessions({})
+    assert alerted["managedSessionRecordsReconciled"] == 1
+    diagnostics = alerted["scheduleSkippedOverlapDiagnostics"]
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["code"] == "SCHEDULE_SKIPPED_OVERLAP"

@@ -10627,6 +10627,74 @@ class TemporalAgentRuntimeActivities:
             "compatibilityProfile": compatibility_profile,
         }
 
+    @staticmethod
+    def _schedule_health_state_path() -> Path:
+        override = os.environ.get("MOONMIND_SCHEDULE_HEALTH_STATE_PATH", "").strip()
+        if override:
+            return Path(override)
+        root = os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
+        return Path(root) / "schedule_health_state.json"
+
+    def _read_schedule_health_state(self) -> dict[str, Any]:
+        try:
+            raw = self._schedule_health_state_path().read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return {}
+        try:
+            parsed = json.loads(raw or "{}")
+        except ValueError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _write_schedule_health_state(
+        self,
+        *,
+        previous: Mapping[str, Any],
+        streaks: Mapping[str, Any],
+        last_alerted: Mapping[str, Any],
+    ) -> None:
+        path = self._schedule_health_state_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
+        payload = {
+            "previous": dict(previous),
+            "streaks": dict(streaks),
+            "last_alerted": {
+                str(k): v for k, v in dict(last_alerted).items() if v is not None
+            },
+        }
+        try:
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            return
+
+    async def _describe_operational_schedule(
+        self, schedule_id: str
+    ) -> Any | None:
+        """Best-effort describe of one Temporal schedule at the activity boundary."""
+        adapter = self._client_adapter
+        if adapter is None:
+            return None
+        describe = getattr(adapter, "describe_schedule", None)
+        if callable(describe):
+            try:
+                return await describe(definition_id=schedule_id)
+            except Exception:
+                pass
+        get_client = getattr(adapter, "get_client", None)
+        if callable(get_client):
+            try:
+                client = await get_client()
+                handle = client.get_schedule_handle(schedule_id)
+                return await handle.describe()
+            except Exception:
+                return None
+        return None
+
     async def agent_runtime_reconcile_managed_sessions(
         self,
         payload: Mapping[str, Any] | None = None,
@@ -10829,34 +10897,106 @@ class TemporalAgentRuntimeActivities:
                 summary["omnigentStuckState"] = stuck_result.to_dict()
         # MoonLadderStudios/MoonMind#4226: surface Temporal schedule health
         # from the same operational reconcile tick. Schedule descriptions are
-        # injected (never fetched here) so the decision stays pure and
-        # testable; failures are auxiliary and must not overwrite primary
-        # reattachment success.
+        # injected when the scheduler supplies them; otherwise the activity
+        # describes the watched schedules itself at this authorized activity
+        # boundary (workflows stay deterministic) and durably tracks
+        # counters/streaks in a best-effort state file so the production
+        # `{}` tick still observes SkippedOverlap growth. Failures are
+        # auxiliary and must not overwrite primary reattachment success.
         try:
             from moonmind.workflows.temporal.schedule_health import (
                 evaluate_reconcile_schedules,
             )
 
             raw_descriptions = action_payload.get("scheduleDescriptions")
-            if isinstance(raw_descriptions, Mapping):
-                raw_previous = action_payload.get("scheduleSkippedPrevious")
-                raw_alerted = action_payload.get("scheduleSkippedLastAlerted")
-                schedule_health = evaluate_reconcile_schedules(
-                    schedule_descriptions=raw_descriptions,
-                    previous_counters=(
-                        raw_previous if isinstance(raw_previous, Mapping) else {}
-                    ),
-                    last_alerted=(
-                        raw_alerted if isinstance(raw_alerted, Mapping) else {}
-                    ),
+            descriptions: dict[str, Any] = (
+                dict(raw_descriptions)
+                if isinstance(raw_descriptions, Mapping)
+                else {}
+            )
+            if not descriptions:
+                watched = action_payload.get("scheduleIdsToWatch")
+                watch_ids: list[str] = []
+                if isinstance(watched, (list, tuple)):
+                    watch_ids = [
+                        str(item).strip() for item in watched if str(item).strip()
+                    ]
+                if not watch_ids:
+                    # Self-monitoring default: the production reconcile
+                    # schedule itself uses OverlapPolicy=Skip, so its own
+                    # SkippedOverlap growth is actionable evidence that the
+                    # operational sweeper is starving.
+                    watch_ids = ["mm-operational:managed-session-reconcile"]
+                for schedule_id in watch_ids:
+                    try:
+                        described = await self._describe_operational_schedule(
+                            schedule_id
+                        )
+                    except Exception:
+                        continue
+                    if described is not None:
+                        descriptions[schedule_id] = described
+            raw_previous = action_payload.get("scheduleSkippedPrevious")
+            raw_alerted = action_payload.get("scheduleSkippedLastAlerted")
+            raw_streaks = action_payload.get("scheduleSkippedStreakPrevious")
+            persisted = self._read_schedule_health_state()
+            previous_counters: dict[str, Any] = (
+                dict(raw_previous) if isinstance(raw_previous, Mapping) else {}
+            )
+            last_alerted: dict[str, Any] = (
+                dict(raw_alerted) if isinstance(raw_alerted, Mapping) else {}
+            )
+            previous_streaks: dict[str, Any] = (
+                dict(raw_streaks) if isinstance(raw_streaks, Mapping) else {}
+            )
+            for key, slot in (
+                ("previous", previous_counters),
+                ("last_alerted", last_alerted),
+                ("streaks", previous_streaks),
+            ):
+                stored = persisted.get(key)
+                if isinstance(stored, Mapping):
+                    for sid, value in stored.items():
+                        slot.setdefault(str(sid), value)
+            schedule_health = evaluate_reconcile_schedules(
+                schedule_descriptions=descriptions,
+                previous_counters=previous_counters,
+                last_alerted=last_alerted,
+                previous_streaks=previous_streaks,
+            )
+            summary["scheduleHealth"] = schedule_health
+            if schedule_health.get("diagnostics"):
+                summary["scheduleSkippedOverlapDiagnostics"] = (
+                    schedule_health["diagnostics"]
                 )
-                summary["scheduleHealth"] = schedule_health
-                if schedule_health.get("diagnostics"):
-                    summary["scheduleSkippedOverlapDiagnostics"] = (
-                        schedule_health["diagnostics"]
-                    )
-                summary["scheduleSkippedCurrent"] = schedule_health.get(
-                    "currentCounters", {}
+            summary["scheduleSkippedCurrent"] = schedule_health.get(
+                "currentCounters", {}
+            )
+            summary["scheduleSkippedStreakCurrent"] = schedule_health.get(
+                "currentStreaks", {}
+            )
+            try:
+                self._write_schedule_health_state(
+                    previous={
+                        str(k): v
+                        for k, v in schedule_health.get("currentCounters", {}).items()
+                    },
+                    streaks={
+                        str(k): v
+                        for k, v in schedule_health.get("currentStreaks", {}).items()
+                    },
+                    last_alerted={
+                        str(d.get("scheduleId")): d.get("skippedOverlap")
+                        for d in schedule_health.get("diagnostics", [])
+                        if isinstance(d, Mapping)
+                        and d.get("scheduleId") is not None
+                        and d.get("skippedOverlap") is not None
+                    } or last_alerted,
+                )
+            except Exception:
+                logger.warning(
+                    "Schedule SkippedOverlap state persist failed during reconcile",
+                    exc_info=True,
                 )
         except Exception:
             logger.warning(
