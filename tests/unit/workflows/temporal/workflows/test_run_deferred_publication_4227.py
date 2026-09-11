@@ -370,3 +370,19 @@ def test_deferred_handoff_preserves_required_finalization_failure(
     )
     assert status == "failed"
     assert failed is True
+
+
+@pytest.mark.parametrize(
+    "state,expected",
+    [("completed", "gated_continuation"), ("failed", None), ("executing", None)],
+)
+def test_only_completed_handoff_publishes_disposition_memo(
+    deferred_workflow, monkeypatch, state, expected
+):
+    captured = []
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", captured.append)
+    deferred_workflow._state = state
+    deferred_workflow._gated_continuation_request = {"action": "reenter_gate"}
+    deferred_workflow._update_memo()
+    assert captured[-1].get("completionDisposition") == expected
