@@ -14,6 +14,7 @@ from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.temporal.github_issue_admission import (
     ENTRYPOINT_SEARCH,
     admit_for_entrypoint,
+    recandidate_after_abandon,
 )
 from moonmind.workflows.temporal.github_issue_lifecycle import (
     ELIGIBLE_SETTLED_STATES,
@@ -300,6 +301,8 @@ async def resolve_issue(
     retry_policy: Mapping[str, Any] | None = None,
     reads_complete: Mapping[str, Any] | None = None,
     active_attempt_comments: Sequence[Mapping[str, Any]] | None = None,
+    own_announcement_abandoned: bool | None = None,
+    writers_settled: bool | None = None,
 ) -> tuple[int | None, dict[str, Any]]:
     """Select the best search match, or first unblocked open issue, within 500 rows.
 
@@ -329,6 +332,25 @@ async def resolve_issue(
         raise ValueError(
             "GitHub issue search requires an explicit owner/repository scope."
         )
+    # Req 4 recandidate gate (issue #4178): a search may consider another
+    # candidate only after its own abandoned announcement and writers are
+    # conclusively settled. Ordinary first selections pass no signals and
+    # proceed; a present-but-unsettled recandidate context blocks selection
+    # rather than silently scanning on.
+    if own_announcement_abandoned is not None or writers_settled is not None:
+        gate = recandidate_after_abandon(
+            own_announcement_abandoned=bool(own_announcement_abandoned),
+            writers_settled=bool(writers_settled),
+        )
+        if not gate["allowed"]:
+            return None, {
+                "searchEvidence": {
+                    "fallbackScanning": not query,
+                    "pagesExamined": 0,
+                    "candidatesExamined": 0,
+                },
+                "error": gate["summary"],
+            }
     evidence: dict[str, Any] = {
         "searchEvidence": {
             "fallbackScanning": not query,
@@ -424,9 +446,12 @@ async def resolve_issue(
                     candidate_attempt_context = attempt_context
                 # Same shared exact-issue admission boundary as explicit /
                 # orchestration / continuation paths (issue #4178): the
-                # search entrypoint admits with its pinned identity. The
-                # fallback-scan path already resolves trusted blocker
-                # evidence per candidate; reuse that read for admission.
+                # search entrypoint admits with its pinned identity plus the
+                # full Req-1 bundle. The fallback-scan path already resolves
+                # trusted blocker evidence per candidate and reuses that read
+                # for admission. The query path resolves blockers for the
+                # admitted candidate only (one bounded read): a blocked
+                # admitted candidate is skipped rather than selected.
                 candidate_blockers: list[dict[str, Any]] | None = None
                 if not query:
                     candidate_blockers = await blockers_from_issue(normalized)
@@ -446,6 +471,10 @@ async def resolve_issue(
                     continue
                 if not query and candidate_blockers:
                     continue
+                if query:
+                    admitted_blockers = await blockers_from_issue(normalized)
+                    if admitted_blockers:
+                        continue
                 return candidate["number"], evidence
             if len(candidates) < 100:
                 return None, {

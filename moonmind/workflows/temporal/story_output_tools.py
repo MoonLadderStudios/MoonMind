@@ -37,11 +37,19 @@ from moonmind.workflows.temporal.github_issue_attempts import (
     resolve_installation_id,
 )
 from moonmind.workflows.temporal.github_issue_admission import (
+    ENTRYPOINT_CONTINUATION,
     ENTRYPOINT_EXPLICIT,
+    ENTRYPOINT_ORCHESTRATION,
+    ENTRYPOINT_RETRY,
     ENTRYPOINT_SEARCH,
     ENTRYPOINTS,
     admit_for_entrypoint,
+    announce_before_assessment,
+    check_delayed_mutation_fenced,
+    child_attempt_context,
     contender_quiesce_decision,
+    persist_admission_identity,
+    recandidate_after_abandon,
     revalidate_for_mutation,
     should_stop_on_resume,
 )
@@ -4551,6 +4559,13 @@ async def load_github_issue_preset_brief(
         # lets the selector admit it, otherwise the selector scans on for an
         # Available candidate.
         try:
+            # Forward the full Req-1 evidence bundle from the trusted input
+            # channel so the query path can trigger blocker / PR-identity /
+            # retry-policy / read-failure denies exactly like the explicit
+            # and start paths (issue #4178). Absent bundle entries stay
+            # absent rather than becoming an empty owner set.
+            _search_bundle = _github_admission_bundle(inputs, _context)
+            _recandidate = _github_recandidate_context(inputs, _context)
             issue_number, search_evidence = await resolve_issue(
                 repository=repository,
                 query=_string(inputs.get("issueSearch")),
@@ -4560,8 +4575,18 @@ async def load_github_issue_preset_brief(
                 # Same shared exact-issue admission boundary as explicit /
                 # orchestration / continuation paths (issue #4178): the
                 # selector admits the search entrypoint with this pinned
-                # identity plus supplied attempt evidence.
+                # identity plus the full trusted evidence bundle.
                 attempt_context=_github_status_attempt_context(inputs, _context),
+                pr_identities=_search_bundle.get("pr_identities"),
+                retry_policy=_search_bundle.get("retry_policy"),
+                reads_complete=_search_bundle.get("reads_complete"),
+                active_attempt_comments=_search_bundle.get("active_attempt_comments"),
+                own_announcement_abandoned=_recandidate.get("own_announcement_abandoned")
+                if _recandidate.get("present")
+                else None,
+                writers_settled=_recandidate.get("writers_settled")
+                if _recandidate.get("present")
+                else None,
             )
         except ValueError as exc:
             return ToolResult(status="FAILED", outputs={"error": str(exc)})
@@ -4672,6 +4697,27 @@ async def load_github_issue_preset_brief(
         inputs.get("brief_artifact_path"),
         "artifacts/github-issue-implement-brief.json",
     )
+    # Req 2 + Req 3 (issue #4178): for eligible Available / Recovery-needed
+    # work, plan the stable attempt announcement + in-progress BEFORE expensive
+    # assessment/implementation and persist the selected issue + predecessor
+    # exactly once with the trusted input context. Advisory only: a claim
+    # plan never bypasses prerequisite/authority/readiness checks, and the
+    # persisted identity flows forward so retry/replay/recovery cannot
+    # silently substitute a different issue. The caller re-reads after the
+    # announcement and immediately before launching work.
+    brief_settled = interpret_issue(
+        {"state": issue.get("state", "open"), "labels": issue.get("labels") or []}
+    ).settled
+    admission_handoff: dict[str, Any] = {}
+    if brief_settled in {"available", "recovery_needed"}:
+        admission_handoff = _github_admission_claim_and_identity(
+            inputs=inputs,
+            context=_context,
+            repository=repository,
+            issue_number=int(issue.get("number") or issue_number),
+            settled=brief_settled,
+            current_labels=[str(label) for label in labels],
+        )
     return ToolResult(
         status="COMPLETED",
         outputs={
@@ -4679,6 +4725,10 @@ async def load_github_issue_preset_brief(
             "issue": issue,
             **search_evidence,
             **recovery_routing,
+            **admission_handoff,
+            "admissionEntrypoint": _github_admission_entrypoint(
+                inputs, search_selected=bool(search_evidence)
+            ),
             "presetBrief": preset_brief,
             "artifactPath": artifact_path,
             "summary": f"Loaded GitHub issue preset brief for {issue_ref} from trusted GitHub data.",
@@ -5534,10 +5584,14 @@ def _github_admission_entrypoint(
     Search-selected work, explicit implementation/orchestration, retries, and
     operator continuations invoke the same shared admission boundary with
     pinned identities (issue #4178). A caller-supplied entrypoint is honored
-    only when it names that shared boundary; otherwise direct loads use
-    explicit admission and search selections use search admission. There are no
-    preset-name exemptions: an unknown entrypoint value falls back to the
-    path default and the boundary itself rejects unknown entrypoints.
+    only when it names that shared boundary. When no explicit entrypoint is
+    supplied, trusted workflow signals select the real orchestration /
+    continuation / retry call site: usable recovery handoff evidence means an
+    operator continuation, retry linkage means a retry, and orchestration
+    linkage means orchestration. Otherwise direct loads use explicit admission
+    and search selections use search admission. There are no preset-name
+    exemptions: an unknown entrypoint value falls back to the path default
+    and the boundary itself rejects unknown entrypoints.
     """
     explicit = _string(
         inputs.get("entrypoint")
@@ -5546,7 +5600,51 @@ def _github_admission_entrypoint(
     )
     if explicit in ENTRYPOINTS:
         return explicit
+    previous = _mapping(inputs.get("previousOutputs"))
+    for source in (inputs, previous):
+        if not isinstance(source, Mapping):
+            continue
+        if _string(source.get("orchestrationRunId") or source.get("orchestration_run_id")):
+            return ENTRYPOINT_ORCHESTRATION
+        if _string(source.get("parentWorkflowId") or source.get("parent_workflow_id")):
+            return ENTRYPOINT_ORCHESTRATION
+        if source.get("nestedImplement") is True or source.get("nested_implement") is True:
+            return ENTRYPOINT_ORCHESTRATION
+    for source in (inputs, previous):
+        if not isinstance(source, Mapping):
+            continue
+        stopped = source.get("predecessorStopped", source.get("predecessor_stopped"))
+        usable = source.get("handoffUsable", source.get("handoff_usable"))
+        if _truthy_like(stopped) and _truthy_like(usable):
+            return ENTRYPOINT_CONTINUATION
+        if _string(source.get("predecessorAttemptId") or source.get("predecessor_attempt_id")):
+            return ENTRYPOINT_CONTINUATION
+    for source in (inputs, previous):
+        if not isinstance(source, Mapping):
+            continue
+        if _string(source.get("retryOf") or source.get("retry_of")):
+            return ENTRYPOINT_RETRY
+        if source.get("attemptRetry") is True or source.get("attempt_retry") is True:
+            return ENTRYPOINT_RETRY
+        linked = source.get("linkedAttempts", source.get("linked_attempts"))
+        if isinstance(linked, list) and any(
+            isinstance(item, Mapping)
+            and _string(item.get("outcome")).lower()
+            in {"failed", "abandoned", "released", "superseded"}
+            for item in linked
+        ):
+            return ENTRYPOINT_RETRY
     return ENTRYPOINT_SEARCH if search_selected else ENTRYPOINT_EXPLICIT
+
+
+def _truthy_like(value: Any) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, str) and value.strip().lower() in {"1", "true", "yes"}:
+        return True
+    if isinstance(value, Mapping):
+        return bool(value)
+    return False
 
 
 def _github_admission_bundle(
@@ -5659,6 +5757,109 @@ def _github_shared_admission_decision(
         reads_complete=bundle.get("reads_complete"),
         active_attempt_comments=bundle.get("active_attempt_comments"),
     )
+
+
+def _github_admission_claim_and_identity(
+    *,
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    repository: str,
+    issue_number: int,
+    settled: str,
+    current_labels: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Plan the Req-2 advisory claim and Req-3 persist-once identity (issue #4178).
+
+    Called on the eligible Available / Recovery-needed path BEFORE expensive
+    assessment/implementation. Callers re-read after the announcement and
+    immediately before launching work; prerequisite/authority/readiness checks
+    stay intact. Claiming for assessment never authorizes changing blocked
+    code or bypassing completion gates. The persist-once identity pins the
+    selected issue + predecessor from the trusted input context so activity
+    retry / workflow replay / failed-step recovery cannot silently substitute
+    a different issue.
+    """
+    bundle = _github_admission_bundle(inputs, context)
+    own_attempt_id = _string(bundle.get("own_attempt_id"))
+    if not own_attempt_id:
+        own_attempt_id = _string(
+            _github_status_attempt_context(inputs, context).get("attemptId")
+        ) or _string(
+            _mapping(inputs.get("previousOutputs")).get("attemptId")
+        )
+    claim = announce_before_assessment(
+        settled=settled,
+        repository=repository,
+        issue_number=issue_number,
+        attempt_id=own_attempt_id or f"pending-{repository}#{issue_number}",
+        current_labels=list(current_labels or []),
+    )
+    persisted = persist_admission_identity(
+        {
+            "repository": repository,
+            "issueNumber": issue_number,
+            "predecessorAttemptId": _string(
+                inputs.get("predecessorAttemptId")
+                or inputs.get("predecessor_attempt_id")
+                or _mapping(inputs.get("previousOutputs")).get("predecessorAttemptId")
+            ),
+        },
+        _mapping(inputs.get("previousOutputs")).get("admittedIdentity")
+        or _mapping((context or {}).get("previousOutputs")).get("admittedIdentity"),
+    )
+    return {"admissionClaim": claim, "admittedIdentity": persisted["identity"],
+            "admissionPersisted": persisted}
+
+
+def _github_recandidate_context(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Collect the trusted recandidate gate signals for the search path (Req 4).
+
+    A search may consider another candidate only after its own abandoned
+    announcement and writers are conclusively settled. Absent signals mean an
+    ordinary first selection; present-but-unsettled signals block recandidacy.
+    """
+    for source in (inputs, _mapping(inputs.get("previousOutputs")),
+                   _mapping((context or {}).get("previousOutputs"))):
+        if not isinstance(source, Mapping):
+            continue
+        if "ownAnnouncementAbandoned" in source or "own_announcement_abandoned" in source:
+            abandoned = source.get("ownAnnouncementAbandoned", source.get("own_announcement_abandoned"))
+            settled_writers = source.get("writersSettled", source.get("writers_settled"))
+            return {
+                "own_announcement_abandoned": abandoned is True,
+                "writers_settled": settled_writers is True,
+                "present": True,
+            }
+    return {"present": False}
+
+
+def _github_child_attempt_gate(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Enforce the Req-6 ownership handoff for remediation/review children.
+
+    Internal child retries share the controlling issue attempt; a legitimate
+    review wait is not a disappeared owner. Existing-PR repair requires an
+    admitted route plus an exact PR target, never fresh permission from a
+    code-review label. Returns None when the caller is not a child activity.
+    """
+    child_kind = _string(inputs.get("childKind") or inputs.get("child_kind"))
+    if not child_kind:
+        return None
+    bundle = _github_admission_bundle(inputs, context)
+    controlling = _string(bundle.get("own_attempt_id")) or _string(
+        inputs.get("controllingAttemptId") or inputs.get("controlling_attempt_id")
+    )
+    pr_url = _string(
+        inputs.get("pullRequestUrl") or inputs.get("pull_request_url") or inputs.get("prUrl")
+    ) or _string((_github_status_pull_request_url(inputs, context) or ""))
+    decision = child_attempt_context(controlling, child_kind=child_kind, pr_url=pr_url)
+    return {"childKind": child_kind, "controllingAttemptId": controlling,
+            "prUrl": pr_url, "decision": decision}
 
 
 def _github_status_transition_reason(
@@ -6474,6 +6675,26 @@ async def update_github_issue_status(
     attempt_context = _github_status_attempt_context(inputs, _context)
     admission_bundle = _github_admission_bundle(inputs, _context)
     own_attempt_id = _string(admission_bundle.get("own_attempt_id"))
+    # Req 6 child handoff gate (issue #4178): internal remediation retries
+    # and PR-review/merge children share the controlling issue attempt. A
+    # legitimate review wait is not a disappeared owner. Existing-PR repair
+    # requires an admitted route plus an exact PR target at this trusted
+    # publication boundary, never fresh permission from a code-review label.
+    child_gate = _github_child_attempt_gate(inputs, _context)
+    if child_gate is not None and not bool(child_gate["decision"].get("allowed")):
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "lifecycleSettled": interpretation.settled,
+                "reasonCode": str(child_gate["decision"].get("reasonCode") or "child_handoff_denied"),
+                "childKind": child_gate["childKind"],
+                "summary": (
+                    f"Skipped GitHub issue update for {issue_ref}: {child_gate['decision'].get('summary')}"
+                ),
+            },
+        )
     if target == "to_in_progress" and (
         admission_bundle.get("released")
         or admission_bundle.get("superseded")
@@ -7161,6 +7382,14 @@ async def update_github_issue_status(
     if warnings:
         outputs["warnings"] = warnings
         outputs["commentStatus"] = "unconfirmed"
+    if child_gate is not None:
+        # Req 6 evidence: the controlling attempt stays pinned on child work.
+        outputs["childAttempt"] = child_gate["decision"]
+        outputs["childKind"] = child_gate["childKind"]
+    if inputs.get("mutationIssuedBeforeCheck") is True or inputs.get("mutation_issued_before_check") is True:
+        # Acceptance D honesty: an already-issued delayed mutation is never
+        # falsely reported as fenced by this later check (unfenced race note).
+        outputs["mutationFenced"] = check_delayed_mutation_fenced(mutation_issued_before_check=True)
     return ToolResult(
         status="COMPLETED",
         outputs=outputs,
