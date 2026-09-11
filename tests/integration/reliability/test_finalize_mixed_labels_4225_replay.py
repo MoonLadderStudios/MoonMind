@@ -130,8 +130,16 @@ async def test_replay_with_pr_through_tool_activity_boundary(
 
     service = _LifecycleFakeService(initial_labels=list(observed["labels"]))
     _install(monkeypatch, service)
+    # The dispatcher-registered handler calls update_github_issue_status with
+    # its default github_service_factory (bound at def time), so patch both the
+    # module attribute and the kwdefault to route the boundary through the fake.
     monkeypatch.setattr(
         story_tools, "GitHubService", lambda *args, **kwargs: service
+    )
+    monkeypatch.setattr(
+        story_tools.update_github_issue_status,
+        "__kwdefaults__",
+        {"github_service_factory": lambda: service},
     )
 
     dispatcher = ToolActivityDispatcher()
