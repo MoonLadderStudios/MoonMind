@@ -88,6 +88,7 @@ ISSUE_BRIEF_LOADER_TOOL_NAMES = frozenset(
 )
 GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME = "github.check_issue_blockers"
 GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME = "github.update_issue_status"
+GITHUB_FINALIZE_FAILED_ATTEMPT_TOOL_NAME = "github.finalize_failed_attempt"
 GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME = "github.resolve_pull_request_target"
 # The status tool runs inside a 60-second activity. One fetch plus the targeted
 # label operations and optional comment must leave enough time for the activity
@@ -7865,6 +7866,107 @@ async def update_github_issue_status(
     )
 
 
+def _failed_attempt_evidence(inputs: Mapping[str, Any], *keys: str) -> dict[str, Any]:
+    """Return the first mapping-valued finalizer evidence block in *inputs*."""
+    for key in keys:
+        value = inputs.get(key)
+        if isinstance(value, Mapping):
+            return dict(value)
+    return {}
+
+
+async def finalize_github_issue_failed_attempt(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> ToolResult:
+    """Finalize a failed/canceled controlling attempt with a safe release handoff.
+
+    Durable failed-path counterpart to the success-path
+    :func:`update_github_issue_status` ``finalize_after_pr_or_done`` mode
+    (MoonLadderStudios/MoonMind#4179): the controlling workflow's terminal
+    failure, exhausted-retries, blocked-outcome, and intentional-cancellation
+    paths invoke this tool instead of stopping without changing GitHub. The
+    outcome mapper keeps internal step failures, remediation iterations, and
+    legitimate review waits non-releasing, so reaching this tool with one of
+    those outcomes reports ``retained`` without GitHub effects. Abrupt
+    termination, timeout, and disconnect outcomes stay potentially unfinalized
+    with recoverable local pending synchronization, never automatic release.
+    """
+    from moonmind.workflows.temporal import github_issue_finalization as _finalization
+    from moonmind.workflows.temporal.activities.github_issue_finalization_activities import (
+        finalize_failed_attempt as _finalize_failed_attempt,
+    )
+
+    try:
+        repository, issue_number = _github_issue_inputs(inputs)
+    except ValueError as exc:
+        return ToolResult(
+            status="FAILED",
+            outputs={"decision": "blocked", "summary": str(exc)},
+        )
+    issue_ref = f"{repository}#{issue_number}"
+    raw_outcome = _first_string(
+        inputs.get("executionEvent"),
+        inputs.get("execution_event"),
+        inputs.get("controllingOutcome"),
+        inputs.get("controlling_outcome"),
+        inputs.get("outcome"),
+        inputs.get("status"),
+    )
+    mapped = _finalization.execution_event_for_controlling_outcome(raw_outcome)
+    execution_event = mapped["event"]
+    from_settled = (
+        _first_string(inputs.get("fromSettled"), inputs.get("from_settled")) or "in_progress"
+    )
+    current_labels = _list(inputs.get("currentLabels", inputs.get("current_labels"))) or None
+    result = await _finalize_failed_attempt(
+        repository=repository,
+        issue_number=issue_number,
+        execution_event=execution_event,
+        from_settled=from_settled,
+        current_labels=current_labels,
+        writer_evidence=_failed_attempt_evidence(inputs, "writerEvidence", "writer_evidence"),
+        mutation_evidence=_failed_attempt_evidence(inputs, "mutationEvidence", "mutation_evidence"),
+        preservation_evidence=_failed_attempt_evidence(inputs, "preservationEvidence", "preservation_evidence"),
+        disposition_evidence=_failed_attempt_evidence(inputs, "dispositionEvidence", "disposition_evidence"),
+        attempt_id=_first_string(inputs.get("attemptId"), inputs.get("attempt_id")),
+        primary_outcome=_first_string(inputs.get("primaryOutcome"), inputs.get("primary_outcome")) or execution_event,
+        met_requirements=_list(inputs.get("metRequirements", inputs.get("met_requirements"))),
+        remaining_requirements=_list(inputs.get("remainingRequirements", inputs.get("remaining_requirements"))),
+        retry_history=_first_string(inputs.get("retryHistory"), inputs.get("retry_history")),
+        next_action=_first_string(inputs.get("nextAction"), inputs.get("next_action")),
+        reason=_first_string(inputs.get("reason")),
+        completion_mode=_first_string(inputs.get("completionMode"), inputs.get("completion_mode")) or "pr_only_handoff",
+        review_owner_ended=_truthy(inputs.get("reviewOwnerEnded", inputs.get("review_owner_ended"))),
+        cancellation_hold=_truthy(inputs.get("cancellationHold", inputs.get("cancellation_hold"))),
+        service=github_service_factory(),
+    )
+    outputs: dict[str, Any] = {
+        "issueRef": issue_ref,
+        "executionEvent": execution_event,
+        "mappingAction": mapped["action"],
+        "mappingSummary": mapped["summary"],
+        "released": result["released"],
+        "reasonCode": result["reasonCode"],
+        "disposition": result["disposition"],
+        "summary": result["summary"],
+        "transition": result["transition"],
+        "mutation": result["mutation"],
+        "mutationOutcome": result["mutationOutcome"],
+        "completionRoute": result["completionRoute"],
+        "mergeAuthorized": result["mergeAuthorized"],
+        "workspaceRetained": result["workspaceRetained"],
+        "pendingSync": result["pendingSync"],
+        "commentId": result["commentId"],
+    }
+    return ToolResult(
+        status="COMPLETED" if result["released"] else "FAILED",
+        outputs=outputs,
+    )
+
+
 async def discover_documents(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -8380,6 +8482,17 @@ def register_story_output_tool_handlers(
         handler=_update_github_issue_status,
     )
 
+    async def _finalize_github_issue_failed_attempt(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await finalize_github_issue_failed_attempt(inputs, context)
+
+    dispatcher.register_skill(
+        skill_name=GITHUB_FINALIZE_FAILED_ATTEMPT_TOOL_NAME,
+        handler=_finalize_github_issue_failed_attempt,
+    )
+
     async def _resolve_pull_request_target(
         inputs: Mapping[str, Any],
         context: Mapping[str, Any] | None = None,
@@ -8429,8 +8542,10 @@ __all__ = [
     "GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME",
     "GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME",
     "GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME",
+    "GITHUB_FINALIZE_FAILED_ATTEMPT_TOOL_NAME",
     "GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME",
     "resolve_pull_request_target",
+    "finalize_github_issue_failed_attempt",
     "GITHUB_STORY_TOOL_NAMES",
     "JIRA_ORCHESTRATE_TASKS_TOOL_NAME",
     "JIRA_STORY_TOOL_NAMES",

@@ -142,6 +142,80 @@ def should_finalize_controlling_attempt(event: Any) -> dict[str, Any]:
     }
 
 
+#: Abrupt/disconnect vocabulary from the durable execution boundary that maps
+#: onto the Req 6 potentially-unfinalized triggers instead of automatic
+#: release. Termination and timeout are never silent release evidence.
+ABRUPT_OUTCOME_ALIASES = frozenset(
+    {
+        "abrupt_termination",
+        "unknown_mutation",
+        "terminated",
+        "termination",
+        "timed_out",
+        "timeout",
+        "disconnected",
+        "disconnected_device",
+        "connection_lost",
+    }
+)
+
+
+def execution_event_for_controlling_outcome(outcome: Any) -> dict[str, Any]:
+    """Map a durable controlling-outcome value onto a finalizer event (Req 1).
+
+    The controlling workflow boundary (preset terminal handler, run-workflow
+    terminal state) reports outcomes in execution vocabulary; this thin
+    adapter routes each value to exactly one finalizer path without changing
+    the release semantics owned by :func:`should_finalize_controlling_attempt`
+    and :func:`classify_potentially_unfinalized`:
+
+    * controlling terminal outcomes (success, terminal failure, exhausted
+      retries, blocked outcomes, intentional cancellation) -> ``finalize``;
+    * internal step failures, remediation iterations, review waits ->
+      ``retain`` (the same attempt stays active);
+    * abrupt termination, timeout, disconnect vocabulary ->
+      ``potentially_unfinalized`` (never automatic release);
+    * anything else (unknown, blank, new values) -> ``no_release``.
+
+    Returns ``{"event": str, "action": str, "summary": str}``.
+    """
+    normalized = normalize_execution_event(outcome)
+    if normalized in ABRUPT_OUTCOME_ALIASES:
+        if normalized in UNFINALIZED_TRIGGERS:
+            canonical = normalized
+        elif "disconnect" in normalized or "connection" in normalized:
+            canonical = "disconnected_device"
+        else:
+            canonical = "abrupt_termination"
+        return {
+            "event": canonical,
+            "action": "potentially_unfinalized",
+            "summary": (
+                f"Outcome {normalized or '<empty>'} is abrupt termination, timeout, or "
+                "disconnect evidence: potentially unfinalized with recoverable "
+                "local pending synchronization, never automatic release."
+            ),
+        }
+    gate = should_finalize_controlling_attempt(normalized)
+    if gate["finalize"]:
+        return {
+            "event": normalized,
+            "action": "finalize",
+            "summary": str(gate["summary"]),
+        }
+    if normalized in NON_RELEASING_EVENTS:
+        return {
+            "event": normalized,
+            "action": "retain",
+            "summary": str(gate["summary"]),
+        }
+    return {
+        "event": normalized,
+        "action": "no_release",
+        "summary": str(gate["summary"]),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Req 2: writer stop + mutation settlement + preservation
 # ---------------------------------------------------------------------------
@@ -881,6 +955,7 @@ def _transition_evidence_for_disposition(
 
 
 __all__ = [
+    "ABRUPT_OUTCOME_ALIASES",
     "ADMITTED_SAVE_METHODS",
     "AUXILIARY_FAILURE_KINDS",
     "COMPLETION_PARENT_PR_AND_MERGE",
@@ -902,6 +977,7 @@ __all__ = [
     "choose_disposition",
     "classify_potentially_unfinalized",
     "confirm_writer_stop",
+    "execution_event_for_controlling_outcome",
     "normalize_execution_event",
     "partial_pr_justifies_code_review",
     "plan_failed_attempt_finalization",

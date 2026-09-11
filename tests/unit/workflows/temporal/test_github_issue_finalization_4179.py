@@ -317,6 +317,7 @@ class _FakeService:
         fail_add: str = "",
         fail_remove: str = "",
         fail_create: str = "",
+        fail_close: str = "",
         unknown_update: bool = False,
     ) -> None:
         self.labels = list(issue_labels or ["status: in-progress"])
@@ -324,6 +325,7 @@ class _FakeService:
         self.fail_add = fail_add
         self.fail_remove = fail_remove
         self.fail_create = fail_create
+        self.fail_close = fail_close
         self.unknown_update = unknown_update
         self.comments: list[dict[str, Any]] = []
         self.calls: list[str] = []
@@ -377,6 +379,18 @@ class _FakeService:
             if comment["id"] == comment_id:
                 comment["body"] = body
         return {"ok": True, "reasonCode": "updated", "commentId": comment_id}
+
+    async def close_issue(self, *, repo: str, issue_number: int) -> dict[str, Any]:
+        _ = (repo, issue_number)
+        self.calls.append("close_issue")
+        if self.fail_close == "unknown":
+            return {"ok": False, "reasonCode": "outcome_unknown", "summary": "lost response"}
+        if self.fail_close == "denied":
+            return {"ok": False, "reasonCode": "denied", "summary": "close denied"}
+        if self.fail_close:
+            return {"ok": False, "reasonCode": "close_failed", "summary": "close failed"}
+        self.state = "closed"
+        return {"ok": True, "reasonCode": "closed", "summary": "Closed."}
 
 
 def _issue_reader(service: _FakeService):  # noqa: ANN202 - test helper
@@ -576,13 +590,6 @@ async def test_failure_stage_after_accepted_verification_code_review(monkeypatch
 async def test_failure_stage_after_merge_closed_without_rebuy(monkeypatch) -> None:
     service = _FakeService(issue_labels=["status: code-review"], issue_state="open")
     monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
-
-    async def _closed_read(*, service: Any, repository: str, issue_number: int) -> dict[str, Any]:
-        _ = (repository, issue_number)
-        return {"ok": True, "reasonCode": "read", "issue": {"state": "closed", "labels": service.labels}}
-
-    if service.state == "open":
-        service.state = "open"  # labels drive the to_closed read-back below
     result = await acts.finalize_failed_attempt(
         **_base_kwargs(
             execution_event="failed",
@@ -592,12 +599,281 @@ async def test_failure_stage_after_merge_closed_without_rebuy(monkeypatch) -> No
         ),
         service=service,
     )
-    # Close completion uses the Done destination before removing blockers; the
-    # fake read-back here still shows code-review, so the plan is releasable
-    # but the Activity reports incomplete rather than false success.
-    assert result["released"] in {True, False}
+    # Failure after merge with verified objective completion releases to
+    # closed: the Activity executes the close step, observes closed on
+    # read-back, and publishes the released terminal comment.
+    assert result["released"] is True
+    assert result["reasonCode"] == "released"
+    assert result["disposition"] == "to_closed"
+    assert result["mutationOutcome"] is not None
+    assert result["mutationOutcome"]["outcome"] == "applied"
+    assert "close_issue" in service.calls
+    assert service.state == "closed"
+    assert "status: done" in service.labels
+    assert "status: code-review" not in service.labels
+    assert service.comments and "pull/7" in service.comments[0]["body"]
+    assert "Released:" in service.comments[0]["body"]
+    assert result["workspaceRetained"] is False
+    # Objective satisfaction is never re-bought because reporting ran late:
+    # the execution outcome stays failed while the objective stays verified.
     separation = fin.separate_objective_from_execution(
         execution_outcome="failed", objective_verified=True, auxiliary_failures=["publication"]
     )
     assert separation["rebuyImplementation"] is False
-    monkeypatch.setattr(acts, "_fetch_issue", _closed_read)
+
+
+@pytest.mark.asyncio
+async def test_activity_close_unknown_stays_pending(monkeypatch) -> None:
+    service = _FakeService(fail_close="unknown")
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(
+        **_base_kwargs(
+            execution_event="failed",
+            from_settled="code_review",
+            current_labels=["status: code-review"],
+            disposition_evidence={"completion_verified": True},
+        ),
+        service=service,
+    )
+    assert result["released"] is False
+    assert result["reasonCode"] == "close_unknown"
+    assert result["workspaceRetained"] is True
+    assert result["pendingSync"] is not None
+    assert result["commentId"] is not None  # proposed comment durable for repair
+
+
+@pytest.mark.asyncio
+async def test_activity_close_denied_never_false_release(monkeypatch) -> None:
+    service = _FakeService(fail_close="denied")
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(
+        **_base_kwargs(
+            execution_event="failed",
+            from_settled="code_review",
+            current_labels=["status: code-review"],
+            disposition_evidence={"completion_verified": True},
+        ),
+        service=service,
+    )
+    assert result["released"] is False
+    assert result["reasonCode"] == "denied"
+    assert result["workspaceRetained"] is True
+
+
+# -- Req 1: controlling-outcome mapping ------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "outcome", ["success", "failed", "exhausted_retries", "blocked", "cancelled", "terminal_failure"]
+)
+def test_controlling_outcomes_map_to_finalize(outcome: str) -> None:
+    mapped = fin.execution_event_for_controlling_outcome(outcome)
+    assert mapped["action"] == "finalize"
+    assert fin.should_finalize_controlling_attempt(mapped["event"])["finalize"] is True
+
+
+@pytest.mark.parametrize(
+    "outcome", ["internal_retry", "remediation_iteration", "review_wait", "step_failure", "awaiting_review"]
+)
+def test_controlling_outcomes_retain_internal_attempts(outcome: str) -> None:
+    mapped = fin.execution_event_for_controlling_outcome(outcome)
+    assert mapped["action"] == "retain"
+    assert fin.should_finalize_controlling_attempt(mapped["event"])["finalize"] is False
+
+
+@pytest.mark.parametrize("outcome", ["terminated", "timed_out", "disconnected", "abrupt_termination"])
+def test_abrupt_outcomes_are_potentially_unfinalized(outcome: str) -> None:
+    mapped = fin.execution_event_for_controlling_outcome(outcome)
+    assert mapped["action"] == "potentially_unfinalized"
+    plan = fin.plan_failed_attempt_finalization(
+        execution_event=mapped["event"],
+        writer_evidence=_writer(),
+        mutation_evidence=_mutations(),
+        preservation_evidence=_preserved(),
+        disposition_evidence={"portable_work_safe": True, "preservation_verified": True},
+    )
+    assert plan.releasable is False
+    assert plan.reason_code == "potentially_unfinalized"
+    assert plan.workspace_retained is True
+
+
+@pytest.mark.parametrize("outcome", ["mystery-outcome", "", None, 123])
+def test_unknown_outcomes_never_release(outcome: Any) -> None:
+    mapped = fin.execution_event_for_controlling_outcome(outcome)
+    assert mapped["action"] == "no_release"
+    plan = fin.plan_failed_attempt_finalization(
+        execution_event=mapped["event"] or outcome,
+        writer_evidence=_writer(),
+        mutation_evidence=_mutations(),
+        preservation_evidence=_preserved(),
+        disposition_evidence={"portable_work_safe": True, "preservation_verified": True},
+    )
+    assert plan.releasable is False
+    assert plan.workspace_retained is True
+
+
+# -- Req 1: durable failed-path tool boundary ------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_failed_path_tool_releases_recovery_needed(monkeypatch) -> None:
+    from moonmind.workflows.temporal import story_output_tools as tools
+
+    service = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await tools.finalize_github_issue_failed_attempt(
+        {
+            "repository": "o/r",
+            "issueNumber": 4179,
+            "executionEvent": "failed",
+            "fromSettled": "in_progress",
+            "currentLabels": ["status: in-progress"],
+            "writerEvidence": _writer(),
+            "mutationEvidence": _mutations(),
+            "preservationEvidence": _preserved(),
+            "dispositionEvidence": {
+                "portable_work_safe": True,
+                "preservation_verified": True,
+                "handoff_published": True,
+            },
+            "attemptId": "att_test",
+            "primaryOutcome": "failed",
+            "metRequirements": ["req-a"],
+            "remainingRequirements": ["req-b"],
+            "retryHistory": "1 failed",
+            "nextAction": "continue-implementation",
+            "reason": "terminal failure with portable work",
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["released"] is True
+    assert result.outputs["disposition"] == "to_recovery_needed"
+    assert result.outputs["mappingAction"] == "finalize"
+    assert result.outputs["mergeAuthorized"] is False
+    assert result.outputs["workspaceRetained"] is False
+    assert "status: recovery-needed" in service.labels
+
+
+@pytest.mark.asyncio
+async def test_failed_path_tool_cancellation_holds_without_rerun(monkeypatch) -> None:
+    from moonmind.workflows.temporal import story_output_tools as tools
+
+    service = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await tools.finalize_github_issue_failed_attempt(
+        {
+            "repository": "o/r",
+            "issueNumber": 4179,
+            "executionEvent": "cancelled",
+            "writerEvidence": _writer(),
+            "mutationEvidence": _mutations(),
+            "preservationEvidence": _preserved(),
+            "dispositionEvidence": {
+                "intentional_cancellation": True,
+                "blocking_reason": "operator hold",
+            },
+            "reason": "intentional cancellation",
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["released"] is True
+    assert result.outputs["disposition"] == "to_needs_attention"
+    assert result.outputs["mergeAuthorized"] is False
+
+
+@pytest.mark.asyncio
+async def test_failed_path_tool_internal_event_retained_without_effects() -> None:
+    from moonmind.workflows.temporal import story_output_tools as tools
+
+    service = _FakeService()
+    result = await tools.finalize_github_issue_failed_attempt(
+        {
+            "repository": "o/r",
+            "issueNumber": 4179,
+            "executionEvent": "remediation_iteration",
+            "writerEvidence": _writer(),
+            "mutationEvidence": _mutations(),
+            "preservationEvidence": _preserved(),
+            "dispositionEvidence": {"portable_work_safe": True, "preservation_verified": True},
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED"
+    assert result.outputs["released"] is False
+    assert result.outputs["mappingAction"] == "retain"
+    assert service.calls == []
+    assert service.comments == []
+
+
+@pytest.mark.asyncio
+async def test_failed_path_tool_rejects_bad_issue_inputs() -> None:
+    from moonmind.workflows.temporal import story_output_tools as tools
+
+    service = _FakeService()
+    result = await tools.finalize_github_issue_failed_attempt(
+        {"repository": "", "issueNumber": 0, "executionEvent": "failed"},
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED"
+    assert service.calls == []
+
+
+def test_failed_path_tool_registered_in_dispatcher() -> None:
+    from moonmind.workflows.temporal import story_output_tools as tools
+
+    class _Dispatcher:
+        def __init__(self) -> None:
+            self.skills: dict[str, Any] = {}
+
+        def register_skill(self, *, skill_name: str, handler: Any) -> None:
+            self.skills[skill_name] = handler
+
+    dispatcher = _Dispatcher()
+    tools.register_story_output_tool_handlers(dispatcher)
+    assert tools.GITHUB_FINALIZE_FAILED_ATTEMPT_TOOL_NAME in dispatcher.skills
+    assert "github.update_issue_status" in dispatcher.skills
+
+
+# -- Replay / in-flight payload compatibility -------------------------------------
+
+
+def test_legacy_blank_and_partial_payloads_degrade_safely() -> None:
+    # A previous attempt/finalization payload shape without the new mapper
+    # fields, with blank or unknown values, degrades to a safe
+    # non-releasing outcome: no release, workspace retained, no crash.
+    blank = fin.plan_failed_attempt_finalization(
+        execution_event="",
+        writer_evidence=_writer(),
+        mutation_evidence=_mutations(),
+        preservation_evidence=_preserved(),
+        disposition_evidence={},
+    )
+    assert blank.releasable is False
+    assert blank.workspace_retained is True
+    # Unknown future disposition keys are ignored: the default is attention
+    # with no automatic replacement work, never a silent rerun.
+    future = fin.choose_disposition({"some_future_field": True, "another_new_flag": "yes"})
+    assert future["disposition"] == fin.DISPOSITION_NEEDS_ATTENTION
+    assert future["schedulesReplacement"] is False
+    # Unknown completion modes grant no merge authority in failure cleanup.
+    unknown_route = fin.route_completion_handoff(completion_mode="some_future_mode")
+    assert unknown_route["mergeAuthorized"] is False
+    assert unknown_route["route"] == "needs_decision"
+
+
+def test_replayed_finalizer_respects_closed_successor_and_hold() -> None:
+    # A late finalizer that rereads shared state and observes a closed issue
+    # or a needs-attention hold abandons new mutations instead of
+    # overwriting the successor's status.
+    assert fin.should_abandon_for_successor(intended_from_settled="code_review", observed_settled="closed")["abandon"] is True
+    assert fin.should_abandon_for_successor(intended_from_settled="in_progress", observed_settled="needs_attention")["abandon"] is True
+    assert fin.should_abandon_for_successor(intended_from_settled="in_progress", observed_settled="in_progress")["abandon"] is False
+    # Unknown auxiliary failure kinds are reported, not merged into the
+    # primary outcome or treated as release evidence.
+    separated = fin.separate_objective_from_execution(
+        execution_outcome="failed", objective_verified=False, auxiliary_failures=["some_future_kind"]
+    )
+    assert separated["unknownAuxiliaryKinds"] == ["some_future_kind"]
+    assert separated["rebuyImplementation"] is True
