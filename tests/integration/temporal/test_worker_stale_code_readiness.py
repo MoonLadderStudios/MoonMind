@@ -44,10 +44,8 @@ def _isolated_code_identity(monkeypatch: pytest.MonkeyPatch, tmp_path):
     monkeypatch.delenv("MOONMIND_IMAGE_DIGEST", raising=False)
     monkeypatch.setenv("MOONMIND_CODE_PACKAGE_ROOT", str(tmp_path))
     monkeypatch.setenv("TEMPORAL_WORKER_FLEET", "workflow")
-    wci._digest_cache.clear()
     wci._STARTUP_IDENTITY = None
     yield
-    wci._digest_cache.clear()
     wci._STARTUP_IDENTITY = None
 
 
@@ -87,8 +85,9 @@ async def test_bind_mounted_module_change_reports_stale_code_until_restart(
         assert body["codeIdentityStatus"] == "healthy"
 
         # Host rewrites a bind-mounted module without restarting the worker.
+        # The checkout digest is recomputed live (never cached), so the next
+        # probe observes the rewrite immediately.
         module.write_text("HANDLER_VERSION = 2\n", encoding="utf-8")
-        wci._digest_cache.clear()
 
         code, body = await loop.run_in_executor(None, _get_readyz)
         assert code == 503, body

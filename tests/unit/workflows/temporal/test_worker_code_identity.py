@@ -49,10 +49,8 @@ from moonmind.workflows.temporal.worker_healthcheck import (
 
 @pytest.fixture(autouse=True)
 def _clear_digest_cache():
-    wci._digest_cache.clear()
     wci._STARTUP_IDENTITY = None
     yield
-    wci._digest_cache.clear()
     wci._STARTUP_IDENTITY = None
 
 
@@ -181,7 +179,20 @@ def test_readiness_urls_from_env_supports_named_entries(
     monkeypatch.delenv("TEMPORAL_WORKFLOW_READINESS_URL", raising=False)
     assert readiness_urls_from_env() == [
         ("workflow", "http://w:8080/readyz"),
-        ("http://other:8080/readyz", "http://other:8080/readyz"),
+        ("other", "http://other:8080/readyz"),
+    ]
+
+
+def test_readiness_urls_from_env_derives_hostname_for_bare_workflow_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MOONMIND_WORKER_READINESS_URLS", raising=False)
+    monkeypatch.setenv(
+        "TEMPORAL_WORKFLOW_READINESS_URL",
+        "http://temporal-worker-workflow:8080/readyz",
+    )
+    assert readiness_urls_from_env() == [
+        ("workflow", "http://temporal-worker-workflow:8080/readyz"),
     ]
 
 
@@ -302,7 +313,6 @@ async def test_readyz_serves_503_while_stale_and_200_after_restart(
         # Modify the bind-mounted module: the next readiness probe must report
         # stale_code with both identities.
         module.write_text("v = 2\n", encoding="utf-8")
-        wci._digest_cache.clear()
         code, body = await loop.run_in_executor(None, _get)
         assert code == 503, body
         assert body["codeIdentityStatus"] == "stale"
@@ -532,4 +542,168 @@ async def test_update_fails_loudly_without_restarter() -> None:
     with pytest.raises(ToolFailure) as exc_info:
         await executor.execute(_update_inputs())
     assert exc_info.value.error_code == "DEPLOYMENT_STALE_WORKER_CODE"
+
+
+def test_probe_worker_readiness_parses_503_stale_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 503 stale_code body must not degrade to unknown (fail-open bypass)."""
+
+    from moonmind.workflows.temporal.worker_code_identity import (
+        probe_worker_readiness,
+    )
+
+    body = json.dumps(
+        {
+            "codeRevision": "startup-rev",
+            "codeDigest": "sha256:x",
+            "codeIdentitySource": "git",
+            "codeIdentityStatus": "stale",
+            "reasonCode": "stale_code",
+        }
+    ).encode("utf-8")
+
+    http_error = urllib.error.HTTPError(
+        "http://w:8080/readyz",
+        503,
+        "Service Unavailable",
+        {},
+        __import__("io").BytesIO(body),
+    )
+
+    class _FailingOpener:
+        def open(self, request, timeout=None):
+            raise http_error
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.worker_code_identity._no_proxy_opener",
+        lambda: _FailingOpener(),
+    )
+    payload = probe_worker_readiness("http://w:8080/readyz")
+    assert payload is not None
+    assert payload["codeIdentityStatus"] == "stale"
+    assert payload["codeRevision"] == "startup-rev"
+
+
+def test_collect_worker_code_freshness_expands_group_children_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The supervisor envelope (children, no top-level identity) per-lane."""
+
+    monkeypatch.setenv("MOONMIND_BUILD_SHA", "checkout-rev")
+    current = WorkerCodeIdentity(revision="checkout-rev", source="MOONMIND_BUILD_SHA")
+
+    def _probe(url: str) -> dict[str, Any]:
+        assert url == "http://group:8080/readyz"
+        return {
+            "status": "unhealthy",
+            "children": [
+                {
+                    "fleet": "workflow",
+                    "codeRevision": "checkout-rev",
+                    "codeDigest": "sha256:x",
+                    "codeIdentitySource": "MOONMIND_BUILD_SHA",
+                },
+                {
+                    "fleet": "workflow",
+                    "codeRevision": "startup-rev",
+                    "codeDigest": "sha256:y",
+                    "codeIdentitySource": "MOONMIND_BUILD_SHA",
+                },
+            ],
+        }
+
+    freshness = collect_worker_code_freshness(
+        [("workflow", "http://group:8080/readyz")], current=current, probe=_probe
+    )
+    assert len(freshness) == 2
+    by_name = {item.name: item.status for item in freshness}
+    assert by_name["workflow/workflow"] == "healthy"
+    assert by_name["workflow/workflow-1"] == "stale"
+
+
+def test_current_worker_code_revision_falls_back_to_digest() -> None:
+    from moonmind.workflows.temporal.worker_code_identity import (
+        current_worker_code_revision,
+    )
+
+    wci._STARTUP_IDENTITY = WorkerCodeIdentity(
+        revision=None, digest="sha256:abc", source="package-digest"
+    )
+    assert current_worker_code_revision() == "sha256:abc"
+    wci._STARTUP_IDENTITY = WorkerCodeIdentity()
+    assert current_worker_code_revision() == "unknown"
+
+
+def test_payload_busy_hint_is_conservative() -> None:
+    from moonmind.workflows.temporal.worker_code_identity import payload_busy_hint
+
+    assert payload_busy_hint({}) is True
+    assert payload_busy_hint({"busy": True}) is True
+    assert payload_busy_hint({"busy": False}) is False
+    assert payload_busy_hint({"busy": False, "activeActivities": 2}) is True
+    assert payload_busy_hint({"children": [{"busy": False}]}) is False
+    assert payload_busy_hint({"children": [{}, {"busy": False}]}) is True
+
+
+def test_compose_service_for_worker_maps_lanes_and_hostnames() -> None:
+    from moonmind.workflows.skills.deployment_execution import (
+        _compose_service_for_worker,
+    )
+
+    assert _compose_service_for_worker("workflow") == "temporal-worker-workflow"
+    assert (
+        _compose_service_for_worker("workflow/workflow-1")
+        == "temporal-worker-workflow"
+    )
+    assert (
+        _compose_service_for_worker("temporal-worker-workflow")
+        == "temporal-worker-workflow"
+    )
+    assert _compose_service_for_worker("http://w:8080/readyz") is None
+
+
+@pytest.mark.asyncio
+async def test_update_fails_when_restarted_worker_stays_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Post-restart unknown is not success: bounded recheck then loud failure."""
+
+    async def _no_sleep(delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+    calls: list[int] = []
+
+    async def _checker() -> Sequence[Mapping[str, Any]]:
+        calls.append(1)
+        if len(calls) == 1:
+            return [
+                {
+                    "worker": "workflow",
+                    "status": "stale",
+                    "startupRevision": "old",
+                    "currentRevision": "new",
+                    "busy": True,
+                }
+            ]
+        return [
+            {
+                "worker": "workflow",
+                "status": "unknown",
+                "startupRevision": "unknown",
+                "currentRevision": "new",
+                "busy": True,
+            }
+        ]
+
+    async def _restarter(stale: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
+        return {"restarted": ["workflow"], "drained": [], "failed": []}
+
+    executor = _update_executor(checker=_checker, restarter=_restarter)
+    with pytest.raises(ToolFailure) as exc_info:
+        await executor.execute(_update_inputs())
+    assert exc_info.value.error_code == "DEPLOYMENT_STALE_WORKER_CODE"
+    assert len(calls) >= 3  # initial check + bounded post-restart rechecks
     assert "stale_code" in str(exc_info.value.details)

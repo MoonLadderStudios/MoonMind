@@ -1079,10 +1079,14 @@ _api_start_time = time.monotonic()
 # rewrites the bind-mounted sources under a long-lived API process.
 try:
     from moonmind.workflows.temporal.worker_code_identity import (
-        resolve_worker_code_identity as _resolve_api_code_identity,
+        record_worker_startup_identity as _record_api_code_identity,
     )
 
-    _API_STARTUP_CODE_IDENTITY = _resolve_api_code_identity()
+    # Record through the shared process-wide startup identity so
+    # current_worker_code_revision() (used for AgentRun/UserWorkflow
+    # metadata) reports this process's actual import-time identity instead
+    # of lazily resolving a possibly newer on-disk checkout.
+    _API_STARTUP_CODE_IDENTITY = _record_api_code_identity()
 except Exception:  # pragma: no cover - best-effort startup snapshot
     _API_STARTUP_CODE_IDENTITY = None
 
@@ -1195,7 +1199,7 @@ async def health_check():
             resolve_checkout_code_identity,
         )
 
-        checkout = resolve_checkout_code_identity()
+        checkout = await asyncio.to_thread(resolve_checkout_code_identity)
         if _API_STARTUP_CODE_IDENTITY is not None:
             api_freshness = evaluate_worker_freshness(
                 name="api",
@@ -1215,8 +1219,10 @@ async def health_check():
         code_freshness["api"] = api_freshness.to_payload()
         workers = [
             item.to_payload()
-            for item in collect_worker_code_freshness(
-                readiness_urls_from_env(), current=checkout
+            for item in await asyncio.to_thread(
+                collect_worker_code_freshness,
+                readiness_urls_from_env(),
+                current=checkout,
             )
         ]
         code_freshness["workers"] = workers

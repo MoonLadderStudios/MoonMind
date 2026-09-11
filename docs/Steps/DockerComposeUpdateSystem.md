@@ -715,9 +715,15 @@ the checkout before new runs are admitted:
    ones (bounded graceful restart — never killed mid-activity), and fails the
    update loudly with `reasonCode=stale_code` when a stale worker cannot be
    restarted (for example the excluded deployment-control runner itself, which
-   must be recreated separately). New `MoonMind.UserWorkflow` admissions are
+   must be recreated separately) or when a restarted worker stays
+   unreachable/`unknown` after bounded rechecks (absence of evidence is not
+   proof of freshness). Bare readiness URLs take their hostname as the worker
+   name so restart planning stays addressable. New `MoonMind.UserWorkflow`
+   admissions are
    refused with `stale_code` while every known worker serving the queue is
-   stale.
+   stale. The API and the deployment-control worker ship the same default
+   workflow readiness target as the workflow worker, so neither gate is
+   silently disabled on a default Compose installation.
 4. Every worker records its startup code identity in AgentRun/UserWorkflow
    metadata (`workerCodeRevision`) so post-incident analysis can tell which
    revision executed each step.

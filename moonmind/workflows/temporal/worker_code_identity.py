@@ -18,11 +18,12 @@ import hashlib
 import json
 import os
 import subprocess
-import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlsplit
 
 UNKNOWN = "unknown"
 STALE_CODE_REASON = "stale_code"
@@ -33,9 +34,7 @@ _READINESS_URLS_ENV_KEY = "MOONMIND_WORKER_READINESS_URLS"
 _WORKFLOW_READINESS_URL_ENV_KEY = "TEMPORAL_WORKFLOW_READINESS_URL"
 
 _MAX_DIGEST_FILES = 10000
-_DIGEST_CACHE_TTL_SECONDS = 60.0
 
-_digest_cache: dict[str, tuple[float, str | None]] = {}
 _STARTUP_IDENTITY: "WorkerCodeIdentity | None" = None
 
 
@@ -135,13 +134,30 @@ def resolve_git_revision(
     return head, "git"
 
 
-def compute_package_digest(package_root: str | Path | None = None) -> str | None:
-    """Return a sha256 digest over the ``moonmind`` package ``*.py`` sources."""
+def _default_digest_roots() -> list[Path]:
+    """Return every bind-mounted source root owned by this process.
 
-    root = _package_root(package_root)
-    if not root.is_dir():
-        return None
-    hasher = hashlib.sha256()
+    The canonical Compose services bind-mount and execute ``moonmind``,
+    ``api_service``, and ``services`` side by side, while ``.git`` is
+    excluded from the image and most services have no build SHA. A digest
+    over ``moonmind`` alone misses pulls that touch only an API route or a
+    worker launcher, so freshness hashing covers every source root that
+    exists next to the ``moonmind`` package.
+    """
+
+    package = _package_root()
+    roots = [package]
+    app_root = package.parent
+    for name in ("api_service", "services"):
+        candidate = app_root / name
+        if candidate.is_dir() and candidate != package:
+            roots.append(candidate)
+    return roots
+
+
+def _hash_source_root(hasher: Any, root: Path, label: str) -> int:
+    """Mix one source root's ``*.py`` files into ``hasher``; return file count."""
+
     try:
         candidates = sorted(
             path
@@ -149,9 +165,7 @@ def compute_package_digest(package_root: str | Path | None = None) -> str | None
             if "__pycache__" not in path.parts
         )
     except OSError:
-        return None
-    if not candidates:
-        return None
+        return 0
     count = 0
     for path in candidates:
         if count >= _MAX_DIGEST_FILES:
@@ -161,25 +175,38 @@ def compute_package_digest(package_root: str | Path | None = None) -> str | None
             content = path.read_bytes()
         except OSError:
             continue
+        hasher.update(label.encode("utf-8"))
+        hasher.update(b"\x00")
         hasher.update(relative.encode("utf-8"))
         hasher.update(b"\x00")
         hasher.update(content)
         hasher.update(b"\x00")
         count += 1
-    if count == 0:
+    return count
+
+
+def compute_package_digest(package_root: str | Path | None = None) -> str | None:
+    """Return a sha256 digest over the bind-mounted ``*.py`` sources.
+
+    With no explicit root, every executable source root owned by the
+    process (``moonmind``, ``api_service``, ``services``) is hashed so a
+    host pull touching any of them changes the identity. An explicit root
+    hashes just that directory (used by tests and single-root callers).
+    """
+
+    if package_root is not None:
+        roots = [(_package_root(package_root), _package_root(package_root).name)]
+    else:
+        roots = [(root, root.name) for root in _default_digest_roots()]
+    hasher = hashlib.sha256()
+    total = 0
+    for root, label in roots:
+        if not root.is_dir():
+            continue
+        total += _hash_source_root(hasher, root, label)
+    if total == 0:
         return None
     return "sha256:" + hasher.hexdigest()
-
-
-def _cached_package_digest(package_root: str | Path | None = None) -> str | None:
-    key = str(_package_root(package_root))
-    now = time.monotonic()
-    cached = _digest_cache.get(key)
-    if cached is not None and now - cached[0] < _DIGEST_CACHE_TTL_SECONDS:
-        return cached[1]
-    digest = compute_package_digest(package_root)
-    _digest_cache[key] = (now, digest)
-    return digest
 
 
 def resolve_worker_code_identity(
@@ -204,10 +231,16 @@ def resolve_checkout_code_identity(
     environ: Mapping[str, str] | None = None,
     live_digest: bool = True,
 ) -> WorkerCodeIdentity:
-    """Resolve the code identity currently on disk (live, per-request)."""
+    """Resolve the code identity currently on disk (live, per-request).
+
+    The package digest is always recomputed fresh: in bind-mounted
+    containers ``.git`` is absent and the digest is the only freshness
+    signal, so a cached digest would keep reporting the pre-pull process
+    as healthy through the cache window after a host pull.
+    """
 
     revision, source = resolve_git_revision(environ=environ)
-    digest = _cached_package_digest(package_root) if live_digest else None
+    digest = compute_package_digest(package_root) if live_digest else None
     if revision is None and digest is None:
         return WorkerCodeIdentity(revision=None, digest=None, source=UNKNOWN)
     if revision is None:
@@ -236,10 +269,19 @@ def worker_startup_identity() -> WorkerCodeIdentity:
 
 
 def current_worker_code_revision() -> str:
-    """Return this process's startup code revision, or ``"unknown"``."""
+    """Return this process's startup code identity, or ``"unknown"``.
 
-    revision = (worker_startup_identity().revision or "").strip()
-    return revision or UNKNOWN
+    Falls back to the startup content digest when no revision is known:
+    in bind-mounted Compose workers git metadata and an explicit build SHA
+    are usually both absent, and the digest is still exact evidence of
+    which modules this process imported.
+    """
+
+    identity = worker_startup_identity()
+    revision = (identity.revision or "").strip()
+    if revision:
+        return revision
+    return (identity.digest or "").strip() or UNKNOWN
 
 
 def compare_code_identities(
@@ -346,10 +388,33 @@ def format_stale_code_message(stale: Sequence[WorkerCodeFreshness]) -> str:
     )
 
 
+def _worker_name_from_url(url: str) -> str:
+    """Derive a worker name from an unnamed readiness URL's hostname.
+
+    A bare URL such as ``http://temporal-worker-workflow:8080/readyz``
+    names its Compose service in the hostname, which restart planning can
+    map back to a service. Falling back to the URL itself would hand a
+    URL to ``docker compose restart`` as the service name and always fail
+    recovery, so unnamed entries resolve to the hostname (or the URL only
+    when no hostname parses).
+    """
+
+    try:
+        host = (urlsplit(url).hostname or "").strip()
+    except ValueError:
+        host = ""
+    return host or url
+
+
 def readiness_urls_from_env(
     environ: Mapping[str, str] | None = None,
 ) -> list[tuple[str, str]]:
-    """Return ``(name, url)`` worker readiness endpoints from the environment."""
+    """Return ``(name, url)`` worker readiness endpoints from the environment.
+
+    Entries may be ``name=url`` or a bare URL; bare URLs take the URL
+    hostname as the worker name so restart-capable targets stay
+    addressable (never the raw URL as a service name).
+    """
 
     env = os.environ if environ is None else environ
     urls: list[tuple[str, str]] = []
@@ -361,9 +426,9 @@ def readiness_urls_from_env(
                 continue
             if "=" in item:
                 name, url = item.split("=", 1)
-                name, url = name.strip() or url.strip(), url.strip()
+                name, url = name.strip() or _worker_name_from_url(url.strip()), url.strip()
             else:
-                name, url = item, item
+                name, url = _worker_name_from_url(item), item
             if url:
                 urls.append((name, url))
     workflow_url = str(env.get(_WORKFLOW_READINESS_URL_ENV_KEY) or "").strip()
@@ -389,16 +454,119 @@ def probe_worker_readiness(
     *,
     timeout: float = 2.0,
 ) -> dict[str, Any] | None:
-    """Fetch one worker ``/readyz`` payload best-effort; ``None`` when unknown."""
+    """Fetch one worker ``/readyz`` payload best-effort; ``None`` when unknown.
+
+    A worker running stale modules deliberately answers ``503`` with its
+    startup-recorded identity in the JSON body, so ``HTTPError`` responses
+    are parsed for their body instead of being discarded as unknown: a
+    discarded 503 body turns every stale worker into ``unknown``, fails
+    admission open, and hides the stale worker from recovery.
+    """
 
     try:
         request = urllib.request.Request(url, method="GET")
-        with _no_proxy_opener().open(request, timeout=timeout) as response:  # noqa: S310
-            body = response.read()
+        try:
+            with _no_proxy_opener().open(request, timeout=timeout) as response:  # noqa: S310
+                body = response.read()
+        except urllib.error.HTTPError as http_err:
+            try:
+                body = http_err.read()
+            except Exception:
+                return None
         payload = json.loads(body.decode("utf-8"))
     except Exception:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _startup_identity_from_payload(payload: Mapping[str, Any]) -> WorkerCodeIdentity:
+    """Build a startup-recorded identity from one ``/readyz`` payload."""
+
+    return WorkerCodeIdentity(
+        revision=str(payload.get("codeRevision") or "").strip() or None,
+        digest=str(payload.get("codeDigest") or "").strip() or None,
+        source=str(payload.get("codeIdentitySource") or "").strip() or UNKNOWN,
+    )
+
+
+def _children_freshness(
+    name: str,
+    payload: Mapping[str, Any],
+    checkout: WorkerCodeIdentity,
+) -> list[WorkerCodeFreshness] | None:
+    """Expand a workflow-group readiness envelope into per-lane freshness.
+
+    The default Compose topology points ``TEMPORAL_WORKFLOW_READINESS_URL``
+    at the workflow worker-group supervisor (port 8080), whose response
+    stores per-process readiness under ``children`` and carries no
+    top-level ``codeRevision``/``codeDigest``. Reading only the top-level
+    fields would classify the whole fleet as ``unknown`` on every
+    successful response, so each child identity is compared with the
+    checkout and reported as ``<group>/<lane>``. Returns ``None`` when
+    the payload carries no child identities (caller falls back to the
+    top-level fields).
+    """
+
+    children = payload.get("children")
+    if not isinstance(children, list) or not children:
+        return None
+    lanes = [child for child in children if isinstance(child, Mapping)]
+    if not lanes:
+        return None
+    seen: dict[str, int] = {}
+    results: list[WorkerCodeFreshness] = []
+    for index, child in enumerate(lanes):
+        label = (
+            str(child.get("fleet") or child.get("worker") or f"child-{index}").strip()
+            or f"child-{index}"
+        )
+        occurrence = seen.get(label, 0)
+        seen[label] = occurrence + 1
+        unique = label if occurrence == 0 else f"{label}-{occurrence}"
+        startup = _startup_identity_from_payload(child)
+        freshness = evaluate_worker_freshness(
+            name=f"{name}/{unique}", startup=startup, current=checkout
+        )
+        results.append(freshness)
+    return results
+
+
+def payload_busy_hint(payload: Mapping[str, Any]) -> bool:
+    """Return a conservative busy hint for one readiness payload.
+
+    Returns ``True`` (drain, never kill) unless the payload explicitly
+    reports an idle worker: ``busy`` false with no in-flight activity
+    counters. Unknown busyness drains rather than interrupting
+    potentially long-running activities with an immediate restart.
+    """
+
+    def _active_count(value: Any) -> int | None:
+        try:
+            count = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        return count if count >= 0 else None
+
+    candidates: list[Mapping[str, Any]] = [payload]
+    children = payload.get("children")
+    if isinstance(children, list):
+        lanes = [child for child in children if isinstance(child, Mapping)]
+        if lanes:
+            # The group envelope itself is an aggregate: busyness is
+            # decided by the per-lane payloads, not the envelope.
+            candidates = lanes
+    for candidate in candidates:
+        if candidate.get("busy") is True:
+            return True
+        for key in ("activeActivities", "inFlightActivities", "pendingActivities"):
+            count = _active_count(candidate.get(key))
+            if count is not None and count > 0:
+                return True
+        if candidate.get("busy") is not False:
+            # No explicit idle signal: conservatively drain rather than
+            # interrupting potentially long-running activities.
+            return True
+    return False
 
 
 def collect_worker_code_freshness(
@@ -426,11 +594,11 @@ def collect_worker_code_freshness(
                 )
             )
             continue
-        startup = WorkerCodeIdentity(
-            revision=str(payload.get("codeRevision") or "").strip() or None,
-            digest=str(payload.get("codeDigest") or "").strip() or None,
-            source=str(payload.get("codeIdentitySource") or "").strip() or UNKNOWN,
-        )
+        children = _children_freshness(name, payload, checkout)
+        if children is not None:
+            results.extend(children)
+            continue
+        startup = _startup_identity_from_payload(payload)
         results.append(evaluate_worker_freshness(name=name, startup=startup, current=checkout))
     return results
 
