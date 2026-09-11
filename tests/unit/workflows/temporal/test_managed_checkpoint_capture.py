@@ -132,7 +132,9 @@ async def test_managed_capture_trusts_the_resolved_workspace_for_every_git_comma
         run_store=object(), artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put
@@ -203,7 +205,9 @@ async def test_managed_capture_is_binary_safe_and_idempotent(tmp_path) -> None:
     )
     artifacts: dict[str, bytes] = {}
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         ref = "artifact://" + hashlib.sha256(payload).hexdigest()
         artifacts[ref] = payload
         return ref
@@ -299,7 +303,9 @@ async def test_managed_capture_coalesces_temporal_heartbeat_backpressure(
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         await asyncio.sleep(0.01)
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
@@ -362,7 +368,9 @@ async def test_managed_capture_heartbeats_during_slow_archive_file(
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     original_addfile = tarfile.TarFile.addfile
@@ -432,7 +440,9 @@ async def test_managed_capture_archive_digest_is_deterministic(tmp_path) -> None
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put
@@ -501,7 +511,9 @@ async def test_managed_capture_skips_deleted_sensitive_and_gitlink_paths(tmp_pat
     )
     artifacts: dict[str, bytes] = {}
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         ref = "artifact://" + hashlib.sha256(payload).hexdigest()
         artifacts[ref] = payload
         return ref
@@ -558,7 +570,9 @@ async def test_managed_capture_accepts_session_record_bound_to_parent_workflow(
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put
@@ -621,7 +635,9 @@ async def test_managed_capture_accepts_cross_step_workflow_session_baseline(
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put
@@ -688,7 +704,9 @@ async def test_managed_capture_accepts_terminal_prior_execution_as_retry_baselin
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put
@@ -750,7 +768,9 @@ async def test_managed_capture_accepts_terminal_verifier_as_remediation_baseline
         run_store=store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, _kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, _kind: str, link: object = None
+    ) -> str:
         return "artifact://" + hashlib.sha256(payload).hexdigest()
 
     activities._put_managed_checkpoint_artifact = put
