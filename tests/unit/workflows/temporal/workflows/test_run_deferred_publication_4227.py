@@ -131,10 +131,84 @@ def test_reenter_gate_writes_deferred_finalization_outcome(
     row = deferred_workflow._step_ledger_row_for("resolve-pr")
     assert row is not None
     outcome = row["finalizationOutcome"]
-    assert outcome["status"] in {"not_required", "deferred"}
+    assert outcome["status"] == "unsupported"
+    assert outcome["criticality"] == "unsupported"
     assert outcome["phase"] == "publication"
     assert outcome["retryCount"] == 0
     assert outcome.get("failureCode") is None
+
+
+def test_rejected_continuation_does_not_defer_publication(
+    deferred_workflow: MoonMindRunWorkflow,
+) -> None:
+    """A rejected/unowned continuation must fail closed, not defer."""
+
+    for recovery in (
+        "continuation_rejected_unowned",
+        "continuation_rejected_failure_provenance",
+        "continuation_rejected_ownership",
+        "continuation_rejected_schema",
+    ):
+        outputs = {
+            "mergeAutomationDisposition": "reenter_gate",
+            "terminalContractOutcome": "continuation_requested",
+            "terminalContractRecoveryOutcome": recovery,
+        }
+        assert (
+            deferred_workflow._terminal_publication_deferred_reason(outputs) is None
+        ), recovery
+
+    # Missing recovery or disallowed disposition also fails closed.
+    assert (
+        deferred_workflow._terminal_publication_deferred_reason(
+            {
+                "mergeAutomationDisposition": "reenter_gate",
+                "terminalContractOutcome": "continuation_requested",
+            }
+        )
+        is None
+    )
+    assert (
+        deferred_workflow._terminal_publication_deferred_reason(
+            {
+                "mergeAutomationDisposition": "merged",
+                "terminalContractOutcome": "continuation_requested",
+                "terminalContractRecoveryOutcome": "durable_parent_handoff",
+            }
+        )
+        is None
+    )
+
+
+def test_deferred_ledger_outcome_validates_against_schema(
+    deferred_workflow: MoonMindRunWorkflow,
+) -> None:
+    """The deferred ledger row must pass StepLedgerSnapshotModel validation."""
+
+    from moonmind.schemas.temporal_models import StepLedgerSnapshotModel
+
+    deferred_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "resolve-pr",
+            "finalizationOutcome": {
+                "status": "not_started",
+                "phase": "after_execution_checkpoint",
+                "criticality": "required",
+                "retryCount": 0,
+            },
+        }
+    ]
+    deferred_workflow._rebuild_step_ledger_index()
+    deferred_workflow._record_execution_context(
+        node_id="resolve-pr",
+        execution_result={"outputs": _reenter_gate_outputs()},
+    )
+    deferred_workflow._apply_deferred_publication(
+        reason=deferred_workflow._publish_reason or "deferred",
+        logical_step_id="resolve-pr",
+    )
+    ledger = deferred_workflow.get_step_ledger()
+    StepLedgerSnapshotModel.model_validate(ledger)
 
 
 def test_reenter_gate_completion_is_not_a_publication_failure(
@@ -238,7 +312,8 @@ def test_deferred_publication_does_not_spend_finalization_retry(
     row = deferred_workflow._step_ledger_row_for("resolve-pr")
     assert row is not None
     outcome = row["finalizationOutcome"]
-    assert outcome["status"] in {"not_required", "deferred"}
+    assert outcome["status"] == "unsupported"
+    assert outcome["criticality"] == "unsupported"
     assert outcome["retryCount"] == 0
     assert outcome.get("failureCode") != FINALIZATION_PUBLICATION_FAILED
     assert deferred_workflow._publish_status == "not_required"
