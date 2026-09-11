@@ -1348,6 +1348,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
         try:
             os.unlink(temporary)
         except OSError:
+            # Best-effort temp cleanup only: the file may already be gone;
+            # the original error propagating below is what matters.
             pass
         raise
 
