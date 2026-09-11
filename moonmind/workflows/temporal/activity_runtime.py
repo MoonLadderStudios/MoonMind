@@ -337,6 +337,24 @@ def _checkpoint_payload_identity(payload: bytes) -> tuple[str, int]:
     return "sha256:" + hashlib.sha256(payload).hexdigest(), len(payload)
 
 
+def _saved_work_execution_link(model: Any) -> ExecutionRef:
+    """Build the owning-execution link for every saved-work artifact.
+
+    Artifacts stored without an execution link are readable only by their
+    creating principal, so the workflow owner cannot read the returned
+    ``savedWorkRef`` and the objects stay absent from execution listings.
+    Linking each saved-work object to the capture identity/namespace keeps
+    ownership resolvable through ``principal_owns_linked_execution``.
+    """
+
+    return ExecutionRef(
+        namespace=model.artifact_namespace,
+        workflow_id=model.identity.workflow_id,
+        run_id=model.identity.run_id,
+        link_type="output.checkpoint",
+    )
+
+
 def _saved_work_diff_to_deltas(
     diff_raw: str, excluded: set[str]
 ) -> list[dict[str, Any]]:
@@ -6105,6 +6123,17 @@ class TemporalAgentRuntimeActivities:
             export_digest="pending-tar-stream",
             location="checkpoint.archive.tar",
         )
+        if tar_scan["disposition"] == "blocked":
+            # Quarantine before any upload: a credential-shaped export must
+            # never be persisted as a normal COMPLETE artifact, even though
+            # capture reports failure. The digest-bound re-check below stays
+            # as defense-in-depth after the final export digest is known.
+            tar_spool.close()
+            raise temporal_exceptions.ApplicationError(
+                "checkpoint archive failed export secret scanning",
+                type="CHECKPOINT_CAPTURE_SECRET_DETECTED",
+                non_retryable=True,
+            )
         tar_spool.seek(0)
         gzip_spool = tempfile.TemporaryFile(prefix="saved-work-capture-gz-")
         with gzip.GzipFile(fileobj=gzip_spool, mode="wb", mtime=0) as compressed:
@@ -6200,6 +6229,7 @@ class TemporalAgentRuntimeActivities:
             archive_payload,
             "application/vnd.moonmind.worktree-archive",
             "checkpoint_archive",
+            link=_saved_work_execution_link(model),
         )
         created_at = (record.finished_at or record.started_at).isoformat()
         staged_paths = []
@@ -6246,6 +6276,7 @@ class TemporalAgentRuntimeActivities:
             manifest_payload,
             "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
             "checkpoint_manifest",
+            link=_saved_work_execution_link(model),
         )
         logger.info("managed_checkpoint_capture_files files=%s", len(entries))
         logger.info("managed_checkpoint_capture_bytes bytes=%s", len(archive_payload))
@@ -6325,6 +6356,7 @@ class TemporalAgentRuntimeActivities:
             delta_payload,
             "application/vnd.moonmind.saved-work-delta+json;version=1",
             "checkpoint_delta",
+            link=_saved_work_execution_link(model),
         )
         lowered_paths: dict[str, str] = {}
         case_collisions: list[str] = []
@@ -6487,6 +6519,7 @@ class TemporalAgentRuntimeActivities:
             saved_work_payload,
             "application/vnd.moonmind.saved-work-manifest+json;version=1",
             "saved_work_manifest",
+            link=_saved_work_execution_link(model),
         )
         # Verify required objects and dependency metadata, then commit the
         # immutable manifest/reference set. An upload without a committed
@@ -6528,7 +6561,11 @@ class TemporalAgentRuntimeActivities:
         return compact.model_dump(by_alias=True, mode="json", exclude_none=True)
 
     async def _put_managed_checkpoint_artifact(
-        self, payload: bytes, content_type: str, artifact_kind: str
+        self,
+        payload: bytes,
+        content_type: str,
+        artifact_kind: str,
+        link: ExecutionRef | dict[str, Any] | None = None,
     ) -> str:
         completed, _reused = (
             await self._artifact_service.put_content_addressed_payload_complete(
@@ -6536,6 +6573,7 @@ class TemporalAgentRuntimeActivities:
                 payload=payload,
                 content_type=content_type,
                 scope=artifact_kind,
+                link=link,
                 metadata_json={"artifact_kind": artifact_kind},
             )
         )
