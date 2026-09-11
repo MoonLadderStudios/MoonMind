@@ -344,7 +344,14 @@ def run_container_job(
     poll_seconds: float = 2.0,
     client: ContainerJobMcpClient | None = None,
 ) -> ContainerJobResult:
-    """Submit one job, wait durably, and return authoritative evidence refs."""
+    """Submit one job, wait durably, and return authoritative evidence refs.
+
+    The wait is bounded: ``timeoutSeconds`` from the job spec plus a 120s
+    terminal-read grace. A ``moonmind container python-tests`` CLI call that
+    never returns (MoonLadderStudios/MoonMind#4226 idle-host signature)
+    therefore fails with :class:`ContainerJobCliError` instead of hanging
+    the calling Omnigent turn indefinitely.
+    """
 
     source = os.environ if env is None else env
     submission = container_job_submission(
