@@ -18,6 +18,11 @@ annotations:
   implementsPreset: github-issue-implement
   issueProvider: github
   output: pull-request
+  titleEnrichment:
+    enabled: true
+    provider: github
+    sourceTool: github.load_issue_preset_brief
+    targetStyle: base-colon-hash
   githubIssueUpdate:
     inProgress:
       comment: true

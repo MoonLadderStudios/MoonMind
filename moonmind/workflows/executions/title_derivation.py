@@ -783,5 +783,140 @@ def _mapping(value: Any) -> Mapping[str, Any] | None:
     return value if isinstance(value, Mapping) else None
 
 
+# --- Shared display-title policy (MoonLadderStudios/MoonMind#4099) ---
+#
+# One deterministic transition shared by creation, manual ``SetTitle`` renames,
+# and automatic issue-search enrichment. Dependency-free (stdlib only) so it is
+# safe to import inside the Temporal workflow sandbox.
+#
+# State carried alongside the display title (memo/workflow fields):
+# - ``base_title``: frozen generated base label (e.g. the preset label).
+# - ``display_title``: current visible title.
+# - ``provenance``: ``"user_explicit"`` protects against automatic updates,
+#   ``"generated"`` remains eligible for enrichment.
+# - ``revision``: monotonic ordering guard; stale results must not overwrite
+#   newer title decisions.
+
+TITLE_PROVENANCE_USER_EXPLICIT = "user_explicit"
+TITLE_PROVENANCE_GENERATED = "generated"
+
+_TITLE_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def normalize_display_title(value: Any) -> str | None:
+    """Validate and normalize display-safe title text with the shared policy.
+
+    Returns the normalized title, or ``None`` when the value is
+    empty/whitespace-only or unsafe. The 150-char creation/display limit is
+    reused here rather than introducing another limit.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    text = str(value).strip() if isinstance(value, (str, int)) else ""
+    if not text:
+        return None
+    # Check raw (stripped) text for control characters before whitespace
+    # collapsing: str.split() treats U+001C..U+001F (among others) as
+    # whitespace, which would otherwise silently convert them to spaces.
+    if _TITLE_CONTROL_CHARS_RE.search(text):
+        return None
+    text = " ".join(text.split())
+    if not text:
+        return None
+    if _TITLE_CONTROL_CHARS_RE.search(text):
+        return None
+    return text[:_MAX_TASK_TITLE_LENGTH] or None
+
+
+def render_issue_search_title(base_label: Any, issue_number: Any) -> str | None:
+    """Render the full generated title from the frozen base label + issue id.
+
+    Never appends to the current display title. Returns ``None`` when the
+    base label is missing or the issue number is not a positive int.
+    """
+    base = normalize_display_title(base_label)
+    try:
+        number = int(issue_number) if not isinstance(issue_number, bool) else 0
+    except (TypeError, ValueError):
+        return None
+    if not base or number <= 0:
+        return None
+    return f"{base}: #{number}"[:_MAX_TASK_TITLE_LENGTH] or None
+
+
+@dataclass(frozen=True)
+class TitleTransitionState:
+    base_title: str | None = None
+    display_title: str | None = None
+    provenance: str = TITLE_PROVENANCE_GENERATED
+    revision: int = 0
+
+
+@dataclass(frozen=True)
+class TitleTransitionResult:
+    state: TitleTransitionState
+    changed: bool
+    reason: str
+
+
+def apply_manual_title(
+    state: TitleTransitionState,
+    new_title: Any,
+) -> TitleTransitionResult:
+    """Apply an explicit user rename. Always marks provenance explicit.
+
+    A same-text manual rename still flips provenance to explicit when
+    necessary. Returns ``changed=False`` only when title AND provenance are
+    already exactly as requested (genuine no-op: no revision bump).
+    """
+    normalized = normalize_display_title(new_title)
+    if normalized is None:
+        raise ValueError("title is required and must be display-safe text")
+    if (
+        state.display_title == normalized
+        and state.provenance == TITLE_PROVENANCE_USER_EXPLICIT
+    ):
+        return TitleTransitionResult(state=state, changed=False, reason="no-op")
+    base = state.base_title or normalized
+    next_state = TitleTransitionState(
+        base_title=base,
+        display_title=normalized,
+        provenance=TITLE_PROVENANCE_USER_EXPLICIT,
+        revision=state.revision + 1,
+    )
+    return TitleTransitionResult(state=next_state, changed=True, reason="manual")
+
+
+def apply_issue_enrichment_title(
+    state: TitleTransitionState,
+    issue_number: Any,
+    *,
+    expected_revision: int | None = None,
+) -> TitleTransitionResult:
+    """Apply automatic ``<base>: #<number>`` enrichment at the mutation point.
+
+    Eligibility is evaluated here, not only before an async call: explicit
+    user titles are always protected, and a stale ``expected_revision``
+    never overwrites a newer title decision. Duplicate accepted results and
+    genuine no-ops are idempotent (no revision bump, no reorder).
+    """
+    if state.provenance == TITLE_PROVENANCE_USER_EXPLICIT:
+        return TitleTransitionResult(state=state, changed=False, reason="explicit")
+    if expected_revision is not None and expected_revision != state.revision:
+        return TitleTransitionResult(state=state, changed=False, reason="stale")
+    rendered = render_issue_search_title(state.base_title, issue_number)
+    if rendered is None:
+        return TitleTransitionResult(state=state, changed=False, reason="invalid")
+    if state.display_title == rendered:
+        return TitleTransitionResult(state=state, changed=False, reason="no-op")
+    next_state = TitleTransitionState(
+        base_title=state.base_title,
+        display_title=rendered,
+        provenance=TITLE_PROVENANCE_GENERATED,
+        revision=state.revision + 1,
+    )
+    return TitleTransitionResult(state=next_state, changed=True, reason="auto")
+
+
 def _normalize_key(key: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "", key.casefold())
