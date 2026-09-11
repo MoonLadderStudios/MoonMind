@@ -147,6 +147,8 @@ async def test_current_preset_requirements_admit_saved_schedule(boundary, runtim
             slug="github-issue-search-and-implement", scope="global", scope_ref=None
         )
     saved["requiredCapabilities"] = current["requiredCapabilities"]
+    # Refreshed schedules carry the author-scope choice (MoonLadderStudios/MoonMind#4257).
+    saved["task"]["appliedStepTemplates"][0]["inputs"] = {"include_all_authors": False}
     original = deepcopy(saved)
     assert (
         await workflow._run_planning_stage(
@@ -253,6 +255,8 @@ async def test_personal_preset_uses_execution_owner_without_global_fallback(boun
     workflow, _, sessions = boundary
     saved = parameters()
     saved["task"]["appliedStepTemplates"][0]["scope"] = "personal"
+    # Refreshed personal schedule carries the author-scope choice (#4257).
+    saved["task"]["appliedStepTemplates"][0]["inputs"] = {"include_all_authors": False}
     async with sessions() as session:
         session.add(
             Preset(
@@ -316,6 +320,8 @@ async def test_new_current_include_capabilities_require_refresh(boundary, includ
     assert raised.value.details[0]["missingCapabilities"] == ["docker"]
     assert calls == [ACTIVITY]
     saved["requiredCapabilities"].append("docker")
+    # Refreshed schedule also carries the author-scope choice (#4257).
+    saved["task"]["appliedStepTemplates"][0]["inputs"] = {"include_all_authors": True}
     assert (
         await workflow._run_planning_stage(
             parameters=saved, input_ref=None, plan_ref="art_refreshed_plan"
@@ -358,3 +364,79 @@ async def test_invalid_current_include_graph_never_launches_work(boundary, inval
         raised.value.details[0]["presets"][0]["reason"]
         == "preset_composition_unavailable"
     )
+
+
+# ---------------------------------------------------------------------------
+# GitHub issue-search author scope (MoonLadderStudios/MoonMind#4257)
+# ---------------------------------------------------------------------------
+
+
+async def _with_current_capabilities(saved, sessions):
+    async with sessions() as session:
+        catalog = PresetCatalogService(session)
+        current = await catalog.get_template(
+            slug="github-issue-search-and-implement", scope="global", scope_ref=None
+        )
+    saved["requiredCapabilities"] = current["requiredCapabilities"]
+    return saved
+
+
+async def test_pre_change_search_schedule_requires_scope_refresh(boundary):
+    """A frozen schedule without a scope choice stops before new selection."""
+    workflow, calls, sessions = boundary
+    saved = await _with_current_capabilities(parameters(), sessions)
+    original = deepcopy(saved)
+    with pytest.raises(ApplicationError, match="plan refresh") as raised:
+        await workflow._run_planning_stage(
+            parameters=saved, input_ref=None, plan_ref="art_saved_plan"
+        )
+    assert raised.value.type == "saved_preset_capabilities_stale"
+    assert raised.value.non_retryable
+    details = raised.value.details[0]
+    assert details["code"] == "github_issue_search_author_scope_stale"
+    assert details["missingInputs"] == ["include_all_authors"]
+    assert details["presets"][0]["reason"] == "author_scope_choice_missing"
+    # Capability check ran; no new plan was generated and inputs are untouched.
+    assert calls == [ACTIVITY]
+    assert saved == original
+
+
+@pytest.mark.parametrize("scope_value", [False, True])
+async def test_refreshed_scope_choice_survives_saved_scheduling(boundary, scope_value):
+    """Authored true/false persist through reload and dispatch."""
+    workflow, calls, sessions = boundary
+    saved = await _with_current_capabilities(parameters(), sessions)
+    saved["task"]["appliedStepTemplates"][0]["inputs"] = {
+        "include_all_authors": scope_value
+    }
+    original = deepcopy(saved)
+    assert (
+        await workflow._run_planning_stage(
+            parameters=saved, input_ref=None, plan_ref="art_saved_plan"
+        )
+        == "art_saved_plan"
+    )
+    assert calls == [ACTIVITY]
+    assert (
+        saved["task"]["appliedStepTemplates"][0]["inputs"]["include_all_authors"]
+        is scope_value
+    )
+    assert saved == original
+
+
+async def test_continued_run_keeps_pinned_search_behavior(boundary, monkeypatch):
+    """Durable continuations keep admitted progress without a scope refresh."""
+    workflow, calls, sessions = boundary
+    saved = await _with_current_capabilities(parameters(), sessions)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "info",
+        lambda: SimpleNamespace(continued_run_id="old-run"),
+    )
+    assert (
+        await workflow._run_planning_stage(
+            parameters=saved, input_ref=None, plan_ref="art_saved_plan"
+        )
+        == "art_saved_plan"
+    )
+    assert calls == []

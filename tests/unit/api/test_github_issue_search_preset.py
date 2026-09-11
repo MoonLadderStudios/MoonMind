@@ -1139,3 +1139,169 @@ async def test_finalize_with_mixed_labels_and_published_pr_ends_degraded_complet
     ]
     assert comment_posts, "expected the PR handoff comment to be posted"
     assert any(pr_url in request.content.decode() for request in comment_posts)
+
+
+# ---------------------------------------------------------------------------
+# Author-scope catalog contract (MoonLadderStudios/MoonMind#4257, AC1/AC2/R7)
+# ---------------------------------------------------------------------------
+
+
+async def _synced_catalog_session(tmp_path, session_factory_holder=None):
+    seeds = tmp_path / "seeds"
+    seeds.mkdir(exist_ok=True)
+    shutil.copy(
+        Path(__file__).resolve().parents[3]
+        / "api_service/data/presets"
+        / f"{PRESET}.yaml",
+        seeds,
+    )
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/catalog.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session = sessionmaker(engine, class_=AsyncSession)()
+    catalog = PresetCatalogService(session)
+    await catalog.sync_seed_templates(seed_dir=seeds)
+    return engine, session, catalog
+
+
+@pytest.mark.asyncio
+async def test_catalog_definition_exposes_all_authors_checkbox_below_search(tmp_path):
+    """The normalized generated-UI contract: order, widget, help, default."""
+    engine, session, catalog = await _synced_catalog_session(tmp_path)
+    try:
+        current = await catalog.get_template(
+            slug=PRESET, scope="global", scope_ref=None
+        )
+    finally:
+        await session.close()
+        await engine.dispose()
+    properties = current["inputSchema"]["properties"]
+    names = list(properties)
+    assert names.index("include_all_authors") == names.index("issue_search") + 1
+    prop = properties["include_all_authors"]
+    assert prop["type"] == "boolean"
+    assert prop["title"] == "Include issues created by other users"
+    assert (
+        prop["description"]
+        == "By default, only issues created by the GitHub account used for this search are eligible."
+    )
+    assert prop["default"] is False
+    assert current["uiSchema"]["include_all_authors"] == {"widget": "checkbox"}
+    assert current["defaults"]["include_all_authors"] is False
+    assert current["presetDigest"]
+    schema_inputs = {item["name"]: item for item in current["inputs"]}
+    assert schema_inputs["include_all_authors"]["type"] == "boolean"
+    assert schema_inputs["include_all_authors"]["default"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "submitted, expected",
+    [({}, False), ({"include_all_authors": False}, False), ({"include_all_authors": True}, True)],
+)
+async def test_catalog_expansion_carries_scope_choice_to_tool_binding(
+    tmp_path, submitted, expected
+):
+    """Omitted input materializes false; authored true/false survive expansion."""
+    engine, session, catalog = await _synced_catalog_session(tmp_path)
+    try:
+        expanded = await catalog.expand_template(
+            slug=PRESET,
+            scope="global",
+            scope_ref=None,
+            inputs=submitted,
+            context={"repository": REPOSITORY},
+        )
+    finally:
+        await session.close()
+        await engine.dispose()
+    tool_inputs = expanded["steps"][0]["tool"]["inputs"]
+    assert tool_inputs["includeAllAuthors"] is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed", ["false", "true", 1, 0, [], {}])
+async def test_catalog_expansion_rejects_malformed_scope_values(tmp_path, malformed):
+    # Explicit null/"" follow the shared catalog omitted convention for every
+    # input type; the strict typed tool boundary still rejects them
+    # (invalid_author_scope_input) instead of coercing with truthiness.
+    from api_service.services.presets.catalog import PresetValidationError
+
+    engine, session, catalog = await _synced_catalog_session(tmp_path)
+    try:
+        with pytest.raises(PresetValidationError):
+            await catalog.expand_template(
+                slug=PRESET,
+                scope="global",
+                scope_ref=None,
+                inputs={"include_all_authors": malformed},
+                context={"repository": REPOSITORY},
+            )
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_seed_sync_refreshes_builtin_without_touching_custom_presets(tmp_path):
+    """Persisted deployments receive the updated built-in definition in place."""
+    from sqlalchemy import select
+
+    from api_service.db.models import Preset, PresetScopeType
+
+    engine, session, catalog = await _synced_catalog_session(tmp_path)
+    try:
+        stale_inputs = [
+            {"name": "issue_search", "label": "GitHub Issue Search", "type": "text"},
+            {"name": "repository", "label": "Repository", "type": "text"},
+        ]
+        template = (
+            await session.execute(
+                select(Preset).where(
+                    Preset.slug == PRESET,
+                    Preset.scope_type == PresetScopeType.GLOBAL,
+                )
+            )
+        ).scalar_one()
+        template.inputs_schema = stale_inputs
+        template.steps = []
+        custom = Preset(
+            slug="team-triage",
+            scope_type=PresetScopeType.PERSONAL,
+            scope_ref="owner-1",
+            title="Team triage",
+            description="Custom preset",
+            required_capabilities=[],
+            inputs_schema=[{"name": "note", "type": "text"}],
+            steps=[],
+            annotations={},
+        )
+        session.add(custom)
+        await session.commit()
+        result = await catalog.sync_seed_templates(
+            seed_dir=tmp_path / "seeds",
+        )
+        assert result.updated >= 1
+        refreshed = (
+            await session.execute(
+                select(Preset).where(
+                    Preset.slug == PRESET,
+                    Preset.scope_type == PresetScopeType.GLOBAL,
+                )
+            )
+        ).scalar_one()
+        names = [item["name"] for item in refreshed.inputs_schema]
+        assert "include_all_authors" in names
+        assert "includeAllAuthors" in json.dumps(refreshed.steps)
+        untouched = (
+            await session.execute(
+                select(Preset).where(
+                    Preset.slug == "team-triage",
+                )
+            )
+        ).scalar_one()
+        assert untouched.inputs_schema == [{"name": "note", "type": "text"}]
+        assert untouched.title == "Team triage"
+    finally:
+        await session.close()
+        await engine.dispose()

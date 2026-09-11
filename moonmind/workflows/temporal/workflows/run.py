@@ -73,6 +73,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.executions.routing import _coerce_bool
     from moonmind.workflows.executions.preset_readiness import (
         SAVED_PRESET_CAPABILITY_READINESS_PATCH,
+        github_issue_search_scope_refresh_needed,
         saved_preset_capability_check,
     )
     from moonmind.workflows.executions.prepared_context import (
@@ -11917,6 +11918,23 @@ class MoonMindRunWorkflow:
                         "Saved schedule capability readiness is unavailable; inspect "
                         "the schedule's preset definitions before retrying.",
                         type="saved_preset_capabilities_unavailable",
+                        non_retryable=True,
+                    )
+                # Scope-specific compatibility (MoonLadderStudios/MoonMind#4257):
+                # a frozen GitHub issue-search schedule saved before the
+                # self-authored default carries no author-scope choice. Stop
+                # with refresh-required before any new selection; refresh
+                # through current authoring materializes false. Capability
+                # gaps report first; this check is deterministic in the saved
+                # parameters. Historical versioning stays with the
+                # patch/continuation guards above, and already-selected
+                # issues continue without a new search downstream.
+                scope_refresh = github_issue_search_scope_refresh_needed(parameters)
+                if scope_refresh is not None:
+                    raise exceptions.ApplicationError(
+                        str(scope_refresh["message"]),
+                        dict(scope_refresh),
+                        type="saved_preset_capabilities_stale",
                         non_retryable=True,
                     )
         if plan_ref:
