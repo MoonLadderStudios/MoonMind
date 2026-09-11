@@ -10,6 +10,8 @@ from moonmind.container_job_cli import (
 
 _ENV = {
     "MOONMIND_AGENT_RUN_ID": "run-4226",
+    "MOONMIND_RUNTIME_ID": "runtime-4226",
+    "MOONMIND_CONTAINER_JOBS_SESSION_ID": "session-4226",
     "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "token-4226",
     "MOONMIND_MANAGED_WORKSPACE": "/workspace",
     "MOONMIND_CONTAINER_JOBS_MCP_URL": "http://localhost:9999/mcp",
@@ -36,8 +38,21 @@ def test_container_job_cli_wait_is_bounded_not_indefinite(
     """A never-terminal job (the #4226 idle-host signature) raises promptly."""
 
     client = _NeverTerminalClient()
-    # Force the deadline to expire immediately without sleeping the suite.
-    monkeypatch.setattr("moonmind.container_job_cli.time.monotonic", lambda: 10**9)
+    # Controllable clock: advance on every monotonic read so the
+    # timeoutSeconds + 120s grace deadline expires without real sleeping.
+    # A constant monotonic mock would never reach the deadline (the loop
+    # could never expire); an advancing clock proves the wait is bounded.
+    ticks = {"t": 1000.0}
+
+    def _fake_monotonic() -> float:
+        value = ticks["t"]
+        ticks["t"] += 30.0
+        return value
+
+    monkeypatch.setattr(
+        "moonmind.container_job_cli.time.monotonic", _fake_monotonic
+    )
+    monkeypatch.setattr("moonmind.container_job_cli.time.sleep", lambda _s: None)
 
     with pytest.raises(ContainerJobCliError, match="did not reach a terminal"):
         run_container_job(

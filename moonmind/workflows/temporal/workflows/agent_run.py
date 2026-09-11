@@ -4373,6 +4373,68 @@ class MoonMindAgentRun:
                 f"{_MAX_OMNIGENT_CAPACITY_REQUEUE_ATTEMPTS}).",
             )
 
+    async def _execute_profile_bound_with_remaining_budget(
+        self,
+        *,
+        act_name: str,
+        request: Any,
+        admission: Any,
+        parent_info: Any,
+        stc_seconds: int,
+        admit_capacity_before_activity: bool,
+        execution_plan_admission: bool,
+    ) -> tuple[Any, Any]:
+        """Run the profile-bound lane with single-shot attempts.
+
+        MoonLadderStudios/MoonMind#4226: Temporal activity retries each
+        receive a fresh StartToClose, so a second attempt on the same
+        session must not get a fresh 6h budget. Each attempt runs with
+        ``maximum_attempts=1`` and attempt 2 inherits the parent's
+        remaining ScheduleToClose budget via
+        :func:`profile_bound_retry_start_to_close_seconds` instead of a
+        fresh full window.
+        """
+
+        single_attempt = RetryPolicy(
+            initial_interval=timedelta(seconds=5),
+            backoff_coefficient=2.0,
+            maximum_interval=timedelta(seconds=300),
+            maximum_attempts=1,
+        )
+        lane_start = workflow.now()
+        try:
+            return await self._execute_omnigent_with_admitted_capacity(
+                act_name=act_name,
+                request=request,
+                admission=admission,
+                parent_info=parent_info,
+                stc_seconds=stc_seconds,
+                admit_capacity_before_activity=admit_capacity_before_activity,
+                execution_plan_admission=execution_plan_admission,
+                retry_policy=single_attempt,
+            )
+        except CancelledError:
+            raise
+        except Exception:
+            elapsed = (workflow.now() - lane_start).total_seconds()
+            retry_stc = profile_bound_retry_start_to_close_seconds(
+                first_stc_seconds=stc_seconds,
+                elapsed_seconds=elapsed,
+            )
+            # One bounded continuation: attempt 2 inherits the remaining
+            # budget computed above (equal to the full window when the
+            # first attempt failed before the clock advanced).
+            return await self._execute_omnigent_with_admitted_capacity(
+                act_name=act_name,
+                request=request,
+                admission=admission,
+                parent_info=parent_info,
+                stc_seconds=retry_stc,
+                admit_capacity_before_activity=admit_capacity_before_activity,
+                execution_plan_admission=execution_plan_admission,
+                retry_policy=single_attempt,
+            )
+
     @staticmethod
     def _omnigent_capacity_requeue_reason(result_payload: Any) -> str | None:
         """Name the capacity this run lost after admission, if any.
@@ -6803,64 +6865,22 @@ class MoonMindAgentRun:
                                 # sizes attempt 2 from the parent's remaining
                                 # ScheduleToClose budget instead of a fresh
                                 # full window.
-                                single_attempt = RetryPolicy(
-                                    initial_interval=timedelta(seconds=5),
-                                    backoff_coefficient=2.0,
-                                    maximum_interval=timedelta(seconds=300),
-                                    maximum_attempts=1,
+                                (
+                                    result_payload,
+                                    admitted_at,
+                                ) = await self._execute_profile_bound_with_remaining_budget(
+                                    act_name=act_name,
+                                    request=request,
+                                    admission=admission,
+                                    parent_info=parent_info,
+                                    stc_seconds=stc_seconds,
+                                    admit_capacity_before_activity=(
+                                        admit_capacity_before_activity
+                                    ),
+                                    execution_plan_admission=(
+                                        use_omnigent_execution_plan_admission
+                                    ),
                                 )
-                                lane_start = workflow.now()
-                                try:
-                                    (
-                                        result_payload,
-                                        admitted_at,
-                                    ) = await self._execute_omnigent_with_admitted_capacity(
-                                        act_name=act_name,
-                                        request=request,
-                                        admission=admission,
-                                        parent_info=parent_info,
-                                        stc_seconds=stc_seconds,
-                                        admit_capacity_before_activity=(
-                                            admit_capacity_before_activity
-                                        ),
-                                        execution_plan_admission=(
-                                            use_omnigent_execution_plan_admission
-                                        ),
-                                        retry_policy=single_attempt,
-                                    )
-                                except CancelledError:
-                                    raise
-                                except Exception:
-                                    elapsed = (
-                                        workflow.now() - lane_start
-                                    ).total_seconds()
-                                    retry_stc = (
-                                        profile_bound_retry_start_to_close_seconds(
-                                            first_stc_seconds=stc_seconds,
-                                            elapsed_seconds=elapsed,
-                                        )
-                                    )
-                                    # One bounded continuation: attempt 2 inherits
-                                    # the remaining budget computed above (equal
-                                    # to the full window when the first attempt
-                                    # failed before the clock advanced).
-                                    (
-                                        result_payload,
-                                        admitted_at,
-                                    ) = await self._execute_omnigent_with_admitted_capacity(
-                                        act_name=act_name,
-                                        request=request,
-                                        admission=admission,
-                                        parent_info=parent_info,
-                                        stc_seconds=retry_stc,
-                                        admit_capacity_before_activity=(
-                                            admit_capacity_before_activity
-                                        ),
-                                        execution_plan_admission=(
-                                            use_omnigent_execution_plan_admission
-                                        ),
-                                        retry_policy=single_attempt,
-                                    )
                             else:
                                 (
                                     result_payload,
