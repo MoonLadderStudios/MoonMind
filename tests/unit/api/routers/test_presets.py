@@ -14,7 +14,7 @@ from api_service.api.routers.presets import (
     _get_save_service,
     router,
 )
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from moonmind.config.settings import settings
 
 def _mock_user():
@@ -30,10 +30,10 @@ def _override_user_dependencies(app: FastAPI) -> None:
         for route in router.routes
         if route.dependant is not None
         for dep in route.dependant.dependencies
-        if dep.call.__name__ == "_current_user_fallback"
+        if dep.call.__name__ in {"_current_user_fallback", "_strict_current_user", "_optional_current_user"}
     }
     if not dependencies:
-        dependencies = {get_current_user()}
+        dependencies = {get_current_user(), get_current_user_optional()}
     for dependency in dependencies:
         app.dependency_overrides[dependency] = _mock_user
 

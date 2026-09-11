@@ -17,7 +17,6 @@ from api_service.services.system_operations import (
 )
 from api_service.services.settings_catalog import has_settings_permission
 from moonmind.config.settings import settings
-from moonmind.security.auth_modes_4120 import is_disabled_local_mode
 from moonmind.workflows.temporal import TemporalExecutionService
 
 
@@ -46,8 +45,9 @@ def _get_temporal_execution_service(
 
 
 def _require_operation_permission(user: User, permission: str) -> None:
-    if is_disabled_local_mode():
-        return
+    # Authorization is checked after identity resolution in every mode:
+    # the disabled local principal resolves with full local-administrator
+    # flags, so no mode-based bypass exists here.
     if has_settings_permission(user, permission):
         return
     raise HTTPException(

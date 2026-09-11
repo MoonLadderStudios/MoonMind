@@ -4,14 +4,10 @@ import uuid
 from typing import AsyncGenerator, Optional
 
 from fastapi import Depends, HTTPException, Request, Response
-from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin
+from fastapi_users import BaseUserManager, UUIDIDMixin
 from fastapi_users import exceptions as fastapi_users_exceptions
 from fastapi_users import schemas
-from fastapi_users.authentication import (
-    AuthenticationBackend,
-    BearerTransport,
-    JWTStrategy,
-)
+from fastapi_users.authentication import BearerTransport
 from fastapi_users.db import SQLAlchemyUserDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -256,26 +252,13 @@ async def get_or_create_default_user(
         )
 
 # Legacy login/register/reset route registration was removed with the bundled
-# Keycloak integration (#4129); no issuance routes remain mounted. The bearer
-# validation below is retained temporarily for authenticated-mode request and
-# WebSocket token checks plus disabled-mode default-user seeding until the
-# #4124-era session contracts replace it. fastapi-users and PyJWT stay as
-# retained dependencies: the User model/migrations couple to the former and
-# managed-session/fanout/proxy capabilities use JWT-secret-backed tokens.
+# Keycloak integration (#4129); no issuance routes remain mounted. Request
+# and WebSocket principal resolution now goes through the qualified #4121
+# session authority in ``api_service.auth_providers``; no legacy
+# application-JWT issuance or acceptance remains on the request path.
+# fastapi-users stays as a retained dependency only because the User
+# model/migrations and the default-user seeding UserManager couple to it.
 # tokenUrl is intentionally empty: it is OpenAPI docs metadata only (it does
 # not affect bearer validation), and no token-issuance route remains to
 # advertise after #4129 removed /api/v1/auth/* and /auth/jwt/*.
 bearer_transport = BearerTransport(tokenUrl="")
-
-def get_jwt_strategy() -> JWTStrategy:
-    return JWTStrategy(secret=settings.security.JWT_SECRET_KEY, lifetime_seconds=3600)
-auth_backend = AuthenticationBackend(
-    name="jwt",
-    transport=bearer_transport,
-    get_strategy=get_jwt_strategy,
-)
-
-fastapi_users = FastAPIUsers[User, uuid.UUID](get_user_manager, [auth_backend])
-
-current_active_user = fastapi_users.current_user(active=True)
-current_active_user_optional = fastapi_users.current_user(active=True, optional=True)

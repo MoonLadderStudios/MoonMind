@@ -65,7 +65,7 @@ async def test_intervention_signal_without_logs(
     mock_record.parameters = {}
     mock_record.artifact_refs = []
     mock_execution_service.signal_execution.return_value = mock_record
-    app.dependency_overrides[get_current_user] = lambda: MagicMock(id=1, email="test@test.com")
+    app.dependency_overrides[get_current_user()] = lambda: MagicMock(id=1, email="test@test.com")
     
     # _get_owned_execution is called directly, not as a dependency
     with patch("api_service.api.routers.executions._get_owned_execution", new_callable=AsyncMock) as mock_get_owned:

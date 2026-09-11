@@ -104,7 +104,6 @@ from api_service.services.checkpoint_branch_turn_execution import (
     get_checkpoint_branch_artifact_service,
 )
 from moonmind.config.settings import settings
-from moonmind.security.auth_modes_4120 import is_disabled_local_mode
 from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
     normalize_no_commit_finish_summary,
@@ -8118,9 +8117,11 @@ async def _validate_and_collect_task_input_attachments(
                     f"{ref['artifactId']} is {artifact.status.value}."
                 )
             owner = str(getattr(artifact, "created_by_principal", None) or "").strip()
+            # Ownership is enforced after identity resolution in every
+            # mode; the disabled local principal owns its own artifacts,
+            # so no mode-based exemption exists here.
             if (
-                not is_disabled_local_mode()
-                and owner
+                owner
                 and owner != principal
                 and not principal.startswith("service:")
             ):

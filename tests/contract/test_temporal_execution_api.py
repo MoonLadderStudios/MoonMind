@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.api.routers.executions import get_temporal_client
-from api_service.auth_providers import get_current_user
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.db import base as db_base
 from api_service.db.models import (
     Base,
@@ -35,6 +35,13 @@ from moonmind.workflows.temporal import (
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
 CURRENT_USER_DEP = get_current_user()
+CURRENT_USER_OPTIONAL_DEP = get_current_user_optional()
+
+
+def _override_current_user(user) -> None:
+    """Install an explicit principal on both shared boundaries (#4125)."""
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: user
+    app.dependency_overrides[CURRENT_USER_OPTIONAL_DEP] = lambda: user
 BANNED_EXECUTION_SCHEMA_FIELDS = {
     "attempt",
     "attempts",
@@ -207,9 +214,7 @@ def test_execution_openapi_paths_use_step_execution_terminology() -> None:
 
 @pytest.mark.asyncio
 async def test_removed_task_api_routes_return_404_without_redirects() -> None:
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=uuid4(), is_superuser=False
-    )
+    _override_current_user(SimpleNamespace(id=uuid4(), is_superuser=False))
 
     transport = ASGITransport(app=app)
     async with AsyncClient(
@@ -340,9 +345,7 @@ async def test_execution_lifecycle_endpoints_report_projection_contract(
     )
 
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
+    _override_current_user(SimpleNamespace(id=shared_user_id, is_superuser=False))
 
     try:
         transport = ASGITransport(app=app)
@@ -811,9 +814,7 @@ async def test_step_execution_api_degraded_manifest_values_fail_closed(
         await conn.run_sync(Base.metadata.create_all)
 
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
+    _override_current_user(SimpleNamespace(id=shared_user_id, is_superuser=False))
 
     try:
         transport = ASGITransport(app=app)
@@ -895,9 +896,7 @@ async def test_request_rerun_keeps_workflow_id_and_rotates_run_id(tmp_path, quer
         await conn.run_sync(Base.metadata.create_all)
 
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
+    _override_current_user(SimpleNamespace(id=shared_user_id, is_superuser=False))
 
     try:
         transport = ASGITransport(app=app)
@@ -981,9 +980,7 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
         await conn.run_sync(Base.metadata.create_all)
 
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
+    _override_current_user(SimpleNamespace(id=shared_user_id, is_superuser=False))
 
     try:
         transport = ASGITransport(app=app)
@@ -1134,9 +1131,7 @@ async def test_projection_orphaned_rows_repair_from_canonical_public_routes(tmp_
         await conn.run_sync(Base.metadata.create_all)
 
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
+    _override_current_user(SimpleNamespace(id=shared_user_id, is_superuser=False))
 
     try:
         transport = ASGITransport(app=app)
@@ -1212,9 +1207,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
         await conn.run_sync(Base.metadata.create_all)
 
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
+    _override_current_user(SimpleNamespace(id=shared_user_id, is_superuser=False))
 
     try:
         transport = ASGITransport(app=app)
@@ -1430,9 +1423,7 @@ async def test_task_shaped_create_rejects_pending_upload_input_artifact(tmp_path
         await conn.run_sync(Base.metadata.create_all)
 
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
+    _override_current_user(SimpleNamespace(id=shared_user_id, is_superuser=False))
 
     try:
         transport = ASGITransport(app=app)
@@ -1503,9 +1494,7 @@ async def test_task_shaped_create_preserves_image_input_attachments(tmp_path, mo
         await conn.run_sync(Base.metadata.create_all)
 
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
+    _override_current_user(SimpleNamespace(id=shared_user_id, is_superuser=False))
 
     try:
         transport = ASGITransport(app=app)
@@ -1613,9 +1602,7 @@ async def test_manifest_execution_status_and_node_page_contract(tmp_path):
         await conn.run_sync(Base.metadata.create_all)
 
     shared_user_id = uuid4()
-    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
-        id=shared_user_id, is_superuser=False
-    )
+    _override_current_user(SimpleNamespace(id=shared_user_id, is_superuser=False))
 
     try:
         transport = ASGITransport(app=app)

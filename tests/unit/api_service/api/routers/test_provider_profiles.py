@@ -141,6 +141,35 @@ def _reset_dependency_overrides():
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def _default_provider_profile_test_principal():
+    """Explicit test principal for the shared auth boundary (#4125).
+
+    Production no longer mints environment-driven test identities, so
+    route-logic tests run under this explicit principal with the standard
+    provider-profile permissions. Tests that need a different identity
+    keep working: their own ``_override_current_user(...)`` call runs
+    after this fixture and wins.
+    """
+    user = SimpleNamespace(
+        id=uuid4(),
+        email="provider-profile-test@example.com",
+        is_active=True,
+        is_superuser=False,
+        settings_permissions={"provider_profiles.read", "provider_profiles.write"},
+    )
+    missing = object()
+    previous = app.dependency_overrides.get(get_current_user(), missing)
+    app.dependency_overrides[get_current_user()] = lambda user=user: user
+    try:
+        yield user
+    finally:
+        if previous is missing:
+            app.dependency_overrides.pop(get_current_user(), None)
+        else:
+            app.dependency_overrides[get_current_user()] = previous
+
+
 def _override_current_user(
     *,
     user_id=None,
@@ -164,7 +193,11 @@ def _override_current_user(
         if getattr(route, "path", "").startswith("/api/v1/provider-profiles")
         and getattr(route, "dependant", None) is not None
         for dep in route.dependant.dependencies
-        if getattr(dep.call, "__name__", "") == "_current_user_fallback"
+        if getattr(dep.call, "__name__", "") in {
+            "_current_user_fallback",
+            "_strict_current_user",
+            "_optional_current_user",
+        }
     } or {get_current_user()}
     for dependency in dependencies:
         app.dependency_overrides[dependency] = lambda user=user: user

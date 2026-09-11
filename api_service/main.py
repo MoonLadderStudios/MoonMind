@@ -1053,8 +1053,13 @@ app = FastAPI(
         "outage or protected setup pending). Machine callers "
         "(workers, MCP/container-job) use scoped service credentials on "
         "authorized routes only — runtime, session, and worker tokens never "
-        "become browser credentials. The accounts/oidc/header journeys are "
-        "Draft contract text pending #4128 qualification."
+        "become browser credentials. Every user-facing path resolves its "
+        "principal through the qualified MoonMind session authority "
+        "(cookie and/or bearer session, single credential precedence; "
+        "legacy application JWTs are rejected as auth_invalid). Session "
+        "issuance journeys for accounts/oidc/header are owned by the "
+        "provider-route slices. Draft contract text pending #4128 "
+        "qualification."
     ),
     version="0.1.0",
     docs_url="/openapi",
