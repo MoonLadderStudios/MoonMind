@@ -129,6 +129,14 @@ steps:
     treat a rate-limited scan as empty, or launch a fresh attempt to escape
     exhausted retry history; inherit cross-device retry/cooldown/hold history.
 
+    Recovery evidence arrives through the trusted workflow input channel only:
+    a scheduler or reconciler that queues a continuation supplies the stopped
+    predecessor and usable-handoff evidence (plus the exact prior PR selector)
+    as workflow context, which this step forwards to the trusted tool. A fresh
+    invocation without such evidence correctly admits only Available candidates;
+    Recovery-needed candidates are passed over until sufficient evidence is
+    supplied. The trusted tool never invents handoff evidence from prose.
+
     The trusted brief tool announces before expensive assessment and settles this
     attempt's own announcement/writers before any recandidation on a detected
     competitor. Preserve the resolved issue and predecessor across replay/retry and
@@ -141,6 +149,9 @@ steps:
       repository: '{{ inputs.repository or context.get(''repository'', '''') }}'
       issueSearch: '{{ inputs.issue_search }}'
       artifactPath: artifacts/github-issue-implement-brief.json
+      predecessorStopped: '{{ context.get(''predecessorStopped'', context.get(''predecessor_stopped'', '''')) }}'
+      handoffUsable: '{{ context.get(''handoffUsable'', context.get(''handoff_usable'', '''')) }}'
+      priorWorkPullRequest: '{{ context.get(''priorWorkPullRequest'', context.get(''prior_work_pull_request'', context.get(''pullRequest'', context.get(''pull_request'', '''')))) }}'
 - title: Assess resolved issue implementation state
   repositoryOperation: read
   type: skill
@@ -196,7 +207,7 @@ steps:
   instructions: |-
     Read the resolved issue from MoonMind trusted previous step context and artifacts/github-issue-implement-brief.json before doing anything.
 
-    Best-effort existing-PR resolution for a safely recoverable continuation: when the trusted brief carries prior-work evidence with an exact existing PR (a safely released partial PR from a stopped writer, e.g. a scheduled run on another device continuing this run's predecessor), dispatch the registered github.resolve_pull_request_target tool with the resolved repository and that PR selector so workspace preparation and downstream steps receive the exact existing PR and its validated current head. When there is no prior-work PR evidence, report resolution as skipped without failing and without creating a pull request. Never reset a continuation to the base branch. A partial PR is not a fully-implemented verdict; accepted evidence must match current requirements and code revision.
+    Best-effort existing-PR resolution for a safely recoverable continuation: when the trusted brief carries prior-work evidence with an exact existing PR (the prior_work_pull_request / priorWorkPullRequest selector routed from the trusted input channel for a safely released partial PR from a stopped writer, e.g. a scheduled run on another device continuing this run's predecessor), dispatch the registered github.resolve_pull_request_target tool with the resolved repository and that PR selector so workspace preparation and downstream steps receive the exact existing PR and its validated current head. When the brief carries no prior-work PR selector, report resolution as skipped without failing and without creating a pull request. Never reset a continuation to the base branch. A partial PR is not a fully-implemented verdict; accepted evidence must match current requirements and code revision.
   skill:
     id: auto
     args:
@@ -326,28 +337,26 @@ steps:
     requiredCapabilities:
     - git
     - gh
-- title: Finalize failed attempt with safe release handoff
-  type: tool
-  annotations:
-    issueImplementRole: failed-attempt-finalization
-  instructions: |-
-    Read the resolved issue from MoonMind trusted previous step context before changing GitHub.
-
-    Durable terminal boundary for failed, blocked, canceled, and exhausted controlling outcomes (not a last success-only step): when this run's controlling outcome is failed, blocked, canceled, or exhausted without a published pull request, dispatch the registered github.finalize_failed_attempt tool with the resolved repository and issue number and the controlling outcome so the attempt is safely released with preserved-work handoff evidence. When the run published a pull request or the assessment finalized through the success path, report this step as skipped without GitHub effects. Keep internal remediation within this one issue attempt and inherit cross-device retry/cooldown/hold history; internal retries do not release or reset the issue budget.
-  tool:
-    id: github.finalize_failed_attempt
-    requiredCapabilities:
-    - gh
-    inputs:
-      repository: '{{ inputs.repository or context.get(''repository'', '''') }}'
-      assessmentArtifactPath: artifacts/github-issue-implement-assessment.json
-      verificationArtifactPath: artifacts/github-issue-implement-verify.json
 - title: Finalize resolved GitHub issue status
   type: tool
   annotations:
     issueImplementRole: code-review-handoff
   instructions: |-
     Read the resolved issue from MoonMind trusted previous step context and artifacts/github-issue-implement-assessment.json (or the recorded verdict from the assess step) before changing GitHub.
+
+    Terminal finalization ownership: failed, blocked, canceled, and exhausted
+    controlling outcomes that never reach this success-path step are owned by
+    the durable failed-attempt finalization boundary (the github_issue
+    finalize_failed_attempt activity plus the periodic handoff reconciler),
+    not by preset plan sequence: the workflow engine marks remaining plan
+    nodes skipped after a failed or blocked result and returns immediately on
+    cancellation, so a success-ordered preset node cannot serve as the
+    terminal handler. This step finalizes only runs that arrive here through
+    the success path; on any other controlling outcome, stop without changing
+    GitHub and leave the attempt for the durable finalizer and reconciler.
+    Keep internal remediation within this one issue attempt and inherit
+    cross-device retry/cooldown/hold history; internal retries do not release
+    or reset the issue budget.
 
     Route completed work to missing verification, review/merge follow-up, or status finalization under the admitted policy. Ordinary code-review issues remain excluded from implementation search; a partial PR does not constitute a fully implemented verdict and accepted evidence must match current requirements and code revision.
 

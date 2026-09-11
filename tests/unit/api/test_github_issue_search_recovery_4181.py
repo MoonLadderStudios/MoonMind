@@ -87,14 +87,20 @@ def test_seed_composes_recovery_aware_journey():
         "never repeat search",
         "reset a continuation to the base branch",
         "second PR",
-        "failed-attempt-finalization",
         "failed, blocked, canceled, and exhausted",
         "Keep internal remediation within",
         "inherit cross-device retry/cooldown/hold history",
         "partial PR does not constitute",
         "code-review-handoff",
+        "durable failed-attempt boundary",
+        "success-ordered preset node",
     ]:
         assert phrase in text, phrase
+    # Terminal finalization is owned by the durable boundary, never by a
+    # success-ordered preset node: the engine skips remaining plan nodes
+    # after a failed/blocked result, so no sequential step may claim the
+    # terminal handler role.
+    assert "failed-attempt-finalization" not in text
 
 
 def _issue(number=4025, **overrides):
@@ -288,22 +294,29 @@ async def test_omitted_blank_and_nonblank_inputs_traverse_compiled_path(
     ]
     assert "pull-request-handoff" in roles
     assert "code-review-handoff" in roles
-    assert "failed-attempt-finalization" in roles
+    # No success-ordered preset node may claim terminal finalization: the
+    # engine skips remaining plan nodes after a failed/blocked result, so
+    # failed/canceled/exhausted outcomes are owned by the durable
+    # failed-attempt boundary plus the reconciler.
+    assert "failed-attempt-finalization" not in roles
     tool_ids = [s["tool"]["id"] for s in steps if isinstance(s, dict) and s.get("tool")]
     assert "github.update_issue_status" in tool_ids
-    # The failed-attempt boundary is a skill-dispatched tool (the agent resolves
-    # the trusted issue identity and controlling outcome at run time), while the
-    # success-path finalization stays a direct tool step for authority checks.
+    assert "github.finalize_failed_attempt" not in tool_ids
+    # The recovery-evidence receive path is compiled into the first step so
+    # a scheduler/reconciler-queued continuation reaches the trusted tool.
+    # With no continuation context these render empty (correctly ignored
+    # downstream: a fresh invocation admits only Available candidates).
+    for key in ("predecessorStopped", "handoffUsable", "priorWorkPullRequest"):
+        assert key in load_tool["inputs"], key
+    assert load_tool["inputs"]["predecessorStopped"] == ""
+    assert load_tool["inputs"]["handoffUsable"] == ""
+    assert load_tool["inputs"]["priorWorkPullRequest"] == ""
+    # The success-path finalization step documents durable terminal ownership.
     finalize = next(
         s for s in steps if s.get("title") == "Finalize resolved GitHub issue status"
     )
     assert finalize["tool"]["inputs"]["mode"] == "finalize_after_pr_or_done"
-    failed = next(
-        s
-        for s in steps
-        if s.get("title") == "Finalize failed attempt with safe release handoff"
-    )
-    assert "github.finalize_failed_attempt" in failed["instructions"]
+    assert "durable failed-attempt boundary" in finalize["instructions"]
     # Existing-PR continuation is an explicit journey step, not a hidden fork.
     resolve = next(
         s
@@ -312,3 +325,56 @@ async def test_omitted_blank_and_nonblank_inputs_traverse_compiled_path(
     )
     assert "github.resolve_pull_request_target" in resolve["instructions"]
     assert "validated current head" in resolve["instructions"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_candidate_skipped_without_handoff_evidence(activity_boundary):
+    # A fresh invocation without continuation evidence correctly admits only
+    # Available candidates: the Recovery-needed candidate is passed over.
+    activity_boundary.pages[:] = [
+        [_issue(200, labels=[{"name": "status: recovery-needed"}]), _issue(201)]
+    ]
+    activity_boundary.detail.update(_issue(201))
+    result = await activity_boundary.execute(
+        "github.load_issue_preset_brief",
+        {"repository": REPOSITORY, "issueSearch": ""},
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["issue"]["number"] == 201
+    assert "predecessor_stopped" not in result.outputs
+    assert "prior_work_pull_request" not in result.outputs
+
+
+@pytest.mark.asyncio
+async def test_recovery_evidence_from_top_level_context_admits_continuation(
+    activity_boundary,
+):
+    # Continuation evidence queued by a scheduler/reconciler arrives through
+    # the trusted workflow input channel (top-level context, no new ordinary
+    # user inputs) and the brief routes it plus the exact prior PR selector
+    # to the start transition and the existing-PR resolution step.
+    from moonmind.workflows.temporal.story_output_tools import (
+        load_github_issue_preset_brief,
+    )
+
+    pr_url = f"https://github.com/{REPOSITORY}/pull/99"
+    activity_boundary.pages[:] = [
+        [_issue(200, labels=[{"name": "status: recovery-needed"}])]
+    ]
+    activity_boundary.detail.update(
+        _issue(200, labels=[{"name": "status: recovery-needed"}])
+    )
+    result = await load_github_issue_preset_brief(
+        {"repository": REPOSITORY, "issueSearch": ""},
+        {
+            "predecessorStopped": True,
+            "handoffUsable": True,
+            "priorWorkPullRequest": pr_url,
+        },
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["issue"]["number"] == 200
+    assert result.outputs["predecessor_stopped"] is True
+    assert result.outputs["handoff_usable"] is True
+    assert result.outputs["prior_work_pull_request"] == pr_url
+    assert result.outputs["priorWorkPullRequest"] == pr_url

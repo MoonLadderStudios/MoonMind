@@ -4549,7 +4549,17 @@ def _github_brief_recovery_handoff(
     satisfy those guards.
     """
     collected: dict[str, Any] = {}
-    sources: list[Any] = [inputs, _mapping((context or {}).get("previousOutputs"))]
+    # Recovery evidence reaches the first preset step through the trusted
+    # workflow input channel: direct tool inputs, previous step outputs, or
+    # top-level workflow context supplied by a scheduler/reconciler that
+    # queues a continuation with its predecessor evidence (no new ordinary
+    # user inputs are required). A fresh invocation without such evidence
+    # correctly admits only Available candidates.
+    sources: list[Any] = [
+        inputs,
+        _mapping((context or {}).get("previousOutputs")),
+        context,
+    ]
     for source in sources:
         if not isinstance(source, Mapping):
             continue
@@ -4565,6 +4575,66 @@ def _github_brief_recovery_handoff(
             ) or isinstance(value, Mapping):
                 collected[snake] = value
     return collected
+
+
+def _github_brief_prior_work_pr(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> str:
+    """Collect an exact prior-work pull request selector for a continuation.
+
+    The existing-PR resolution step requires a repository plus an exact PR
+    selector, but the trusted brief previously carried only
+    ``predecessor_stopped``/``handoff_usable`` flags, so a recovered attempt
+    had no authoritative value with which to invoke
+    ``github.resolve_pull_request_target``. Forward the selector from the
+    same trusted input channel: an explicit ``pullRequest``/``pull_request``
+    or ``prUrl``-family value, a preserved PR URL inside a mapping-valued
+    handoff, or the first PR identity in the Req-1 admission bundle.
+    Returns "" when no selector was supplied; absent evidence stays absent.
+    """
+    previous = _mapping(inputs.get("previousOutputs"))
+    context_previous = _mapping((context or {}).get("previousOutputs"))
+    for source in (inputs, previous, context_previous, context or {}):
+        if not isinstance(source, Mapping):
+            continue
+        for key in (
+            "pullRequest",
+            "pull_request",
+            "priorWorkPullRequest",
+            "prior_work_pull_request",
+            "pullRequestUrl",
+            "pull_request_url",
+            "prUrl",
+            "pr_url",
+        ):
+            value = _string(source.get(key))
+            if value:
+                return value
+        for key in ("handoffUsable", "handoff_usable"):
+            handoff = source.get(key)
+            if isinstance(handoff, Mapping):
+                preserved = handoff.get("preservedWork", handoff.get("preserved_work"))
+                if isinstance(preserved, Mapping):
+                    value = _string(preserved.get("prUrl", preserved.get("pr_url")))
+                    if value:
+                        return value
+                value = _string(handoff.get("prUrl", handoff.get("pr_url")))
+                if value:
+                    return value
+    bundle_prs = _github_admission_bundle(inputs, context).get("pr_identities")
+    if isinstance(bundle_prs, list):
+        for entry in bundle_prs:
+            if not isinstance(entry, Mapping):
+                continue
+            for key in ("url", "prUrl", "pr_url", "pullRequestUrl", "pull_request_url"):
+                value = _string(entry.get(key))
+                if value:
+                    return value
+            number = entry.get("number", entry.get("prNumber", entry.get("pr_number")))
+            if type(number) is int and number > 0:
+                return str(number)
+    return ""
 
 
 async def load_github_issue_preset_brief(
@@ -4732,7 +4802,9 @@ async def load_github_issue_preset_brief(
     issue_ref = f"{repository}#{issue['number'] or issue_number}"
     # Route usable recovery handoff evidence with the brief so the later
     # start transition can satisfy its predecessor_stopped/handoff_usable
-    # guards for a Recovery-needed selection.
+    # guards for a Recovery-needed selection, and so the existing-PR
+    # resolution step receives the exact prior PR selector it requires
+    # (a safely released partial PR from the stopped predecessor).
     recovery_routing: dict[str, Any] = {}
     if recovery_handoff and interpret_issue(
         {"state": issue.get("state", "open"), "labels": issue.get("labels") or []}
@@ -4741,6 +4813,10 @@ async def load_github_issue_preset_brief(
             "predecessor_stopped": recovery_handoff.get("predecessor_stopped"),
             "handoff_usable": recovery_handoff.get("handoff_usable"),
         }
+        prior_work_pr = _github_brief_prior_work_pr(inputs, _context)
+        if prior_work_pr:
+            recovery_routing["prior_work_pull_request"] = prior_work_pr
+            recovery_routing["priorWorkPullRequest"] = prior_work_pr
     body = _string(issue.get("body"))
     title = _string(issue.get("title"))
     labels = issue.get("labels") if isinstance(issue.get("labels"), list) else []
