@@ -27,7 +27,6 @@ from tests.integration.reliability.helpers import load_replay
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.integration_ci,
     pytest.mark.reliability_journey,
 ]
 
