@@ -27,7 +27,7 @@ from moonmind.workflows.executions.preset_expansion import (
 from moonmind.workflows.temporal.boundary_inventory import (
     iter_temporal_boundary_contracts,
 )
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -147,7 +147,7 @@ async def test_expansion_preserves_title_enrichment_in_plan_snapshot(
 
 
 def test_production_workflow_registers_canonical_set_title_update() -> None:
-    definition = workflow._Definition.must_from_class(MoonMindRunWorkflow)
+    definition = workflow._Definition.must_from_class(MoonMindUserWorkflow)
     assert definition.name == "MoonMind.UserWorkflow"
     updates = dict(getattr(definition, "updates", {}))
     assert "SetTitle" in updates
