@@ -405,9 +405,38 @@ class _AdmissionHttpClient:
             return _AdmissionFakeHttpResponse(dict(type(self).search_payload))
         return _AdmissionFakeHttpResponse(dict(type(self).issue_payload))
 
+    async def post(self, url: str, **kwargs: Any):
+        return _AdmissionFakeHttpResponse({})
+
 
 def _install_admission_http(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(story_tools.httpx, "AsyncClient", _AdmissionHttpClient)
+
+
+def _install_dynamic_issue_fetch(
+    monkeypatch: pytest.MonkeyPatch, service: _AdmissionFakeService, number: int
+) -> None:
+    """Serve issue reads from the fake service labels so read-back observes writes."""
+
+    async def _fetch(
+        *,
+        repository: str,
+        issue_number: int,
+        github_service_factory=None,  # type: ignore[no-untyped-def]
+    ):
+        return (
+            {
+                "number": number,
+                "title": "admission",
+                "body": "body",
+                "html_url": f"https://github.com/{repository}/issues/{number}",
+                "state": "open",
+                "labels": [{"name": label} for label in service.labels],
+            },
+            None,
+        )
+
+    monkeypatch.setattr(story_tools, "_fetch_github_issue", _fetch)
 
 
 def _admission_issue_payload(number: int, labels: list[str]) -> dict[str, Any]:
@@ -615,3 +644,229 @@ def test_real_transition_and_retry_shapes_preserved() -> None:
 
     # Retained history: legacy in-progress spellings still count.
     assert has_in_progress_status({"labels": ["status: in-progress"]}) is True
+
+
+# ---------------------------------------------------------------------------
+# Remediation wiring: announce/persist, recandidate, child handoffs,
+# entrypoint inference, interleaving + delayed-mutation through real shapes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_brief_load_plans_claim_and_persists_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Req 2+3 are wired: the brief plans the advisory claim and pins identity."""
+    service = _AdmissionFakeService(labels=[])
+    _install_admission_http(monkeypatch)
+    _AdmissionHttpClient.issue_payload = _admission_issue_payload(4178, [])
+    result = await story_tools.load_github_issue_preset_brief(
+        {
+            "repository": "o/r",
+            "issueNumber": 4178,
+            "attemptId": "att_" + "a" * 24,
+            "predecessorAttemptId": "att_" + "b" * 24,
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED"
+    claim = result.outputs["admissionClaim"]
+    assert claim["planned"] is True
+    assert claim["reasonCode"] == "claim_planned"
+    assert result.outputs["admittedIdentity"] == {
+        "repository": "o/r",
+        "issueNumber": 4178,
+        "predecessorAttemptId": "att_" + "b" * 24,
+    }
+    assert result.outputs["admissionPersisted"]["persisted"] is True
+
+
+@pytest.mark.asyncio
+async def test_brief_entrypoint_inference_continuation_retry_orchestration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Acceptance A: continuation/retry/orchestration reach the same boundary."""
+    service = _AdmissionFakeService(labels=[])
+    _install_admission_http(monkeypatch)
+    _AdmissionHttpClient.issue_payload = _admission_issue_payload(4178, [])
+
+    continued = await story_tools.load_github_issue_preset_brief(
+        {
+            "repository": "o/r",
+            "issueNumber": 4178,
+            "predecessorStopped": True,
+            "handoffUsable": True,
+        },
+        github_service_factory=lambda: service,
+    )
+    assert continued.status == "COMPLETED"
+    assert continued.outputs["admissionEntrypoint"] == ENTRYPOINT_CONTINUATION
+
+    retried = await story_tools.load_github_issue_preset_brief(
+        {"repository": "o/r", "issueNumber": 4178, "retryOf": "att_" + "c" * 24},
+        github_service_factory=lambda: service,
+    )
+    assert retried.status == "COMPLETED"
+    assert retried.outputs["admissionEntrypoint"] == ENTRYPOINT_RETRY
+
+    orchestrated = await story_tools.load_github_issue_preset_brief(
+        {"repository": "o/r", "issueNumber": 4178, "orchestrationRunId": "orch-1"},
+        github_service_factory=lambda: service,
+    )
+    assert orchestrated.status == "COMPLETED"
+    assert orchestrated.outputs["admissionEntrypoint"] == ENTRYPOINT_ORCHESTRATION
+
+
+@pytest.mark.asyncio
+async def test_search_query_path_forwards_read_failure_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Req 1: the query caller forwards reads_complete so denies trigger."""
+    from moonmind.workflows.temporal import github_issue_search as search_tools
+    from moonmind.workflows.temporal.github_issue_search import resolve_issue
+
+    def _candidate(number: int) -> dict[str, Any]:
+        return {
+            "number": number,
+            "title": "candidate",
+            "body": "body",
+            "html_url": f"https://github.com/o/r/issues/{number}",
+            "state": "open",
+            "labels": [],
+        }
+
+    _AdmissionHttpClient.search_payload = {
+        "incomplete_results": False,
+        "items": [_candidate(31), _candidate(32)],
+    }
+    monkeypatch.setattr(search_tools.httpx, "AsyncClient", _AdmissionHttpClient)
+    service = _AdmissionFakeService()
+
+    async def no_blockers(issue: dict[str, Any]) -> list[dict[str, Any]]:
+        return []
+
+    blocked, evidence = await resolve_issue(
+        repository="o/r",
+        query="task",
+        github_service=service,  # type: ignore[arg-type]
+        blockers_from_issue=no_blockers,
+        reads_complete={"labels": True, "comments": False},
+    )
+    assert blocked is None
+    assert evidence["searchEvidence"]["candidatesExamined"] == 2
+
+
+@pytest.mark.asyncio
+async def test_search_recandidate_gate_blocks_unsettled_writers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Req 4: recandidacy requires own abandoned announcement + settled writers."""
+    from moonmind.workflows.temporal import github_issue_search as search_tools
+    from moonmind.workflows.temporal.github_issue_search import resolve_issue
+
+    monkeypatch.setattr(search_tools.httpx, "AsyncClient", _AdmissionHttpClient)
+    service = _AdmissionFakeService()
+
+    async def no_blockers(issue: dict[str, Any]) -> list[dict[str, Any]]:
+        return []
+
+    blocked, evidence = await resolve_issue(
+        repository="o/r",
+        query="",
+        github_service=service,  # type: ignore[arg-type]
+        blockers_from_issue=no_blockers,
+        own_announcement_abandoned=True,
+        writers_settled=False,
+    )
+    assert blocked is None
+    assert "conclusively settled" in evidence["error"]
+
+
+@pytest.mark.asyncio
+async def test_child_repair_requires_exact_pr_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Req 6 through the trusted status boundary: repair needs an exact PR."""
+    service = _AdmissionFakeService(labels=[])
+    _install_admission_http(monkeypatch)
+    _AdmissionHttpClient.issue_payload = _admission_issue_payload(4178, [])
+    denied = await story_tools.update_github_issue_status(
+        {
+            "repository": "o/r",
+            "issueNumber": 4178,
+            "mode": "start",
+            "childKind": "existing_pr_repair",
+            "attemptId": "att_" + "a" * 24,
+        },
+        github_service_factory=lambda: service,
+    )
+    assert denied.status == "FAILED"
+    assert denied.outputs["reasonCode"] == "missing_pr_target"
+    assert service.operations == []
+
+    _install_dynamic_issue_fetch(monkeypatch, service, 4178)
+    allowed = await story_tools.update_github_issue_status(
+        {
+            "repository": "o/r",
+            "issueNumber": 4178,
+            "mode": "start",
+            "childKind": "existing_pr_repair",
+            "attemptId": "att_" + "a" * 24,
+            "pullRequestUrl": "https://github.com/o/r/pull/7",
+        },
+        github_service_factory=lambda: service,
+    )
+    assert allowed.status == "COMPLETED"
+    assert allowed.outputs["childAttempt"]["reasonCode"] == "admitted_repair"
+    assert allowed.outputs["childKind"] == "existing_pr_repair"
+
+
+@pytest.mark.asyncio
+async def test_two_interleaved_attempts_quiesce_through_tool_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Acceptance C through the real boundary: both contenders stop, neither clears."""
+    attempt_a = "att_" + "a" * 24
+    attempt_b = "att_" + "b" * 24
+    for own, other in ((attempt_a, attempt_b), (attempt_b, attempt_a)):
+        service = _AdmissionFakeService(labels=["status: in-progress"])
+        _install_admission_http(monkeypatch)
+        _AdmissionHttpClient.issue_payload = _admission_issue_payload(
+            4178, ["status: in-progress"]
+        )
+        result = await story_tools.update_github_issue_status(
+            {
+                "repository": "o/r",
+                "issueNumber": 4178,
+                "mode": "start",
+                "attemptId": own,
+                "observedContenders": [{"attemptId": other, "activity": "active"}],
+            },
+            github_service_factory=lambda: service,
+        )
+        assert result.status == "FAILED"
+        assert result.outputs["reasonCode"] == "contender_observed"
+        assert service.operations == []
+        assert service.labels == ["status: in-progress"]
+
+
+@pytest.mark.asyncio
+async def test_delayed_mutation_honesty_through_mutation_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Acceptance D through the real mutation path: delayed mutation not fenced."""
+    service = _AdmissionFakeService(labels=[])
+    _install_admission_http(monkeypatch)
+    _install_dynamic_issue_fetch(monkeypatch, service, 4178)
+    result = await story_tools.update_github_issue_status(
+        {
+            "repository": "o/r",
+            "issueNumber": 4178,
+            "mode": "start",
+            "mutationIssuedBeforeCheck": True,
+        },
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["mutationFenced"]["fenced"] is False
+    assert result.outputs["mutationFenced"]["reasonCode"] == "unfenced_race"
