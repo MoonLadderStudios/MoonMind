@@ -98,6 +98,17 @@ MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH = (
 # original gate decisions.
 MERGE_AUTOMATION_REVIEW_LOOP_PATCH = "merge-automation-review-loop-v1"
 MAX_PUBLISHED_REVIEW_CYCLES = 20
+# Typed routing for validated pr-resolver terminal verdicts
+# (MoonLadderStudios/MoonMind#4223). Guarded so histories recorded before the
+# policy existed keep replaying the legacy immediate-fail gate decision.
+MERGE_AUTOMATION_PR_RESOLVER_VERDICT_ROUTING_PATCH = (
+    "merge-automation-pr-resolver-verdict-routing-v1"
+)
+NEXT_STEP_RUN_FULL_REMEDIATION = "run_full_remediation"
+NEXT_STEP_RETRY_FINALIZE_AFTER_BACKOFF = "retry_finalize_after_backoff"
+NEXT_STEP_MANUAL_REVIEW = "manual_review"
+NEXT_STEP_ATTEMPTS_EXHAUSTED = "attempts_exhausted"
+MAX_PUBLISHED_RESOLVER_VERDICT_CYCLES = 20
 RESOLVER_ISSUE_RECOVERY_NONE = "none"
 RESOLVER_ISSUE_RECOVERY_COMPLETED = "completed"
 RESOLVER_ISSUE_RECOVERY_REENTER_GATE = "reenter_gate"
@@ -149,6 +160,12 @@ class MoonMindMergeAutomationWorkflow:
         self._last_progress_signature: str | None = None
         self._no_progress_cycles = 0
         self._summary: str | None = None
+        # Validated pr-resolver verdict routing (#4223): one record per
+        # resolver child, bounded by verdict+reason+head progress.
+        self._resolver_verdict_cycles: list[dict[str, Any]] = []
+        self._resolver_verdict_stop_reason: str | None = None
+        self._remediation_child_workflow_ids: list[str] = []
+        self._verdict_routing_enabled = False
 
     def _summary_payload(self) -> dict[str, Any]:
         pr = self._input.pull_request if self._input is not None else None
@@ -201,6 +218,20 @@ class MoonMindMergeAutomationWorkflow:
             }
         if self._continuation_observability_enabled:
             payload["continuationCounters"] = dict(self._continuation_counters)
+        if self._verdict_routing_enabled or self._resolver_verdict_cycles:
+            payload["resolverVerdictCycles"] = [
+                dict(cycle)
+                for cycle in self._resolver_verdict_cycles[
+                    -MAX_PUBLISHED_RESOLVER_VERDICT_CYCLES:
+                ]
+            ]
+            payload["remediationChildWorkflowIds"] = list(
+                self._remediation_child_workflow_ids
+            )
+            if self._resolver_verdict_stop_reason:
+                payload["resolverVerdictStopReason"] = (
+                    self._resolver_verdict_stop_reason
+                )
         if self._summary:
             payload["summary"] = self._summary
         if self._post_merge_jira_result is not None:
@@ -420,6 +451,18 @@ class MoonMindMergeAutomationWorkflow:
                 "mergeAutomationDisposition": result.get("mergeAutomationDisposition"),
                 "headSha": result.get("headSha"),
             }
+            if self._verdict_routing_enabled:
+                verdict = self._pr_resolver_verdict(result)
+                for key in (
+                    "prResolverStatus",
+                    "finalReason",
+                    "nextStep",
+                    "terminalContractEvidenceRef",
+                    "retryAfterSeconds",
+                    "prResolverVerdictSummary",
+                ):
+                    if verdict.get(key) is not None:
+                        payload["result"][key] = verdict.get(key)
             continuation = result.get("gatedContinuation")
             if isinstance(continuation, Mapping):
                 normalized = {
@@ -496,6 +539,424 @@ class MoonMindMergeAutomationWorkflow:
         if not isinstance(resolver_result, Mapping):
             return ""
         return str(resolver_result.get("mergeAutomationDisposition") or "").strip()
+
+    @staticmethod
+    def _compact_verdict_text(value: Any, *, max_chars: int = 500) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            return ""
+        if len(candidate) > max_chars:
+            return candidate[: max_chars - 3].rstrip() + "..."
+        return candidate
+
+    @classmethod
+    def _pr_resolver_verdict(cls, resolver_result: Mapping[str, Any]) -> dict[str, Any]:
+        """Project the Skill's validated terminal verdict without reinterpreting it.
+
+        Only the verdict facts the Skill wrote are carried (status, reason,
+        next step, evidence ref, retry delay, head). MoonMind routes on these
+        values; it never reclassifies the blocker or selects a different fix.
+        """
+
+        status = cls._compact_verdict_text(
+            resolver_result.get("prResolverStatus")
+            or resolver_result.get("pr_resolver_status")
+            or resolver_result.get("status"),
+            max_chars=80,
+        )
+        reason = cls._compact_verdict_text(
+            resolver_result.get("prResolverReason")
+            or resolver_result.get("pr_resolver_reason")
+            or resolver_result.get("final_reason")
+            or resolver_result.get("finalReason")
+            or resolver_result.get("reason"),
+            max_chars=500,
+        )
+        next_step = cls._compact_verdict_text(
+            resolver_result.get("prResolverNextStep")
+            or resolver_result.get("pr_resolver_next_step")
+            or resolver_result.get("next_step")
+            or resolver_result.get("nextStep"),
+            max_chars=80,
+        )
+        head_sha = cls._compact_verdict_text(
+            resolver_result.get("headSha")
+            or resolver_result.get("head_sha")
+            or resolver_result.get("latestHeadSha"),
+            max_chars=80,
+        )
+        evidence_ref = cls._compact_verdict_text(
+            resolver_result.get("terminalContractEvidenceRef")
+            or resolver_result.get("terminal_contract_evidence_ref"),
+            max_chars=200,
+        )
+        retry_after: int | None = None
+        for key in (
+            "retryAfterSeconds",
+            "retry_after_seconds",
+            "prResolverRetryAfterSeconds",
+        ):
+            raw = resolver_result.get(key)
+            if raw is None or isinstance(raw, bool):
+                continue
+            try:
+                candidate = int(raw) if not isinstance(raw, int) else raw
+            except (TypeError, ValueError):
+                continue
+            if candidate >= 1:
+                retry_after = candidate
+                break
+        if retry_after is None:
+            continuation = resolver_result.get("gatedContinuation")
+            if isinstance(continuation, Mapping):
+                raw = continuation.get("retryAfterSeconds")
+                if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 1:
+                    retry_after = raw
+        summary = cls._compact_verdict_text(
+            resolver_result.get("prResolverVerdictSummary")
+            or resolver_result.get("summary"),
+            max_chars=1600,
+        )
+        verdict: dict[str, Any] = {}
+        if status:
+            verdict["prResolverStatus"] = status
+        if reason:
+            verdict["finalReason"] = reason
+        if next_step:
+            verdict["nextStep"] = next_step
+        if head_sha:
+            verdict["headSha"] = head_sha
+        if evidence_ref:
+            verdict["terminalContractEvidenceRef"] = evidence_ref
+        if retry_after is not None:
+            verdict["retryAfterSeconds"] = retry_after
+        if summary:
+            verdict["prResolverVerdictSummary"] = summary
+        return verdict
+
+    @staticmethod
+    def _resolver_verdict_signature(verdict: Mapping[str, Any]) -> str:
+        """Bound cycles by progress: identical verdict+reason+head means no progress."""
+
+        status = str(verdict.get("prResolverStatus") or "").strip().lower()
+        reason = str(verdict.get("finalReason") or "").strip().lower()
+        head = str(verdict.get("headSha") or "").strip().lower()
+        return f"{status}|{reason}|{head}"
+
+    def _record_resolver_verdict_cycle(
+        self,
+        *,
+        resolver_workflow_id: str,
+        disposition: str,
+        verdict: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        cycle = {
+            "cycle": len(self._resolver_verdict_cycles) + 1,
+            "resolverChildWorkflowId": resolver_workflow_id,
+            "disposition": disposition,
+            "headSha": str(verdict.get("headSha") or ""),
+            "prResolverStatus": str(verdict.get("prResolverStatus") or ""),
+            "finalReason": str(verdict.get("finalReason") or ""),
+            "nextStep": str(verdict.get("nextStep") or ""),
+            "terminalContractEvidenceRef": str(
+                verdict.get("terminalContractEvidenceRef") or ""
+            ),
+        }
+        if verdict.get("retryAfterSeconds") is not None:
+            cycle["retryAfterSeconds"] = verdict.get("retryAfterSeconds")
+        if verdict.get("prResolverVerdictSummary"):
+            cycle["summary"] = verdict.get("prResolverVerdictSummary")
+        self._resolver_verdict_cycles.append(cycle)
+        return cycle
+
+    @staticmethod
+    def _normalize_remediation_artifact_ref(value: Any) -> str:
+        """Normalize a terminal evidence ref to an ``artifact://`` ref.
+
+        The runtime materializer only recognizes top-level ``gateResultRef`` /
+        ``remainingWorkRef`` values using the ``artifact://`` scheme, while the
+        ``remediate-issue`` Skill requires materialized local paths and stops
+        when it receives only an unreadable reference.
+        """
+
+        candidate = str(value or "").strip()
+        if not candidate:
+            return ""
+        if candidate.startswith("artifact://"):
+            remainder = candidate.removeprefix("artifact://").strip()
+            return candidate if remainder else ""
+        return f"artifact://{candidate}"
+
+    def _build_remediation_run_request(
+        self,
+        *,
+        verdict: Mapping[str, Any],
+        resolver_workflow_id: str,
+    ) -> dict[str, Any]:
+        """Build a bounded remediate-issue child request from Skill evidence.
+
+        The Skill's validated evidence ref is routed through the supported
+        ``gateResultRef`` / ``remainingWorkRef`` fields so the Activity can
+        materialize it, and the child runs in the authoritative PR-head
+        workspace with a workflow-owned publication handoff. MoonMind only
+        routes, it never reclassifies the blocker or invents a fix plan.
+        """
+
+        pr = self._input.pull_request if self._input is not None else None
+        evidence_ref = self._normalize_remediation_artifact_ref(
+            verdict.get("terminalContractEvidenceRef")
+        )
+        head_sha = str(verdict.get("headSha") or "").strip()
+        final_reason = str(verdict.get("finalReason") or "").strip()
+        repo = pr.repo if pr is not None else ""
+        head_branch = (
+            str(pr.head_branch or "").strip()
+            if pr is not None and pr.head_branch
+            else ""
+        )
+        base_branch = (
+            str(pr.base_branch or "").strip()
+            if pr is not None and pr.base_branch
+            else ""
+        )
+        target_branch = head_branch or base_branch
+        initial_parameters: dict[str, Any] = {
+            "repository": repo,
+            "repo": repo,
+            "publishMode": "auto",
+            "task": {
+                "instructions": (
+                    "Apply the bounded remediate-issue Skill contract to the "
+                    "validated pr-resolver terminal evidence. "
+                    f"Reason: {final_reason or 'unknown'}. "
+                    "Do not reimplement Skill semantics."
+                ),
+                "tool": {"type": "skill", "name": "remediate-issue"},
+                "skill": {
+                    "id": "remediate-issue",
+                    "args": {
+                        "gateResultRef": evidence_ref,
+                        "remainingWorkRef": evidence_ref,
+                        "remainingWorkPath": str(
+                            verdict.get("terminalContractEvidenceRef") or ""
+                        ),
+                        "headSha": head_sha,
+                        "finalReason": final_reason,
+                        "resolverChildWorkflowId": resolver_workflow_id,
+                    },
+                },
+                "publish": {"mode": "auto"},
+            },
+            "workspaceSpec": {
+                "repository": repo,
+                "branch": head_branch,
+                "startingBranch": base_branch or target_branch,
+                "targetBranch": target_branch,
+            },
+        }
+        if evidence_ref:
+            initial_parameters["gateResultRef"] = evidence_ref
+            initial_parameters["remainingWorkRef"] = evidence_ref
+        if pr is not None:
+            initial_parameters["mergeGate"] = {
+                "parentWorkflowId": self._resolver_parent_workflow_id(),
+                "pullRequestUrl": pr.url,
+                "headSha": head_sha or pr.head_sha,
+            }
+        return {
+            "workflowType": "MoonMind.UserWorkflow",
+            "parentWorkflowId": self._resolver_parent_workflow_id(),
+            "title": (
+                f"Remediate {final_reason or 'pr-resolver blocker'} "
+                f"for PR #{pr.number if pr is not None else '?'}"
+            ),
+            "initial_parameters": initial_parameters,
+        }
+
+    async def _run_bounded_remediation(
+        self,
+        *,
+        verdict: Mapping[str, Any],
+        resolver_workflow_id: str,
+    ) -> None:
+        remediation_request = self._build_remediation_run_request(
+            verdict=verdict,
+            resolver_workflow_id=resolver_workflow_id,
+        )
+        remediation_workflow_id = f"{resolver_workflow_id}:remediation"
+        self._remediation_child_workflow_ids.append(remediation_workflow_id)
+        try:
+            remediation_result = await workflow.execute_child_workflow(
+                "MoonMind.UserWorkflow",
+                remediation_request,
+                id=remediation_workflow_id,
+                task_queue=self._workflow_child_task_queue(),
+                search_attributes=self._resolver_search_attributes(),
+                cancellation_type=ChildWorkflowCancellationType.TRY_CANCEL,
+                static_summary="Bounded pr-resolver remediation for merge automation",
+                static_details=(
+                    f"Remediate {verdict.get('finalReason') or 'pr-resolver blocker'}"
+                ),
+            )
+        except CancelledError:
+            raise
+        except Exception:
+            # A failed remediation step must not mask the Skill's validated
+            # verdict; the gate re-opens and the progress bound decides.
+            return
+        if isinstance(remediation_result, Mapping):
+            self._refresh_tracked_head_sha(remediation_result)
+
+    async def _wait_for_pr_resolver_backoff(self, *, retry_after_seconds: int) -> None:
+        try:
+            await workflow.sleep(timedelta(seconds=int(retry_after_seconds)))
+        except CancelledError:
+            raise
+        except Exception as exc:
+            # Direct unit-boundary tests invoke run() without a Temporal
+            # event loop. Production histories always use the timer above.
+            if type(exc).__name__ != "_NotInWorkflowEventLoopError":
+                raise
+
+    def _skill_verdict_summary(
+        self, *, verdict: Mapping[str, Any], disposition: str
+    ) -> str:
+        explicit = str(verdict.get("prResolverVerdictSummary") or "").strip()
+        if explicit:
+            return explicit
+        status = str(verdict.get("prResolverStatus") or "").strip()
+        reason = str(verdict.get("finalReason") or "").strip()
+        next_step = str(verdict.get("nextStep") or "").strip()
+        if status or reason or next_step:
+            parts = [f"pr-resolver reported status '{status or 'unknown'}'"]
+            if reason:
+                parts.append(reason)
+            if next_step:
+                parts.append(f"next_step={next_step}")
+            return "; ".join(parts)
+        if disposition == DISPOSITION_MANUAL_REVIEW:
+            return "pr-resolver requested manual review."
+        return "pr-resolver reported failure."
+
+    async def _route_pr_resolver_terminal(
+        self,
+        *,
+        resolver_result: Mapping[str, Any],
+        resolver_workflow_id: str,
+        resolver_disposition: str,
+    ) -> dict[str, Any] | None:
+        """Route a validated terminal verdict; None means re-enter the gate.
+
+        One typed policy (MoonLadderStudios/MoonMind#4223):
+        - ``run_full_remediation`` → one bounded remediate-issue child, then
+          re-enter the gate on the (possibly new) head.
+        - ``retry_finalize_after_backoff`` → wait the Skill-supplied
+          ``retryAfterSeconds`` with no agent launch, then re-enter.
+        - ``manual_review``/``attempts_exhausted`` (or unrecognized) → stop
+          with the Skill's summary.
+        Cycles are bounded by progress, not count: an identical
+        verdict+reason+head to the previous cycle stops instead of launching
+        another resolver.
+        """
+
+        verdict = self._pr_resolver_verdict(resolver_result)
+        # Fall back to the tracked head when the child omits it so progress
+        # bounding still compares the revision the gate acted on.
+        if not verdict.get("headSha") and self._input is not None:
+            tracked = str(self._input.pull_request.head_sha or "").strip()
+            if tracked:
+                verdict = {**verdict, "headSha": tracked}
+        cycle = self._record_resolver_verdict_cycle(
+            resolver_workflow_id=resolver_workflow_id,
+            disposition=resolver_disposition,
+            verdict=verdict,
+        )
+        # Keep the gate's tracked head aligned with the revision the Skill
+        # actually evaluated before any routing decision.
+        self._refresh_tracked_head_sha(resolver_result)
+        signature = self._resolver_verdict_signature(verdict)
+        if len(self._resolver_verdict_cycles) >= 2:
+            previous = self._resolver_verdict_cycles[-2]
+            previous_signature = self._resolver_verdict_signature(previous)
+            if signature and signature == previous_signature:
+                self._resolver_verdict_stop_reason = (
+                    "identical_verdict_head_no_progress"
+                )
+                cycle["stopReason"] = self._resolver_verdict_stop_reason
+                return await self._failed_resolver_summary(
+                    summary=self._skill_verdict_summary(
+                        verdict=verdict, disposition=resolver_disposition
+                    ),
+                    blocker_kind=resolver_disposition,
+                )
+        next_step = str(verdict.get("nextStep") or "").strip().lower()
+        if next_step == NEXT_STEP_RUN_FULL_REMEDIATION:
+            await self._run_bounded_remediation(
+                verdict=verdict,
+                resolver_workflow_id=resolver_workflow_id,
+            )
+            self._status = STATE_WAITING
+            self._publish_visibility()
+            return None
+        if next_step == NEXT_STEP_RETRY_FINALIZE_AFTER_BACKOFF:
+            retry_after = verdict.get("retryAfterSeconds")
+            if not isinstance(retry_after, int) or retry_after < 1:
+                retry_after = (
+                    self._input.config.timeouts.fallback_poll_seconds
+                    if self._input is not None
+                    else 300
+                )
+            self._resolver_verdict_stop_reason = None
+            cycle["waitedRetryAfterSeconds"] = retry_after
+            self._status = STATE_WAITING
+            self._summary = (
+                "pr-resolver requested a finalize retry after backoff; "
+                f"waiting {retry_after}s before re-entering the gate."
+            )
+            self._publish_visibility()
+            await self._wait_for_pr_resolver_backoff(
+                retry_after_seconds=int(retry_after)
+            )
+            return None
+        # ``manual_review``/``attempts_exhausted`` (or any unrecognized
+        # next_step) stops the cycle with the Skill's summary.
+        has_verdict_facts = any(
+            str(resolver_result.get(key) or "").strip()
+            for key in (
+                "prResolverStatus",
+                "prResolverReason",
+                "prResolverNextStep",
+                "final_reason",
+                "finalReason",
+                "next_step",
+                "nextStep",
+                "terminalContractEvidenceRef",
+                "retryAfterSeconds",
+                "prResolverVerdictSummary",
+            )
+        )
+        if not has_verdict_facts:
+            if resolver_disposition == DISPOSITION_MANUAL_REVIEW:
+                self._resolver_verdict_stop_reason = "manual_review"
+                return await self._failed_resolver_summary(
+                    summary="pr-resolver requested manual review.",
+                    blocker_kind=DISPOSITION_MANUAL_REVIEW,
+                )
+            self._resolver_verdict_stop_reason = "failed"
+            return await self._failed_resolver_summary(
+                summary="pr-resolver reported failure.",
+                blocker_kind=DISPOSITION_FAILED,
+            )
+        self._resolver_verdict_stop_reason = (
+            next_step if next_step else resolver_disposition
+        )
+        cycle["stopReason"] = self._resolver_verdict_stop_reason
+        return await self._failed_resolver_summary(
+            summary=self._skill_verdict_summary(
+                verdict=verdict, disposition=resolver_disposition
+            ),
+            blocker_kind=resolver_disposition,
+        )
 
     def _continuation_deadline(
         self, resolver_result: Mapping[str, Any], *, resolver_workflow_id: str
@@ -1231,6 +1692,9 @@ class MoonMindMergeAutomationWorkflow:
         self._review_loop_enabled = workflow.patched(
             MERGE_AUTOMATION_REVIEW_LOOP_PATCH
         )
+        self._verdict_routing_enabled = workflow.patched(
+            MERGE_AUTOMATION_PR_RESOLVER_VERDICT_ROUTING_PATCH
+        )
         self._review_cycles = [
             cycle.model_dump(by_alias=True, mode="json")
             for cycle in self._input.review_cycles
@@ -1467,6 +1931,33 @@ class MoonMindMergeAutomationWorkflow:
                                 summary="pr-resolver returned an invalid gated continuation.",
                                 blocker_kind="resolver_continuation_invalid",
                             )
+                        if (
+                            workflow.patched("merge-automation-bound-reenter-progress-v1")
+                            and self._review_loop_active()
+                        ):
+                            continuation = resolver_result.get("gatedContinuation") or {}
+                            signature = continuation.get("progressSignature")
+                            # Older payloads have no signature: an unchanged
+                            # head/reason still cannot claim objective progress.
+                            signature = signature or (
+                                f"{self._input.pull_request.head_sha}|"
+                                f"{continuation.get('reason', '')}"
+                            )
+                            made_progress = self._register_progress_signature(signature)
+                            if (
+                                not made_progress
+                                and self._no_progress_cycles
+                                >= self._review_loop_config().max_consecutive_no_progress_cycles
+                            ):
+                                return await self._blocked_review_summary(
+                                    summary=(
+                                        "Resolver continuation budget exhausted: "
+                                        "the same head and outstanding work repeatedly "
+                                        "returned to the gate. Inspect the resolver "
+                                        "evidence and repair its blocker before retrying."
+                                    ),
+                                    blocker_kind="review_loop_no_progress",
+                                )
                         if expire_at is not None and continuation_deadline >= expire_at:
                             self._status = STATE_EXPIRED
                             self._summary = (
@@ -1543,11 +2034,33 @@ class MoonMindMergeAutomationWorkflow:
                     self._publish_visibility()
                     return await self._finish()
                 if resolver_disposition == DISPOSITION_MANUAL_REVIEW:
+                    if self._verdict_routing_enabled:
+                        routed = await self._route_pr_resolver_terminal(
+                            resolver_result=resolver_result
+                            if isinstance(resolver_result, Mapping)
+                            else {},
+                            resolver_workflow_id=resolver_workflow_id,
+                            resolver_disposition=resolver_disposition,
+                        )
+                        if routed is not None:
+                            return routed
+                        continue
                     return await self._failed_resolver_summary(
                         summary="pr-resolver requested manual review.",
                         blocker_kind=DISPOSITION_MANUAL_REVIEW,
                     )
                 if resolver_disposition == DISPOSITION_FAILED:
+                    if self._verdict_routing_enabled:
+                        routed = await self._route_pr_resolver_terminal(
+                            resolver_result=resolver_result
+                            if isinstance(resolver_result, Mapping)
+                            else {},
+                            resolver_workflow_id=resolver_workflow_id,
+                            resolver_disposition=resolver_disposition,
+                        )
+                        if routed is not None:
+                            return routed
+                        continue
                     return await self._failed_resolver_summary(
                         summary="pr-resolver reported failure.",
                         blocker_kind=DISPOSITION_FAILED,

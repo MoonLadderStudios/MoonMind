@@ -121,6 +121,47 @@ The title displays the user-provided Workflow name when present. If no explicit 
 Untitled workflow
 ```
 
+### Source context (Repository + Starting Branch)
+
+The shared detail hero renders a compact, read-only source-context strip
+(`td-source-context`) directly under the title row, outside tab-specific
+content. It shows **Repository** and **Starting Branch** together where
+available and stays visible on the default Chat route (`/workflows/{workflowId}`)
+as well as Overview, Execution, Evidence, and Debug, on desktop and mobile.
+The default tab is unchanged; the strip is not gated by `overviewTabActive`.
+
+Both the shared strip and Overview → Git & Publish read the same normalized
+value from the selected execution's recorded `repository` / `startingBranch`
+via `resolveWorkflowSourceContext()` in
+`frontend/src/entrypoints/workflow-detail.tsx`. The full branch name keeps a
+`title` tooltip with sensible wrapping/truncation (`break-all`,
+`overflow-wrap: anywhere`).
+
+Branch semantics:
+
+- **Starting Branch** is the recorded source branch only. It is never derived
+  from the generated work branch, checkpoint branch, publication destination,
+  or PR base. **Target Branch** and **Published/Saved Work Branch** remain
+  separate facts.
+- A recorded resolved default (for example `develop (default)`) is shown
+  verbatim as resolution evidence. An unresolved default is never labeled as
+  an observed branch and `main` is never guessed: the backend projection only
+  emits the `(default)` suffix from recorded `defaultBranch` evidence.
+- The displayed context always belongs to the execution being viewed. The
+  detail query key includes the workflow id, so navigation, polling, rerun, or
+  resume replaces the record instead of retaining stale branch values.
+
+Unavailable-data behavior (no new persistence):
+
+- Repository-backed execution with a recorded branch: shows the branch in both
+  the shared strip and Overview.
+- Repository-backed execution with missing branch metadata: shows explicit
+  **Not recorded** in both places (Overview previously omitted the row).
+- Workflow without a repository source: the shared strip is intentionally
+  omitted and Overview shows **Not applicable**.
+- Loading: the detail loading placeholder covers the hero; no source-context
+  row renders until the execution record resolves.
+
 ### Status badge
 
 The status badge is always visible and uses one of the canonical Workflow statuses:

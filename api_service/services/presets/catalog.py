@@ -1492,6 +1492,11 @@ def _normalize_preset_annotations(
     # rather than letting an input silently fall back to its static default at
     # expansion.
     _dependent_input_default_rules(normalized, inputs_schema)
+    # MoonLadderStudios/MoonMind#4099: fail fast on a malformed opt-in
+    # title-enrichment declaration at seed time.
+    _normalize_title_enrichment_policy(
+        normalized.get("titleEnrichment") or normalized.get("title_enrichment")
+    )
     return normalized
 
 
@@ -1614,6 +1619,51 @@ def _normalize_checkpoint_branching_policy(value: Any) -> dict[str, Any]:
     if requested_work_branch:
         normalized["gitWorkBranch"] = requested_work_branch
     return normalized
+
+
+def _normalize_title_enrichment_policy(value: Any) -> dict[str, Any] | None:
+    """Normalize the opt-in issue-search title-enrichment declaration.
+
+    MoonLadderStudios/MoonMind#4099: a small pinned-preset annotation that
+    connects the accepted typed resolver result to the workflow-owned shared
+    title transition. Absent/false-enabled means no automatic enrichment.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise PresetValidationError(
+            "Template titleEnrichment annotation must be an object."
+        )
+    enabled = value.get("enabled", value.get("enable", False))
+    if enabled is False or enabled is None:
+        return None
+    if enabled is not True:
+        raise PresetValidationError("titleEnrichment.enabled must be true or false.")
+    provider = str(value.get("provider") or "").strip().lower()
+    if provider not in ("github",):
+        raise PresetValidationError(
+            "titleEnrichment.provider must be 'github'."
+        )
+    source_tool = str(
+        value.get("sourceTool") or value.get("source_tool") or ""
+    ).strip()
+    if not source_tool:
+        raise PresetValidationError(
+            "titleEnrichment.sourceTool is required when enabled."
+        )
+    target_style = str(
+        value.get("targetStyle") or value.get("target_style") or "base-colon-hash"
+    ).strip()
+    if target_style != "base-colon-hash":
+        raise PresetValidationError(
+            "titleEnrichment.targetStyle must be 'base-colon-hash'."
+        )
+    return {
+        "enabled": True,
+        "provider": provider,
+        "sourceTool": source_tool,
+        "targetStyle": target_style,
+    }
 
 
 def _normalize_checkpoint_branching_triggers(value: Any) -> list[str]:
@@ -2985,6 +3035,21 @@ class PresetCatalogService:
             expanded_payload["publish"] = dict(workflow_publish)
         if isinstance(checkpoint_branching, Mapping):
             expanded_payload["checkpointBranching"] = dict(checkpoint_branching)
+        # MoonLadderStudios/MoonMind#4099: preserve the opt-in title-enrichment
+        # declaration through expansion so the admitted plan snapshot carries
+        # it to the workflow (which owns the enrichment transition).
+        title_enrichment = _normalize_title_enrichment_policy(
+            annotations.get("titleEnrichment") or annotations.get("title_enrichment")
+        )
+        if title_enrichment is not None:
+            expanded_payload["titleEnrichment"] = {
+                **title_enrichment,
+                # Expansion-populated (not authored): the frozen preset label
+                # the workflow renders "<base>: #<number>" from, and the slug
+                # the opt-in scope check matches.
+                "presetTitle": str(template.title or "").strip(),
+                "presetSlug": str(template.slug or "").strip(),
+            }
         return expanded_payload
 
     def _resolve_inputs(

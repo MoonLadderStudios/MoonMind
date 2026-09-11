@@ -4284,6 +4284,9 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.omnigent_session import (
         MoonMindOmnigentSessionWorkflow,
     )
+    from moonmind.workflows.temporal.workflows.github_issue_reconcile import (
+        MoonMindGitHubIssueReconcileWorkflow,
+    )
 
     assert kwargs["workflows"] == (
         MoonMindUserWorkflow,
@@ -4301,6 +4304,7 @@ async def test_main_async_workflow_fleet(
         MoonMindMergeAutomationWorkflow,
         MoonMindPRResolverWorkflow,
         MoonMindPublicationRecoveryWorkflow,
+        MoonMindGitHubIssueReconcileWorkflow,
     )
     assert kwargs["activities"] == (
         resolve_adapter_metadata,

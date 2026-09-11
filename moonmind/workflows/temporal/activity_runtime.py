@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import contextlib
 import fcntl
 import functools
@@ -113,6 +114,7 @@ from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedProfileLaunchContext,
     build_managed_profile_launch_context,
     managed_run_status_metadata,
+    pr_resolver_verdict_summary,
 )
 from moonmind.utils.logging import SecretRedactor, redact_sensitive_payload, redact_sensitive_text
 from moonmind.utils.metrics import get_metrics_emitter
@@ -1027,6 +1029,14 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "merge_automation.complete_post_merge_github": (
         "integrations",
         "merge_automation_complete_post_merge_github",
+    ),
+    "github_issue.finalize_failed_attempt": (
+        "integrations",
+        "github_issue_finalize_failed_attempt",
+    ),
+    "github_issue.reconcile_handoffs": (
+        "integrations",
+        "github_issue_reconcile_handoffs",
     ),
     "pr_resolver.resolve_selector": (
         "integrations",
@@ -5053,6 +5063,138 @@ class TemporalIntegrationActivities:
             **outputs,
         }
 
+    async def github_issue_finalize_failed_attempt(self, payload, /, **kwargs):
+        """Finalize a failed/canceled controlling issue attempt (durable entrypoint).
+
+        Durable counterpart to the ``github.finalize_failed_attempt`` skill
+        tool: the controlling terminal path (failed or canceled exits that
+        never reach the success-path status update) schedules
+        ``github_issue.finalize_failed_attempt`` instead of relying on an
+        agent to invoke the skill. Input keys mirror the tool inputs; only
+        ``repository`` and ``issueNumber`` are required.
+        """
+        from moonmind.workflows.temporal.story_output_tools import (
+            finalize_github_issue_failed_attempt,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "github_issue.finalize_failed_attempt requires an object"
+            )
+        config = payload.get("failedAttemptFinalization")
+        if not isinstance(config, Mapping):
+            config = payload
+
+        def _first(*keys: str) -> Any:
+            for key in keys:
+                if key in config and config[key] is not None:
+                    return config[key]
+            return None
+
+        def _block(*keys: str) -> dict[str, Any]:
+            for key in keys:
+                value = config.get(key)
+                if isinstance(value, Mapping):
+                    return dict(value)
+            return {}
+
+        repository = str(
+            _first("repository", "repo") or ""
+        ).strip()
+        try:
+            issue_number = int(_first("issueNumber", "issue_number") or 0)
+        except (TypeError, ValueError):
+            issue_number = 0
+        if not repository or issue_number <= 0:
+            raise TemporalActivityRuntimeError(
+                "github_issue.finalize_failed_attempt requires repository and issueNumber"
+            )
+        result = await finalize_github_issue_failed_attempt(
+            {
+                "repository": repository,
+                "issueNumber": issue_number,
+                "executionEvent": _first("executionEvent", "execution_event", "controllingOutcome", "controlling_outcome", "outcome", "status"),
+                "fromSettled": _first("fromSettled", "from_settled") or "in_progress",
+                "currentLabels": _first("currentLabels", "current_labels"),
+                "writerEvidence": _block("writerEvidence", "writer_evidence"),
+                "mutationEvidence": _block("mutationEvidence", "mutation_evidence"),
+                "preservationEvidence": _block("preservationEvidence", "preservation_evidence"),
+                "dispositionEvidence": _block("dispositionEvidence", "disposition_evidence"),
+                "attemptId": _first("attemptId", "attempt_id"),
+                "primaryOutcome": _first("primaryOutcome", "primary_outcome"),
+                "metRequirements": _first("metRequirements", "met_requirements"),
+                "remainingRequirements": _first("remainingRequirements", "remaining_requirements"),
+                "retryHistory": _first("retryHistory", "retry_history"),
+                "nextAction": _first("nextAction", "next_action"),
+                "reason": _first("reason"),
+                "completionMode": _first("completionMode", "completion_mode") or "pr_only_handoff",
+                "reviewOwnerEnded": _first("reviewOwnerEnded", "review_owner_ended"),
+                "cancellationHold": _first("cancellationHold", "cancellation_hold"),
+            }
+        )
+        outputs = dict(result.outputs)
+        succeeded = result.status == "COMPLETED" and outputs.get("released") is True
+        return {
+            "status": "succeeded" if succeeded else "failed",
+            "repository": repository,
+            "issueNumber": issue_number,
+            **outputs,
+        }
+
+    async def github_issue_reconcile_handoffs(self, payload, /, **kwargs):
+        """Reconcile interrupted issue handoffs through the bounded scan (durable entrypoint).
+
+        Durable counterpart to periodic maintenance: the default scheduled
+        ``MoonMind.GitHubIssueReconcile`` workflow executes
+        ``github_issue.reconcile_handoffs`` instead of relying on an agent
+        to repair stranded handoffs. Only ``repository`` is required;
+        ``issueNumbers`` optionally narrows the run. Pending-sync evidence
+        persists across worker restarts via ``stateDir``.
+        """
+        from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import (
+            reconcile_github_issue_handoffs,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "github_issue.reconcile_handoffs requires an object"
+            )
+        config = payload.get("reconciliation")
+        if not isinstance(config, Mapping):
+            config = payload
+
+        def _first(*keys: str) -> Any:
+            for key in keys:
+                if key in config and config[key] is not None:
+                    return config[key]
+            return None
+
+        repository = str(_first("repository", "repo") or "").strip()
+        if not repository:
+            raise TemporalActivityRuntimeError(
+                "github_issue.reconcile_handoffs requires repository"
+            )
+        raw_numbers = _first("issueNumbers", "issue_numbers")
+        issue_numbers = None
+        if isinstance(raw_numbers, (list, tuple)):
+            parsed: list[int] = []
+            for raw in raw_numbers:
+                try:
+                    parsed.append(int(raw))  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    continue
+            issue_numbers = parsed
+        result = await reconcile_github_issue_handoffs(
+            repository=repository,
+            issue_numbers=issue_numbers,
+            state_dir=_first("stateDir", "state_dir"),
+        )
+        return {
+            "status": "succeeded" if result.get("ok") else "failed",
+            "repository": repository,
+            **result,
+        }
+
     async def pr_resolver_resolve_selector(self, payload, /, **kwargs):
         """Resolve a PR number, URL, or branch to one canonical PR identity."""
 
@@ -5998,7 +6140,11 @@ class TemporalAgentRuntimeActivities:
         if not webhook_url and not email_configured:
             return {"status": "skipped", "reason": "no_channels"}
 
-        event = _build_execution_notification_payload(payload, redact=True)
+        # Inspect original content before redaction can erase a finding. The
+        # independently built delivery payload remains redacted for low-security
+        # sends and cannot mutate the scan input through nested references.
+        scan_event = _build_execution_notification_payload(payload, redact=False)
+        event = redact_sensitive_payload(copy.deepcopy(scan_event))
         results: list[dict[str, str]] = []
         errors: list[dict[str, str]] = []
         timeout_seconds = max(1, int(notification_settings.timeout_seconds or 5))
@@ -6008,7 +6154,7 @@ class TemporalAgentRuntimeActivities:
             if authorization:
                 headers["Authorization"] = authorization
             blocked_reason = _scan_execution_notification_before_send(
-                event,
+                scan_event,
                 surface="execution.notification.webhook.payload",
             )
             if blocked_reason is not None:
@@ -6046,7 +6192,7 @@ class TemporalAgentRuntimeActivities:
                     )
         if email_configured:
             blocked_reason = _scan_execution_notification_before_send(
-                event,
+                scan_event,
                 surface="execution.notification.email.payload",
             )
             if blocked_reason is not None:
@@ -6766,6 +6912,14 @@ class TemporalAgentRuntimeActivities:
             await self._report_task_run_binding(workflow_id, record_run_id)
 
         response = record.model_dump(mode="json")
+        from moonmind.workflows.temporal.worker_code_identity import (
+            current_worker_code_revision,
+        )
+
+        # Executing-worker code revision (MoonLadderStudios/MoonMind#4224): the
+        # AgentRun workflow persists this in run metadata for post-incident
+        # analysis of which revision executed the step.
+        response["workerCodeRevision"] = current_worker_code_revision()
         if request.terminal_contract is not None:
             response["terminalContract"] = request.terminal_contract.model_dump(
                 mode="json", by_alias=True
@@ -10621,6 +10775,74 @@ class TemporalAgentRuntimeActivities:
             "compatibilityProfile": compatibility_profile,
         }
 
+    @staticmethod
+    def _schedule_health_state_path() -> Path:
+        override = os.environ.get("MOONMIND_SCHEDULE_HEALTH_STATE_PATH", "").strip()
+        if override:
+            return Path(override)
+        root = os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
+        return Path(root) / "schedule_health_state.json"
+
+    def _read_schedule_health_state(self) -> dict[str, Any]:
+        try:
+            raw = self._schedule_health_state_path().read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return {}
+        try:
+            parsed = json.loads(raw or "{}")
+        except ValueError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _write_schedule_health_state(
+        self,
+        *,
+        previous: Mapping[str, Any],
+        streaks: Mapping[str, Any],
+        last_alerted: Mapping[str, Any],
+    ) -> None:
+        path = self._schedule_health_state_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
+        payload = {
+            "previous": dict(previous),
+            "streaks": dict(streaks),
+            "last_alerted": {
+                str(k): v for k, v in dict(last_alerted).items() if v is not None
+            },
+        }
+        try:
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            return
+
+    async def _describe_operational_schedule(
+        self, schedule_id: str
+    ) -> Any | None:
+        """Best-effort describe of one Temporal schedule at the activity boundary."""
+        adapter = self._client_adapter
+        if adapter is None:
+            return None
+        describe = getattr(adapter, "describe_schedule", None)
+        if callable(describe):
+            try:
+                return await describe(definition_id=schedule_id)
+            except Exception:
+                pass
+        get_client = getattr(adapter, "get_client", None)
+        if callable(get_client):
+            try:
+                client = await get_client()
+                handle = client.get_schedule_handle(schedule_id)
+                return await handle.describe()
+            except Exception:
+                return None
+        return None
+
     async def agent_runtime_reconcile_managed_sessions(
         self,
         payload: Mapping[str, Any] | None = None,
@@ -10821,6 +11043,120 @@ class TemporalAgentRuntimeActivities:
                 summary["omnigentStuckStateSweepFailed"] = 1
             else:
                 summary["omnigentStuckState"] = stuck_result.to_dict()
+        # MoonLadderStudios/MoonMind#4226: surface Temporal schedule health
+        # from the same operational reconcile tick. Schedule descriptions are
+        # injected when the scheduler supplies them; otherwise the activity
+        # describes the explicitly watched schedules itself at this
+        # authorized activity boundary (workflows stay deterministic) and
+        # durably tracks counters/streaks in a best-effort state file. The
+        # production reconcile schedule carries its own ID in
+        # `scheduleIdsToWatch` so its SkippedOverlap growth is observed.
+        # Failures are auxiliary and must not overwrite primary reattachment
+        # success.
+        try:
+            from moonmind.workflows.temporal.schedule_health import (
+                evaluate_reconcile_schedules,
+            )
+
+            raw_descriptions = action_payload.get("scheduleDescriptions")
+            descriptions: dict[str, Any] = (
+                dict(raw_descriptions)
+                if isinstance(raw_descriptions, Mapping)
+                else {}
+            )
+            if not descriptions:
+                # Explicit opt-in only: describe the watched schedules when
+                # the scheduler asks for it via `scheduleIdsToWatch` (the
+                # production reconcile schedule carries its own ID). Plain
+                # `{}` ticks with no reachable Temporal server leave the
+                # bounded reattach summary untouched.
+                watched = action_payload.get("scheduleIdsToWatch")
+                watch_ids: list[str] = []
+                if isinstance(watched, (list, tuple)):
+                    watch_ids = [
+                        str(item).strip() for item in watched if str(item).strip()
+                    ]
+                for schedule_id in watch_ids:
+                    try:
+                        described = await self._describe_operational_schedule(
+                            schedule_id
+                        )
+                    except Exception:
+                        continue
+                    if described is not None:
+                        descriptions[schedule_id] = described
+            if not descriptions:
+                # No schedule health input available (unit-test `{}` ticks
+                # with no reachable Temporal server, for example): leave the
+                # bounded reattach summary untouched.
+                return summary
+            raw_previous = action_payload.get("scheduleSkippedPrevious")
+            raw_alerted = action_payload.get("scheduleSkippedLastAlerted")
+            raw_streaks = action_payload.get("scheduleSkippedStreakPrevious")
+            persisted = self._read_schedule_health_state()
+            previous_counters: dict[str, Any] = (
+                dict(raw_previous) if isinstance(raw_previous, Mapping) else {}
+            )
+            last_alerted: dict[str, Any] = (
+                dict(raw_alerted) if isinstance(raw_alerted, Mapping) else {}
+            )
+            previous_streaks: dict[str, Any] = (
+                dict(raw_streaks) if isinstance(raw_streaks, Mapping) else {}
+            )
+            for key, slot in (
+                ("previous", previous_counters),
+                ("last_alerted", last_alerted),
+                ("streaks", previous_streaks),
+            ):
+                stored = persisted.get(key)
+                if isinstance(stored, Mapping):
+                    for sid, value in stored.items():
+                        slot.setdefault(str(sid), value)
+            schedule_health = evaluate_reconcile_schedules(
+                schedule_descriptions=descriptions,
+                previous_counters=previous_counters,
+                last_alerted=last_alerted,
+                previous_streaks=previous_streaks,
+            )
+            summary["scheduleHealth"] = schedule_health
+            if schedule_health.get("diagnostics"):
+                summary["scheduleSkippedOverlapDiagnostics"] = (
+                    schedule_health["diagnostics"]
+                )
+            summary["scheduleSkippedCurrent"] = schedule_health.get(
+                "currentCounters", {}
+            )
+            summary["scheduleSkippedStreakCurrent"] = schedule_health.get(
+                "currentStreaks", {}
+            )
+            try:
+                self._write_schedule_health_state(
+                    previous={
+                        str(k): v
+                        for k, v in schedule_health.get("currentCounters", {}).items()
+                    },
+                    streaks={
+                        str(k): v
+                        for k, v in schedule_health.get("currentStreaks", {}).items()
+                    },
+                    last_alerted={
+                        str(d.get("scheduleId")): d.get("skippedOverlap")
+                        for d in schedule_health.get("diagnostics", [])
+                        if isinstance(d, Mapping)
+                        and d.get("scheduleId") is not None
+                        and d.get("skippedOverlap") is not None
+                    } or last_alerted,
+                )
+            except Exception:
+                logger.warning(
+                    "Schedule SkippedOverlap state persist failed during reconcile",
+                    exc_info=True,
+                )
+        except Exception:
+            logger.warning(
+                "Schedule SkippedOverlap evaluation failed during reconcile",
+                exc_info=True,
+            )
         return summary
 
     async def agent_runtime_cleanup_managed_runtime_files(
@@ -11141,12 +11477,17 @@ class TemporalAgentRuntimeActivities:
             activity.heartbeat(f"Checking status for run_id {run_id}")
 
         record = self._run_store.load(run_id)
+        from moonmind.workflows.temporal.worker_code_identity import (
+            current_worker_code_revision,
+        )
+
         if record is None:
             status = AgentRunStatus(
                 runId=run_id,
                 agentKind="managed",
                 agentId=agent_id,
                 status="running",
+                workerCodeRevision=current_worker_code_revision(),
             )
             return status
 
@@ -11156,6 +11497,7 @@ class TemporalAgentRuntimeActivities:
             agentId=record.agent_id or agent_id,
             status=record.status,
             metadata=managed_run_status_metadata(record),
+            workerCodeRevision=current_worker_code_revision(),
         )
         return status
 
@@ -11623,6 +11965,7 @@ class TemporalAgentRuntimeActivities:
     ) -> AgentRunResult:
         """Apply an execution-bound terminal contract above provider adapters."""
         from moonmind.workflows.terminal_evidence import (
+            PR_RESOLVER_VERDICT_FAILURE_CODES,
             evaluate_terminal_evidence,
             resolve_terminal_evidence_source,
         )
@@ -11865,13 +12208,47 @@ class TemporalAgentRuntimeActivities:
                 }
             )
 
+        skill_terminal_verdict = (
+            evaluation.outcome == "terminal_failure"
+            and metadata["terminalContractId"] == "pr_resolver_terminal.v1"
+            and evaluation.failure_code in PR_RESOLVER_VERDICT_FAILURE_CODES
+        )
         metadata.update(
             {
                 "terminalContractSatisfied": False,
                 "terminalContractMissingEvidence": list(evaluation.missing_evidence),
-                "terminalContractRecoveryOutcome": "unsupported_or_exhausted",
+                "terminalContractRecoveryOutcome": (
+                    "skill_terminal_verdict"
+                    if skill_terminal_verdict
+                    else "unsupported_or_exhausted"
+                ),
             }
         )
+        if skill_terminal_verdict:
+            # The Skill wrote a validated blocked/failed verdict. Report that
+            # verdict; there is no missing evidence to continue or repair.
+            verdict_summary = pr_resolver_verdict_summary(
+                status=str(
+                    metadata.get("prResolverStatus")
+                    or metadata.get("mergeAutomationDisposition")
+                    or ""
+                ),
+                reason=str(metadata.get("prResolverReason") or ""),
+                next_step=str(metadata.get("prResolverNextStep") or ""),
+            )
+            update: dict[str, Any] = {
+                "provider_error_code": result.provider_error_code
+                or evaluation.failure_code,
+                "metadata": metadata,
+            }
+            if result.failure_class is None:
+                update["failure_class"] = "execution_error"
+                update["summary"] = verdict_summary
+            else:
+                # An earlier runtime failure keeps its own summary; the verdict
+                # remains readable in metadata.
+                metadata["prResolverVerdictSummary"] = verdict_summary
+            return _validated_result(update)
         missing = ", ".join(evaluation.missing_evidence) or "valid terminal evidence"
         terminal_failure_message = str(
             metadata.get("terminalFailureMessage") or ""

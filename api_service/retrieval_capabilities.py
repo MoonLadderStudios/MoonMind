@@ -1,7 +1,12 @@
-"""Ephemeral retrieval authority and bounded evidence for managed sessions.
+"""Retired native retrieval authority: drain-only evidence for managed sessions.
 
-The raw capability is returned once to the host.  Only its digest is retained;
-durable evidence therefore cannot be used to replay retrieval authority.
+Built-in vector retrieval is retired (MoonLadderStudios/MoonMind#4105,
+#4107): no new retrieval capability may be issued. ``RetrievalCapabilityRegistry``
+retains only the drain and historical-evidence paths -- scoped revocation,
+durable status/summaries, secret-free evidence, and result reads for
+already-issued capabilities -- so already-issued authority drains under the
+epic cutover rule and historical artifacts remain authorized and readable.
+New issuance fails closed via :meth:`RetrievalCapabilityRegistry.issue`.
 """
 
 from __future__ import annotations
@@ -92,10 +97,12 @@ class RetrievalCapabilityError(RuntimeError):
 
 
 class RetrievalCapabilityRegistry:
-    """Durable live authority with artifact-backed, secret-free evidence.
+    """Drain-only authority for retired native retrieval.
 
-    SQLite is the authority for capability lifecycle, accounting and
-    deduplication.  The in-memory objects are short-lived projections only.
+    SQLite remains the authority for already-issued capability lifecycle,
+    accounting and deduplication so in-flight work drains and historical
+    evidence stays readable after restart. New issuance is retired: :meth:`issue`
+    always fails closed. The in-memory objects are short-lived projections only.
     """
 
     def __init__(self, evidence_root: Path | None = None) -> None:
@@ -181,32 +188,22 @@ class RetrievalCapabilityRegistry:
     def issue(
         self, budget: RetrievalBudgetSnapshot, *, lifetime_seconds: int
     ) -> tuple[str, RetrievalCapability]:
-        now = time.time()
-        token = secrets.token_urlsafe(32)
-        capability = RetrievalCapability(
-            capability_id=f"rcap_{secrets.token_hex(12)}",
-            token_digest=_digest(token),
-            budget=budget,
-            issued_at=now,
-            expires_at=now + lifetime_seconds,
+        """Refuse new native retrieval issuance (retired #4105/#4107).
+
+        Already-issued capabilities continue to drain through ``revoke``,
+        ``revoke_scope``, ``resolve`` (revoked/expired/identity checks),
+        ``status`` and the evidence readers. No new token is ever minted,
+        so no newly issued token can grant retired vector authority and no
+        host manifest can receive a dead retrieval tool or credential.
+        """
+        raise RetrievalCapabilityError(
+            "retired",
+            "Built-in vector retrieval has been retired "
+            "(MoonLadderStudios/MoonMind#4105, #4107). Remove retired follow-up "
+            "retrieval request fields and use explicit attachments, artifact "
+            "refs, or scoped workspace access instead. Historical details "
+            "remain readable.",
         )
-        with self._lock:
-            self._capabilities[capability.capability_id] = capability
-            self._by_digest[capability.token_digest] = capability.capability_id
-            with self._connect() as connection:
-                connection.execute(
-                    """INSERT INTO retrieval_capabilities
-                       (capability_id, token_digest, budget_json, issued_at, expires_at)
-                       VALUES (?, ?, ?, ?, ?)""",
-                    (
-                        capability.capability_id,
-                        capability.token_digest,
-                        json.dumps(asdict(budget), sort_keys=True),
-                        capability.issued_at,
-                        capability.expires_at,
-                    ),
-                )
-        return token, capability
 
     def resolve(
         self,

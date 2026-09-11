@@ -3579,7 +3579,14 @@ class StepFinalizationOutcomeModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     status: Literal[
-        "not_started", "succeeded", "retry_pending", "failed", "degraded", "unsupported"
+        "not_started",
+        "succeeded",
+        "retry_pending",
+        "failed",
+        "degraded",
+        "unsupported",
+        "deferred",
+        "not_required",
     ]
     phase: str | None = None
     criticality: Literal["required", "recoverability_only", "unsupported"]
@@ -4061,6 +4068,9 @@ class ExecutionModel(BaseModel):
         "failed",
         "canceled",
     ] = Field(..., alias="status")
+    completion_disposition: Literal["gated_continuation"] | None = Field(
+        None, alias="completionDisposition"
+    )
     dashboard_status: Literal[
         "queued",
         "running",
@@ -4242,6 +4252,9 @@ class ExecutionListItemModel(BaseModel):
         "failed",
         "canceled",
     ] = Field(..., alias="status")
+    completion_disposition: Literal["gated_continuation"] | None = Field(
+        None, alias="completionDisposition"
+    )
     dashboard_status: Literal[
         "queued",
         "running",

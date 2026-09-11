@@ -83,6 +83,10 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - TEMPORAL_DASHBOARD_SUBMIT_ENABLED=true
       - TEMPORAL_WORKFLOW_EDITING_ENABLED=${TEMPORAL_WORKFLOW_EDITING_ENABLED:-true}
+      # Stale worker-code admission (MoonLadderStudios/MoonMind#4224) runs in
+      # the API: it needs the same default workflow readiness target as the
+      # workflow worker itself, otherwise the gate silently disables itself.
+      - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
       # `ContainerJobService.submit()` resolves the deployment's declared image
       # sources before it creates durable job identity, so the API must see the
@@ -236,6 +240,7 @@ services:
     volumes:
       - ./api_service:/app/api_service
       - ./moonmind:/app/moonmind:ro
+      - ./services:/app/services:ro
       - ./docs:/app/docs:ro
       - ./.agents:/app/.agents:ro
       - ./deploy/state:/workspace/deployment_state:ro
@@ -942,6 +947,11 @@ services:
       - TEMPORAL_WORKER_FLEET=deployment
       - TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE=${TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE:-mm.activity.deployment}
       - TEMPORAL_DEPLOYMENT_WORKER_CONCURRENCY=${TEMPORAL_DEPLOYMENT_WORKER_CONCURRENCY:-1}
+      # Stale worker-code recovery (MoonLadderStudios/MoonMind#4224) runs in
+      # this worker: it needs the same default workflow readiness target as
+      # the workflow worker itself, otherwise recovery silently keeps
+      # image-only behavior.
+      - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
         moonmind.workflows.temporal.worker_runtime}
       - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
@@ -1031,6 +1041,11 @@ services:
       - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
+      # Canonical deployment identity shared by all integrations replicas.
+      # When unset, the worker persists one ID on the moonmind_secrets volume
+      # (/app/var/secrets/moonmind-installation-id) and reuses it across
+      # restarts; set it explicitly to pin the identity.
+      - MOONMIND_INSTALLATION_ID=${MOONMIND_INSTALLATION_ID:-}
     env_file:
       - path: .env
         required: false
@@ -1064,15 +1079,17 @@ services:
       - control-plane-network
     restart: unless-stopped
 
-  # MoonLadderStudios/MoonMind#4115: the native Qdrant service is retired and
-  # intentionally absent from the vector-free release (no live or optional
-  # native Qdrant backend, no compatibility profile). The previous image was
-  # qdrant/qdrant:v1.17.1 with qdrant-storage:/qdrant/storage. Removing this
-  # YAML definition does not stop a running pre-cutover orphan: exact-container
-  # retirement is an explicit operator action with ownership checks (see
-  # docs/tmp/QdrantCutoverRunbook-4115.md). The qdrant-storage volume below is
-  # retained through the recovery window; its eventual deletion is a separate
-  # exact-resource operator action, never automatic.
+  # MoonLadderStudios/MoonMind#4110: the native Qdrant service and its
+  # qdrant-storage volume declaration are removed from the vector-free
+  # release (no live or optional native Qdrant backend, no compatibility
+  # profile). The previous image was qdrant/qdrant:v1.17.1 with
+  # qdrant-storage:/qdrant/storage. Removing this YAML definition does not
+  # stop a running pre-cutover orphan nor delete pre-cutover host data:
+  # exact-container retirement is an explicit operator action with ownership
+  # checks (see docs/tmp/QdrantCutoverRunbook-4115.md), and the pre-cutover
+  # volume persists as an unmanaged host orphan through the #4115
+  # recovery window; its eventual deletion is a separate exact-resource
+  # operator action, never automatic.
 
   omnigent-runtime-bootstrap:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
@@ -1615,12 +1632,13 @@ services:
     restart: unless-stopped
 
 volumes:
-  # MoonLadderStudios/MoonMind#4115: retained through the explicit
-  # recovery/retention window after the Qdrant service removal above. Never
-  # deleted by a normal upgrade; eventual deletion is a separate
-  # exact-resource operator action after export/restore verification.
+  # MoonLadderStudios/MoonMind#4110: the native Qdrant volume declaration is
+  # removed with the Qdrant service (no qdrant-storage declaration, mount, or
+  # product support remains). Pre-cutover operator data persists on the host
+  # as an unmanaged orphan outside this file through the #4115
+  # recovery/retention window; eventual deletion is a separate exact-resource
+  # operator action after export/restore verification, never automatic.
   # Distinct from moonmind_retrieval_state (classified by #4107).
-  qdrant-storage:
   omnigent-host-state:
   omnigent-host-claude-state:
   omnigent-host-claude-home:

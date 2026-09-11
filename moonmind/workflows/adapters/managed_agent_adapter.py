@@ -128,12 +128,18 @@ _AUTO_PUBLISH_ALLOWED_STATUSES = frozenset(
 def managed_run_status_metadata(record: ManagedRunRecord) -> dict[str, Any]:
     """Return compact status metadata that is safe for workflow history."""
 
+    from moonmind.workflows.temporal.worker_code_identity import (
+        current_worker_code_revision,
+    )
+
     capabilities = resolve_runtime_execution_capabilities(record.runtime_id)
     metadata: dict[str, Any] = {
         "runtimeId": capabilities.runtime_id,
         "capabilitySetVersion": capabilities.capability_set_version,
         "capabilityDigest": capabilities.capability_digest,
         "runtimeCapabilities": capabilities.model_dump(by_alias=True, mode="json"),
+        # Executing-worker code revision (MoonLadderStudios/MoonMind#4224).
+        "workerCodeRevision": current_worker_code_revision(),
     }
     if record.workspace_path:
         metadata["workspaceLocator"] = {
@@ -838,11 +844,6 @@ def _derive_pr_resolver_failure(
         final.get("reason"),
     )
     next_step = _pr_resolver_next_step(payload)
-    summary_parts = [f"pr-resolver reported status '{status}'"]
-    if reason:
-        summary_parts.append(reason)
-    if next_step:
-        summary_parts.append(f"next_step={next_step}")
     normalized_reason = reason.lower().replace("-", "_").replace(" ", "_")
     # User fault is intentionally allow-listed and can only come from a terminal
     # artifact that passed identity, freshness, and terminal-shape validation.
@@ -850,7 +851,26 @@ def _derive_pr_resolver_failure(
         disposition == "manual_review"
         and normalized_reason in _PR_RESOLVER_USER_ACTIONABLE_REASONS
     ) else "execution_error"
-    return failure_class, "; ".join(summary_parts)
+    return failure_class, pr_resolver_verdict_summary(
+        status=status, reason=reason, next_step=next_step
+    )
+
+
+def pr_resolver_verdict_summary(
+    *, status: str, reason: str = "", next_step: str = ""
+) -> str:
+    """Operator-safe summary of a validated pr-resolver terminal verdict.
+
+    Shared by the managed adapter and the terminal-evidence Activity so every
+    host reports the Skill's own status/reason/next_step the same way.
+    """
+
+    summary_parts = [f"pr-resolver reported status '{status}'"]
+    if reason:
+        summary_parts.append(reason)
+    if next_step:
+        summary_parts.append(f"next_step={next_step}")
+    return "; ".join(summary_parts)
 
 
 def _pr_resolver_terminal_failure_code(evidence: _PrResolverEvidence) -> str:

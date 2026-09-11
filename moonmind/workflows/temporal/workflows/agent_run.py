@@ -236,6 +236,48 @@ STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID = (
     "agent-run-omnigent-profile-bound-execution-v1"
 )
+# MoonLadderStudios/MoonMind#4226: Temporal activity retries each receive a
+# fresh StartToClose, so a second attempt on the same session must not get a
+# fresh 6h budget. The workflow owns the retry with the remaining
+# ScheduleToClose budget instead of relying on server-side retries.
+OMNIGENT_PROFILE_BOUND_REMAINING_BUDGET_PATCH_ID = (
+    "agent-run-omnigent-profile-bound-remaining-budget-v1"
+)
+#: Minimum per-attempt execution budget for a profile-bound retry (seconds).
+PROFILE_BOUND_RETRY_MINIMUM_SECONDS = 60
+
+
+def profile_bound_retry_start_to_close_seconds(
+    *,
+    first_stc_seconds: int,
+    elapsed_seconds: float,
+    minimum_seconds: int = PROFILE_BOUND_RETRY_MINIMUM_SECONDS,
+) -> int | None:
+    """Return the StartToClose budget for the second profile-bound attempt.
+
+    MoonLadderStudios/MoonMind#4226: the retry inherits the parent's
+    remaining ScheduleToClose budget instead of a fresh full window, so a
+    dead first attempt cannot cost another full 6h. The result is clamped
+    to at least ``minimum_seconds`` while budget remains. When the first
+    attempt already consumed the whole budget (``remaining <= 0``), this
+    returns ``None`` so the caller propagates the original failure instead
+    of launching a probe after the lane's execution authority expired.
+    """
+
+    try:
+        first = int(first_stc_seconds)
+    except (TypeError, ValueError):
+        first = int(minimum_seconds)
+    try:
+        elapsed = float(elapsed_seconds)
+    except (TypeError, ValueError):
+        elapsed = 0.0
+    if elapsed < 0:
+        elapsed = 0.0
+    remaining = first - int(elapsed)
+    if remaining <= 0:
+        return None
+    return max(int(minimum_seconds), remaining)
 OMNIGENT_SESSION_SUPERVISOR_PATCH_ID = (
     "agent-run-omnigent-session-supervisor-v1"
 )
@@ -2832,6 +2874,16 @@ class MoonMindAgentRun:
             )
         if evaluated.failure_class is None:
             return evaluated
+        if (
+            (evaluated.metadata or {}).get("terminalContractRecoveryOutcome")
+            == "skill_terminal_verdict"
+        ):
+            # A validated manual-review/failed verdict is the Skill's terminal
+            # answer. There is nothing to continue or repair, so keep the
+            # verdict instead of relabeling it as an exhausted continuation.
+            # Pre-existing histories never carry this value, so replay of older
+            # runs still takes the continuation path below.
+            return evaluated
 
         runtime_id = (
             request.managed_session.runtime_id
@@ -4187,6 +4239,7 @@ class MoonMindAgentRun:
         stc_seconds: int,
         admit_capacity_before_activity: bool,
         execution_plan_admission: bool = False,
+        retry_policy: RetryPolicy | None = None,
     ) -> tuple[Any, Any]:
         """Run the generic Omnigent execution under one capacity authority.
 
@@ -4244,6 +4297,13 @@ class MoonMindAgentRun:
                 handoff_bound["schedule_to_start_timeout"] = timedelta(
                     seconds=_OMNIGENT_EXECUTION_HANDOFF_SECONDS
                 )
+            routed_overrides: dict[str, Any] = {}
+            if retry_policy is not None:
+                # MoonLadderStudios/MoonMind#4226: the profile-bound lane
+                # owns its retry with the remaining budget, so each attempt
+                # runs single-shot here instead of receiving a fresh
+                # StartToClose from a server-side retry.
+                routed_overrides["retry_policy"] = retry_policy
             try:
                 result_payload = await self._execute_routed_activity(
                     act_name,
@@ -4257,6 +4317,7 @@ class MoonMindAgentRun:
                         )
                     ),
                     **handoff_bound,
+                    **routed_overrides,
                     heartbeat_timeout=STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT,
                     cancellation_type=(
                         # The workflow owns the provider lease but the Activity
@@ -4314,6 +4375,74 @@ class MoonMindAgentRun:
                 f"{requeue_reason} was lost after admission "
                 f"(attempt {capacity_requeue_attempts} of "
                 f"{_MAX_OMNIGENT_CAPACITY_REQUEUE_ATTEMPTS}).",
+            )
+
+    async def _execute_profile_bound_with_remaining_budget(
+        self,
+        *,
+        act_name: str,
+        request: Any,
+        admission: Any,
+        parent_info: Any,
+        stc_seconds: int,
+        admit_capacity_before_activity: bool,
+        execution_plan_admission: bool,
+    ) -> tuple[Any, Any]:
+        """Run the profile-bound lane with single-shot attempts.
+
+        MoonLadderStudios/MoonMind#4226: Temporal activity retries each
+        receive a fresh StartToClose, so a second attempt on the same
+        session must not get a fresh 6h budget. Each attempt runs with
+        ``maximum_attempts=1`` and attempt 2 inherits the parent's
+        remaining ScheduleToClose budget via
+        :func:`profile_bound_retry_start_to_close_seconds` instead of a
+        fresh full window.
+        """
+
+        single_attempt = RetryPolicy(
+            initial_interval=timedelta(seconds=5),
+            backoff_coefficient=2.0,
+            maximum_interval=timedelta(seconds=300),
+            maximum_attempts=1,
+        )
+        lane_start = workflow.now()
+        try:
+            return await self._execute_omnigent_with_admitted_capacity(
+                act_name=act_name,
+                request=request,
+                admission=admission,
+                parent_info=parent_info,
+                stc_seconds=stc_seconds,
+                admit_capacity_before_activity=admit_capacity_before_activity,
+                execution_plan_admission=execution_plan_admission,
+                retry_policy=single_attempt,
+            )
+        except CancelledError:
+            raise
+        except Exception:
+            elapsed = (workflow.now() - lane_start).total_seconds()
+            retry_stc = profile_bound_retry_start_to_close_seconds(
+                first_stc_seconds=stc_seconds,
+                elapsed_seconds=elapsed,
+            )
+            if retry_stc is None:
+                # The first attempt consumed the whole budget: propagate the
+                # original failure so the run records a timeout instead of
+                # mutating the provider or repository after the lane's
+                # execution authority expired.
+                raise
+            # One bounded continuation: attempt 2 inherits the remaining
+            # budget computed above (equal to the full window when the
+            # first attempt failed before the clock advanced).
+            return await self._execute_omnigent_with_admitted_capacity(
+                act_name=act_name,
+                request=request,
+                admission=admission,
+                parent_info=parent_info,
+                stc_seconds=retry_stc,
+                admit_capacity_before_activity=admit_capacity_before_activity,
+                execution_plan_admission=execution_plan_admission,
+                retry_policy=single_attempt,
             )
 
     @staticmethod
@@ -6732,22 +6861,53 @@ class MoonMindAgentRun:
                                     admission=admission,
                                 )
                             )
-                            (
-                                result_payload,
-                                admitted_at,
-                            ) = await self._execute_omnigent_with_admitted_capacity(
-                                act_name=act_name,
-                                request=request,
-                                admission=admission,
-                                parent_info=parent_info,
-                                stc_seconds=stc_seconds,
-                                admit_capacity_before_activity=(
-                                    admit_capacity_before_activity
-                                ),
-                                execution_plan_admission=(
-                                    use_omnigent_execution_plan_admission
-                                ),
+                            use_remaining_budget_retry = (
+                                act_name
+                                == "integration.omnigent.profile_bound_execute"
+                                and workflow.patched(
+                                    OMNIGENT_PROFILE_BOUND_REMAINING_BUDGET_PATCH_ID
+                                )
                             )
+                            if use_remaining_budget_retry:
+                                # MoonLadderStudios/MoonMind#4226: Temporal
+                                # retries each receive a fresh StartToClose,
+                                # so the lane runs single-shot attempts and
+                                # sizes attempt 2 from the parent's remaining
+                                # ScheduleToClose budget instead of a fresh
+                                # full window.
+                                (
+                                    result_payload,
+                                    admitted_at,
+                                ) = await self._execute_profile_bound_with_remaining_budget(
+                                    act_name=act_name,
+                                    request=request,
+                                    admission=admission,
+                                    parent_info=parent_info,
+                                    stc_seconds=stc_seconds,
+                                    admit_capacity_before_activity=(
+                                        admit_capacity_before_activity
+                                    ),
+                                    execution_plan_admission=(
+                                        use_omnigent_execution_plan_admission
+                                    ),
+                                )
+                            else:
+                                (
+                                    result_payload,
+                                    admitted_at,
+                                ) = await self._execute_omnigent_with_admitted_capacity(
+                                    act_name=act_name,
+                                    request=request,
+                                    admission=admission,
+                                    parent_info=parent_info,
+                                    stc_seconds=stc_seconds,
+                                    admit_capacity_before_activity=(
+                                        admit_capacity_before_activity
+                                    ),
+                                    execution_plan_admission=(
+                                        use_omnigent_execution_plan_admission
+                                    ),
+                                )
                             if admitted_at is not None:
                                 # The capacity wait is durable queueing, not
                                 # execution. Reset the clock at the admission the
@@ -6787,6 +6947,13 @@ class MoonMindAgentRun:
                                     type="UnsupportedStatus",
                                     non_retryable=True,
                                 ) from exc
+                            # Executing-worker code revision rides the activity
+                            # result (determinism-safe: pure data flow from the
+                            # activity payload, MoonLadderStudios/MoonMind#4224).
+                            worker_code_revision = handle_dict.get(
+                                "workerCodeRevision",
+                                handle_dict.get("worker_code_revision", "unknown"),
+                            )
                             handle = AgentRunHandle(
                                 runId=handle_dict["external_id"],
                                 agentKind="external",
@@ -6798,7 +6965,9 @@ class MoonMindAgentRun:
                                     "normalizedStatus": normalized_for_metadata,
                                     "externalUrl": handle_dict.get("url"),
                                     "callbackSupported": handle_dict.get("callback_supported", False),
-                                }
+                                    "workerCodeRevision": worker_code_revision,
+                                },
+                                workerCodeRevision=worker_code_revision,
                             )
                         else:
                             handle = AgentRunHandle(**handle_dict) if isinstance(handle_dict, dict) else handle_dict

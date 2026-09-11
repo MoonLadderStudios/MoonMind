@@ -47,6 +47,7 @@ from api_service.api.routers.container_jobs import router as container_jobs_rout
 from api_service.api.routers.mcp_tools import router as mcp_tools_router
 from api_service.api.routers.jira_browser import router as jira_browser_router
 from api_service.api.routers.oauth_sessions import router as oauth_sessions_router
+from api_service.api.routers.advanced_auth_4124 import router as advanced_auth_4124_router
 from api_service.api.routers.profile import router as profile_router
 from api_service.api.routers.recurring_workflows import (
     router as recurring_workflows_router,
@@ -103,6 +104,7 @@ from api_service.api.routers.system_operations import (
 )
 from api_service.api.routers.proxy import router as proxy_router
 from api_service.api.routers.auth_advanced_4124 import router as auth_advanced_4124_router
+from api_service.api.routers.issue_lifecycle import router as issue_lifecycle_router
 from api_service.api.websockets import router as websockets_router
 from api_service.api.schemas import UserProfileUpdate
 from api_service.db.base import get_async_session_context
@@ -691,6 +693,25 @@ async def _maintain_omnigent_bootstrap_reconciliation() -> None:
             retry_delay_seconds = min(retry_delay_seconds * 2, 120)
 
 
+_OMNIGENT_INVENTORY_REFRESH_INTERVAL_SECONDS = 120
+
+
+async def _maintain_omnigent_inventory() -> None:
+    """Keep discovery fresh even while bootstrap waits on credential authority."""
+    from api_service.services.omnigent_agent_profile_service import (
+        refresh_upstream_inventory,
+    )
+
+    while True:
+        try:
+            await refresh_upstream_inventory()
+        except Exception as exc:
+            logger.warning(
+                "Omnigent inventory refresh deferred (%s)", type(exc).__name__
+            )
+        await asyncio.sleep(_OMNIGENT_INVENTORY_REFRESH_INTERVAL_SECONDS)
+
+
 async def _initialize_oidc_provider(app: FastAPI):
     """Validate the authentication selector; generic OIDC discovery lives in #4124."""
     # The bundled Keycloak integration was removed (#4129): retired selectors
@@ -896,6 +917,28 @@ async def _initialize_oidc_provider(app: FastAPI):
         )
     except Exception as exc:
         raise RuntimeError(f"Invalid MoonMind control-plane auth config: {exc}") from exc
+    # Advanced modes fail fast on missing explicit configuration (#4124):
+    # `oidc` needs issuer/client/callback material, `header` needs the
+    # explicitly trusted ingress plus its identity namespace. This keeps a
+    # half-configured deployment from serving an unauthenticated fallback.
+    if production_mode == "oidc":
+        try:
+            from moonmind.security.advanced_identity_4124 import (
+                resolve_oidc_provider_config,
+            )
+
+            resolve_oidc_provider_config()
+        except Exception as exc:
+            raise RuntimeError(f"Invalid generic OIDC configuration: {exc}") from exc
+    elif production_mode == "header":
+        try:
+            from moonmind.security.advanced_identity_4124 import (
+                resolve_trusted_proxy_config,
+            )
+
+            resolve_trusted_proxy_config()
+        except Exception as exc:
+            raise RuntimeError(f"Invalid trusted-proxy configuration: {exc}") from exc
     # Disabled-mode exposure at the deployment boundary.
     try:
         validate_publish_binding(
@@ -969,21 +1012,23 @@ async def lifespan(app: FastAPI):
             _maintain_omnigent_bootstrap_reconciliation(),
             name="omnigent-bootstrap-reconciliation",
         )
+        app.state.omnigent_inventory_task = asyncio.create_task(
+            _maintain_omnigent_inventory(), name="omnigent-inventory-refresh"
+        )
     try:
         yield
     finally:
-        retry_task = getattr(
-            app.state,
-            "omnigent_bootstrap_reconciliation_task",
-            None,
-        )
-        if retry_task is not None and not retry_task.done():
-            retry_task.cancel()
-            try:
-                await retry_task
-            except asyncio.CancelledError:
-                # Shutdown owns this task, so cancellation is the expected outcome.
-                pass
+        maintenance_tasks = [
+            task
+            for name in (
+                "omnigent_bootstrap_reconciliation_task",
+                "omnigent_inventory_task",
+            )
+            if (task := getattr(app.state, name, None)) is not None
+        ]
+        for task in maintenance_tasks:
+            task.cancel()
+        await asyncio.gather(*maintenance_tasks, return_exceptions=True)
         # The pooled Omnigent HTTP/SSE transport lives for the process, so
         # this process closes it (MoonLadderStudios/MoonMind#3878).
         from moonmind.omnigent.production import close_omnigent_transport_pool
@@ -1045,6 +1090,22 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 health_router = APIRouter()
 
 _api_start_time = time.monotonic()
+
+# API-process startup code identity (MoonLadderStudios/MoonMind#4224): recorded
+# once at import so /healthz can report stale_code when a host git pull
+# rewrites the bind-mounted sources under a long-lived API process.
+try:
+    from moonmind.workflows.temporal.worker_code_identity import (
+        record_worker_startup_identity as _record_api_code_identity,
+    )
+
+    # Record through the shared process-wide startup identity so
+    # current_worker_code_revision() (used for AgentRun/UserWorkflow
+    # metadata) reports this process's actual import-time identity instead
+    # of lazily resolving a possibly newer on-disk checkout.
+    _API_STARTUP_CODE_IDENTITY = _record_api_code_identity()
+except Exception:  # pragma: no cover - best-effort startup snapshot
+    _API_STARTUP_CODE_IDENTITY = None
 
 
 @health_router.get("/healthz")
@@ -1135,12 +1196,77 @@ async def health_check():
         db_reachable=db_reachable,
         secret_ready=True,
     )
+    # Worker code freshness (MoonLadderStudios/MoonMind#4224): compare the
+    # API process's startup-recorded identity and each reachable worker's
+    # /readyz identity with the checkout on disk. A host `git pull` alone is
+    # not a deployment — stale workers must be restarted before new runs are
+    # admitted (see docs/Steps/DockerComposeUpdateSystem.md).
+    code_freshness: dict[str, Any] = {}
+    try:
+        from moonmind.workflows.temporal.worker_code_identity import (
+            UNKNOWN as _CODE_UNKNOWN,
+        )
+        from moonmind.workflows.temporal.worker_code_identity import (
+            WorkerCodeIdentity as _WorkerCodeIdentity,
+        )
+        from moonmind.workflows.temporal.worker_code_identity import (
+            collect_worker_code_freshness,
+            evaluate_worker_freshness,
+            readiness_urls_from_env,
+            resolve_checkout_code_identity,
+        )
+
+        checkout = await asyncio.to_thread(resolve_checkout_code_identity)
+        if _API_STARTUP_CODE_IDENTITY is not None:
+            api_freshness = evaluate_worker_freshness(
+                name="api",
+                startup=_API_STARTUP_CODE_IDENTITY,
+                current=checkout,
+            )
+        else:
+            # No startup snapshot (import-time failure): report unknown, never
+            # healthy — there is no evidence the modules match the checkout.
+            api_freshness = evaluate_worker_freshness(
+                name="api",
+                startup=_WorkerCodeIdentity(
+                    revision=None, digest=None, source=_CODE_UNKNOWN
+                ),
+                current=checkout,
+            )
+        code_freshness["api"] = api_freshness.to_payload()
+        workers = [
+            item.to_payload()
+            for item in await asyncio.to_thread(
+                collect_worker_code_freshness,
+                readiness_urls_from_env(),
+                current=checkout,
+            )
+        ]
+        code_freshness["workers"] = workers
+        stale = [
+            item for item in [api_freshness.to_payload(), *workers]
+            if item.get("status") == "stale"
+        ]
+        if stale:
+            code_freshness["reasonCode"] = "stale_code"
+            code_freshness["staleCode"] = [
+                {
+                    "worker": item.get("worker"),
+                    "startupRevision": item.get("startupRevision"),
+                    "currentRevision": item.get("currentRevision"),
+                }
+                for item in stale
+            ]
+    except Exception as exc:
+        logger.warning("Worker code freshness probe degraded: %s", exc)
     body = {
         "status": "ok" if db_reachable and not migration_required else "degraded",
         "db": db_status,
         "uptime_seconds": uptime,
         **readiness,
     }
+    if code_freshness:
+        body["workerCodeFreshness"] = code_freshness
     if not db_reachable or migration_required:
         return JSONResponse(status_code=503, content=body)
     return body
@@ -1165,12 +1291,17 @@ app.include_router(workflows_router)
 app.include_router(provider_profiles_router, prefix="/api/v1")
 app.include_router(omnigent_agent_profiles_router)
 app.include_router(oauth_sessions_router, prefix="/api/v1")
+# Generic OIDC login/callback/logout for `oidc` mode plus the trusted-header
+# request identity for `header` mode (#4124). Mounted under /api/v1/oidc —
+# never /api/v1/auth/*, which stays unmounted per the #4129 removal manifest.
+app.include_router(advanced_auth_4124_router)
 app.include_router(secrets_router, prefix="/api/v1/secrets")
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(proxy_router, prefix="/api/v1")
 app.include_router(system_operations_router)
 app.include_router(deployment_operations_router)
 app.include_router(executions_router)
+app.include_router(issue_lifecycle_router)
 app.include_router(execution_integrations_router)
 app.include_router(automation_router)
 

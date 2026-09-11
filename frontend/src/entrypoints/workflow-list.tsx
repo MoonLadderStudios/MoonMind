@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 
@@ -230,6 +230,7 @@ const ExecutionRowSchema = z
     taskSkills: z.array(z.string()).nullable().optional(),
     title: z.string(),
     status: z.string(),
+    completionDisposition: z.string().nullable().optional(),
     state: z.string(),
     rawState: z.string().optional(),
     temporalStatus: z.string().optional(),
@@ -1114,6 +1115,13 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     initialPrefs.workflowListColumnVisibility,
   );
   const [liveUpdatesPref, setLiveUpdatesPref] = useState(initialPrefs.liveUpdatesEnabled);
+  // #4183: persistent, discoverable needs-attention quick filter. Mirrored to
+  // dashboard preferences so the view survives reload; it filters to rows
+  // with `attentionRequired` or an intervention request using the existing
+  // row signal (never labels a merely-missing remote workflow as failed).
+  const [needsAttentionOnly, setNeedsAttentionOnly] = useState(
+    initialPrefs.workflowListNeedsAttentionOnly,
+  );
   const [prefsMenuOpen, setPrefsMenuOpen] = useState(false);
   const prefsMenuRef = useRef<HTMLDivElement | null>(null);
   // The desktop table and the mobile card list are separate surfaces. On desktop
@@ -1464,8 +1472,15 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   const pageItems = useMemo(() => {
     const items = data?.items || [];
-    return items.filter((row) => rowMatchesProgressFilter(row, filters.progress));
-  }, [data?.items, filters.progress]);
+    const progressFiltered = items.filter((row) => rowMatchesProgressFilter(row, filters.progress));
+    // #4183: needs-attention quick filter reuses the existing row-level
+    // attention signal (`attentionRequired` or an intervention request).
+    if (!needsAttentionOnly) return progressFiltered;
+    return progressFiltered.filter((row) => {
+      const state = String(row.rawState || row.state || row.status || '').toLowerCase();
+      return Boolean(row.attentionRequired) || state === 'intervention_requested';
+    });
+  }, [data?.items, filters.progress, needsAttentionOnly]);
 
   const sortedItems = useMemo(() => {
     return sortRows(pageItems, sortField, sortDir);
@@ -2370,6 +2385,41 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 </span>
               ) : null}
             </button>
+            <fieldset className="segmented-control-field workflow-list-attention-filter">
+              <legend className="sr-only">Attention visibility</legend>
+              <div
+                className="segmented-control"
+                data-intensity="quiet"
+                style={{ '--segmented-control-count': 2, '--segmented-control-active-index': needsAttentionOnly ? 1 : 0 } as CSSProperties}
+              >
+                <label className="segmented-control-item">
+                  <input
+                    type="radio"
+                    name="workflow-list-attention-visibility"
+                    value="all"
+                    checked={!needsAttentionOnly}
+                    onChange={() => {
+                      setNeedsAttentionOnly(false);
+                      updateDashboardPreferences({ workflowListNeedsAttentionOnly: false });
+                    }}
+                  />
+                  <span className="segmented-control-item-label">All</span>
+                </label>
+                <label className="segmented-control-item">
+                  <input
+                    type="radio"
+                    name="workflow-list-attention-visibility"
+                    value="needs-attention"
+                    checked={needsAttentionOnly}
+                    onChange={() => {
+                      setNeedsAttentionOnly(true);
+                      updateDashboardPreferences({ workflowListNeedsAttentionOnly: true });
+                    }}
+                  />
+                  <span className="segmented-control-item-label">Needs attention</span>
+                </label>
+              </div>
+            </fieldset>
             {hasActiveFilters ? (
               <div className="workflow-list-filter-chips" aria-label="Active filters" aria-live="polite">
                 {activeFilters.map(({ field, label, value }) => (
@@ -2572,7 +2622,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           </td>
                           {isColumnVisible('status') ? (
                             <td className="queue-table-cell-status">
-                              <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} />
+                              <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} completionDisposition={row.completionDisposition} />
                               {statusSupplements.map((item) => (
                                 <div key={item} className="workflow-list-status-supplement small">
                                   {item}
@@ -2632,7 +2682,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         </a>
                       </div>
                       <div className="queue-card-status">
-                        <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} />
+                        <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} completionDisposition={row.completionDisposition} />
                         {statusSupplements.map((item) => (
                           <div key={item} className="workflow-list-status-supplement small">
                             {item}

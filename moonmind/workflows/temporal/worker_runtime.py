@@ -578,6 +578,24 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
         if lock_dir
         else DeploymentUpdateLockManager()
     )
+    # Stale-code recovery (MoonLadderStudios/MoonMind#4224): after recreation,
+    # bind-mounted workers that were not recreated may still run stale
+    # modules. The checker probes the configured worker /readyz endpoints;
+    # the restarter restarts idle stale workers immediately and drains busy
+    # ones, never restarting the excluded runner services mid-update. When no
+    # readiness endpoint is configured the executor keeps image-only behavior.
+    from moonmind.workflows.skills.deployment_execution import (
+        build_compose_stale_worker_restarter,
+        build_env_stale_worker_checker,
+    )
+
+    stale_worker_checker = build_env_stale_worker_checker()
+    stale_worker_restarter = build_compose_stale_worker_restarter(
+        project_dir=project_dir,
+        compose_file=compose_file,
+        project_name=project_name,
+        excluded_services=excluded_services,
+    )
     return DeploymentUpdateExecutor(
         lock_manager=lock_manager,
         desired_state_store=desired_state_store,
@@ -592,6 +610,8 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
             excluded_services=excluded_services,
         ),
         excluded_services=excluded_services,
+        stale_worker_checker=stale_worker_checker,
+        stale_worker_restarter=stale_worker_restarter,
     )
 
 
@@ -3158,7 +3178,26 @@ async def main_async() -> None:
 
     # Liveness starts immediately. Readiness remains false until the Temporal
     # connection, executable spec, SDK workers, and polling tasks all exist.
-    health_state = WorkerHealthState()
+    # The startup code identity is recorded before any activity executes so
+    # post-incident analysis can tell which revision ran each step, and so the
+    # /readyz projection can report stale_code when a host git pull rewrites
+    # the bind-mounted sources under a long-lived worker
+    # (MoonLadderStudios/MoonMind#4224).
+    from moonmind.workflows.temporal.worker_code_identity import (
+        record_worker_startup_identity,
+    )
+
+    _startup_code_identity = record_worker_startup_identity()
+    health_state = WorkerHealthState(
+        code_revision=_startup_code_identity.revision,
+        code_digest=_startup_code_identity.digest,
+        code_identity_source=_startup_code_identity.source,
+    )
+    logger.info(
+        "Worker code identity: revision=%s source=%s",
+        _startup_code_identity.revision or "unknown",
+        _startup_code_identity.source,
+    )
     healthcheck_server = await start_healthcheck_server(health_state)
 
     import os

@@ -129,7 +129,14 @@ type DomainStatusPillProps = WorkflowStatusPillOptions & {
   status: string | null | undefined;
 };
 
-export function WorkflowLifecycleStatusPill({ status, enableMotion = true }: DomainStatusPillProps) {
+export function WorkflowLifecycleStatusPill({
+  status,
+  enableMotion = true,
+  completionDisposition,
+}: DomainStatusPillProps & { completionDisposition?: string | null | undefined }) {
+  if (status === 'completed' && completionDisposition === 'gated_continuation') {
+    return <StatusPill label="Handed off" pillProps={{ className: 'status status-neutral' }} />;
+  }
   return (
     <StatusPill
       label={formatWorkflowStatusLabel(status, '-')}

@@ -9,6 +9,7 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -1162,6 +1163,158 @@ class DeploymentUpdateExecutor:
     evidence_writer: EvidenceWriter
     runner: ComposeRunner
     excluded_services: tuple[str, ...] = ()
+    # Stale-code recovery (MoonLadderStudios/MoonMind#4224): after services are
+    # recreated, bind-mounted workers that were not recreated may still run
+    # stale modules. The checker reports stale workers
+    # ([{worker, startupRevision, currentRevision, busy}]) and the restarter
+    # restarts idle workers immediately while draining busy ones (never
+    # killing in-flight work). Both default to None to preserve the
+    # image-only update behavior for callers that do not opt in; when a check
+    # reports stale workers but no restarter can fix them, the update fails
+    # loudly instead of admitting new work on stale workers.
+    stale_worker_checker: (
+        Callable[[], Awaitable[Sequence[Mapping[str, Any]]]] | None
+    ) = None
+    stale_worker_restarter: (
+        Callable[
+            [Sequence[Mapping[str, Any]]], Awaitable[Mapping[str, Any]]
+        ]
+        | None
+    ) = None
+
+    async def _reconcile_stale_workers(
+        self,
+        *,
+        stack: str,
+        command_log: dict[str, Any],
+        progress_events: list[dict[str, str]],
+        write_evidence: Callable[[str, Mapping[str, Any]], Awaitable[str]],
+    ) -> str | None:
+        """Restart workers still running stale modules after recreation.
+
+        Idle stale workers restart immediately; busy ones are drained rather
+        than killed (MoonLadderStudios/MoonMind#4224). When stale workers
+        remain and no restarter can fix them, the update fails loudly with
+        ``reasonCode=stale_code`` instead of admitting new work on stale
+        workers. Callers that do not configure a checker keep the previous
+        image-only behavior.
+        """
+
+        if self.stale_worker_checker is None:
+            return None
+        from moonmind.workflows.temporal.worker_code_identity import (
+            format_stale_code_message,
+            plan_stale_worker_recovery,
+        )
+        from moonmind.workflows.temporal.worker_code_identity import (
+            WorkerCodeFreshness,
+        )
+
+        stale = [dict(item) for item in await self.stale_worker_checker()]
+        if not stale:
+            command_log["workerCodeFreshness"] = {"status": "healthy", "stale": []}
+            return None
+        actionable = [
+            item for item in stale if str(item.get("status") or "stale") == "stale"
+        ]
+        if not actionable:
+            # Fail-open for unidentifiable workers (unreachable endpoints or
+            # envelopes without identities): an unknown worker must not wedge
+            # the update, but it is recorded as unknown — never healthy.
+            command_log["workerCodeFreshness"] = {
+                "status": "unknown",
+                "stale": [],
+                "unknown": [
+                    {
+                        "worker": str(item.get("worker") or item.get("name") or "unknown"),
+                        "startupRevision": str(item.get("startupRevision") or "unknown"),
+                        "currentRevision": str(item.get("currentRevision") or "unknown"),
+                    }
+                    for item in stale
+                ],
+            }
+            return None
+        freshness = [
+            WorkerCodeFreshness(
+                name=str(item.get("worker") or item.get("name") or "unknown"),
+                status="stale",
+                startup_revision=str(item.get("startupRevision") or "unknown"),
+                current_revision=str(item.get("currentRevision") or "unknown"),
+            )
+            for item in actionable
+        ]
+        busy = {
+            str(item.get("worker") or item.get("name") or "").strip()
+            for item in actionable
+            if item.get("busy") is True
+        }
+        plan = plan_stale_worker_recovery(
+            [item.name for item in freshness], busy=sorted(busy)
+        )
+        recovery: dict[str, Any] = {
+            "status": "stale",
+            "reasonCode": "stale_code",
+            "stale": [item.to_payload() for item in freshness],
+            "plan": plan.to_payload(),
+        }
+        _add_progress(
+            progress_events,
+            "RESTARTING_STALE_WORKERS",
+            "Restarting workers running stale code: "
+            + ", ".join(item.name for item in freshness)
+            + ".",
+        )
+        if self.stale_worker_restarter is None:
+            recovery["recovery"] = {"status": "no_restarter"}
+            command_log["workerCodeFreshness"] = recovery
+            recovery_ref = await write_evidence("worker-code-freshness", recovery)
+            recovery["recoveryArtifactRef"] = recovery_ref
+            raise ToolFailure(
+                error_code="DEPLOYMENT_STALE_WORKER_CODE",
+                message=format_stale_code_message(freshness)
+                + " No stale-worker restarter is configured for this stack.",
+                retryable=False,
+                details={"stack": stack, "reasonCode": "stale_code",
+                         "staleWorkers": [item.to_payload() for item in freshness],
+                         "recoveryArtifactRef": recovery_ref},
+            )
+        outcome = dict(await self.stale_worker_restarter(actionable))
+        recovery["recovery"] = outcome
+        # Post-restart verification requires known freshness: an unreachable
+        # or not-yet-ready endpoint reports ``unknown``, which is absence of
+        # evidence — not proof the replacement is fresh. Retry to a bounded
+        # terminal state instead of recording success on an empty list.
+        actionable_names = {item.name for item in freshness}
+        remaining: list[dict[str, Any]] = []
+        for attempt in range(3):
+            rechecked = [dict(item) for item in await self.stale_worker_checker()]
+            remaining = [
+                item
+                for item in rechecked
+                if str(item.get("worker") or item.get("name") or "") in actionable_names
+                and str(item.get("status") or "stale") in ("stale", "unknown")
+            ]
+            if not remaining:
+                break
+            if attempt < 2:
+                await asyncio.sleep(5)
+        recovery["remaining"] = remaining
+        command_log["workerCodeFreshness"] = recovery
+        recovery_ref = await write_evidence("worker-code-freshness", recovery)
+        recovery["recoveryArtifactRef"] = recovery_ref
+        failed = list(outcome.get("failed") or [])
+        if remaining or failed:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_STALE_WORKER_CODE",
+                message=format_stale_code_message(freshness)
+                + " Stale workers could not be restarted.",
+                retryable=False,
+                details={"stack": stack, "reasonCode": "stale_code",
+                         "staleWorkers": [item.to_payload() for item in freshness],
+                         "recovery": outcome,
+                         "recoveryArtifactRef": recovery_ref},
+            )
+        return recovery_ref
 
     async def execute(
         self,
@@ -1207,6 +1360,7 @@ class DeploymentUpdateExecutor:
         after_ref: str | None = None
         command_ref: str | None = None
         verification_ref: str | None = None
+        worker_code_recovery_ref: str | None = None
         verification: ComposeVerification | None = None
         final_status: str | None = None
         failure_reason: str | None = None
@@ -1362,6 +1516,19 @@ class DeploymentUpdateExecutor:
                 _ensure_command_succeeded("up", up_result)
                 command_ref = await write_evidence("command-log", command_log)
 
+                worker_code_recovery_ref = await self._reconcile_stale_workers(
+                    stack=parsed["stack"],
+                    command_log=command_log,
+                    progress_events=progress_events,
+                    write_evidence=write_evidence,
+                )
+                if worker_code_recovery_ref is not None:
+                    # The reconcile step mutated command_log after the first
+                    # command-log write above: rewrite it so
+                    # commandLogArtifactRef contains the workerCodeFreshness
+                    # evidence instead of a pre-reconcile snapshot.
+                    command_ref = await write_evidence("command-log", command_log)
+
                 _add_progress(progress_events, "VERIFYING", "Verifying deployed state.")
                 verification = await self.runner.verify(
                     stack=parsed["stack"],
@@ -1452,6 +1619,8 @@ class DeploymentUpdateExecutor:
             "verificationArtifactRef": verification_ref,
             "audit": _redact_sensitive(audit_snapshot(completed=True)),
         }
+        if worker_code_recovery_ref is not None:
+            outputs["workerCodeFreshnessArtifactRef"] = worker_code_recovery_ref
         if final_status != "SUCCEEDED":
             outputs["failure"] = {
                 "class": "verification_failure",
@@ -1471,6 +1640,230 @@ class DeploymentUpdateExecutor:
                 "events": progress_events,
             },
         )
+
+
+def build_env_stale_worker_checker(
+    urls: Sequence[tuple[str, str]] | None = None,
+) -> Callable[[], Awaitable[Sequence[Mapping[str, Any]]]] | None:
+    """Build the deployment-update stale-worker checker from readiness URLs.
+
+    Returns ``None`` when no worker readiness endpoint is configured, in which
+    case the executor keeps the previous image-only behavior. Otherwise returns
+    an async checker yielding ``[{worker, startupRevision, currentRevision,
+    busy, service}]`` for workers whose running modules differ from the
+    checkout on disk (MoonLadderStudios/MoonMind#4224).
+    """
+
+    from moonmind.workflows.temporal.worker_code_identity import (
+        collect_worker_code_freshness,
+        payload_busy_hint,
+        probe_worker_readiness,
+        readiness_urls_from_env,
+    )
+
+    targets = list(urls) if urls is not None else readiness_urls_from_env()
+    if not targets:
+        return None
+
+    async def _check() -> Sequence[Mapping[str, Any]]:
+        payload_by_url: dict[str, Any] = {}
+
+        def _recording_probe(url: str) -> Any:
+            payload = probe_worker_readiness(url)
+            payload_by_url[url] = payload
+            return payload
+
+        freshness = await asyncio.to_thread(
+            collect_worker_code_freshness, targets, probe=_recording_probe
+        )
+        url_by_name = dict(targets)
+        items: list[dict[str, Any]] = []
+        for item in freshness:
+            # Surface stale workers for restart and unknown workers for
+            # post-restart verification; healthy workers need no action.
+            if item.status not in ("stale", "unknown"):
+                continue
+            url = url_by_name.get(item.name)
+            if url is None and "/" in item.name:
+                # Workflow-group lane ("<group>/<lane>"): the busy signal
+                # lives on the group's envelope payload.
+                url = url_by_name.get(item.name.split("/", 1)[0])
+            payload = payload_by_url.get(url or "")
+            busy = (
+                payload_busy_hint(payload)
+                if isinstance(payload, Mapping)
+                else True
+            )
+            items.append(
+                {
+                    "worker": item.name,
+                    "status": item.status,
+                    "startupRevision": item.startup_revision,
+                    "currentRevision": item.current_revision,
+                    "busy": busy,
+                    "service": _compose_service_for_worker(item.name),
+                }
+            )
+        return items
+
+    return _check
+
+
+def _compose_service_for_worker(worker_name: str) -> str | None:
+    """Map a readiness worker name to its Compose service, when known.
+
+    Workflow-group lane names look like ``"<group>/<lane>"``: they
+    restart through the group service Compose knows. A raw URL is never
+    a service name — unnamed readiness targets resolve their hostname
+    in ``readiness_urls_from_env``, and anything URL-shaped left over is
+    rejected here so recovery cannot hand a URL to ``docker compose
+    restart``. A bare ``temporal-worker-*`` hostname (from an unnamed
+    readiness URL) is already the Compose service name.
+    """
+
+    try:
+        from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
+    except Exception:
+        return None
+    raw = str(worker_name or "").strip()
+    candidates = [raw]
+    if "/" in raw:
+        candidates.append(raw.split("/", 1)[0].strip())
+    for candidate in candidates:
+        if not candidate or "://" in candidate or "/" in candidate:
+            continue
+        normalized = candidate.lower()
+        for fleet, service in _FLEET_SERVICE_NAMES.items():
+            if normalized in {fleet, service}:
+                return service
+        if normalized.startswith("temporal-worker-"):
+            return candidate
+    return None
+
+
+def build_compose_stale_worker_restarter(
+    *,
+    project_dir: str | Path,
+    compose_file: str | None = None,
+    project_name: str = "moonmind",
+    excluded_services: Sequence[str] = (),
+    idle_grace_seconds: int = 30,
+    drain_grace_seconds: int = 300,
+    command_timeout_seconds: int = 900,
+) -> Callable[
+    [Sequence[Mapping[str, Any]]], Awaitable[Mapping[str, Any]]
+]:
+    """Build a restarter that recovers stale workers via Compose.
+
+    Idle stale workers restart immediately (``docker compose restart -t
+    <idle_grace>``); busy ones are drained rather than killed — the longer
+    grace lets in-flight activities finish or fail over through Temporal
+    retry before the process is replaced
+    (MoonLadderStudios/MoonMind#4224). Services in ``excluded_services``
+    (notably the deployment-control runner itself) are never restarted
+    mid-update; they are reported as ``skipped`` so the update fails loudly
+    instead of killing its own runner.
+    """
+
+    from moonmind.workflows.temporal.worker_code_identity import (
+        plan_stale_worker_recovery,
+    )
+
+    excluded = {str(item).strip() for item in excluded_services if str(item).strip()}
+
+    async def _restart(service: str, grace: int) -> tuple[str, str]:
+        command = ["docker", "compose"]
+        if compose_file:
+            command += ["--file", compose_file]
+        if project_name:
+            command += ["--project-name", project_name]
+        command += ["restart", "--timeout", str(grace), service]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=str(project_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                _, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=command_timeout_seconds
+                )
+            except asyncio.TimeoutError:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+                await process.wait()
+                return service, f"restart timed out after {command_timeout_seconds}s"
+            if process.returncode != 0:
+                detail = (stderr or b"").decode("utf-8", errors="ignore")[-500:]
+                return service, f"restart exited {process.returncode}: {detail}"
+        except OSError as exc:
+            return service, f"restart failed: {exc}"
+        return service, ""
+
+    async def _restart_all(stale: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
+        names = [
+            str(item.get("worker") or item.get("name") or "").strip() for item in stale
+        ]
+        busy = {
+            str(item.get("worker") or item.get("name") or "").strip()
+            for item in stale
+            if item.get("busy") is True
+        }
+        plan = plan_stale_worker_recovery(names, busy=sorted(busy))
+        restarted: list[str] = []
+        drained: list[str] = []
+        failed: list[dict[str, str]] = []
+        skipped: list[str] = []
+
+        async def _run_group(
+            group: Sequence[str], grace: int, outcome: list[str]
+        ) -> None:
+            for name in group:
+                service = next(
+                    (
+                        str(item.get("service") or "").strip()
+                        for item in stale
+                        if str(item.get("worker") or item.get("name") or "").strip()
+                        == name
+                        and str(item.get("service") or "").strip()
+                    ),
+                    None,
+                ) or _compose_service_for_worker(name) or name
+                if not service or "://" in service or "/" in service:
+                    # Unnamed readiness targets have no mapped Compose
+                    # service: failing loudly beats handing a URL to
+                    # ``docker compose restart`` as the service name.
+                    failed.append(
+                        {
+                            "worker": name,
+                            "error": (
+                                "no restartable Compose service for worker "
+                                f"'{name}': configure a service=name=url "
+                                "readiness entry"
+                            ),
+                        }
+                    )
+                    continue
+                if service in excluded:
+                    skipped.append(name)
+                    continue
+                _, error = await _restart(service, grace)
+                if error:
+                    failed.append({"worker": name, "error": error})
+                else:
+                    outcome.append(name)
+
+        await _run_group(plan.restart_now, idle_grace_seconds, restarted)
+        await _run_group(plan.drain_then_restart, drain_grace_seconds, drained)
+        return {
+            "restarted": restarted,
+            "drained": drained,
+            "failed": failed,
+            "skipped": skipped,
+        }
+
+    return _restart_all
 
 
 def _add_progress(events: list[dict[str, str]], state: str, message: str) -> None:
@@ -2693,6 +3086,8 @@ __all__ = [
     "InMemoryEvidenceWriter",
     "TemporalDeploymentEvidenceWriter",
     "build_compose_command_plan",
+    "build_compose_stale_worker_restarter",
     "build_deployment_update_handler",
+    "build_env_stale_worker_checker",
     "register_deployment_update_tool_handler",
 ]
