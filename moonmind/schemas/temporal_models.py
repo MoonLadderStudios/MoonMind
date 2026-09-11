@@ -3579,14 +3579,7 @@ class StepFinalizationOutcomeModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     status: Literal[
-        "not_started",
-        "succeeded",
-        "retry_pending",
-        "failed",
-        "degraded",
-        "unsupported",
-        "deferred",
-        "not_required",
+        "not_started", "succeeded", "retry_pending", "failed", "degraded", "unsupported"
     ]
     phase: str | None = None
     criticality: Literal["required", "recoverability_only", "unsupported"]

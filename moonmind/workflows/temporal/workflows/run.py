@@ -694,6 +694,14 @@ GATED_CONTINUATION_GATE_REGISTRY: Mapping[str, frozenset[str]] = {
 RUN_PR_RESOLVER_REVIEW_REQUEST_AUTHORITY_PATCH = (
     "run-pr-resolver-review-request-authority-v1"
 )
+# A validated continuation (reenter_gate/request_review) or validated
+# manual_review/failed verdict legitimately publishes nothing. New histories
+# mark publication not_required from the terminal-contract evaluation result
+# before the auto-publish evidence check; replayed histories keep the recorded
+# auto_publish_evidence_missing failure (MoonLadderStudios/MoonMind#4227).
+RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH = (
+    "run-defer-publication-on-terminal-continuation-v1"
+)
 RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
 RUN_PREPUBLICATION_FAILURE_BLOCKS_REPAIR_PATCH = (
     "run-prepublication-failure-blocks-repair-v1"
@@ -755,15 +763,6 @@ RUN_RUNTIME_EXECUTION_CAPABILITIES_PATCH = "run-runtime-execution-capabilities-v
 RUN_DURABLE_FINALIZATION_OUTCOME_PATCH = "run-durable-finalization-outcome-v1"
 RUN_SKIP_NO_PUBLISH_PREPUBLICATION_CHECKPOINT_PATCH = (
     "run-skip-no-publish-prepublication-checkpoint-v1"
-)
-# A validated continuation (reenter_gate/request_review) or validated terminal
-# verdict (manual_review/failed) legitimately publishes nothing. The
-# pr_resolver_terminal.v1 contract only requires publish evidence for
-# merged/already_merged/review_clean, so auto-publish must defer to the gate
-# owner instead of recording auto_publish_evidence_missing
-# (MoonLadderStudios/MoonMind#4227).
-RUN_CONTINUATION_DEFERS_AUTO_PUBLISH_PATCH = (
-    "run-continuation-defers-auto-publish-v1"
 )
 FINALIZATION_CHECKPOINT_FAILED = "FINALIZATION_CHECKPOINT_FAILED"
 FINALIZATION_PUBLICATION_FAILED = "FINALIZATION_PUBLICATION_FAILED"
@@ -7113,6 +7112,17 @@ class MoonMindRunWorkflow:
         exc: Exception,
         updated_at: datetime,
     ) -> None:
+        if self._patched_or_false_outside_workflow(
+            RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
+        ):
+            deferred_reason = self._stored_terminal_publication_deferred_reason()
+            if deferred_reason is not None:
+                self._apply_deferred_publication(
+                    reason=deferred_reason,
+                    logical_step_id=logical_step_id,
+                    updated_at=updated_at,
+                )
+                return
         row = self._step_ledger_row_for(logical_step_id)
         if not isinstance(row, dict):
             return
@@ -13713,110 +13723,104 @@ class MoonMindRunWorkflow:
                 self._update_memo()
                 break
             publish_status_before = self._publish_status
-            remediation_checkpoint_required = (
-                workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
-                and self._remediation_loop_spec is not None
-                and (
-                    workflow_owned_remediation_head
-                    or self._moonspec_step_role(node) == "moonspec-verification-gate"
-                )
-            )
-            if remediation_checkpoint_required:
-                prepublication_checkpoint_failed = (
-                    await self._record_prepublication_checkpoint(
-                        node_id,
-                        publish_mode=publish_mode,
-                        updated_at=workflow.now(),
-                        required_for_remediation=True,
-                    )
-                )
-            else:
-                # Preserve the historical internal invocation shape for replayed
-                # paths and test/runtime adapters that predate remediation-owned
-                # checkpoint admission.
-                prepublication_checkpoint_failed = (
-                    await self._record_prepublication_checkpoint(
-                        node_id,
-                        publish_mode=publish_mode,
-                        updated_at=workflow.now(),
-                    )
-                )
-            if prepublication_checkpoint_failed:
-                break
-            if workflow_owned_remediation_head:
-                self._advance_remediation_workspace_head(
-                    node=node,
-                    node_inputs=node_inputs,
-                    execution_result=execution_result,
-                    step_execution_id=(
-                        f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
-                        f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
-                    ),
-                )
-            publication_raised = False
-            try:
-                await self._record_publish_result_from_execution(
-                    parameters=parameters,
-                    execution_result=execution_result,
-                )
-            except Exception as exc:
-                if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
-                    raise
-                self._record_publication_finalization_failure(
-                    node_id,
-                    exc=exc,
+            terminal_deferred_reason: str | None = None
+            if self._patched_or_false_outside_workflow(
+                RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
+            ):
+                terminal_deferred_reason = self._terminal_publication_deferred_reason(
+                    self._effective_result_outputs(execution_result)
+                ) or self._stored_terminal_publication_deferred_reason()
+            if terminal_deferred_reason is not None:
+                # An accepted terminal handoff publishes nothing: record the
+                # deferred outcome before any pre-publication checkpoint so a
+                # required checkpoint failure cannot mask the handoff as
+                # FINALIZATION_CHECKPOINT_FAILED.
+                self._apply_deferred_publication(
+                    reason=terminal_deferred_reason,
+                    logical_step_id=node_id,
                     updated_at=workflow.now(),
                 )
-                publication_raised = True
-            if (
-                not publication_raised
-                and self._publish_status == "failed"
-                and publish_status_before != "failed"
-                and workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH)
-            ):
-                if workflow.patched(RUN_CONTINUATION_DEFERS_AUTO_PUBLISH_PATCH):
-                    deferral_reason = (
-                        self._terminal_contract_publication_deferral_reason(
-                            execution_result
+                prepublication_checkpoint_failed = False
+                publication_raised = False
+            else:
+                remediation_checkpoint_required = (
+                    workflow.patched(RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH)
+                    and self._remediation_loop_spec is not None
+                    and (
+                        workflow_owned_remediation_head
+                        or self._moonspec_step_role(node) == "moonspec-verification-gate"
+                    )
+                )
+                if remediation_checkpoint_required:
+                    prepublication_checkpoint_failed = (
+                        await self._record_prepublication_checkpoint(
+                            node_id,
+                            publish_mode=publish_mode,
+                            updated_at=workflow.now(),
+                            required_for_remediation=True,
                         )
                     )
-                    if deferral_reason is not None:
-                        self._publish_status = "not_required"
-                        self._publish_reason = deferral_reason
-                        self._record_publication_deferred_finalization(
-                            node_id,
-                            reason=deferral_reason,
-                            updated_at=workflow.now(),
-                        )
-                    else:
-                        self._record_publication_finalization_failure(
-                            node_id,
-                            exc=RuntimeError(
-                                self._publish_reason or "Publish failed"
-                            ),
-                            updated_at=workflow.now(),
-                        )
                 else:
+                    # Preserve the historical internal invocation shape for replayed
+                    # paths and test/runtime adapters that predate remediation-owned
+                    # checkpoint admission.
+                    prepublication_checkpoint_failed = (
+                        await self._record_prepublication_checkpoint(
+                            node_id,
+                            publish_mode=publish_mode,
+                            updated_at=workflow.now(),
+                        )
+                    )
+                if prepublication_checkpoint_failed:
+                    break
+                if workflow_owned_remediation_head:
+                    self._advance_remediation_workspace_head(
+                        node=node,
+                        node_inputs=node_inputs,
+                        execution_result=execution_result,
+                        step_execution_id=(
+                            f"{workflow.info().workflow_id}:{workflow.info().run_id}:"
+                            f"{node_id}:execution:{self._step_execution_for(node_id) or 1}"
+                        ),
+                    )
+                publication_raised = False
+                try:
+                    await self._record_publish_result_from_execution(
+                        parameters=parameters,
+                        execution_result=execution_result,
+                    )
+                except Exception as exc:
+                    if not workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH):
+                        raise
+                    self._record_publication_finalization_failure(
+                        node_id,
+                        exc=exc,
+                        updated_at=workflow.now(),
+                    )
+                    publication_raised = True
+                if (
+                    not publication_raised
+                    and self._publish_status == "failed"
+                    and publish_status_before != "failed"
+                    and workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH)
+                ):
                     self._record_publication_finalization_failure(
                         node_id,
                         exc=RuntimeError(self._publish_reason or "Publish failed"),
                         updated_at=workflow.now(),
                     )
-            if (
-                not publication_raised
-                and self._publish_status == "not_required"
-                and workflow.patched(RUN_DURABLE_FINALIZATION_OUTCOME_PATCH)
-                and workflow.patched(RUN_CONTINUATION_DEFERS_AUTO_PUBLISH_PATCH)
-            ):
-                deferral_reason = self._terminal_contract_publication_deferral_reason(
-                    execution_result
-                )
-                if deferral_reason is not None:
-                    self._record_publication_deferred_finalization(
-                        node_id,
-                        reason=deferral_reason,
-                        updated_at=workflow.now(),
-                    )
+                if self._patched_or_false_outside_workflow(
+                    RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
+                ):
+                    deferred_reason = self._terminal_publication_deferred_reason(
+                        self._effective_result_outputs(execution_result)
+                    ) or self._stored_terminal_publication_deferred_reason()
+                    if deferred_reason is not None:
+                        self._apply_deferred_publication(
+                            reason=deferred_reason,
+                            logical_step_id=node_id,
+                            updated_at=workflow.now(),
+                        )
             if workflow.patched(RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH):
                 outputs_for_gate = self._get_from_result(execution_result, "outputs")
                 if isinstance(
@@ -16636,15 +16640,15 @@ class MoonMindRunWorkflow:
         parameters: Mapping[str, Any],
         execution_result: Any,
     ) -> None:
-        if self._publish_mode(parameters) == "auto" and workflow.patched(
-            RUN_CONTINUATION_DEFERS_AUTO_PUBLISH_PATCH
+        if self._patched_or_false_outside_workflow(
+            RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
         ):
-            deferral_reason = self._terminal_contract_publication_deferral_reason(
-                execution_result
+            deferred_reason = self._terminal_publication_deferred_reason(
+                self._effective_result_outputs(execution_result)
             )
-            if deferral_reason is not None:
+            if deferred_reason is not None:
                 self._publish_status = "not_required"
-                self._publish_reason = deferral_reason
+                self._publish_reason = deferred_reason
                 return
         if self._publish_mode(parameters) == "auto":
             await self._resolve_auto_publish_evidence_ref(execution_result)
@@ -16717,111 +16721,147 @@ class MoonMindRunWorkflow:
             return
         self._publish_context["autoPublishEvidence"] = evidence_payload
 
-    def _terminal_contract_publication_deferral_reason(
-        self,
-        execution_result: Any | None = None,
+    def _terminal_publication_deferred_reason(
+        self, outputs: Mapping[str, Any] | None
     ) -> str | None:
-        """Return why auto-publish is not owed, derived from contract fields.
+        """Return why publication is not owed from the contract result.
 
-        The ``pr_resolver_terminal.v1`` contract only requires publish evidence
-        for ``merged``/``already_merged``/``review_clean``. A
-        ``continuation_requested`` outcome (``reenter_gate``/``request_review``)
-        or a validated ``manual_review``/``failed`` verdict legitimately
-        publishes nothing, so publication defers to the gate owner. This reads
-        the terminal contract evaluation result (disposition, outcome, recovery
-        outcome, gated continuation) — never the skill name.
+        Derived from the flattened terminal-contract evaluation fields
+        (``terminalContractOutcome`` / ``terminalContractRecoveryOutcome`` /
+        ``mergeAutomationDisposition``), never from the skill name. A
+        ``continuation_requested`` outcome defers publication only for an
+        accepted handoff (``durable_parent_handoff`` recovery plus an allowed
+        continuation disposition ``reenter_gate``/``request_review``); rejected
+        or unowned continuations (``continuation_rejected_*``) and reserved
+        fields arriving through a direct executable must fail closed. A
+        validated ``manual_review``/``failed`` verdict
+        (``skill_terminal_verdict``) legitimately publishes nothing.
         """
 
-        dispositions: list[str] = []
-        outcomes: list[str] = []
-        recovery_outcomes: list[str] = []
-
-        def _collect(source: Any) -> None:
-            if not isinstance(source, Mapping):
-                return
-            for key in (
-                "mergeAutomationDisposition",
-                "merge_automation_disposition",
+        if not isinstance(outputs, Mapping):
+            return None
+        outcome_raw = outputs.get("terminalContractOutcome")
+        if outcome_raw is None:
+            outcome_raw = outputs.get("terminal_contract_outcome")
+        outcome = (
+            str(outcome_raw).strip().lower()
+            if isinstance(outcome_raw, str)
+            else ""
+        )
+        disposition_raw = outputs.get("mergeAutomationDisposition")
+        if disposition_raw is None:
+            disposition_raw = outputs.get("merge_automation_disposition")
+        disposition = (
+            self._normalize_gate_type(str(disposition_raw))
+            if isinstance(disposition_raw, str) and str(disposition_raw).strip()
+            else ""
+        )
+        recovery_raw = outputs.get("terminalContractRecoveryOutcome")
+        if recovery_raw is None:
+            recovery_raw = outputs.get("terminal_contract_recovery_outcome")
+        recovery = (
+            str(recovery_raw).strip().lower()
+            if isinstance(recovery_raw, str)
+            else ""
+        )
+        if outcome == "continuation_requested":
+            if (
+                recovery != "durable_parent_handoff"
+                or disposition not in {"reenter_gate", "request_review"}
             ):
-                value = source.get(key)
-                if isinstance(value, str) and value.strip():
-                    dispositions.append(value.strip().lower())
-            for key in ("terminalContractOutcome", "terminal_contract_outcome"):
-                value = source.get(key)
-                if isinstance(value, str) and value.strip():
-                    outcomes.append(value.strip().lower())
-            for key in (
-                "terminalContractRecoveryOutcome",
-                "terminal_contract_recovery_outcome",
-            ):
-                value = source.get(key)
-                if isinstance(value, str) and value.strip():
-                    recovery_outcomes.append(value.strip().lower())
-
-        if execution_result is not None:
-            _collect(execution_result)
-            _collect(self._effective_result_outputs(execution_result))
-            _collect(self._effective_result_metadata(execution_result))
-        if self._merge_automation_disposition:
-            dispositions.append(self._merge_automation_disposition.strip().lower())
-        gated_action: str | None = None
-        if isinstance(self._gated_continuation_request, Mapping):
-            gated_action = self._coerce_text(
-                self._gated_continuation_request.get("action"), max_chars=80
-            )
-            if gated_action:
-                dispositions.append(gated_action.strip().lower())
-
-        for disposition in dispositions:
-            if disposition in MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS:
-                return (
-                    "publication deferred to merge automation gate "
-                    f"(mergeAutomationDisposition={disposition})"
-                )
-        if "continuation_requested" in outcomes:
-            disposition = next((item for item in dispositions if item), "continuation")
+                return None
+            label = disposition or "continuation"
             return (
-                "publication deferred to merge automation gate "
-                "(terminalContractOutcome=continuation_requested, "
-                f"disposition={disposition})"
+                f"publication deferred to gate owner for {label} terminal "
+                "(continuation_requested)"
             )
-        for disposition in dispositions:
-            if disposition in {"manual_review", "failed"}:
-                return (
-                    "publication not required for validated terminal verdict "
-                    f"(mergeAutomationDisposition={disposition})"
-                )
+        if (
+            outcome == "terminal_failure"
+            and recovery == "skill_terminal_verdict"
+            and disposition in {"manual_review", "failed"}
+        ):
+            return (
+                f"publication not required for {disposition} terminal "
+                "(skill_terminal_verdict)"
+            )
         return None
 
-    def _record_publication_deferred_finalization(
+    def _stored_terminal_publication_deferred_reason(self) -> str | None:
+        """Return the deferred reason from stored workflow state.
+
+        Used on paths without the step outputs (e.g. the ``auto`` fallback in
+        ``_determine_publish_completion``). The stored fields are written by
+        ``_record_execution_context`` from the same flattened contract result.
+        """
+
+        stored_outcome = self._coerce_text(
+            self._publish_context.get("terminalContractOutcome"), max_chars=80
+        )
+        stored_recovery = self._coerce_text(
+            self._publish_context.get("terminalContractRecoveryOutcome"),
+            max_chars=80,
+        )
+        stored_disposition = self._normalize_gate_type(
+            self._merge_automation_disposition
+        )
+        outputs: dict[str, Any] = {}
+        if stored_outcome:
+            outputs["terminalContractOutcome"] = stored_outcome
+        if stored_recovery:
+            outputs["terminalContractRecoveryOutcome"] = stored_recovery
+        if stored_disposition:
+            outputs["mergeAutomationDisposition"] = stored_disposition
+        if not outputs:
+            return None
+        return self._terminal_publication_deferred_reason(outputs)
+
+    def _apply_deferred_publication(
         self,
-        logical_step_id: str,
         *,
         reason: str,
-        updated_at: datetime,
+        logical_step_id: str | None = None,
+        updated_at: datetime | None = None,
     ) -> None:
-        row = self._step_ledger_row_for(logical_step_id)
-        if not isinstance(row, dict):
-            return
-        previous = row.get("finalizationOutcome")
-        retry_count = 0
-        if isinstance(previous, Mapping):
-            try:
-                retry_count = int(previous.get("retryCount") or 0)
-            except (TypeError, ValueError):
-                retry_count = 0
-        row["finalizationOutcome"] = {
-            "status": "deferred",
-            "phase": "publication",
-            "criticality": "recoverability_only",
-            "failureCode": None,
-            "terminalFailureCode": None,
-            "retryCount": retry_count,
-            "message": self._coerce_text(reason, max_chars=500) or str(reason),
-            "updatedAt": updated_at.isoformat(),
-        }
+        self._publish_status = "not_required"
+        self._publish_reason = reason
+        if logical_step_id is not None:
+            row = self._step_ledger_row_for(logical_step_id)
+            if isinstance(row, dict):
+                try:
+                    timestamp = (
+                        updated_at.isoformat()
+                        if updated_at is not None
+                        else workflow.now().isoformat()
+                    )
+                except Exception as exc:
+                    if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+                        from datetime import timezone as _timezone
+
+                        timestamp = datetime.now(_timezone.utc).isoformat()
+                    else:
+                        raise
+                row["finalizationOutcome"] = {
+                    "status": "unsupported",
+                    "phase": "publication",
+                    "criticality": "unsupported",
+                    "failureCode": None,
+                    "terminalFailureCode": None,
+                    "retryCount": 0,
+                    "message": reason,
+                    "updatedAt": timestamp,
+                }
 
     def _record_auto_publish_result(self, execution_result: Any) -> None:
+        if self._patched_or_false_outside_workflow(
+            RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
+        ):
+            deferred_reason = self._terminal_publication_deferred_reason(
+                self._effective_result_outputs(execution_result)
+            )
+            if deferred_reason is not None:
+                self._publish_status = "not_required"
+                self._publish_reason = deferred_reason
+                return
         resolver_ref_contract = workflow.patched(
             RUN_PR_RESOLVER_PUBLISH_EVIDENCE_REF_PATCH
         )
@@ -16868,16 +16908,6 @@ class MoonMindRunWorkflow:
             evidence_payload = self._publish_context.get("autoPublishEvidence")
 
         if evidence_payload is None:
-            if workflow.patched(RUN_CONTINUATION_DEFERS_AUTO_PUBLISH_PATCH):
-                deferral_reason = (
-                    self._terminal_contract_publication_deferral_reason(
-                        execution_result
-                    )
-                )
-                if deferral_reason is not None:
-                    self._publish_status = "not_required"
-                    self._publish_reason = deferral_reason
-                    return
             self._publish_status = "failed"
             self._publish_reason = "auto_publish_evidence_missing"
             return
@@ -17180,6 +17210,28 @@ class MoonMindRunWorkflow:
             )
         else:
             self._publish_context.pop("mergeAutomationDisposition", None)
+        terminal_contract_outcome = self._coerce_text(
+            outputs.get("terminalContractOutcome")
+            or outputs.get("terminal_contract_outcome"),
+            max_chars=80,
+        )
+        if terminal_contract_outcome:
+            self._publish_context["terminalContractOutcome"] = (
+                terminal_contract_outcome
+            )
+        else:
+            self._publish_context.pop("terminalContractOutcome", None)
+        terminal_contract_recovery = self._coerce_text(
+            outputs.get("terminalContractRecoveryOutcome")
+            or outputs.get("terminal_contract_recovery_outcome"),
+            max_chars=80,
+        )
+        if terminal_contract_recovery:
+            self._publish_context["terminalContractRecoveryOutcome"] = (
+                terminal_contract_recovery
+            )
+        else:
+            self._publish_context.pop("terminalContractRecoveryOutcome", None)
         merge_automation_head_sha = self._coerce_text(
             outputs.get("headSha")
             or outputs.get("head_sha")
@@ -18376,37 +18428,38 @@ class MoonMindRunWorkflow:
             self._publish_reason = missing_outcome
             return ("failed", missing_outcome, True)
 
-        if publish_mode == "auto" and self._publish_status is None:
-            if workflow.patched(RUN_CONTINUATION_DEFERS_AUTO_PUBLISH_PATCH):
-                deferral_reason = (
-                    self._terminal_contract_publication_deferral_reason(None)
-                )
-                if deferral_reason is not None:
-                    self._publish_status = "not_required"
-                    self._publish_reason = deferral_reason
-                    if self._report_requested(parameters) and not self._report_created:
-                        return (
-                            "failed",
-                            "reportOutput requested but no final report was created",
-                            True,
-                        )
-                    if self._is_canonical_no_commit_outcome(parameters):
-                        return (
-                            "no_commit",
-                            self._compose_success_completion_message(
-                                publish_detail=self._publish_reason,
-                                publish_mode=publish_mode,
-                            ),
-                            False,
-                        )
+        if self._patched_or_false_outside_workflow(
+            RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH
+        ):
+            deferred_reason = self._stored_terminal_publication_deferred_reason()
+            if deferred_reason is not None and self._publish_status is None:
+                self._publish_status = "not_required"
+                self._publish_reason = deferred_reason
+                if self._report_requested(parameters) and not self._report_created:
                     return (
-                        "success",
+                        "failed",
+                        "reportOutput requested but no final report was created",
+                        True,
+                    )
+                if self._is_canonical_no_commit_outcome(parameters):
+                    return (
+                        "no_commit",
                         self._compose_success_completion_message(
                             publish_detail=self._publish_reason,
                             publish_mode=publish_mode,
                         ),
                         False,
                     )
+                return (
+                    "success",
+                    self._compose_success_completion_message(
+                        publish_detail=self._publish_reason,
+                        publish_mode=publish_mode,
+                    ),
+                    False,
+                )
+
+        if publish_mode == "auto" and self._publish_status is None:
             self._publish_status = "failed"
             self._publish_reason = "auto_publish_evidence_missing"
             return ("failed", self._publish_reason, True)
