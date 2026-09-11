@@ -24,6 +24,23 @@ Relationship to neighbouring slices:
   authorized backends (env/db/vault/exec rules from ``secret_refs`` are
   preserved where explicitly selected, but this interface never becomes a
   generic user-authored secret-provider or command executor).
+* Historical decoding and new-write cutover owned by #4023 integrate at the
+  ``CredentialIssuer`` / ``SecretRevisionReader`` seams defined here: this
+  slice performs no historical-decode fallback and no silent cutover.  When
+  #4023 lands, its cutover adapter plugs the same issuer boundary and its
+  decoding policy rides the ACTIVE-revision read; no consumer-interface
+  change is required here.
+* Cross-process renewal single-flight rides the injectable
+  ``SharedRenewalStore`` behind ``BoundCredentialCache.join_or_lead``.  The
+  store holds only short-lived lease ownership plus published metadata — no
+  database transaction lock is held during network issuance.  Production
+  wiring should back it with an existing durable lease/advisory primitive
+  (same pattern family as the pg advisory / host-lease coordination
+  elsewhere in the repo); unit scope uses the thread-safe in-memory store.
+* Lost issuance acknowledgment is reconciled, never assumed: when the issuer
+  exposes ``reconcile_duplicate`` (or a ``duplicate_reconciler`` is
+  injected), the acquirer binds the duplicate instead of blindly re-issuing.
+  Exactly-once issuance is never promised.
 """
 
 from __future__ import annotations
@@ -31,13 +48,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import threading
 import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
-from typing import Any, Awaitable, Callable, Mapping, Sequence
+from typing import Any, Awaitable, Callable, Mapping, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -343,6 +361,7 @@ class BindingMetadata(BaseModel):
     issuance_id: str = Field(alias="issuanceId", min_length=1)
     generation: int = Field(ge=1)
     adapter_kind: str = Field(alias="adapterKind", min_length=1)
+    access_mode: AccessMode = Field(default=AccessMode.EXPLICIT, alias="accessMode")
     expires_at: str | None = Field(None, alias="expiresAt")
 
 
@@ -457,6 +476,15 @@ class Issuance:
 
 CredentialIssuer = Callable[
     [BindingMetadata], Awaitable[Issuance] | Issuance
+]
+
+
+#: Reconcile a possibly-issued duplicate after a lost acknowledgment.
+#: Receives the attempted binding plus the previous issuance id and returns
+#: the bound duplicate, or ``None`` when the provider cannot reconcile (the
+#: caller then retries issuance explicitly).  Exactly-once is never promised.
+DuplicateReconciler = Callable[
+    [BindingMetadata, str], Awaitable[Issuance | None] | Issuance | None
 ]
 
 
@@ -584,6 +612,111 @@ class _CacheEntry:
     last_use: float = field(default_factory=time.monotonic)
 
 
+class SharedRenewalStore:
+    """Thread-safe cross-worker renewal coordination + publication (R5).
+
+    Share one instance across ``BoundCredentialCache`` objects (threads,
+    worker processes via a durable backing) to prevent two workers from
+    stampeding the same renewal.  Only short-lived lease ownership is held —
+    a ``(owner_id, monotonic deadline)`` timestamp per renewal key — so no
+    database transaction lock is ever held during network issuance.  The
+    leader publishes the resulting metadata + material bytes; followers poll
+    for that publication instead of re-issuing.
+
+    Production wiring should back this same boundary with an existing durable
+    lease/advisory primitive (same pattern family as the pg advisory /
+    host-lease coordination elsewhere in the repo).  This in-memory
+    implementation is the portable default and is fully shareable across
+    threads; separate processes must supply a durable backend behind the same
+    small method surface (``try_claim`` / ``release_claim`` / ``get`` /
+    ``publish`` / ``next_generation``).
+    """
+
+    def __init__(
+        self, *, max_entries: int = 128, lease_seconds: float = 30.0
+    ) -> None:
+        self._max_entries = max(1, int(max_entries))
+        self._lease_seconds = max(1.0, float(lease_seconds))
+        self._mu = threading.Lock()
+        self._leases: dict[tuple[Any, ...], tuple[str, float]] = {}
+        # key -> (binding, material bytes copy, generation)
+        self._published: OrderedDict[
+            tuple[Any, ...], tuple[BindingMetadata, bytes, int]
+        ] = OrderedDict()
+        self._generations: dict[tuple[Any, ...], int] = {}
+
+    def try_claim(self, key: tuple[Any, ...], *, owner_id: str) -> bool:
+        """Claim renewal leadership for ``key``; False means another owner holds it."""
+
+        now = time.monotonic()
+        with self._mu:
+            owner, deadline = self._leases.get(key, ("", 0.0))
+            if owner and owner != owner_id and deadline > now:
+                return False
+            self._leases[key] = (owner_id, now + self._lease_seconds)
+            return True
+
+    def release_claim(self, key: tuple[Any, ...], *, owner_id: str) -> None:
+        with self._mu:
+            owner, _ = self._leases.get(key, ("", 0.0))
+            if owner == owner_id or not owner:
+                self._leases.pop(key, None)
+
+    def lease_held(self, key: tuple[Any, ...]) -> bool:
+        with self._mu:
+            owner, deadline = self._leases.get(key, ("", 0.0))
+            return bool(owner) and deadline > time.monotonic()
+
+    def next_generation(self, key: tuple[Any, ...]) -> int:
+        with self._mu:
+            current = self._generations.get(key, 0) + 1
+            self._generations[key] = current
+            return current
+
+    def get(
+        self, key: tuple[Any, ...]
+    ) -> tuple[BindingMetadata, bytes, int] | None:
+        with self._mu:
+            found = self._published.get(key)
+            if found is None:
+                return None
+            binding, material, generation = found
+            self._published.move_to_end(key)
+            return (binding, bytes(material), generation)
+
+    def publish(
+        self,
+        key: tuple[Any, ...],
+        *,
+        binding: BindingMetadata,
+        material: bytes,
+        generation: int,
+    ) -> bool:
+        """Publish only if no newer generation already won (fencing)."""
+
+        with self._mu:
+            current = self._published.get(key)
+            if current is not None and current[2] > generation:
+                return False
+            self._published[key] = (binding, bytes(material), generation)
+            self._published.move_to_end(key)
+            while len(self._published) > self._max_entries:
+                evicted_key, _ = self._published.popitem(last=False)
+                self._generations.pop(evicted_key, None)
+            return True
+
+    def invalidate(self, key: tuple[Any, ...]) -> None:
+        with self._mu:
+            self._published.pop(key, None)
+
+
+class RenewalCoordinator(Protocol):
+    """Minimal durable single-flight surface a production backend can implement."""
+
+    def try_claim(self, key: tuple[Any, ...], *, owner_id: str) -> bool: ...
+    def release_claim(self, key: tuple[Any, ...], *, owner_id: str) -> None: ...
+
+
 class BoundCredentialCache:
     """Bounded cache keyed by the full renewal identity (R5).
 
@@ -593,6 +726,12 @@ class BoundCredentialCache:
     key with a finite owner lease and generation check; no database locks are
     held during network issuance, and cancellation of one waiter never
     invalidates another consumer's valid credential.
+
+    Pass a shared :class:`SharedRenewalStore` (or any object with its
+    ``try_claim`` / ``release_claim`` surface plus ``get`` / ``publish`` /
+    ``next_generation``) to coordinate across cache instances/workers.  Local
+    asyncio futures still coordinate waiters inside one process; the shared
+    store fences leaders across instances.
     """
 
     def __init__(
@@ -600,6 +739,7 @@ class BoundCredentialCache:
         *,
         max_entries: int = 128,
         owner_lease_seconds: float = 30.0,
+        shared: SharedRenewalStore | Any | None = None,
     ) -> None:
         self._max_entries = max(1, int(max_entries))
         self._lease = max(1.0, float(owner_lease_seconds))
@@ -607,6 +747,8 @@ class BoundCredentialCache:
         self._inflight: dict[tuple[Any, ...], asyncio.Future] = {}
         self._inflight_owner: dict[tuple[Any, ...], tuple[str, float]] = {}
         self._guard = asyncio.Lock()
+        self._shared = shared
+        self._local_generations: dict[tuple[Any, ...], int] = {}
 
     @staticmethod
     def renewal_key_for(
@@ -627,17 +769,51 @@ class BoundCredentialCache:
             (execution_owner or "").strip(),
         )
 
+    def next_generation(self, key: tuple[Any, ...]) -> int:
+        """Monotonic per-key issuance generation (fences stale publishers)."""
+
+        if self._shared is not None and hasattr(self._shared, "next_generation"):
+            try:
+                return int(self._shared.next_generation(key))
+            except Exception:
+                pass
+        current = self._local_generations.get(key, 0) + 1
+        self._local_generations[key] = current
+        return current
+
     async def get(self, key: tuple[Any, ...]) -> _CacheEntry | None:
         async with self._guard:
             entry = self._entries.get(key)
-            if entry is None:
-                return None
-            if entry.credential.cleared:
-                self._entries.pop(key, None)
-                return None
-            self._entries.move_to_end(key)
-            entry.last_use = time.monotonic()
-            return entry
+            if entry is not None:
+                if entry.credential.cleared:
+                    self._entries.pop(key, None)
+                else:
+                    self._entries.move_to_end(key)
+                    entry.last_use = time.monotonic()
+                    return entry
+        # Cross-worker publication: materialize a local handle over the
+        # shared material bytes without re-issuing.
+        if self._shared is not None and hasattr(self._shared, "get"):
+            try:
+                published = self._shared.get(key)
+            except Exception:
+                published = None
+            if published is not None:
+                binding, material, generation = published
+                if material:
+                    local = _CacheEntry(
+                        binding=binding,
+                        credential=EphemeralCredential(bytes(material)),
+                        generation=int(generation),
+                    )
+                    async with self._guard:
+                        self._entries[key] = local
+                        self._entries.move_to_end(key)
+                        while len(self._entries) > self._max_entries:
+                            _, evicted = self._entries.popitem(last=False)
+                            evicted.credential.clear()
+                    return local
+        return None
 
     async def publish(
         self, key: tuple[Any, ...], entry: _CacheEntry, *, generation: int
@@ -654,7 +830,21 @@ class BoundCredentialCache:
             while len(self._entries) > self._max_entries:
                 _, evicted = self._entries.popitem(last=False)
                 evicted.credential.clear()
-            return True
+        if self._shared is not None and hasattr(self._shared, "publish"):
+            try:
+                shared_ok = self._shared.publish(
+                    key,
+                    binding=entry.binding,
+                    material=entry.credential.use_now(bytes),
+                    generation=generation,
+                )
+                if not shared_ok:
+                    return False
+            except BoundAccessError:
+                raise
+            except Exception:
+                pass
+        return True
 
     async def join_or_lead(
         self, key: tuple[Any, ...], *, owner_id: str
@@ -662,7 +852,10 @@ class BoundCredentialCache:
         """Single-flight entry: (True, None) leads; (False, future) waits.
 
         A stale owner lease (previous leader died mid-issuance) lets a new
-        leader take over instead of blocking forever.
+        leader take over instead of blocking forever.  When a shared store is
+        configured, leadership is additionally fenced across cache instances:
+        (False, None) means a cross-worker leader holds the shared lease, so
+        the caller should await shared publication instead of issuing.
         """
 
         async with self._guard:
@@ -673,11 +866,66 @@ class BoundCredentialCache:
                     return False, existing
                 # Finite owner lease expired: previous leader is fenced out.
                 existing.cancel()
+            if self._shared is not None and hasattr(self._shared, "try_claim"):
+                try:
+                    claimed = self._shared.try_claim(key, owner_id=owner_id)
+                except Exception:
+                    claimed = True
+                if not claimed:
+                    return False, None
             loop = asyncio.get_running_loop()
             future: asyncio.Future = loop.create_future()
             self._inflight[key] = future
             self._inflight_owner[key] = (owner_id, time.monotonic())
             return True, None
+
+    async def await_shared_publication(
+        self,
+        key: tuple[Any, ...],
+        *,
+        timeout_seconds: float = 30.0,
+        poll_seconds: float = 0.005,
+    ) -> _CacheEntry | None:
+        """Poll the shared store for a cross-worker leader's publication."""
+
+        if self._shared is None or not hasattr(self._shared, "get"):
+            return None
+        deadline = time.monotonic() + max(0.05, float(timeout_seconds))
+        while time.monotonic() < deadline:
+            published = None
+            try:
+                published = self._shared.get(key)
+            except Exception:
+                published = None
+            if published is not None:
+                binding, material, generation = published
+                if material:
+                    return _CacheEntry(
+                        binding=binding,
+                        credential=EphemeralCredential(bytes(material)),
+                        generation=int(generation),
+                    )
+            # Leader released the lease without publishing (failure): the
+            # follower should stop waiting and compete for leadership.
+            try:
+                held = (
+                    self._shared.lease_held(key)
+                    if hasattr(self._shared, "lease_held")
+                    else True
+                )
+            except Exception:
+                held = True
+            if not held:
+                return None
+            await asyncio.sleep(max(0.001, float(poll_seconds)))
+        return None
+
+    def release_shared(self, key: tuple[Any, ...], *, owner_id: str) -> None:
+        if self._shared is not None and hasattr(self._shared, "release_claim"):
+            try:
+                self._shared.release_claim(key, owner_id=owner_id)
+            except Exception:
+                pass
 
     async def settle_inflight(
         self,
@@ -693,16 +941,28 @@ class BoundCredentialCache:
             current_owner = True  # settle only our own flight; lease-takeover
             _ = (owner_id, current_owner)
             if future is None or future.done():
-                return
-            if error is not None:
+                pass
+            elif error is not None:
                 future.set_exception(error)
             else:
                 future.set_result(entry)
+        # Release the cross-worker lease only after local waiters settle, so
+        # a follower polling the shared store observes either the publication
+        # or a released lease (and then competes), never a dangling claim.
+        # The shared publication itself was already written by publish(); the
+        # lease here is coordination only, never a lock held during issuance
+        # beyond this timestamp ownership.
+        self.release_shared(key, owner_id=owner_id)
 
     def invalidate(self, key: tuple[Any, ...]) -> None:
         entry = self._entries.pop(key, None)
         if entry is not None:
             entry.credential.clear()
+        if self._shared is not None and hasattr(self._shared, "invalidate"):
+            try:
+                self._shared.invalidate(key)
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -744,6 +1004,8 @@ class BoundCredentialAcquirer:
         expiry_margin_seconds: float = 30.0,
         clock_skew_seconds: float = 5.0,
         max_attempts: int = 3,
+        duplicate_reconciler: DuplicateReconciler | None = None,
+        shared_wait_seconds: float = 30.0,
     ) -> None:
         self._revision_reader = revision_reader
         self._issuer_for = issuer_for
@@ -751,6 +1013,76 @@ class BoundCredentialAcquirer:
         self._margin = max(0.0, float(expiry_margin_seconds))
         self._skew = max(0.0, float(clock_skew_seconds))
         self._max_attempts = max(1, int(max_attempts))
+        self._duplicate_reconciler = duplicate_reconciler
+        self._shared_wait = max(0.2, float(shared_wait_seconds))
+
+    def _reconciler_for(self, issuer: Any) -> DuplicateReconciler | None:
+        """Normalize any reconcile hook to ``(binding, previous_id)``.
+
+        Issuers may expose ``reconcile_duplicate`` in the narrow
+        provider-native shape ``(*, previous_issuance_id)`` (as
+        :class:`FakeExpiringAdapter` does) or in the full
+        ``(binding, previous_issuance_id)`` caller-owned shape.  Both are
+        normalized here so the acquire path always invokes one contract.
+        """
+
+        candidate = self._duplicate_reconciler
+        if candidate is None:
+            reconcile = getattr(issuer, "reconcile_duplicate", None)
+            candidate = reconcile if callable(reconcile) else None
+        if candidate is None:
+            return None
+
+        async def _normalized(
+            binding: BindingMetadata, previous_issuance_id: str
+        ) -> Issuance | None:
+            try:
+                result = candidate(binding, previous_issuance_id)  # type: ignore[operator]
+            except TypeError:
+                result = candidate(previous_issuance_id=previous_issuance_id)  # type: ignore[call-arg]
+            return await _await_if_needed(result)
+
+        return _normalized
+
+    async def _publish_verified(
+        self,
+        *,
+        key: tuple[Any, ...],
+        leader_id: str,
+        snapshot: SelectionSnapshot,
+        active: ActiveRevision,
+        binding: BindingMetadata,
+        issuance: Issuance,
+    ) -> AcquiredCredential:
+        """Verify, post-flight recheck, and publish one issuance (R6)."""
+
+        self._verify_issuance(issuance=issuance, binding=binding)
+        recheck = await _await_if_needed(
+            self._revision_reader(snapshot.connection_id)
+        )
+        if (
+            not isinstance(recheck, ActiveRevision)
+            or recheck.status != "active"
+            or recheck.credential_revision != active.credential_revision
+            or recheck.policy_revision != active.policy_revision
+        ):
+            raise BoundAccessError(
+                BOUND_REVOKED,
+                "binding revoked or rotated during issuance; discarding",
+            )
+        credential = EphemeralCredential(issuance.material)
+        entry = _CacheEntry(
+            binding=binding, credential=credential, generation=binding.generation
+        )
+        published = await self._cache.publish(
+            key, entry, generation=binding.generation
+        )
+        if not published:
+            # A newer generation won concurrently; use ours directly
+            # without polluting the cache.
+            pass
+        await self._cache.settle_inflight(key, owner_id=leader_id, entry=entry)
+        return AcquiredCredential(binding=binding, credential=credential)
 
     def _binding_for(
         self, request: AcquisitionRequest, *, active: ActiveRevision, generation: int
@@ -783,6 +1115,7 @@ class BoundCredentialAcquirer:
             issuanceId=f"iss:{uuid.uuid4().hex[:16]}",
             generation=generation,
             adapterKind=active.adapter_kind,
+            accessMode=snapshot.access_mode,
         )
 
     def _renewal_key(
@@ -879,61 +1212,80 @@ class BoundCredentialAcquirer:
         leader_id = f"{request.operation_id}:{uuid.uuid4().hex[:8]}"
         is_leader, waiter = await self._cache.join_or_lead(key, owner_id=leader_id)
         if not is_leader:
-            assert waiter is not None
-            try:
-                entry = await asyncio.shield(waiter)
-            except asyncio.CancelledError:
-                # Cancellation of one waiter must not invalidate another
-                # consumer's valid credential: the shield keeps the shared
-                # flight alive; this waiter alone stops waiting.
-                raise
-            if entry is None or entry.credential.cleared:
-                raise BoundAccessError(
-                    BOUND_UNAVAILABLE, "shared renewal produced no credential"
+            if waiter is not None:
+                try:
+                    entry = await asyncio.shield(waiter)
+                except asyncio.CancelledError:
+                    # Cancellation of one waiter must not invalidate another
+                    # consumer's valid credential: the shield keeps the shared
+                    # flight alive; this waiter alone stops waiting.
+                    raise
+                if entry is None or entry.credential.cleared:
+                    raise BoundAccessError(
+                        BOUND_UNAVAILABLE, "shared renewal produced no credential"
+                    )
+                return AcquiredCredential(
+                    binding=entry.binding, credential=entry.credential, cache_hit=True
                 )
-            return AcquiredCredential(
-                binding=entry.binding, credential=entry.credential, cache_hit=True
+            # Cross-worker follower: a shared-store leader holds the lease.
+            # Await its publication instead of stampeding a second issuance.
+            # A released lease with no publication means the leader failed, so
+            # fall through and compete for leadership rather than failing.
+            shared_entry = await self._cache.await_shared_publication(
+                key, timeout_seconds=self._shared_wait
             )
+            if shared_entry is not None:
+                if shared_entry.credential.cleared:
+                    raise BoundAccessError(
+                        BOUND_UNAVAILABLE, "shared renewal produced no credential"
+                    )
+                return AcquiredCredential(
+                    binding=shared_entry.binding,
+                    credential=shared_entry.credential,
+                    cache_hit=True,
+                )
+            # Recheck the local cache (leader may have published locally
+            # between our claim attempt and the shared poll), otherwise
+            # compete for leadership now that the lease is free.
+            cached_retry = await self._cache.get(key)
+            if cached_retry is not None:
+                return AcquiredCredential(
+                    binding=cached_retry.binding,
+                    credential=cached_retry.credential,
+                    cache_hit=True,
+                )
+            is_leader, waiter = await self._cache.join_or_lead(
+                key, owner_id=leader_id
+            )
+            if not is_leader:
+                if waiter is None:
+                    raise BoundAccessError(
+                        BOUND_UNAVAILABLE, "shared renewal contention; retry"
+                    )
+                try:
+                    entry = await asyncio.shield(waiter)
+                except asyncio.CancelledError:
+                    raise
+                if entry is None or entry.credential.cleared:
+                    raise BoundAccessError(
+                        BOUND_UNAVAILABLE, "shared renewal produced no credential"
+                    )
+                return AcquiredCredential(
+                    binding=entry.binding, credential=entry.credential, cache_hit=True
+                )
 
         # Leader path: no cache/database lock is held during network issuance;
-        # only the in-flight placeholder above coordinates waiters.
+        # only the in-flight placeholder plus a short-lived shared lease
+        # timestamp coordinate waiters.
         last_error: BoundAccessError | None = None
         for _attempt in range(self._max_attempts):
+            generation = self._cache.next_generation(key)
+            binding = self._binding_for(
+                request, active=active, generation=generation
+            )
+            issuer = self._issuer_for(active.adapter_kind)
             try:
-                binding = self._binding_for(
-                    request, active=active, generation=1
-                )
-                issuer = self._issuer_for(active.adapter_kind)
                 issuance = await _await_if_needed(issuer(binding))
-                self._verify_issuance(issuance=issuance, binding=binding)
-                # Recheck revocation/revisions after the in-flight issuer call
-                # so a late response cannot repopulate a revoked cache.
-                recheck = await _await_if_needed(
-                    self._revision_reader(snapshot.connection_id)
-                )
-                if (
-                    not isinstance(recheck, ActiveRevision)
-                    or recheck.status != "active"
-                    or recheck.credential_revision != active.credential_revision
-                    or recheck.policy_revision != active.policy_revision
-                ):
-                    raise BoundAccessError(
-                        BOUND_REVOKED,
-                        "binding revoked or rotated during issuance; discarding",
-                    )
-                credential = EphemeralCredential(issuance.material)
-                entry = _CacheEntry(
-                    binding=binding, credential=credential, generation=1
-                )
-                published = await self._cache.publish(key, entry, generation=1)
-                if not published:
-                    # A newer generation won concurrently; use ours directly
-                    # without polluting the cache.
-                    pass
-                await self._cache.settle_inflight(
-                    key, owner_id=leader_id, entry=entry
-                )
-                return AcquiredCredential(binding=binding, credential=credential)
             except asyncio.CancelledError:
                 raise
             except BoundAccessError as exc:
@@ -948,12 +1300,64 @@ class BoundCredentialAcquirer:
                     break
                 continue
             except Exception as exc:
-                # Issuer/backend failures (timeouts, transport errors) are
-                # retryable within the bounded budget, never a cue to try
-                # another credential.
+                # Lost acknowledgment: the provider may have issued server-side
+                # while the caller observed a transport failure.  Bind the
+                # duplicate via the reconciler instead of blindly re-issuing.
+                # Exactly-once issuance is never promised.
                 last_error = BoundAccessError(
                     BOUND_ISSUER_FAILED, f"issuer failed: {type(exc).__name__}"
                 )
+                reconciler = self._reconciler_for(issuer)
+                if reconciler is not None:
+                    try:
+                        duplicate = await _await_if_needed(
+                            reconciler(binding, binding.issuance_id)
+                        )
+                    except Exception:
+                        duplicate = None
+                    if duplicate is not None:
+                        try:
+                            return await self._publish_verified(
+                                key=key,
+                                leader_id=leader_id,
+                                snapshot=snapshot,
+                                active=active,
+                                binding=binding,
+                                issuance=duplicate,
+                            )
+                        except BoundAccessError as reconcile_exc:
+                            last_error = reconcile_exc
+                            if reconcile_exc.code in {
+                                BOUND_REVOKED,
+                                BOUND_DISABLED,
+                                BOUND_STALE_REVISION,
+                                BOUND_SCOPE_MISMATCH,
+                                BOUND_DENIED,
+                            }:
+                                break
+                            continue
+                continue
+            try:
+                return await self._publish_verified(
+                    key=key,
+                    leader_id=leader_id,
+                    snapshot=snapshot,
+                    active=active,
+                    binding=binding,
+                    issuance=issuance,
+                )
+            except asyncio.CancelledError:
+                raise
+            except BoundAccessError as exc:
+                last_error = exc
+                if exc.code in {
+                    BOUND_REVOKED,
+                    BOUND_DISABLED,
+                    BOUND_STALE_REVISION,
+                    BOUND_SCOPE_MISMATCH,
+                    BOUND_DENIED,
+                }:
+                    break
                 continue
         assert last_error is not None
         await self._cache.settle_inflight(
@@ -990,9 +1394,7 @@ class BoundCredentialAcquirer:
             repositoryDisplay=binding.route_id,
             role=binding.role,
             operations=binding.operations,
-            accessMode=(
-                AccessMode.EXPLICIT if binding.adapter_kind else AccessMode.ROUTED
-            ),
+            accessMode=binding.access_mode,
             policyRevision=binding.policy_revision,
             connectionId=binding.connection_id,
             connectionPolicyRevision=binding.connection_revision,
@@ -1137,10 +1539,13 @@ __all__ = [
     "BoundErrorDTO",
     "BoundTelemetryDTO",
     "CredentialState",
+    "DuplicateReconciler",
     "EphemeralCredential",
     "FakeExpiringAdapter",
     "Issuance",
     "PatAdapter",
+    "RenewalCoordinator",
+    "SharedRenewalStore",
     "SelectionSnapshot",
     "binding_digest_for",
     "make_bound_client",
