@@ -383,7 +383,12 @@ def collect_inventory_survey(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
             survey["qdrant_surfaces"].append("docker-compose.yaml: QDRANT_URL wiring")
         if re.search(r"(?m)^  qdrant-storage:", code):
             survey["qdrant_storage_volume"] = (
-                "qdrant-storage declared (retained through recovery window)"
+                "qdrant-storage declared (violates #4110 removal; "
+                "pre-cutover host data retention is an unmanaged orphan, "
+                "never a Compose declaration)"
+            )
+            survey["qdrant_surfaces"].append(
+                "docker-compose.yaml: qdrant-storage volume declaration"
             )
         else:
             survey["qdrant_storage_volume"] = "qdrant-storage absent"
@@ -804,6 +809,12 @@ def check_upgrade_fixture(
             "upgrade-fixture", "failed",
             "Upgrade fixture fails: compose still wires QDRANT_URL into "
             "application services.",
+        )
+    if re.search(r"(?m)^  qdrant-storage:", code):
+        return StepResult(
+            "upgrade-fixture", "failed",
+            "Upgrade fixture fails: compose still declares the obsolete "
+            "qdrant-storage volume (MoonLadderStudios/MoonMind#4110).",
         )
     _, detail = _vector_free_deployment_present(repo_root)
     # MoonLadderStudios/MoonMind#4192: probe the boolean, not prose

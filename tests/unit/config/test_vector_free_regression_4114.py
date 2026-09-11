@@ -104,10 +104,11 @@ _RETIRED_TOOL_DESCRIPTOR_RE = re.compile(
     r"qdrant|followUpRetrieval|follow_up_retrieval", re.IGNORECASE
 )
 
-# The native Qdrant volume is retained through the recovery window (#4115) and
-# ``moonmind_retrieval_state`` is classified by #4107. Any other
-# vector-named volume is a reintroduction.
-_KNOWN_VECTOR_FREE_VOLUMES = {"qdrant-storage", "moonmind_retrieval_state"}
+# MoonLadderStudios/MoonMind#4110: the native Qdrant volume declaration is
+# removed; only ``moonmind_retrieval_state`` (classified by #4107) is an
+# allowed vector-named volume. Any other vector-named volume is a
+# reintroduction.
+_KNOWN_VECTOR_FREE_VOLUMES = {"moonmind_retrieval_state"}
 
 
 def _env_items(service: dict) -> list[str]:
@@ -124,8 +125,7 @@ def check_compose_vector_free(compose: dict) -> list[str]:
     for name, service in services.items():
         service = service or {}
         if _VECTOR_SERVICE_NAME_RE.search(str(name)):
-            # The historical ``qdrant-storage`` *volume* is allowed; a live
-            # *service* with a vector name is never allowed.
+            # A live *service* with a vector name is never allowed.
             problems.append(f"service {name!r} carries a vector service name")
         image = str(service.get("image", ""))
         if _VECTOR_IMAGE_RE.search(image):
@@ -399,9 +399,16 @@ def test_compose_rejects_canonical_vector_store_images() -> None:
         )
 
 
-def test_compose_allows_retained_recovery_volume() -> None:
+def test_compose_has_no_qdrant_storage_volume() -> None:
+    """#4110: the Qdrant volume declaration is removed, not retained."""
     compose = yaml.safe_load((REPO_ROOT / "docker-compose.yaml").read_text())
-    assert "qdrant-storage" in (compose.get("volumes", {}) or {})
+    assert "qdrant-storage" not in (compose.get("volumes", {}) or {})
+    assert any(
+        "reintroduces vector state" in problem
+        for problem in check_compose_vector_free(
+            {"services": {}, "volumes": {"qdrant-storage": {}}}
+        )
+    )
     fixture = {"services": {}, "volumes": {"pgvector-data": {}}}
     assert any(
         "reintroduces vector state" in problem
