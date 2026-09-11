@@ -3923,6 +3923,200 @@ async def test_agent_runtime_publish_artifacts_resolves_omnigent_sandbox_workspa
             assert persisted["issue_ref"] == "MoonLadderStudios/MoonMind#3620"
 
 
+async def test_agent_runtime_publish_artifacts_rejects_missing_verdict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for mm:12352fc2: assessment JSON without verdict must fail fast.
+
+    The Omnigent assessment agent wrote requirements + summary but omitted the
+    required verdict key. Publishing must raise at this owning boundary instead
+    of emitting a ref without verdict that later fails In Progress gating with
+    a misleading 'unavailable' error.
+    """
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            workspace_root = tmp_path / "agent_workspaces"
+            workspace_id = "sandbox-assess-missing-verdict"
+            workflow_id = "parent-wf"
+            step_execution_id = "parent-wf:run-1:step-2:execution:1"
+            workspace = (
+                workspace_root / "temporal_sandbox" / workspace_id / "repo"
+            )
+            assessment_path = (
+                workspace / "artifacts/github-issue-implement-assessment.json"
+            )
+            assessment_path.parent.mkdir(parents=True)
+            assessment_path.write_text(
+                json.dumps(
+                    {
+                        "issue_provider": "github",
+                        "issue_ref": "MoonLadderStudios/MoonMind#4175",
+                        "mode": "main",
+                        "summary": "Epic fully implemented",
+                        "requirements": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            SandboxWorkspaceRecordStore(workspace_root).ensure(
+                SandboxWorkspaceRecord(
+                    workspace_id=workspace_id,
+                    workflow_id=workflow_id,
+                    step_execution_id=step_execution_id,
+                    relative_path="repo",
+                )
+            )
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                workspace_root=workspace_root,
+            )
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities, "execution_notify_completion", _skip_notify
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:step-2",
+                    workflow_run_id="child-run-assess",
+                ),
+            )
+
+            with pytest.raises(
+                activity_runtime_module.TemporalActivityRuntimeError,
+                match="no recoverable.*verdict",
+            ):
+                await activities.agent_runtime_publish_artifacts(
+                    AgentRunResult(
+                        summary="Omnigent session completed",
+                        metadata={
+                            "correlationId": workflow_id,
+                            "idempotencyKey": f"{step_execution_id}:agent_execute",
+                            "workspaceLocator": {
+                                "kind": "sandbox",
+                                "workspaceId": workspace_id,
+                                "relativePath": "repo",
+                            },
+                            "assessment_artifact_path": (
+                                "artifacts/github-issue-implement-assessment.json"
+                            ),
+                        },
+                    )
+                )
+
+
+async def test_agent_runtime_publish_artifacts_normalizes_missing_verdict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resilient fallback: unanimous met requirements recover missing verdict.
+
+    Mirrors mm:12352fc2 where the agent omitted the verdict key but marked every
+    requirement met. Publisher normalizes to FULLY_IMPLEMENTED with provenance
+    instead of failing the run on a minor schema difference.
+    """
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            workspace_root = tmp_path / "agent_workspaces"
+            workspace_id = "sandbox-assess-recoverable"
+            workflow_id = "parent-wf"
+            step_execution_id = "parent-wf:run-1:step-2:execution:1"
+            workspace = (
+                workspace_root / "temporal_sandbox" / workspace_id / "repo"
+            )
+            assessment_path = (
+                workspace / "artifacts/github-issue-implement-assessment.json"
+            )
+            assessment_path.parent.mkdir(parents=True)
+            assessment_path.write_text(
+                json.dumps(
+                    {
+                        "issue_provider": "github",
+                        "issue_ref": "MoonLadderStudios/MoonMind#4175",
+                        "mode": "main",
+                        "summary": "Epic fully implemented on main",
+                        "requirements": [
+                            {"id": "a", "status": "met"},
+                            {"id": "b", "status": "met"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            SandboxWorkspaceRecordStore(workspace_root).ensure(
+                SandboxWorkspaceRecord(
+                    workspace_id=workspace_id,
+                    workflow_id=workflow_id,
+                    step_execution_id=step_execution_id,
+                    relative_path="repo",
+                )
+            )
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                workspace_root=workspace_root,
+            )
+
+            async def _skip_notify(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+                return {"status": "skipped"}
+
+            monkeypatch.setattr(
+                activities, "execution_notify_completion", _skip_notify
+            )
+            monkeypatch.setattr(
+                temporal_activity,
+                "info",
+                lambda: SimpleNamespace(
+                    namespace="default",
+                    workflow_id="parent-wf:agent:step-2",
+                    workflow_run_id="child-run-assess",
+                ),
+            )
+
+            result = await activities.agent_runtime_publish_artifacts(
+                AgentRunResult(
+                    summary="Omnigent session completed",
+                    metadata={
+                        "correlationId": workflow_id,
+                        "idempotencyKey": f"{step_execution_id}:agent_execute",
+                        "workspaceLocator": {
+                            "kind": "sandbox",
+                            "workspaceId": workspace_id,
+                            "relativePath": "repo",
+                        },
+                        "assessment_artifact_path": (
+                            "artifacts/github-issue-implement-assessment.json"
+                        ),
+                    },
+                )
+            )
+
+            assert isinstance(result, AgentRunResult)
+            assert result.metadata["assessmentVerdict"] == "FULLY_IMPLEMENTED"
+            _artifact, artifact_path = await service.read_path(
+                artifact_id=result.metadata["assessmentArtifactRef"],
+                principal="system:agent_runtime",
+            )
+            persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
+            assert persisted["verdict"] == "FULLY_IMPLEMENTED"
+            assert persisted["verdictProvenance"] == "requirements_inferred"
+
+
 @pytest.mark.parametrize(
     "runtime",
     ["omnigent", "codex_cli", "claude_code", "jules", "openclaw"],

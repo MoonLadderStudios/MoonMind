@@ -5571,3 +5571,99 @@ async def test_check_github_issue_blockers_forwards_artifact_ref() -> None:
 
     assert result.outputs["assessmentVerdict"] == "NOT_IMPLEMENTED"
     assert result.outputs["assessmentArtifactRef"] == "art_gh_assessment_2"
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_resolves_compact_mapping_verdict() -> None:
+    # Regression for mm:12352fc2 workflow: when the assessment ran on an Omnigent
+    # host, the compact assessmentVerdict in previousOutputs is the fast path.
+    # GitHub start gating must honor it like the Jira flow does, without
+    # requiring a locally mountable handoff file.
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "start",
+            "assessmentArtifactPath": "artifacts/missing-assessment.json",
+            "previousOutputs": {
+                "assessmentVerdict": "FULLY_IMPLEMENTED",
+                "assessmentArtifactRef": "art_compact_verdict",
+            },
+        },
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "skipped"
+    assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
+    assert service.token_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_unavailable_names_ref_for_remediation() -> None:
+    # When the artifact resolves but carries no usable verdict (e.g. assessment
+    # JSON missing the required verdict key), the failure must name the ref and
+    # tell the operator to re-run the assessment step.
+    artifact_service = _FakeAssessmentArtifactService(
+        {"art_missing_verdict": {"summary": "no verdict here"}}
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 1067,
+            "mode": "start",
+            "assessmentArtifactPath": "artifacts/github-issue-implement-assessment.json",
+            "assessmentArtifactRef": "art_missing_verdict",
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert "art_missing_verdict" in result.outputs["summary"]
+    assert "verdict" in result.outputs["summary"].lower()
+    assert service.token_requests == []
+
+
+@pytest.mark.asyncio
+async def test_update_github_issue_status_recovers_missing_verdict_from_requirements() -> None:
+    # Resilient fallback for mm:12352fc2: verdict key omitted but agent's own
+    # requirements are unanimously met. Trust semantic intent over syntactic
+    # field presence instead of failing the run.
+    artifact_service = _FakeAssessmentArtifactService(
+        {
+            "art_recoverable": {
+                "issue_provider": "github",
+                "issue_ref": "MoonLadderStudios/MoonMind#4175",
+                "mode": "main",
+                "summary": "Epic fully implemented on main",
+                "requirements": [
+                    {"id": "a", "status": "met"},
+                    {"id": "b", "status": "met"},
+                ],
+            }
+        }
+    )
+    service = _FakeGitHubService()
+
+    result = await update_github_issue_status(
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 4175,
+            "mode": "start",
+            "assessmentArtifactPath": "artifacts/github-issue-implement-assessment.json",
+            "assessmentArtifactRef": "art_recoverable",
+        },
+        {"temporal_artifact_service": artifact_service},
+        github_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["decision"] == "skipped"
+    assert result.outputs["assessmentVerdict"] == "FULLY_IMPLEMENTED"
+    assert service.token_requests == []
