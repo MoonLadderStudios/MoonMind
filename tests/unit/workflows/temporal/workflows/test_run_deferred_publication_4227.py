@@ -317,6 +317,7 @@ def test_deferred_publication_does_not_spend_finalization_retry(
     assert outcome["criticality"] == "unsupported"
     assert outcome["retryCount"] == 0
     assert outcome.get("failureCode") != FINALIZATION_PUBLICATION_FAILED
+    assert deferred_workflow._publish_status == "not_required"
 
 
 def test_deferred_handoff_preserves_required_finalization_failure(
@@ -369,4 +370,3 @@ def test_deferred_handoff_preserves_required_finalization_failure(
     )
     assert status == "failed"
     assert failed is True
-    assert deferred_workflow._publish_status == "not_required"
