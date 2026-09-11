@@ -38,9 +38,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.base import get_async_session
 from api_service.api.routers.workflow_console_view_model import (
-    build_repository_branch_options,
+    build_repository_branch_metadata_async,
+    build_repository_branch_options_async,
     build_repository_issue_options,
     resolve_dashboard_runtime_config,
+    resolve_repository_branch_async,
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.models import AgentSkillDefinition, TemporalArtifact, User
@@ -409,11 +411,35 @@ class DashboardBranchOption(BaseModel):
 
 
 class DashboardBranchListResponse(BaseModel):
-    """Dashboard response containing branch options for one repository."""
+    """Dashboard response containing bounded branch suggestions for one repository."""
 
     items: list[DashboardBranchOption] = Field(default_factory=list)
     error: str | None = Field(None)
     default_branch: str | None = Field(None, alias="defaultBranch")
+    has_more: bool = Field(False, alias="hasMore")
+
+    model_config = {"populate_by_name": True}
+
+
+class DashboardBranchMetadataResponse(BaseModel):
+    """Metadata-only branch response so form init never enumerates branches."""
+
+    default_branch: str | None = Field(None, alias="defaultBranch")
+    error: str | None = Field(None)
+
+    model_config = {"populate_by_name": True}
+
+
+class DashboardBranchResolveResponse(BaseModel):
+    """Exact-name branch resolution independent of suggestion pages."""
+
+    found: bool = Field(False)
+    branch: str | None = Field(None)
+    default_branch: str | None = Field(None, alias="defaultBranch")
+    error: str | None = Field(None)
+    inconclusive: bool = Field(True)
+
+    model_config = {"populate_by_name": True}
 
 
 class DashboardIssueOption(BaseModel):
@@ -1829,14 +1855,47 @@ async def get_dashboard_skill_input_contract(
     return DashboardSkillInputContractResponse(**option.model_dump(by_alias=True))
 
 
+@router.get(
+    "/api/github/branches/resolve", response_model=DashboardBranchResolveResponse
+)
+async def resolve_dashboard_github_branch(
+    repository: str = Query(..., min_length=1),
+    branch: str = Query(..., min_length=1),
+    _user: User = Depends(get_current_user()),
+) -> DashboardBranchResolveResponse:
+    """Resolve one exact branch name without scanning suggestion pages."""
+
+    payload = await resolve_repository_branch_async(repository, branch)
+    return DashboardBranchResolveResponse(**payload)
+
+
+@router.get(
+    "/api/github/branches/metadata", response_model=DashboardBranchMetadataResponse
+)
+async def get_dashboard_github_branch_metadata(
+    repository: str = Query(..., min_length=1),
+    _user: User = Depends(get_current_user()),
+) -> DashboardBranchMetadataResponse:
+    """Resolve only default-branch metadata so form init never enumerates branches."""
+
+    payload = await build_repository_branch_metadata_async(repository)
+    return DashboardBranchMetadataResponse(**payload)
+
+
 @router.get("/api/github/branches", response_model=DashboardBranchListResponse)
 async def list_dashboard_github_branches(
     repository: str = Query(..., min_length=1),
+    q: str = Query(""),
+    limit: int = Query(20, ge=1, le=50),
     _user: User = Depends(get_current_user()),
 ) -> DashboardBranchListResponse:
-    """List GitHub branches through MoonMind so browsers never call GitHub directly."""
+    """List one bounded page of GitHub branches through MoonMind."""
 
-    payload = build_repository_branch_options(repository)
+    # Awaited async execution keeps the API event loop responsive while the
+    # upstream lookup is delayed; only a single upstream branch page is ever
+    # read per call and hasMore reports further pages instead of draining
+    # them.
+    payload = await build_repository_branch_options_async(repository, q, limit)
     return DashboardBranchListResponse(**payload)
 
 

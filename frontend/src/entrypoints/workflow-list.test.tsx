@@ -708,6 +708,21 @@ describe('Workflows Entrypoint', () => {
     expect(updatedCell.getAttribute('title')).not.toBe(staleExact);
   });
 
+  it('shows completed resolver continuations as handed off', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [{
+        taskId: 'resolver-833', source: 'temporal', title: 'Resolve PR 833',
+        status: 'completed', state: 'completed', rawState: 'completed',
+        completionDisposition: 'gated_continuation', createdAt: '2026-09-11T00:40:00Z',
+      }] }),
+    } as Response);
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    const row = await screen.findByRole('row', { name: /Resolve PR 833/ });
+    expect(within(row).getByText('Handed off')).toBeTruthy();
+    expect(within(row).queryByText('Completed')).toBeNull();
+  });
+
   it('uses closedAt for terminal rows when synthetic updatedAt is older', async () => {
     const closedAt = '2026-04-15T20:00:00Z';
     const syntheticUpdatedAt = '2026-04-15T10:00:00Z';

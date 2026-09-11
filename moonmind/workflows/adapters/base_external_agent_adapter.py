@@ -256,6 +256,12 @@ class BaseExternalAgentAdapter(abc.ABC):
         }
         if callback_correlation_key:
             metadata["callbackCorrelationKey"] = callback_correlation_key
+        from moonmind.workflows.temporal.worker_code_identity import (
+            current_worker_code_revision,
+        )
+
+        worker_revision = current_worker_code_revision()
+        metadata["workerCodeRevision"] = worker_revision
         return AgentRunHandle(
             runId=run_id,
             agentKind="external",
@@ -263,6 +269,7 @@ class BaseExternalAgentAdapter(abc.ABC):
             status=status,
             startedAt=datetime.now(tz=UTC),
             metadata=metadata,
+            workerCodeRevision=worker_revision,
         )
 
     @staticmethod
@@ -285,12 +292,19 @@ class BaseExternalAgentAdapter(abc.ABC):
         }
         if extra_metadata:
             meta.update(extra_metadata)
+        from moonmind.workflows.temporal.worker_code_identity import (
+            current_worker_code_revision,
+        )
+
+        worker_revision = current_worker_code_revision()
+        meta.setdefault("workerCodeRevision", worker_revision)
         return AgentRunStatus(
             runId=run_id,
             agentKind="external",
             agentId=agent_id,
             status=status,
             metadata=meta,
+            workerCodeRevision=worker_revision,
         )
 
     @staticmethod
@@ -314,6 +328,11 @@ class BaseExternalAgentAdapter(abc.ABC):
             f"{provider_name} task {run_id} ended with "
             f"provider status '{provider_status}'."
         )
+        from moonmind.workflows.temporal.worker_code_identity import (
+            current_worker_code_revision,
+        )
+
+        worker_revision = current_worker_code_revision()
         return AgentRunResult(
             outputRefs=[],
             summary=summary,
@@ -322,7 +341,9 @@ class BaseExternalAgentAdapter(abc.ABC):
             metadata={
                 "normalizedStatus": normalized_status,
                 "externalUrl": external_url,
+                "workerCodeRevision": worker_revision,
             },
+            workerCodeRevision=worker_revision,
         )
 
 __all__ = [

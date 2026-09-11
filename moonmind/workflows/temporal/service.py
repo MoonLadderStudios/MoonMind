@@ -125,7 +125,14 @@ from moonmind.workflows.executions.preset_expansion import (
     expand_preset_for_child_run,
     has_unexpanded_task_template,
 )
-from moonmind.workflows.executions.title_derivation import synthesize_execution_title
+from moonmind.workflows.executions.title_derivation import (
+    TITLE_PROVENANCE_GENERATED,
+    TITLE_PROVENANCE_USER_EXPLICIT,
+    TitleTransitionState,
+    apply_manual_title,
+    normalize_display_title,
+    synthesize_execution_title,
+)
 from moonmind.workflows.executions.checkpoint_resume_admission import (
     AdmittedCheckpointResumeDecision,
 )
@@ -162,6 +169,26 @@ def _workflow_payload(parameters: Mapping[str, Any]) -> Mapping[str, Any]:
     if workflow_payload:
         return workflow_payload
     return _mapping_payload(parameters.get("task"))
+
+
+def _issue_search_title_enrichment_base(
+    task_payload: Mapping[str, Any] | None,
+) -> str | None:
+    """Return the frozen preset base label for opt-in title enrichment.
+
+    MoonLadderStudios/MoonMind#4099: the admitted plan snapshot carries the
+    pinned ``titleEnrichment`` declaration (populated with ``presetTitle`` at
+    expansion). Only an enabled declaration with a display-safe preset title
+    yields a base; anything else leaves creation-time synthesis untouched.
+    """
+    if not isinstance(task_payload, Mapping):
+        return None
+    enrichment = task_payload.get("titleEnrichment") or task_payload.get(
+        "title_enrichment"
+    )
+    if not isinstance(enrichment, Mapping) or enrichment.get("enabled") is not True:
+        return None
+    return normalize_display_title(enrichment.get("presetTitle"))
 
 
 def _visibility_runtime_from_parameters(
@@ -594,6 +621,37 @@ class TemporalExecutionService:
         )
         payload = result.scalar_one_or_none()
         return bool(isinstance(payload, Mapping) and payload.get("workersPaused"))
+
+    async def _enforce_worker_code_freshness(self) -> None:
+        """Refuse new UserWorkflows when only stale workers serve the queue.
+
+        Probes the configured worker ``/readyz`` endpoints and compares each
+        worker's startup-recorded code identity with the checkout revision on
+        disk (MoonLadderStudios/MoonMind#4224). Raises
+        :class:`TemporalExecutionValidationError` with ``reasonCode=stale_code``
+        when every known worker is stale. Fail-open when no readiness endpoint
+        is configured or reachable.
+        """
+
+        from moonmind.workflows.temporal.worker_code_identity import (
+            WorkerCodeAdmissionError,
+            collect_worker_code_freshness,
+            enforce_worker_code_admission,
+            readiness_urls_from_env,
+        )
+
+        urls = readiness_urls_from_env()
+        if not urls:
+            return
+        freshness = await asyncio.to_thread(collect_worker_code_freshness, urls)
+        try:
+            enforce_worker_code_admission(freshness)
+        except Exception as exc:
+            if isinstance(exc, WorkerCodeAdmissionError):
+                raise TemporalExecutionValidationError(str(exc)) from exc
+            logger.warning(
+                "Worker code freshness gate degraded: %s", exc
+            )
 
     async def send_quiesce_pause_signal(self, **kwargs):
         return await self._client_adapter.send_batch_pause_update(**kwargs)
@@ -2011,6 +2069,13 @@ class TemporalExecutionService:
             owner_type=owner_type,
         )
         if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
+            # Stale-code admission gate (MoonLadderStudios/MoonMind#4224): do
+            # not admit new UserWorkflows on a task queue served only by stale
+            # workers. Fail-open when no worker readiness endpoint is
+            # configured or reachable — the unknown state stays visible in the
+            # readiness detail instead of wedging admissions on a monitoring
+            # outage.
+            await self._enforce_worker_code_freshness()
             skill_validation = await validate_skill_step_inputs(
                 initial_parameters=initial_parameters,
                 session=self._session,
@@ -2186,12 +2251,42 @@ class TemporalExecutionService:
             or title
             or self._default_title_for_type(workflow_type_enum)
         )
+        title_source = title_result.source
+        title_confidence = title_result.confidence
+        # MoonLadderStudios/MoonMind#4099: for opt-in issue-search presets the
+        # frozen base label is the preset's declared title, so the pending
+        # display title is exactly that label and enrichment renders
+        # "<base>: #<number>". An explicit caller title always wins and stays
+        # protected from automatic enrichment.
+        enrichment_base = _issue_search_title_enrichment_base(task_params)
+        if enrichment_base is not None and title_source != "user_explicit":
+            resolved_title = enrichment_base
+            title_source = "preset_template"
+            title_confidence = "medium"
         memo = {
             "title": resolved_title,
             "summary": title_result.summary or summary or "Execution initialized.",
-            "titleSource": title_result.source,
-            "titleConfidence": title_result.confidence,
+            "titleSource": title_source,
+            "titleConfidence": title_confidence,
+            # MoonLadderStudios/MoonMind#4099: frozen base label + explicit vs
+            # generated provenance + revision guard for the shared title
+            # transition (manual SetTitle and automatic issue enrichment).
+            "titleBase": resolved_title,
+            "titleProvenance": (
+                TITLE_PROVENANCE_USER_EXPLICIT
+                if title_source == "user_explicit"
+                else TITLE_PROVENANCE_GENERATED
+            ),
+            "titleRevision": 0,
         }
+        # Admitting-authority code revision (MoonLadderStudios/MoonMind#4224):
+        # post-incident analysis can tell which revision admitted the run; the
+        # executing worker stamps its own revision in AgentRun metadata.
+        from moonmind.workflows.temporal.worker_code_identity import (
+            current_worker_code_revision,
+        )
+
+        memo["workerCodeRevision"] = current_worker_code_revision()
         if input_artifact_ref:
             memo["input_ref"] = input_artifact_ref
         if manifest_artifact_ref:
@@ -4113,10 +4208,63 @@ class TemporalExecutionService:
         record: TemporalExecutionCanonicalRecord,
         title: str,
     ) -> dict[str, Any]:
+        # MoonLadderStudios/MoonMind#4099: repair the public SetTitle path with
+        # the one shared workflow-owned title transition. Validation,
+        # explicit provenance, revision guard, memo consistency, and mm_title
+        # search tokens are handled here so the canonical record stays in sync
+        # with the workflow-side update.
+        normalized = normalize_display_title(title)
+        if normalized is None:
+            raise TemporalExecutionValidationError(
+                "title is required and must be display-safe text "
+                "when updateName is SetTitle"
+            )
         memo = dict(record.memo or {})
-        memo["title"] = title
+        try:
+            current_revision = int(memo.get("titleRevision") or 0)
+        except (TypeError, ValueError):
+            current_revision = 0
+        current_state = TitleTransitionState(
+            base_title=normalize_display_title(memo.get("titleBase"))
+            or normalize_display_title(memo.get("title"))
+            or normalized,
+            display_title=normalize_display_title(memo.get("title")),
+            provenance=str(
+                memo.get("titleProvenance")
+                or (
+                    TITLE_PROVENANCE_USER_EXPLICIT
+                    if memo.get("titleSource") == "user_explicit"
+                    else TITLE_PROVENANCE_GENERATED
+                )
+            ),
+            revision=current_revision,
+        )
+        try:
+            transition = apply_manual_title(current_state, normalized)
+        except ValueError as exc:
+            raise TemporalExecutionValidationError(str(exc)) from exc
+        if not transition.changed:
+            return {
+                "accepted": True,
+                "applied": "immediate",
+                "message": "Title unchanged.",
+            }
+        next_state = transition.state
+        memo["title"] = next_state.display_title
+        memo["titleBase"] = next_state.base_title
+        memo["titleProvenance"] = next_state.provenance
+        memo["titleRevision"] = next_state.revision
+        memo["titleSource"] = "user_explicit"
+        memo["titleConfidence"] = "high"
         record.memo = memo
         self._touch(record)
+        attrs = dict(record.search_attributes or {})
+        title_tokens = tokenize_title(next_state.display_title)
+        if title_tokens:
+            attrs["mm_title"] = title_tokens
+        else:
+            attrs.pop("mm_title", None)
+        record.search_attributes = attrs
         return {
             "accepted": True,
             "applied": "immediate",
@@ -4225,10 +4373,19 @@ class TemporalExecutionService:
         next_plan_ref = plan_artifact_ref or record.plan_ref
         task_params = params.get("task") if isinstance(params.get("task"), dict) else {}
         repository = repository_name_from_value(params.get("repository")) or None
+        # MoonLadderStudios/MoonMind#4099: explicit user titles survive a rerun
+        # verbatim, while generated titles restart from the frozen base label
+        # so the new run re-enriches from its own resolver result instead of
+        # inheriting a stale "<base>: #<number>" as a false explicit title.
+        source_memo = record.memo or {}
+        if source_memo.get("titleProvenance") == TITLE_PROVENANCE_USER_EXPLICIT:
+            rerun_title_fallback = str(source_memo.get("title") or "").strip()
+        else:
+            rerun_title_fallback = str(
+                source_memo.get("titleBase") or source_memo.get("title") or ""
+            ).strip()
         title = (
-            str(task_params.get("title") or "").strip()
-            or str((record.memo or {}).get("title") or "").strip()
-            or None
+            str(task_params.get("title") or "").strip() or rerun_title_fallback or None
         )
 
         rerun_create_idempotency_key = self._rerun_create_idempotency_key(

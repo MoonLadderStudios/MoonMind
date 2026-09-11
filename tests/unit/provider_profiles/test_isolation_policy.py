@@ -94,6 +94,9 @@ def test_alternate_provider_materialization_derives_policy() -> None:
 
 
 def test_credential_free_profile_derives_empty_policy() -> None:
+    # MoonLadderStudios/MoonMind#4021: the credentialless Zen route clears
+    # ambient keys (including OPENCODE_API_KEY); unknown credential-free
+    # strategies still derive an empty policy.
     policy = derive_isolation_policy(
         runtime_id="opencode",
         provider_id="opencode",
@@ -102,7 +105,14 @@ def test_credential_free_profile_derives_empty_policy() -> None:
         runtime_materialization_mode="composite",
     )
     assert policy is not None
-    assert list(policy.keys) == []
+    assert list(policy.keys) == [
+        "OPENCODE_API_KEY",
+        "OPENCODE_AUTH_CONTENT",
+        "OPENCODE_CONFIG",
+        "OPENCODE_CONFIG_CONTENT",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ]
 
 
 def test_malformed_override_rejected() -> None:

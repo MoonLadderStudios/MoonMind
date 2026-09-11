@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import contextlib
 import fcntl
 import functools
@@ -51,6 +52,19 @@ from moonmind.schemas.managed_checkpoint_models import (
     ManagedCheckpointEntry,
     ManagedWorkspaceCheckpointCaptureInput,
     ManagedWorkspaceCheckpointCaptureResult,
+)
+from moonmind.schemas.saved_work_models import (
+    SAVED_WORK_CAPTURE_CONTRACT_VERSION,
+    SAVED_WORK_FORMAT_SIZE_LIMITS,
+    assert_single_capture_generation,
+    build_saved_work_manifest,
+    commit_saved_work_manifest,
+    describe_output_claim,
+    parse_git_diff_raw_to_deltas,
+    resolve_saved_work_format_profile,
+    scan_saved_work_export_stream,
+    snapshot_capture_generation,
+    verify_captured_artifact_evidence,
 )
 from moonmind.schemas.temporal_activity_models import (
     AcceptedRepositoryEvidence,
@@ -315,6 +329,45 @@ def _workspace_content_digest(entries: Sequence[Mapping[str, Any]]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _checkpoint_payload_identity(payload: bytes) -> tuple[str, int]:
+    """Return the expected (digest, size) identity for one capture candidate."""
+
+    return "sha256:" + hashlib.sha256(payload).hexdigest(), len(payload)
+
+
+def _saved_work_execution_link(model: Any) -> ExecutionRef:
+    """Build the owning-execution link for every saved-work artifact.
+
+    Artifacts stored without an execution link are readable only by their
+    creating principal, so the workflow owner cannot read the returned
+    ``savedWorkRef`` and the objects stay absent from execution listings.
+    Linking each saved-work object to the capture identity/namespace keeps
+    ownership resolvable through ``principal_owns_linked_execution``.
+    """
+
+    return ExecutionRef(
+        namespace=model.artifact_namespace,
+        workflow_id=model.identity.workflow_id,
+        run_id=model.identity.run_id,
+        link_type="output.checkpoint",
+    )
+
+
+def _saved_work_diff_to_deltas(
+    diff_raw: str, excluded: set[str]
+) -> list[dict[str, Any]]:
+    """Parse `git diff HEAD --raw -z --find-renames` into binary-safe deltas.
+
+    Thin adapter over the portable
+    :func:`moonmind.schemas.saved_work_models.parse_git_diff_raw_to_deltas`
+    contract so workflow code carries the adapter call while the delta
+    semantics stay in the schema layer.
+    """
+
+    return parse_git_diff_raw_to_deltas(diff_raw, excluded)
+
 
 _PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
 _PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
@@ -1028,6 +1081,22 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "merge_automation.complete_post_merge_github": (
         "integrations",
         "merge_automation_complete_post_merge_github",
+    ),
+    "github_issue.finalize_failed_attempt": (
+        "integrations",
+        "github_issue_finalize_failed_attempt",
+    ),
+    "github_issue.reconcile_handoffs": (
+        "integrations",
+        "github_issue_reconcile_handoffs",
+    ),
+    "github_issue.assess_legacy": (
+        "integrations",
+        "github_issue_assess_legacy",
+    ),
+    "github_issue.plan_legacy_repair": (
+        "integrations",
+        "github_issue_plan_legacy_repair",
     ),
     "pr_resolver.resolve_selector": (
         "integrations",
@@ -5054,6 +5123,253 @@ class TemporalIntegrationActivities:
             **outputs,
         }
 
+    async def github_issue_finalize_failed_attempt(self, payload, /, **kwargs):
+        """Finalize a failed/canceled controlling issue attempt (durable entrypoint).
+
+        Durable counterpart to the ``github.finalize_failed_attempt`` skill
+        tool: the controlling terminal path (failed or canceled exits that
+        never reach the success-path status update) schedules
+        ``github_issue.finalize_failed_attempt`` instead of relying on an
+        agent to invoke the skill. Input keys mirror the tool inputs; only
+        ``repository`` and ``issueNumber`` are required.
+        """
+        from moonmind.workflows.temporal.story_output_tools import (
+            finalize_github_issue_failed_attempt,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "github_issue.finalize_failed_attempt requires an object"
+            )
+        config = payload.get("failedAttemptFinalization")
+        if not isinstance(config, Mapping):
+            config = payload
+
+        def _first(*keys: str) -> Any:
+            for key in keys:
+                if key in config and config[key] is not None:
+                    return config[key]
+            return None
+
+        def _block(*keys: str) -> dict[str, Any]:
+            for key in keys:
+                value = config.get(key)
+                if isinstance(value, Mapping):
+                    return dict(value)
+            return {}
+
+        repository = str(
+            _first("repository", "repo") or ""
+        ).strip()
+        try:
+            issue_number = int(_first("issueNumber", "issue_number") or 0)
+        except (TypeError, ValueError):
+            issue_number = 0
+        if not repository or issue_number <= 0:
+            raise TemporalActivityRuntimeError(
+                "github_issue.finalize_failed_attempt requires repository and issueNumber"
+            )
+        result = await finalize_github_issue_failed_attempt(
+            {
+                "repository": repository,
+                "issueNumber": issue_number,
+                "executionEvent": _first("executionEvent", "execution_event", "controllingOutcome", "controlling_outcome", "outcome", "status"),
+                "fromSettled": _first("fromSettled", "from_settled") or "in_progress",
+                "currentLabels": _first("currentLabels", "current_labels"),
+                "writerEvidence": _block("writerEvidence", "writer_evidence"),
+                "mutationEvidence": _block("mutationEvidence", "mutation_evidence"),
+                "preservationEvidence": _block("preservationEvidence", "preservation_evidence"),
+                "dispositionEvidence": _block("dispositionEvidence", "disposition_evidence"),
+                "attemptId": _first("attemptId", "attempt_id"),
+                "primaryOutcome": _first("primaryOutcome", "primary_outcome"),
+                "metRequirements": _first("metRequirements", "met_requirements"),
+                "remainingRequirements": _first("remainingRequirements", "remaining_requirements"),
+                "retryHistory": _first("retryHistory", "retry_history"),
+                "nextAction": _first("nextAction", "next_action"),
+                "reason": _first("reason"),
+                "completionMode": _first("completionMode", "completion_mode") or "pr_only_handoff",
+                "reviewOwnerEnded": _first("reviewOwnerEnded", "review_owner_ended"),
+                "cancellationHold": _first("cancellationHold", "cancellation_hold"),
+            }
+        )
+        outputs = dict(result.outputs)
+        succeeded = result.status == "COMPLETED" and outputs.get("released") is True
+        return {
+            "status": "succeeded" if succeeded else "failed",
+            "repository": repository,
+            "issueNumber": issue_number,
+            **outputs,
+        }
+
+    async def github_issue_reconcile_handoffs(self, payload, /, **kwargs):
+        """Reconcile interrupted issue handoffs through the bounded scan (durable entrypoint).
+
+        Durable counterpart to periodic maintenance: the default scheduled
+        ``MoonMind.GitHubIssueReconcile`` workflow executes
+        ``github_issue.reconcile_handoffs`` instead of relying on an agent
+        to repair stranded handoffs. Only ``repository`` is required;
+        ``issueNumbers`` optionally narrows the run. Pending-sync evidence
+        persists across worker restarts via ``stateDir``.
+        """
+        from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import (
+            reconcile_github_issue_handoffs,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "github_issue.reconcile_handoffs requires an object"
+            )
+        config = payload.get("reconciliation")
+        if not isinstance(config, Mapping):
+            config = payload
+
+        def _first(*keys: str) -> Any:
+            for key in keys:
+                if key in config and config[key] is not None:
+                    return config[key]
+            return None
+
+        repository = str(_first("repository", "repo") or "").strip()
+        if not repository:
+            raise TemporalActivityRuntimeError(
+                "github_issue.reconcile_handoffs requires repository"
+            )
+        raw_numbers = _first("issueNumbers", "issue_numbers")
+        issue_numbers = None
+        if isinstance(raw_numbers, (list, tuple)):
+            parsed: list[int] = []
+            for raw in raw_numbers:
+                try:
+                    parsed.append(int(raw))  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    continue
+            issue_numbers = parsed
+        result = await reconcile_github_issue_handoffs(
+            repository=repository,
+            issue_numbers=issue_numbers,
+            state_dir=_first("stateDir", "state_dir"),
+        )
+        return {
+            "status": "succeeded" if result.get("ok") else "failed",
+            "repository": repository,
+            **result,
+        }
+
+    async def github_issue_assess_legacy(self, payload, /, **kwargs):
+        """Assess one issue's legacy evidence through the bounded cutover path.
+
+        Durable counterpart to ad-hoc inspection: trusted callers pass
+        ``repository`` plus ``issueNumber`` and receive the bounded
+        read-only :func:`assess_legacy_issue` report with exact evidence,
+        known/unknown ownership, and suggested actions. Read-only: no
+        GitHub state is mutated. Only ``repository`` and ``issueNumber``
+        are required; ``prs``/``checkpoints``/``issueFlags`` optionally
+        narrow the already-read supplemental evidence.
+        """
+        from moonmind.workflows.temporal.activities.github_issue_legacy_cutover_activities import (
+            assess_legacy_cutover_issue,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "github_issue.assess_legacy requires an object"
+            )
+        config = payload.get("legacyCutover")
+        if not isinstance(config, Mapping):
+            config = payload
+
+        def _first(*keys: str) -> Any:
+            for key in keys:
+                if key in config and config[key] is not None:
+                    return config[key]
+            return None
+
+        repository = str(_first("repository", "repo") or "").strip()
+        try:
+            issue_number = int(_first("issueNumber", "issue_number") or 0)
+        except (TypeError, ValueError):
+            issue_number = 0
+        if not repository or issue_number <= 0:
+            raise TemporalActivityRuntimeError(
+                "github_issue.assess_legacy requires repository and issueNumber"
+            )
+        raw_prs = _first("prs", "pullRequests")
+        prs = list(raw_prs) if isinstance(raw_prs, (list, tuple)) else []
+        raw_checkpoints = _first("checkpoints")
+        checkpoints = list(raw_checkpoints) if isinstance(raw_checkpoints, (list, tuple)) else []
+        raw_flags = _first("issueFlags", "issue_flags")
+        issue_flags = dict(raw_flags) if isinstance(raw_flags, Mapping) else {}
+        raw_posters = _first("trustedPosters", "trusted_posters")
+        trusted_posters = list(raw_posters) if isinstance(raw_posters, (list, tuple)) else None
+        result = await assess_legacy_cutover_issue(
+            repository=repository,
+            issue_number=issue_number,
+            prs=prs,
+            checkpoints=checkpoints,
+            issue_flags=issue_flags,
+            trusted_posters=trusted_posters,
+        )
+        return {
+            "status": "succeeded" if result.get("ok") else "failed",
+            "repository": repository,
+            "issueNumber": issue_number,
+            **result,
+        }
+
+    async def github_issue_plan_legacy_repair(self, payload, /, **kwargs):
+        """Plan one legacy repair through the shared authorization guards.
+
+        Pure planning boundary: callers pass a prior ``assessment`` report
+        (as produced by ``github_issue.assess_legacy``) plus the transition
+        target and evidence, and receive the guarded repair plan for the
+        existing finalization/reconciliation writers. Performs no GitHub
+        writes itself; ambiguous evidence stays blocked without an
+        explicit operator decision.
+        """
+        from moonmind.workflows.temporal.activities.github_issue_legacy_cutover_activities import (
+            plan_legacy_cutover_repair,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "github_issue.plan_legacy_repair requires an object"
+            )
+        config = payload.get("legacyCutover")
+        if not isinstance(config, Mapping):
+            config = payload
+
+        def _first(*keys: str) -> Any:
+            for key in keys:
+                if key in config and config[key] is not None:
+                    return config[key]
+            return None
+
+        def _block(*keys: str) -> dict[str, Any]:
+            for key in keys:
+                value = config.get(key)
+                if isinstance(value, Mapping):
+                    return dict(value)
+            return {}
+
+        assessment = _block("assessment")
+        if not assessment:
+            raise TemporalActivityRuntimeError(
+                "github_issue.plan_legacy_repair requires assessment"
+            )
+        result = await plan_legacy_cutover_repair(
+            assessment=assessment,
+            from_settled=str(_first("fromSettled", "from_settled") or ""),
+            to_target=str(_first("toTarget", "to_target") or ""),
+            evidence=_block("evidence"),
+            reason=str(_first("reason") or ""),
+            operator_decision=_block("operatorDecision", "operator_decision"),
+            conclusively_stopped=bool(_first("conclusivelyStopped", "conclusively_stopped")),
+        )
+        return {
+            "status": "succeeded" if result.get("allowed") else "failed",
+            **result,
+        }
+
     async def pr_resolver_resolve_selector(self, payload, /, **kwargs):
         """Resolve a PR number, URL, or branch to one canonical PR identity."""
 
@@ -5735,6 +6051,27 @@ class TemporalAgentRuntimeActivities:
         record: Any,
     ) -> dict[str, Any]:
         policy = model.capture_policy
+        # One stable capture generation starts here: record HEAD and the
+        # worktree status before enumeration so a writer mutating files or
+        # HEAD mid-capture is detected and retried/blocked instead of
+        # producing a falsely consistent snapshot. Capture never runs an
+        # unconditional `git add -A` and never mutates the live agent
+        # index/history to create export evidence.
+        async def _git_text(*args: str) -> str:
+            command = self._workspace_git_command(str(workspace), *args)
+            return (await _run_command(command)).stdout.strip()
+
+        async def _git_raw(*args: str) -> str:
+            command = self._workspace_git_command(str(workspace), *args)
+            return (await _run_command(command)).stdout
+
+        pre_head = await _git_text("rev-parse", "HEAD")
+        pre_status = await _git_raw(
+            "status", "--porcelain=v1", "-z", "--untracked-files=all",
+        )
+        pre_status_digest = "sha256:" + hashlib.sha256(
+            pre_status.encode()
+        ).hexdigest()
         enumerate_args = ["ls-files", "-z", "--cached"]
         if policy.include_untracked:
             enumerate_args.extend(["--others", "--exclude-standard"])
@@ -5747,13 +6084,27 @@ class TemporalAgentRuntimeActivities:
             ".git", ".codex", ".ssh", ".gnupg", "node_modules", "__pycache__",
             ".cache", ".docker", "credentials", "managed_runs", "managed_sessions",
         }
-        selected = [
-            path for path in paths
-            if Path(path).name not in excluded_names
-            and not any(part in excluded_parts for part in Path(path).parts)
-            and Path(path).parts[:2]
-            not in {(".agents", "skills"), (".gemini", "skills")}
-        ]
+        # Capture-owned temporary archives stay outside the exported tree,
+        # and runtime-issued credential paths are never exported.
+        excluded_suffixes = (".tmp", ".tar.gz", ".tgz", ".zip")
+        exclusions: list[dict[str, str]] = []
+        absent_paths: list[str] = []
+        selected: list[str] = []
+        for path in paths:
+            parts = Path(path).parts
+            if Path(path).name in excluded_names:
+                exclusions.append({"path": path, "reason": "sensitive-filename-policy"})
+                continue
+            if any(part in excluded_parts for part in parts):
+                exclusions.append({"path": path, "reason": "sensitive-path-policy"})
+                continue
+            if parts[:2] in {(".agents", "skills"), (".gemini", "skills")}:
+                exclusions.append({"path": path, "reason": "runtime-skill-overlay"})
+                continue
+            if path.lower().endswith(excluded_suffixes):
+                exclusions.append({"path": path, "reason": "temporary-archive"})
+                continue
+            selected.append(path)
         if len(selected) > policy.max_file_count:
             raise temporal_exceptions.ApplicationError(
                 "maximum file count exceeded", type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED",
@@ -5761,10 +6112,18 @@ class TemporalAgentRuntimeActivities:
             )
         entries: list[ManagedCheckpointEntry] = []
         total = 0
-        output = BytesIO()
+        fingerprints: dict[str, str] = {}
+        # Bounded spool path outside the exported workspace tree: large
+        # workspace exports stream through temp files in bounded chunks
+        # instead of allocating the entire workspace in memory. Capture
+        # secrets and these spool files never enter the exported tree. The
+        # uncompressed tar spools first so export-byte secret controls can
+        # inspect the actual exported bytes; gzip then streams from that
+        # spool with normalized metadata for deterministic identities.
+        tar_spool = tempfile.TemporaryFile(prefix="saved-work-capture-tar-")
 
-        with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as compressed, tarfile.open(
-            fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT
+        with tarfile.open(
+            fileobj=tar_spool, mode="w", format=tarfile.PAX_FORMAT
         ) as archive:
             for relative_text in selected:
                 # Archive construction is synchronous. Yield between entries so
@@ -5773,8 +6132,21 @@ class TemporalAgentRuntimeActivities:
                 await asyncio.sleep(0)
                 path = workspace / relative_text
                 if not path.exists() and not path.is_symlink():
+                    # Tracked-but-absent: baseline-anchored deletion evidence,
+                    # never silently treated as complete content.
+                    absent_paths.append(relative_text)
                     continue
-                info_stat = path.lstat()
+                try:
+                    info_stat = path.lstat()
+                except OSError as exc:
+                    raise temporal_exceptions.ApplicationError(
+                        f"unreadable path during capture: {relative_text}",
+                        type="CHECKPOINT_CAPTURE_UNREADABLE",
+                        non_retryable=True,
+                    ) from exc
+                fingerprints[relative_text] = (
+                    f"{info_stat.st_mtime_ns}:{info_stat.st_size}"
+                )
                 if stat.S_ISLNK(info_stat.st_mode):
                     target = os.readlink(path)
                     resolved = (path.parent / target).resolve()
@@ -5791,7 +6163,16 @@ class TemporalAgentRuntimeActivities:
                             "maximum per-file size exceeded",
                             type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED", non_retryable=True,
                         )
-                    digest = await asyncio.to_thread(_sha256_file, path)
+                    # Unreadable/skipped data is never treated as complete:
+                    # hashing or opening failures fail the capture explicitly.
+                    try:
+                        digest = await asyncio.to_thread(_sha256_file, path)
+                    except OSError as exc:
+                        raise temporal_exceptions.ApplicationError(
+                            f"unreadable file during capture: {relative_text}",
+                            type="CHECKPOINT_CAPTURE_UNREADABLE",
+                            non_retryable=True,
+                        ) from exc
                     payload = None
                     target = None
                     entry_type = "file"
@@ -5817,7 +6198,15 @@ class TemporalAgentRuntimeActivities:
                 tar_info.uid = tar_info.gid = tar_info.mtime = 0
                 tar_info.uname = tar_info.gname = ""
                 if entry_type == "file":
-                    with path.open("rb") as source:
+                    try:
+                        source = path.open("rb")
+                    except OSError as exc:
+                        raise temporal_exceptions.ApplicationError(
+                            f"unreadable file during capture: {relative_text}",
+                            type="CHECKPOINT_CAPTURE_UNREADABLE",
+                            non_retryable=True,
+                        ) from exc
+                    with source:
                         await asyncio.to_thread(archive.addfile, tar_info, source)
                 else:
                     archive.addfile(tar_info)
@@ -5835,29 +6224,136 @@ class TemporalAgentRuntimeActivities:
                         linkTarget=target,
                     )
                 )
-        archive_payload = output.getvalue()
-        archive_digest = "sha256:" + hashlib.sha256(archive_payload).hexdigest()
+        # Scan the actual exported tar bytes (not only manifest text) as a
+        # bounded chunk stream with overlap, so credential-shaped content
+        # spanning a chunk boundary is still detected without holding the
+        # whole export in memory. Binary/uninspectable regions stay explicit
+        # instead of a fabricated clean scan.
+        tar_spool.flush()
+        tar_spool.seek(0)
+
+        def _tar_spool_chunks() -> Any:
+            while True:
+                tar_chunk = tar_spool.read(
+                    SAVED_WORK_FORMAT_SIZE_LIMITS["max_spool_chunk_bytes"]
+                )
+                if not tar_chunk:
+                    return
+                yield tar_chunk
+
+        tar_scan = scan_saved_work_export_stream(
+            _tar_spool_chunks(),
+            export_digest="pending-tar-stream",
+            location="checkpoint.archive.tar",
+        )
+        if tar_scan["disposition"] == "blocked":
+            # Quarantine before any upload: a credential-shaped export must
+            # never be persisted as a normal COMPLETE artifact, even though
+            # capture reports failure. The digest-bound re-check below stays
+            # as defense-in-depth after the final export digest is known.
+            tar_spool.close()
+            raise temporal_exceptions.ApplicationError(
+                "checkpoint archive failed export secret scanning",
+                type="CHECKPOINT_CAPTURE_SECRET_DETECTED",
+                non_retryable=True,
+            )
+        tar_spool.seek(0)
+        gzip_spool = tempfile.TemporaryFile(prefix="saved-work-capture-gz-")
+        with gzip.GzipFile(fileobj=gzip_spool, mode="wb", mtime=0) as compressed:
+            while True:
+                tar_chunk = tar_spool.read(
+                    SAVED_WORK_FORMAT_SIZE_LIMITS["max_spool_chunk_bytes"]
+                )
+                if not tar_chunk:
+                    break
+                compressed.write(tar_chunk)
+        tar_spool.close()
+        spool = gzip_spool
+        # Flush the bounded spool, then stream the archive identity in chunks
+        # and enforce explicit size limits: oversized exports fail explicitly
+        # rather than being silently truncated or reported as no output.
+        spool.flush()
+        spool_size = os.fstat(spool.fileno()).st_size
+        if spool_size > policy.max_total_bytes:
+            spool.close()
+            raise temporal_exceptions.ApplicationError(
+                "maximum total size exceeded",
+                type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED",
+                non_retryable=True,
+            )
+        spool.seek(0)
+        archive_hasher = hashlib.sha256()
+        while True:
+            spool_chunk = spool.read(
+                SAVED_WORK_FORMAT_SIZE_LIMITS["max_spool_chunk_bytes"]
+            )
+            if not spool_chunk:
+                break
+            archive_hasher.update(spool_chunk)
+        archive_digest = "sha256:" + archive_hasher.hexdigest()
+        spool.seek(0)
+        archive_payload = spool.read()
+        spool.close()
+        if len(archive_payload) != spool_size:
+            raise temporal_exceptions.ApplicationError(
+                "capture spool changed during read",
+                type="CHECKPOINT_CAPTURE_CONCURRENT_MUTATION",
+                non_retryable=False,
+            )
+        # Close the single consistency boundary: re-read HEAD/status and
+        # re-stat captured files. Drift retries/blocks explicitly through a
+        # retryable error; the idempotency record is only written after a
+        # fully verified capture, so retries re-capture cleanly.
+        head = await _git_text("rev-parse", "HEAD")
+        branch = await _git_text("branch", "--show-current")
+        post_status = await _git_raw(
+            "status", "--porcelain=v1", "-z", "--untracked-files=all",
+        )
+        post_status_digest = "sha256:" + hashlib.sha256(
+            post_status.encode()
+        ).hexdigest()
+        generation_before = snapshot_capture_generation(
+            git_head=pre_head,
+            status_digest=pre_status_digest,
+            file_fingerprints={
+                entry.path: fingerprints[entry.path] for entry in entries
+            },
+        )
+        post_fingerprints: dict[str, str] = {}
+        for entry in entries:
+            try:
+                current_stat = (workspace / entry.path).lstat()
+            except OSError as exc:
+                raise temporal_exceptions.ApplicationError(
+                    f"captured file vanished during capture: {entry.path}",
+                    type="CHECKPOINT_CAPTURE_CONCURRENT_MUTATION",
+                    non_retryable=False,
+                ) from exc
+            post_fingerprints[entry.path] = (
+                f"{current_stat.st_mtime_ns}:{current_stat.st_size}"
+            )
+        try:
+            assert_single_capture_generation(
+                generation_before,
+                snapshot_capture_generation(
+                    git_head=head,
+                    status_digest=post_status_digest,
+                    file_fingerprints=post_fingerprints,
+                ),
+            )
+        except ValueError as exc:
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                type="CHECKPOINT_CAPTURE_CONCURRENT_MUTATION",
+                non_retryable=False,
+            ) from exc
+        status = post_status
         archive_ref = await self._put_managed_checkpoint_artifact(
             archive_payload,
             "application/vnd.moonmind.worktree-archive",
             "checkpoint_archive",
+            link=_saved_work_execution_link(model),
         )
-        async def _git(*args: str) -> str:
-            command = self._workspace_git_command(str(workspace), *args)
-            return (await _run_command(command)).stdout.strip()
-        head = await _git("rev-parse", "HEAD")
-        branch = await _git("branch", "--show-current")
-        status = (
-            await _run_command(
-                self._workspace_git_command(
-                    str(workspace),
-                    "status",
-                    "--porcelain=v1",
-                    "-z",
-                    "--untracked-files=all",
-                ),
-            )
-        ).stdout
         created_at = (record.finished_at or record.started_at).isoformat()
         staged_paths = []
         records = status.split("\0")
@@ -5903,9 +6399,270 @@ class TemporalAgentRuntimeActivities:
             manifest_payload,
             "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
             "checkpoint_manifest",
+            link=_saved_work_execution_link(model),
         )
         logger.info("managed_checkpoint_capture_files files=%s", len(entries))
         logger.info("managed_checkpoint_capture_bytes bytes=%s", len(archive_payload))
+        # Bind the streamed tar-scan evidence to the final export digest.
+        # Confidentiality controls therefore cover the actual exported bytes
+        # and reachable history, not only the manifest text; unsupported
+        # binary inspection stays explicit instead of a fabricated clean
+        # scan, and a redacted preview is never a restorable source.
+        export_scan = {**tar_scan, "exportDigest": archive_digest}
+        if export_scan["disposition"] == "blocked":
+            raise temporal_exceptions.ApplicationError(
+                "checkpoint archive failed export secret scanning",
+                type="CHECKPOINT_CAPTURE_SECRET_DETECTED",
+                non_retryable=True,
+            )
+        # Binary-safe exact-baseline delta against the recorded baseline
+        # commit. Export uses `git diff --raw` with external diff drivers
+        # and textconv disabled and never `git bundle --all`; no bundle,
+        # hook, external-diff, or textconv helper is executed for export.
+        # Repo-config-driven clean/smudge filters remain owned by the
+        # source-preparation boundary (#2615); LFS pointer files are
+        # captured as their truthful worktree bytes with the baseline
+        # dependency declared. Paths excluded from capture can never
+        # produce deletion claims.
+        excluded_for_delta = {
+            exclusion["path"]
+            for exclusion in exclusions
+            if exclusion["reason"] != "absent-from-worktree"
+        }
+        baseline_paths = set(
+            filter(
+                None,
+                (
+                    await _git_raw("ls-tree", "-r", "--name-only", "-z", "HEAD")
+                ).split("\0"),
+            )
+        )
+        diff_raw = await _git_raw(
+            "diff",
+            "HEAD",
+            "--raw",
+            "-z",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--find-renames",
+        )
+        delta_changes = _saved_work_diff_to_deltas(diff_raw, excluded_for_delta)
+        entry_by_path = {entry.path: entry for entry in entries}
+        diff_covered_paths = {str(change.get("path")) for change in delta_changes}
+        for untracked_path in sorted(
+            {entry.path for entry in entries}
+            - baseline_paths
+            - excluded_for_delta
+            - diff_covered_paths
+        ):
+            delta_changes.append(
+                {
+                    "path": untracked_path,
+                    "change": "added",
+                    "new": entry_by_path[untracked_path].model_dump(
+                        by_alias=True, mode="json", exclude_none=True
+                    ),
+                }
+            )
+        delta_changes.sort(
+            key=lambda item: (str(item.get("path")), str(item.get("change")))
+        )
+        delta_payload = _json_bytes(
+            {
+                "schemaVersion": SAVED_WORK_CAPTURE_CONTRACT_VERSION,
+                "baselineCommit": head,
+                "changes": delta_changes,
+            }
+        )
+        delta_digest = "sha256:" + hashlib.sha256(delta_payload).hexdigest()
+        delta_ref = await self._put_managed_checkpoint_artifact(
+            delta_payload,
+            "application/vnd.moonmind.saved-work-delta+json;version=1",
+            "checkpoint_delta",
+            link=_saved_work_execution_link(model),
+        )
+        lowered_paths: dict[str, str] = {}
+        case_collisions: list[str] = []
+        for entry in entries:
+            folded = entry.path.lower()
+            first_seen = lowered_paths.setdefault(folded, entry.path)
+            if first_seen != entry.path and entry.path not in case_collisions:
+                case_collisions.append(entry.path)
+        # One compact saved-work manifest indexes the verified evidence.
+        # ACL/retention resolve through artifact ownership handles, never
+        # through editable copied policy. A redacted preview is never a
+        # restorable source; optional preview/report failure stays separate
+        # from the committed capture result.
+        format_profile = resolve_saved_work_format_profile(
+            is_git_workspace=True, requested_result="portable"
+        )
+        baseline_dependency = f"git-baseline:{head}"
+        saved_work_outputs = [
+            describe_output_claim(
+                fmt="full_snapshot",
+                status="self_contained",
+                ref=archive_ref,
+                digest=archive_digest,
+                size_bytes=len(archive_payload),
+                detail=(
+                    "worktree snapshot of captured bytes; history "
+                    "reconstruction requires the recorded baseline dependency"
+                ),
+            ),
+            describe_output_claim(
+                fmt="exact_baseline_delta",
+                status="requires_dependencies",
+                ref=delta_ref,
+                digest=delta_digest,
+                size_bytes=len(delta_payload),
+                dependencies=[baseline_dependency],
+                detail=(
+                    "binary-safe worktree-vs-baseline delta; excluded "
+                    "paths never produce deletion claims"
+                ),
+            ),
+            describe_output_claim(
+                fmt="selected_history",
+                status="inapplicable",
+                detail=(
+                    "no refs requested; selected-history bundles include "
+                    "only intended reachable refs with declared baseline, "
+                    "LFS, and submodule dependencies (never bundle --all)"
+                ),
+            ),
+        ]
+        record_status = getattr(record, "status", None)
+        quiescence_verified = record_status in {
+            "completed",
+            "failed",
+            "canceled",
+            "timed_out",
+        }
+        saved_work = build_saved_work_manifest(
+            capture_id=model.idempotency_key,
+            identity={
+                **model.identity.model_dump(by_alias=True, mode="json"),
+                "boundary": model.boundary,
+            },
+            source={
+                "kind": "managed-code-workspace",
+                "workspaceLocator": model.workspace_locator.model_dump(
+                    by_alias=True, mode="json"
+                ),
+                "baselineCommit": head,
+            },
+            content_digest=archive_digest,
+            file_manifest_digest=workspace_digest,
+            capture_policy=policy.model_dump(by_alias=True, mode="json"),
+            required_formats=format_profile["required"],
+            optional_formats=format_profile["optional"],
+            outputs=saved_work_outputs,
+            exclusions=[
+                *exclusions[:100],
+                *(
+                    [{"path": path, "reason": "absent-from-worktree"} for path in absent_paths[:100]]
+                    if absent_paths
+                    else []
+                ),
+            ],
+            scan={
+                "disposition": (
+                    export_scan["disposition"]
+                    if export_scan["disposition"] != "clean"
+                    else "clean"
+                ),
+                "manifestScan": "allow",
+                "exportScan": export_scan,
+                "redactedPreviewRestorable": False,
+            },
+            dependencies=[baseline_dependency],
+            quiescence={
+                "verified": quiescence_verified,
+                "mechanism": (
+                    "terminal-run-record with pre/post capture-generation "
+                    "match"
+                    if quiescence_verified
+                    else "pre/post capture-generation match on an active "
+                    "run record; writer fencing remains owned by the "
+                    "orchestration boundary"
+                ),
+                "generationHead": head,
+                "statusDigest": post_status_digest,
+            },
+            git={
+                "baselineCommit": head,
+                "headCommit": head,
+                "branch": branch,
+                "isDirty": bool(status),
+                "statusDigest": post_status_digest,
+                "stagedPaths": staged_paths,
+                "submodules": [],
+                "deltaRef": delta_ref,
+                "deltaDigest": delta_digest,
+                "deltaChangeCount": len(delta_changes),
+                "caseCollisions": case_collisions,
+            },
+            capture_generation=head,
+            artifact_scope="checkpoint_archive",
+            retention_ref="artifact-ownership",
+        )
+        if case_collisions:
+            saved_work.setdefault("limitations", []).append(
+                "target-platform path/case collisions present; capture does "
+                "not claim a format the restore path cannot reconstruct "
+                "(coordinated with the restore owner)"
+            )
+        saved_work_payload = _json_bytes(saved_work)
+        saved_work_digest = "sha256:" + hashlib.sha256(
+            saved_work_payload
+        ).hexdigest()
+        # Delta and manifest indexes carry paths and reasons rather than
+        # file content, but a credential-shaped filename must still not
+        # leak through artifact metadata: scan both before upload.
+        derivative_scan = scan_outbound_bundle(
+            [
+                OutboundBundleItem(
+                    location="checkpoint.delta",
+                    content=delta_payload.decode("utf-8"),
+                ),
+                OutboundBundleItem(
+                    location="checkpoint.saved-work",
+                    content=saved_work_payload.decode("utf-8"),
+                ),
+            ],
+            high_security_mode=True,
+        )
+        if not derivative_scan.allowed:
+            raise temporal_exceptions.ApplicationError(
+                "saved-work derivative metadata failed outbound secret scanning",
+                type="CHECKPOINT_CAPTURE_SECRET_DETECTED",
+                non_retryable=True,
+            )
+        saved_work_ref = await self._put_managed_checkpoint_artifact(
+            saved_work_payload,
+            "application/vnd.moonmind.saved-work-manifest+json;version=1",
+            "saved_work_manifest",
+            link=_saved_work_execution_link(model),
+        )
+        # Verify required objects and dependency metadata, then commit the
+        # immutable manifest/reference set. An upload without a committed
+        # usable manifest remains an incomplete capture for the
+        # finalization/retention owners to reconcile.
+        commit = commit_saved_work_manifest(
+            {**saved_work, "manifestDigest": saved_work_digest},
+            required_refs_available={
+                "checkpoint_archive": True,
+                "checkpoint_manifest": True,
+                "checkpoint_delta": True,
+                "saved_work_manifest": True,
+            },
+        )
+        if commit["status"] != "committed":
+            raise temporal_exceptions.ApplicationError(
+                f"saved-work manifest is not committable: {commit.get('reason')}",
+                type="CHECKPOINT_CAPTURE_INCOMPLETE",
+                non_retryable=True,
+            )
         compact = ManagedWorkspaceCheckpointCaptureResult(
             status="captured",
             workspace={
@@ -5919,13 +6676,19 @@ class TemporalAgentRuntimeActivities:
                 "includesIgnoredFiles": False,
             },
             sourceWorkspaceLocator=model.workspace_locator,
-            diagnosticRefs=[manifest_ref],
+            diagnosticRefs=[manifest_ref, delta_ref, saved_work_ref],
             idempotencyKey=model.idempotency_key,
+            savedWorkRef=saved_work_ref,
+            savedWorkDigest=saved_work_digest,
         )
         return compact.model_dump(by_alias=True, mode="json", exclude_none=True)
 
     async def _put_managed_checkpoint_artifact(
-        self, payload: bytes, content_type: str, artifact_kind: str
+        self,
+        payload: bytes,
+        content_type: str,
+        artifact_kind: str,
+        link: ExecutionRef | dict[str, Any] | None = None,
     ) -> str:
         completed, _reused = (
             await self._artifact_service.put_content_addressed_payload_complete(
@@ -5933,8 +6696,20 @@ class TemporalAgentRuntimeActivities:
                 payload=payload,
                 content_type=content_type,
                 scope=artifact_kind,
+                link=link,
                 metadata_json={"artifact_kind": artifact_kind},
             )
+        )
+        # Bind the retry to the expected capture candidate: a reused
+        # COMPLETE artifact carrying different bytes must fail (or start an
+        # explicitly new attempt) rather than bind the wrong bytes to the
+        # claimed manifest. Same request + same immutable candidate reuses
+        # the committed result.
+        digest, size = _checkpoint_payload_identity(payload)
+        verify_captured_artifact_evidence(
+            expected_digest=digest,
+            expected_size_bytes=size,
+            artifact=completed,
         )
         return _compact_artifact_ref_text(build_artifact_ref(completed))
 
@@ -5999,12 +6774,11 @@ class TemporalAgentRuntimeActivities:
         if not webhook_url and not email_configured:
             return {"status": "skipped", "reason": "no_channels"}
 
-        # Scan the unredacted payload so credential-shaped secrets block the
-        # send; only the redacted event is ever transmitted. Scanning the
-        # redacted event would miss secrets because redaction replaces them
-        # with sentinels that the outbound scan intentionally ignores.
-        unredacted_event = _build_execution_notification_payload(payload, redact=False)
-        event = redact_sensitive_payload(unredacted_event)
+        # Inspect original content before redaction can erase a finding. The
+        # independently built delivery payload remains redacted for low-security
+        # sends and cannot mutate the scan input through nested references.
+        scan_event = _build_execution_notification_payload(payload, redact=False)
+        event = redact_sensitive_payload(copy.deepcopy(scan_event))
         results: list[dict[str, str]] = []
         errors: list[dict[str, str]] = []
         timeout_seconds = max(1, int(notification_settings.timeout_seconds or 5))
@@ -6014,7 +6788,7 @@ class TemporalAgentRuntimeActivities:
             if authorization:
                 headers["Authorization"] = authorization
             blocked_reason = _scan_execution_notification_before_send(
-                unredacted_event,
+                scan_event,
                 surface="execution.notification.webhook.payload",
             )
             if blocked_reason is not None:
@@ -6052,7 +6826,7 @@ class TemporalAgentRuntimeActivities:
                     )
         if email_configured:
             blocked_reason = _scan_execution_notification_before_send(
-                unredacted_event,
+                scan_event,
                 surface="execution.notification.email.payload",
             )
             if blocked_reason is not None:
@@ -6772,6 +7546,14 @@ class TemporalAgentRuntimeActivities:
             await self._report_task_run_binding(workflow_id, record_run_id)
 
         response = record.model_dump(mode="json")
+        from moonmind.workflows.temporal.worker_code_identity import (
+            current_worker_code_revision,
+        )
+
+        # Executing-worker code revision (MoonLadderStudios/MoonMind#4224): the
+        # AgentRun workflow persists this in run metadata for post-incident
+        # analysis of which revision executed the step.
+        response["workerCodeRevision"] = current_worker_code_revision()
         if request.terminal_contract is not None:
             response["terminalContract"] = request.terminal_contract.model_dump(
                 mode="json", by_alias=True
@@ -7995,22 +8777,115 @@ class TemporalAgentRuntimeActivities:
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
-                logger.warning(
-                    "Assessment verdict artifact could not be read as JSON: %s",
-                    assessment_path,
-                    exc_info=True,
+                failure_class = str(
+                    result_dict.get("failureClass")
+                    or result_dict.get("failure_class")
+                    or ""
+                ).strip()
+                if failure_class:
+                    logger.warning(
+                        "Assessment verdict artifact could not be read as JSON: %s",
+                        assessment_path,
+                        exc_info=True,
+                    )
+                    return {}
+                raise TemporalActivityRuntimeError(
+                    "Declared assessment verdict artifact could not be read as JSON: "
+                    f"{assessment_path}. The assessment step must write a JSON object "
+                    "with keys issue_provider, issue_ref, issue_url, verdict, branch, "
+                    "base_ref, mode, summary, and requirements."
                 )
-                return {}
             if not isinstance(payload, Mapping):
-                logger.warning(
-                    "Assessment verdict artifact payload must be a JSON object: %s",
-                    assessment_path,
+                failure_class = str(
+                    result_dict.get("failureClass")
+                    or result_dict.get("failure_class")
+                    or ""
+                ).strip()
+                if failure_class:
+                    logger.warning(
+                        "Assessment verdict artifact payload must be a JSON object: %s",
+                        assessment_path,
+                    )
+                    return {}
+                raise TemporalActivityRuntimeError(
+                    "Assessment verdict artifact payload must be a JSON object: "
+                    f"{assessment_path}. The assessment step must write a JSON object "
+                    "with keys issue_provider, issue_ref, issue_url, verdict, branch, "
+                    "base_ref, mode, summary, and requirements."
                 )
-                return {}
+            normalized_payload = dict(payload)
+            try:
+                from moonmind.workflows.temporal.assessment_verdict import (
+                    normalize_assessment_payload,
+                )
+            except Exception:  # pragma: no cover - import guard
+                normalize_assessment_payload = None  # type: ignore[assignment]
+            if normalize_assessment_payload is not None:
+                assistant_hint = ""
+                if isinstance(metadata, Mapping):
+                    for _key in (
+                        "assistantText",
+                        "lastAssistantText",
+                        "assistant_text",
+                    ):
+                        _val = metadata.get(_key)
+                        if isinstance(_val, str) and _val.strip():
+                            assistant_hint = _val
+                            break
+                verdict_value, verdict_provenance, verdict_evidence = (
+                    normalize_assessment_payload(
+                        payload,
+                        assistant_text=assistant_hint,
+                    )
+                )
+                if verdict_value and verdict_provenance != "declared":
+                    normalized_payload = dict(payload)
+                    normalized_payload["verdict"] = verdict_value
+                    normalized_payload["verdictProvenance"] = verdict_provenance
+                    normalized_payload["verdictEvidence"] = verdict_evidence
+                    logger.warning(
+                        "Assessment verdict artifact %s missing declared verdict; "
+                        "normalized via %s (%s)",
+                        assessment_path,
+                        verdict_provenance,
+                        verdict_evidence,
+                    )
+            else:
+                verdict_value = str(payload.get("verdict") or "").strip().upper()
+                if verdict_value not in {
+                    "FULLY_IMPLEMENTED",
+                    "PARTIALLY_IMPLEMENTED",
+                    "NOT_IMPLEMENTED",
+                    "BLOCKED",
+                }:
+                    verdict_value = ""
+            if not verdict_value:
+                failure_class = str(
+                    result_dict.get("failureClass")
+                    or result_dict.get("failure_class")
+                    or ""
+                ).strip()
+                if failure_class:
+                    logger.warning(
+                        "Assessment verdict artifact has no recoverable verdict %s; "
+                        "preserving original agent failure (%s)",
+                        assessment_path,
+                        failure_class,
+                    )
+                    return {}
+                raise TemporalActivityRuntimeError(
+                    "Declared assessment verdict artifact has no recoverable "
+                    f"verdict: {assessment_path}. The assessment step must write "
+                    "verdict as exactly one of FULLY_IMPLEMENTED, "
+                    "PARTIALLY_IMPLEMENTED, NOT_IMPLEMENTED, or BLOCKED, or "
+                    "provide an explicit verdict statement (for example "
+                    "'## Verdict: FULLY_IMPLEMENTED') so the normalizer can "
+                    "recover it. Requirement statuses alone never imply completion."
+                )
             verdict_ref = await _write_json_artifact(
                 self._artifact_service,
                 principal="system:agent_runtime",
-                payload=dict(payload),
+                payload=dict(normalized_payload),
                 execution_ref=_execution_ref("output.assessment_verdict"),
                 metadata_json={
                     "name": "assessment-verdict.json",
@@ -8044,14 +8919,8 @@ class TemporalAgentRuntimeActivities:
             }
             # Compact structured verdict rides previousOutputs as a fast path for
             # adjacent steps; the ref is the durable, bridge-compatible channel.
-            verdict = str(payload.get("verdict") or "").strip().upper()
-            if verdict in {
-                "FULLY_IMPLEMENTED",
-                "PARTIALLY_IMPLEMENTED",
-                "NOT_IMPLEMENTED",
-                "BLOCKED",
-            }:
-                published["assessmentVerdict"] = verdict
+            # verdict_value was validated above, so it is always present here.
+            published["assessmentVerdict"] = verdict_value
             return published
 
         async def _publish_issue_brief_artifact() -> dict[str, Any]:
@@ -10627,6 +11496,74 @@ class TemporalAgentRuntimeActivities:
             "compatibilityProfile": compatibility_profile,
         }
 
+    @staticmethod
+    def _schedule_health_state_path() -> Path:
+        override = os.environ.get("MOONMIND_SCHEDULE_HEALTH_STATE_PATH", "").strip()
+        if override:
+            return Path(override)
+        root = os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
+        return Path(root) / "schedule_health_state.json"
+
+    def _read_schedule_health_state(self) -> dict[str, Any]:
+        try:
+            raw = self._schedule_health_state_path().read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            return {}
+        try:
+            parsed = json.loads(raw or "{}")
+        except ValueError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _write_schedule_health_state(
+        self,
+        *,
+        previous: Mapping[str, Any],
+        streaks: Mapping[str, Any],
+        last_alerted: Mapping[str, Any],
+    ) -> None:
+        path = self._schedule_health_state_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
+        payload = {
+            "previous": dict(previous),
+            "streaks": dict(streaks),
+            "last_alerted": {
+                str(k): v for k, v in dict(last_alerted).items() if v is not None
+            },
+        }
+        try:
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            tmp.replace(path)
+        except OSError:
+            return
+
+    async def _describe_operational_schedule(
+        self, schedule_id: str
+    ) -> Any | None:
+        """Best-effort describe of one Temporal schedule at the activity boundary."""
+        adapter = self._client_adapter
+        if adapter is None:
+            return None
+        describe = getattr(adapter, "describe_schedule", None)
+        if callable(describe):
+            try:
+                return await describe(definition_id=schedule_id)
+            except Exception:
+                pass
+        get_client = getattr(adapter, "get_client", None)
+        if callable(get_client):
+            try:
+                client = await get_client()
+                handle = client.get_schedule_handle(schedule_id)
+                return await handle.describe()
+            except Exception:
+                return None
+        return None
+
     async def agent_runtime_reconcile_managed_sessions(
         self,
         payload: Mapping[str, Any] | None = None,
@@ -10827,6 +11764,120 @@ class TemporalAgentRuntimeActivities:
                 summary["omnigentStuckStateSweepFailed"] = 1
             else:
                 summary["omnigentStuckState"] = stuck_result.to_dict()
+        # MoonLadderStudios/MoonMind#4226: surface Temporal schedule health
+        # from the same operational reconcile tick. Schedule descriptions are
+        # injected when the scheduler supplies them; otherwise the activity
+        # describes the explicitly watched schedules itself at this
+        # authorized activity boundary (workflows stay deterministic) and
+        # durably tracks counters/streaks in a best-effort state file. The
+        # production reconcile schedule carries its own ID in
+        # `scheduleIdsToWatch` so its SkippedOverlap growth is observed.
+        # Failures are auxiliary and must not overwrite primary reattachment
+        # success.
+        try:
+            from moonmind.workflows.temporal.schedule_health import (
+                evaluate_reconcile_schedules,
+            )
+
+            raw_descriptions = action_payload.get("scheduleDescriptions")
+            descriptions: dict[str, Any] = (
+                dict(raw_descriptions)
+                if isinstance(raw_descriptions, Mapping)
+                else {}
+            )
+            if not descriptions:
+                # Explicit opt-in only: describe the watched schedules when
+                # the scheduler asks for it via `scheduleIdsToWatch` (the
+                # production reconcile schedule carries its own ID). Plain
+                # `{}` ticks with no reachable Temporal server leave the
+                # bounded reattach summary untouched.
+                watched = action_payload.get("scheduleIdsToWatch")
+                watch_ids: list[str] = []
+                if isinstance(watched, (list, tuple)):
+                    watch_ids = [
+                        str(item).strip() for item in watched if str(item).strip()
+                    ]
+                for schedule_id in watch_ids:
+                    try:
+                        described = await self._describe_operational_schedule(
+                            schedule_id
+                        )
+                    except Exception:
+                        continue
+                    if described is not None:
+                        descriptions[schedule_id] = described
+            if not descriptions:
+                # No schedule health input available (unit-test `{}` ticks
+                # with no reachable Temporal server, for example): leave the
+                # bounded reattach summary untouched.
+                return summary
+            raw_previous = action_payload.get("scheduleSkippedPrevious")
+            raw_alerted = action_payload.get("scheduleSkippedLastAlerted")
+            raw_streaks = action_payload.get("scheduleSkippedStreakPrevious")
+            persisted = self._read_schedule_health_state()
+            previous_counters: dict[str, Any] = (
+                dict(raw_previous) if isinstance(raw_previous, Mapping) else {}
+            )
+            last_alerted: dict[str, Any] = (
+                dict(raw_alerted) if isinstance(raw_alerted, Mapping) else {}
+            )
+            previous_streaks: dict[str, Any] = (
+                dict(raw_streaks) if isinstance(raw_streaks, Mapping) else {}
+            )
+            for key, slot in (
+                ("previous", previous_counters),
+                ("last_alerted", last_alerted),
+                ("streaks", previous_streaks),
+            ):
+                stored = persisted.get(key)
+                if isinstance(stored, Mapping):
+                    for sid, value in stored.items():
+                        slot.setdefault(str(sid), value)
+            schedule_health = evaluate_reconcile_schedules(
+                schedule_descriptions=descriptions,
+                previous_counters=previous_counters,
+                last_alerted=last_alerted,
+                previous_streaks=previous_streaks,
+            )
+            summary["scheduleHealth"] = schedule_health
+            if schedule_health.get("diagnostics"):
+                summary["scheduleSkippedOverlapDiagnostics"] = (
+                    schedule_health["diagnostics"]
+                )
+            summary["scheduleSkippedCurrent"] = schedule_health.get(
+                "currentCounters", {}
+            )
+            summary["scheduleSkippedStreakCurrent"] = schedule_health.get(
+                "currentStreaks", {}
+            )
+            try:
+                self._write_schedule_health_state(
+                    previous={
+                        str(k): v
+                        for k, v in schedule_health.get("currentCounters", {}).items()
+                    },
+                    streaks={
+                        str(k): v
+                        for k, v in schedule_health.get("currentStreaks", {}).items()
+                    },
+                    last_alerted={
+                        str(d.get("scheduleId")): d.get("skippedOverlap")
+                        for d in schedule_health.get("diagnostics", [])
+                        if isinstance(d, Mapping)
+                        and d.get("scheduleId") is not None
+                        and d.get("skippedOverlap") is not None
+                    } or last_alerted,
+                )
+            except Exception:
+                logger.warning(
+                    "Schedule SkippedOverlap state persist failed during reconcile",
+                    exc_info=True,
+                )
+        except Exception:
+            logger.warning(
+                "Schedule SkippedOverlap evaluation failed during reconcile",
+                exc_info=True,
+            )
         return summary
 
     async def agent_runtime_cleanup_managed_runtime_files(
@@ -11147,12 +12198,17 @@ class TemporalAgentRuntimeActivities:
             activity.heartbeat(f"Checking status for run_id {run_id}")
 
         record = self._run_store.load(run_id)
+        from moonmind.workflows.temporal.worker_code_identity import (
+            current_worker_code_revision,
+        )
+
         if record is None:
             status = AgentRunStatus(
                 runId=run_id,
                 agentKind="managed",
                 agentId=agent_id,
                 status="running",
+                workerCodeRevision=current_worker_code_revision(),
             )
             return status
 
@@ -11162,6 +12218,7 @@ class TemporalAgentRuntimeActivities:
             agentId=record.agent_id or agent_id,
             status=record.status,
             metadata=managed_run_status_metadata(record),
+            workerCodeRevision=current_worker_code_revision(),
         )
         return status
 

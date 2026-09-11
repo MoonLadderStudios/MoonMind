@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentUpstreamAgentProjection
@@ -20,6 +22,70 @@ _INVENTORY_FRESHNESS_TTL = timedelta(minutes=5)
 _METADATA_TEXT_LIMIT = 512
 _METADATA_LIST_LIMIT = 64
 _IMMUTABLE_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_INVENTORY_REFRESH_TIMEOUT_SECONDS = 15
+logger = logging.getLogger(__name__)
+
+
+class UpstreamInventoryRefreshError(RuntimeError):
+    """The configured endpoint could not supply fresh launch evidence."""
+
+
+async def refresh_upstream_inventory(*, endpoint_ref: str = "default") -> None:
+    """Refresh discovery independently of authoring and credential maintenance.
+
+    Only the configured endpoint is authorized. The separate transaction must
+    never commit a caller's partially authored workflow or immutable selection.
+    The deadline covers pagination and persistence, not just each HTTP page.
+    """
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.bridge_config import (
+        HOST_PROTOCOL_MODE_PROXY,
+        resolve_bridge_config,
+    )
+    from moonmind.omnigent.settings import resolved_api_token, resolved_server_url
+    from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
+
+    if endpoint_ref != "default":
+        raise UpstreamInventoryRefreshError(
+            "upstream inventory refresh requires the configured default endpoint"
+        )
+    config = resolve_bridge_config()
+    if not config.enabled or config.host_protocol_mode != HOST_PROTOCOL_MODE_PROXY:
+        raise UpstreamInventoryRefreshError("Omnigent inventory bridge is unavailable")
+    attempted_at = datetime.now(timezone.utc)
+    try:
+        async with asyncio.timeout(_INVENTORY_REFRESH_TIMEOUT_SECONDS):
+            inventory = await OmnigentHttpClient(
+                base_url=resolved_server_url(),
+                api_token=resolved_api_token(),
+                timeout_seconds=5,
+            ).list_agents()
+            async with async_session_maker() as session:
+                await synchronize_upstream_inventory(
+                    session,
+                    endpoint_ref=endpoint_ref,
+                    bridge_mode="proxy",
+                    inventory=inventory,
+                )
+    except Exception as exc:
+        # Provider exception strings can contain URLs or credentials. Retain a
+        # bounded, non-sensitive failure classification, never their raw text.
+        reason = (
+            f"upstream inventory refresh failed ({type(exc).__name__}); retry submission"
+        )
+        try:
+            async with asyncio.timeout(5):
+                async with async_session_maker() as session:
+                    await record_upstream_sync_failure(
+                        session,
+                        endpoint_ref=endpoint_ref,
+                        bridge_mode="proxy",
+                        error=reason,
+                        now=attempted_at,
+                    )
+        except Exception:
+            logger.warning("Could not persist upstream inventory refresh failure")
+        raise UpstreamInventoryRefreshError(reason) from exc
 
 
 async def computed_launchable_harnesses(session: AsyncSession) -> set[str]:
@@ -291,19 +357,21 @@ async def record_upstream_sync_failure(
     """Retain last-known metadata while explicitly recording stale error state."""
     attempted_at = now or datetime.now(timezone.utc)
     safe_error = error.replace("\n", " ")[:512]
-    rows = list(
-        (
-            await session.execute(
-                select(OmnigentUpstreamAgentProjection).where(
-                    OmnigentUpstreamAgentProjection.endpoint_ref == endpoint_ref,
-                    OmnigentUpstreamAgentProjection.bridge_mode == bridge_mode,
-                )
-            )
-        ).scalars()
+    # Compare at the database write boundary: an overlapping successful refresh
+    # must remain authoritative even if it commits while this write waits.
+    await session.execute(
+        update(OmnigentUpstreamAgentProjection)
+        .where(
+            OmnigentUpstreamAgentProjection.endpoint_ref == endpoint_ref,
+            OmnigentUpstreamAgentProjection.bridge_mode == bridge_mode,
+            or_(
+                OmnigentUpstreamAgentProjection.last_successful_sync_at.is_(None),
+                OmnigentUpstreamAgentProjection.last_successful_sync_at < attempted_at,
+            ),
+        )
+        .values(last_attempt_at=attempted_at, error=safe_error)
+        .execution_options(synchronize_session=False)
     )
-    for projection in rows:
-        projection.last_attempt_at = attempted_at
-        projection.error = safe_error
     await session.commit()
 
 

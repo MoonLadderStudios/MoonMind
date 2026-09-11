@@ -2530,6 +2530,55 @@ class GitHubService:
                     "summary": f"Label remove result unknown: {exc.__class__.__name__}.",
                 }
 
+    async def close_issue(
+        self,
+        *,
+        repo: str,
+        issue_number: int,
+        github_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Close an issue without touching its labels."""
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return {
+                "ok": False,
+                "reasonCode": "auth_unavailable",
+                "summary": resolution_error or self._missing_auth_summary("close issue"),
+            }
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.patch(
+                    f"https://api.github.com/repos/{repo}/issues/{issue_number}",
+                    headers=headers,
+                    json={"state": "closed"},
+                )
+                response.raise_for_status()
+                return {
+                    "ok": True,
+                    "reasonCode": "closed",
+                    "summary": f"Closed {repo}#{issue_number}.",
+                }
+            except httpx.HTTPStatusError as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "denied" if exc.response.status_code in {401, 403, 404} else "close_failed",
+                    "httpStatus": exc.response.status_code,
+                    "summary": (
+                        f"Issue close failed with HTTP {exc.response.status_code}. "
+                        f"{self._github_permission_summary(exc.response)}"
+                    ).strip(),
+                }
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return {
+                    "ok": False,
+                    "reasonCode": "outcome_unknown",
+                    "summary": f"Issue close result unknown: {exc.__class__.__name__}.",
+                }
+
     async def list_issue_comments(
         self,
         *,

@@ -2,13 +2,11 @@ import { JSX } from 'react';
 
 import {
   ContextRetrievalAuthoring,
-  RetrievalCeilings,
 } from '../lib/contextRetrievalAuthoring';
 
 interface ContextRetrievalControlsProps {
   value: ContextRetrievalAuthoring;
   onChange: (next: ContextRetrievalAuthoring) => void;
-  ceilings?: RetrievalCeilings;
   /** Optional heading/context copy tailored to the hosting surface. */
   description?: string;
   disabled?: boolean;

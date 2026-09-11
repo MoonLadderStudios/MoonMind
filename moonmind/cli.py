@@ -101,7 +101,12 @@ def container_run(
     "python-tests",
     help=(
         "Run Python unit tests in the active managed workspace through a durable "
-        "container job."
+        "container job. The CLI waits a bounded interval "
+        "(--timeout-seconds plus a 120s terminal-read grace) for the job to "
+        "reach a terminal state instead of waiting indefinitely; a stuck "
+        "`moonmind container python-tests` call inside an idle Omnigent host "
+        "(MoonLadderStudios/MoonMind#4226) therefore surfaces as a CLI error "
+        "rather than a silent hang."
     ),
 )
 def container_python_tests(
@@ -128,6 +133,65 @@ def worker_doctor() -> None:
         "Worker prerequisites satisfied (native Manifest/RAG ingestion retired).",
         fg=typer.colors.GREEN,
     )
+
+
+@worker_app.command(
+    "code-readiness",
+    help=(
+        "Compare each worker's startup-recorded code identity with the "
+        "checkout on disk and report stale_code (MoonLadderStudios/MoonMind#4224). "
+        "A host git pull alone is not a deployment: restart stale workers "
+        "before new runs are admitted."
+    ),
+)
+def worker_code_readiness(
+    url: list[str] | None = typer.Option(
+        None,
+        "--url",
+        help="Worker /readyz endpoint to probe (repeatable). Defaults to "
+        "MOONMIND_WORKER_READINESS_URLS / TEMPORAL_WORKFLOW_READINESS_URL.",
+    ),
+) -> None:
+    from moonmind.workflows.temporal.worker_code_identity import (
+        collect_worker_code_freshness,
+        format_stale_code_message,
+        readiness_urls_from_env,
+        resolve_checkout_code_identity,
+    )
+
+    targets = [(item, item) for item in (url or []) if item.strip()]
+    if not targets:
+        targets = readiness_urls_from_env()
+    checkout = resolve_checkout_code_identity()
+    typer.echo(
+        f"checkout revision: {checkout.revision or 'unknown'} "
+        f"(source={checkout.source})"
+    )
+    if not targets:
+        typer.secho(
+            "No worker readiness endpoints configured: set "
+            "MOONMIND_WORKER_READINESS_URLS or TEMPORAL_WORKFLOW_READINESS_URL.",
+            fg=typer.colors.YELLOW,
+        )
+        return
+    freshness = collect_worker_code_freshness(targets, current=checkout)
+    stale = [item for item in freshness if item.status == "stale"]
+    for item in freshness:
+        color = (
+            typer.colors.GREEN
+            if item.status == "healthy"
+            else typer.colors.RED
+            if item.status == "stale"
+            else typer.colors.YELLOW
+        )
+        typer.secho(
+            f"{item.name}: {item.status} "
+            f"(running={item.startup_revision} checkout={item.current_revision})",
+            fg=color,
+        )
+    if stale:
+        typer.secho(format_stale_code_message(stale), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
 
 
 def main() -> None:

@@ -1677,6 +1677,10 @@ __all__ = [
     "AgentSkillDefinition",
     "SkillSet",
     "SkillSetEntry",
+    "RepositoryConnectionRecord",
+    "RepositoryConnectionAssignment",
+    "RepositoryRouteDefault",
+    "RepositoryConnectionAuditEvent",
 ]
 
 
@@ -5093,4 +5097,204 @@ class MergeAutomationReviewRequestRecord(Base):
         nullable=False,
         server_default=func.now(),
         onupdate=func.now(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Repository connections and transactional routes (#4005).
+#
+# Single writable authority for scoped RepositoryConnections, many-to-many
+# assignments, and per-scope route defaults.  Deployment JSON files are
+# versioned read-only snapshots published from these rows (or classified
+# legacy input); they are never an independently editable fallback policy.
+# ---------------------------------------------------------------------------
+
+
+class RepositoryConnectionRecord(Base):
+    """Durable scoped connection (metadata only; no secret bodies).
+
+    ``connection_id`` is the stable ``RepositoryConnection.id``.  Credential
+    configuration is stored as metadata (SecretRef provider/key or App
+    refs); raw PAT values live only in Managed Secrets / trusted delivery.
+    ``tombstone`` marks a deleted identifier so ID reuse cannot adopt old
+    bindings.  ``policy_revision`` is compared on edits (optimistic
+    concurrency); ``credential_revision`` advances only on rotation.
+    """
+
+    __tablename__ = "repository_connection_records"
+    __table_args__ = (
+        Index("ix_repository_connections_owner", "owner_ref"),
+        Index("ix_repository_connections_scope", "scope_type", "scope_ref"),
+        Index("ix_repository_connections_lifecycle", "lifecycle"),
+    )
+
+    connection_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider: Mapped[str] = mapped_column(String(16), nullable=False)
+    hosting_service: Mapped[str] = mapped_column(String(32), nullable=False)
+    endpoint_normalized: Mapped[str] = mapped_column(String(1024), nullable=False)
+    endpoint_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
+    trust_bundle_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    allowed_operations: Mapped[list[str]] = mapped_column(
+        mutable_json_list(), nullable=False, default=list
+    )
+    client_policy: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    credential_config: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    projection_policy: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True, default=None
+    )
+    merge_coordinator_policy: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True, default=None
+    )
+    lifecycle: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="active", server_default="active"
+    )
+    policy_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    credential_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    owner_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    scope_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    allowed_principal_refs: Mapped[list[str]] = mapped_column(
+        mutable_json_list(), nullable=False, default=list
+    )
+    tombstone: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class RepositoryConnectionAssignment(Base):
+    """Many-to-many scoped grant: one row per (connection, repository)."""
+
+    __tablename__ = "repository_connection_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id",
+            "endpoint_normalized",
+            "repo_key",
+            name="uq_repo_assignment_connection_repo",
+        ),
+        Index("ix_repo_assignment_repo", "endpoint_normalized", "repo_key"),
+        Index("ix_repo_assignment_connection", "connection_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    connection_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("repository_connection_records.connection_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    endpoint_normalized: Mapped[str] = mapped_column(String(1024), nullable=False)
+    repo_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    provider_repo_id: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    canonical_remote: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    display_name: Mapped[str] = mapped_column(String(2000), nullable=False)
+    operations: Mapped[list[str]] = mapped_column(
+        mutable_json_list(), nullable=False, default=list
+    )
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class RepositoryRouteDefault(Base):
+    """At most one default per (scope, repository, capability bundle).
+
+    ``scope_ref`` is NULL for system scope, and NULLs compare distinct under
+    both SQLite and Postgres unique indexes, so the uniqueness key uses the
+    non-null ``scope_key`` (``"system"`` or ``"workspace:<ref>"``) instead of
+    the raw nullable ``scope_ref``.  ``scope_type``/``scope_ref`` remain as
+    readable data columns.  ``capability_bundle`` is the sorted, comma-joined
+    operation bundle so one role cannot split reads and writes across
+    different credentials.
+    """
+
+    __tablename__ = "repository_route_defaults"
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_key",
+            "endpoint_normalized",
+            "repo_key",
+            "capability_bundle",
+            name="uq_repo_route_default",
+        ),
+        Index("ix_repo_route_default_repo", "endpoint_normalized", "repo_key"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    scope_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    scope_key: Mapped[str] = mapped_column(String(300), nullable=False)
+    endpoint_normalized: Mapped[str] = mapped_column(String(1024), nullable=False)
+    repo_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    capability_bundle: Mapped[str] = mapped_column(String(1024), nullable=False)
+    connection_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("repository_connection_records.connection_id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class RepositoryConnectionAuditEvent(Base):
+    """Append-only metadata-only audit for connection/assignment/default changes."""
+
+    __tablename__ = "repository_connection_audit_events"
+    __table_args__ = (
+        UniqueConstraint("request_id", "action", name="uq_repo_audit_request_action"),
+        Index("ix_repo_audit_connection", "connection_id"),
+        Index("ix_repo_audit_created", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    request_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    actor_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    connection_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    scope_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    policy_revision: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    detail_json: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -2411,6 +2411,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/executions/issue-lifecycle/context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Project Lifecycle Context
+         * @description Derive the bounded issue-lifecycle projection for Workflow Detail.
+         */
+        post: operations["project_lifecycle_context_api_v1_executions_issue_lifecycle_context_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/executions/issue-lifecycle/actions/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate Operator Action
+         * @description Server-side revalidation of one operator action submission.
+         *
+         *     Stale UI eligibility never grants a release: permission, staleness,
+         *     duplicate, wrong-issue, conflicting-PR, unknown-writer, stop-proof,
+         *     publication-intent, and retry-policy checks run on the server. On
+         *     success an auditable portable-handoff record is returned (to be
+         *     published through the existing authorized GitHub write boundary by
+         *     the caller); during a GitHub outage the decision reports
+         *     pending/unknown rather than a false successful remote update.
+         */
+        post: operations["validate_operator_action_api_v1_executions_issue_lifecycle_actions_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/executions/issue-lifecycle/actions/submit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Operator Action
+         * @description Validate, record, and publish one operator action submission.
+         *
+         *     The validated portable-handoff decision is published as a human-readable
+         *     GitHub issue comment through the existing authorized GitHub write
+         *     boundary (``GitHubService.create_issue_comment``), so the decision is
+         *     auditable and visible to another deployment through GitHub -- no second
+         *     result store is added. The GitHub comment is the durable
+         *     cross-deployment record; the same portable handoff is returned for the
+         *     caller to retain in existing workflow results (#4020).
+         *
+         *     During a GitHub outage (or when live issue evidence is missing) the
+         *     decision reports pending/unknown rather than a false successful remote
+         *     update. Duplicate idempotency-key replays never repeat effects.
+         */
+        post: operations["submit_operator_action_api_v1_executions_issue_lifecycle_actions_submit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/integrations/callbacks": {
         parameters: {
             query?: never;
@@ -4319,6 +4399,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/github/branches/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Resolve Dashboard Github Branch
+         * @description Resolve one exact branch name without scanning suggestion pages.
+         */
+        get: operations["resolve_dashboard_github_branch_api_github_branches_resolve_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/github/branches/metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dashboard Github Branch Metadata
+         * @description Resolve only default-branch metadata so form init never enumerates branches.
+         */
+        get: operations["get_dashboard_github_branch_metadata_api_github_branches_metadata_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/github/branches": {
         parameters: {
             query?: never;
@@ -4328,7 +4448,7 @@ export interface paths {
         };
         /**
          * List Dashboard Github Branches
-         * @description List GitHub branches through MoonMind so browsers never call GitHub directly.
+         * @description List one bounded page of GitHub branches through MoonMind.
          */
         get: operations["list_dashboard_github_branches_api_github_branches_get"];
         put?: never;
@@ -4691,6 +4811,86 @@ export interface paths {
         post: operations["pin_artifact_api_artifacts__artifact_id__pin_post"];
         /** Unpin Artifact */
         delete: operations["unpin_artifact_api_artifacts__artifact_id__pin_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oidc Login
+         * @description Start a generic-OIDC authorization transaction (302 to the IdP).
+         */
+        get: operations["oidc_login_api_v1_auth_oidc_login_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Oidc Callback
+         * @description Consume a transaction, validate the IdP result, mint a session.
+         */
+        get: operations["oidc_callback_api_v1_auth_oidc_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Oidc Logout
+         * @description Revoke the MoonMind session; IdP end-session is best-effort.
+         */
+        post: operations["oidc_logout_api_v1_auth_oidc_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/proxy/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Proxy Me
+         * @description Resolve the trusted-proxy asserted identity for this request.
+         */
+        get: operations["proxy_me_api_v1_auth_proxy_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -6693,7 +6893,7 @@ export interface components {
         };
         /**
          * DashboardBranchListResponse
-         * @description Dashboard response containing branch options for one repository.
+         * @description Dashboard response containing bounded branch suggestions for one repository.
          */
         DashboardBranchListResponse: {
             /** Items */
@@ -6702,6 +6902,21 @@ export interface components {
             error?: string | null;
             /** Defaultbranch */
             defaultBranch?: string | null;
+            /**
+             * Hasmore
+             * @default false
+             */
+            hasMore: boolean;
+        };
+        /**
+         * DashboardBranchMetadataResponse
+         * @description Metadata-only branch response so form init never enumerates branches.
+         */
+        DashboardBranchMetadataResponse: {
+            /** Defaultbranch */
+            defaultBranch?: string | null;
+            /** Error */
+            error?: string | null;
         };
         /**
          * DashboardBranchOption
@@ -6723,6 +6938,28 @@ export interface components {
              * @description Branch option source
              */
             source: string;
+        };
+        /**
+         * DashboardBranchResolveResponse
+         * @description Exact-name branch resolution independent of suggestion pages.
+         */
+        DashboardBranchResolveResponse: {
+            /**
+             * Found
+             * @default false
+             */
+            found: boolean;
+            /** Branch */
+            branch?: string | null;
+            /** Defaultbranch */
+            defaultBranch?: string | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Inconclusive
+             * @default true
+             */
+            inconclusive: boolean;
         };
         /**
          * DashboardIssueListResponse
@@ -7602,6 +7839,8 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "awaiting_action" | "waiting" | "completed" | "failed" | "canceled";
+            /** Completiondisposition */
+            completionDisposition?: "gated_continuation" | null;
             /**
              * Dashboardstatus
              * @enum {string}
@@ -7983,6 +8222,8 @@ export interface components {
              * @enum {string}
              */
             status: "queued" | "running" | "awaiting_action" | "waiting" | "completed" | "failed" | "canceled";
+            /** Completiondisposition */
+            completionDisposition?: "gated_continuation" | null;
             /**
              * Dashboardstatus
              * @enum {string}
@@ -9185,6 +9426,53 @@ export interface components {
              */
             isDefault: boolean;
         };
+        /** LifecycleContextRequest */
+        LifecycleContextRequest: {
+            /**
+             * Repository
+             * @description GitHub repository e.g. 'o/r'.
+             */
+            repository: string;
+            /**
+             * Issue Number
+             * @description GitHub issue number.
+             */
+            issue_number: number;
+            /** Issue */
+            issue?: {
+                [key: string]: unknown;
+            } | null;
+            /** Current Attempt */
+            current_attempt?: {
+                [key: string]: unknown;
+            } | null;
+            /** Predecessor Attempts */
+            predecessor_attempts?: {
+                [key: string]: unknown;
+            }[];
+            /** Deployment Id */
+            deployment_id?: string | null;
+            /** Preserved Pr */
+            preserved_pr?: {
+                [key: string]: unknown;
+            } | null;
+            /** Retry State */
+            retry_state?: {
+                [key: string]: unknown;
+            } | null;
+            /** Operator Hold */
+            operator_hold?: {
+                [key: string]: unknown;
+            } | null;
+            /** Sync State */
+            sync_state?: {
+                [key: string]: unknown;
+            } | null;
+            /** Local Facts */
+            local_facts?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /**
          * LinkArtifactRequest
          * @description Link an existing artifact to one execution reference.
@@ -9595,6 +9883,58 @@ export interface components {
             unavailableReason?: string | null;
             /** Rollbackaction */
             rollbackAction?: string | null;
+        };
+        /** OperatorActionRequest */
+        OperatorActionRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "continue_work" | "hold_processing" | "acknowledge_incident" | "resolve_conflict" | "authorize_retry" | "abandon_work";
+            /** Repository */
+            repository: string;
+            /** Issue Number */
+            issue_number: number;
+            /** Request */
+            request?: {
+                [key: string]: unknown;
+            };
+            /** Live Issue */
+            live_issue?: {
+                [key: string]: unknown;
+            } | null;
+            /** Live Attempt */
+            live_attempt?: {
+                [key: string]: unknown;
+            } | null;
+            /** Live Pr */
+            live_pr?: {
+                [key: string]: unknown;
+            } | null;
+            /** Seen Idempotency Keys */
+            seen_idempotency_keys?: string[];
+            /** Stop Proof */
+            stop_proof?: {
+                [key: string]: unknown;
+            } | null;
+            /** Retry Policy */
+            retry_policy?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Work Disposition */
+            work_disposition?: string | null;
+            /**
+             * Retry Budget Reset
+             * @default false
+             */
+            retry_budget_reset: boolean;
+            /** Continue Variant */
+            continue_variant?: string | null;
         };
         /** OutputDeclaration */
         OutputDeclaration: {
@@ -12775,7 +13115,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "not_started" | "succeeded" | "retry_pending" | "failed" | "degraded" | "unsupported";
+            status: "not_started" | "succeeded" | "retry_pending" | "failed" | "degraded" | "unsupported" | "deferred" | "not_required";
             /** Phase */
             phase?: string | null;
             /**
@@ -18345,6 +18685,111 @@ export interface operations {
             };
         };
     };
+    project_lifecycle_context_api_v1_executions_issue_lifecycle_context_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LifecycleContextRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_operator_action_api_v1_executions_issue_lifecycle_actions_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperatorActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_operator_action_api_v1_executions_issue_lifecycle_actions_submit_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperatorActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     describe_integration_callbacks_api_integrations_callbacks_get: {
         parameters: {
             query?: never;
@@ -22813,10 +23258,75 @@ export interface operations {
             };
         };
     };
+    resolve_dashboard_github_branch_api_github_branches_resolve_get: {
+        parameters: {
+            query: {
+                repository: string;
+                branch: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardBranchResolveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_dashboard_github_branch_metadata_api_github_branches_metadata_get: {
+        parameters: {
+            query: {
+                repository: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardBranchMetadataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_dashboard_github_branches_api_github_branches_get: {
         parameters: {
             query: {
                 repository: string;
+                q?: string;
+                limit?: number;
             };
             header?: never;
             path?: never;
@@ -23681,6 +24191,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oidc_login_api_v1_auth_oidc_login_get: {
+        parameters: {
+            query?: {
+                return_path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oidc_callback_api_v1_auth_oidc_callback_get: {
+        parameters: {
+            query?: {
+                code?: string;
+                state?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    oidc_logout_api_v1_auth_oidc_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    proxy_me_api_v1_auth_proxy_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

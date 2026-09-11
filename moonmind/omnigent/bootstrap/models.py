@@ -43,6 +43,13 @@ class BootstrapResolved(BaseModel):
     omnigent_build_digest: str | None = Field(default=None, alias="omnigentBuildDigest")
     architecture: str | None = None
     resolved_at: datetime | None = Field(default=None, alias="resolvedAt")
+    # MoonLadderStudios/MoonMind#4021 req-5: immutable free-model eligibility
+    # evidence frozen with the admitted credentialless attempt. None for
+    # keyed routes and for records written before this revision; discovery
+    # refresh never rewrites it in place (see recheck_frozen_attempt).
+    free_model_attempt: dict[str, Any] | None = Field(
+        default=None, alias="freeModelAttempt"
+    )
 
 
 class ResolvedOmnigentDeploymentState(BaseModel):

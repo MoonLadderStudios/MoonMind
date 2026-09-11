@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import secrets
+import time
+from dataclasses import asdict
 
 import pytest
 
 from api_service.retrieval_capabilities import (
     RetrievalBudgetSnapshot,
+    RetrievalCapability,
     RetrievalCapabilityError,
     RetrievalCapabilityRegistry,
 )
@@ -31,9 +36,60 @@ def _budget(**overrides):
     return RetrievalBudgetSnapshot(**values)
 
 
+def _seed_issued_capability(
+    registry: RetrievalCapabilityRegistry,
+    budget: RetrievalBudgetSnapshot,
+    *,
+    lifetime_seconds: int,
+) -> tuple[str, RetrievalCapability]:
+    """Seed an already-issued capability for drain tests (retired #4107).
+
+    Test-only white-box seeding for the drain-only contract: production
+    ``RetrievalCapabilityRegistry.issue`` always raises ``retired`` and must
+    never be used to mint authority. This inserts the durable row directly so
+    revoke/resolve/begin/finish/abort/status/evidence assertions keep covering
+    already-issued lifecycle, budget, redaction and idempotency behavior.
+    """
+    now = time.time()
+    token = secrets.token_urlsafe(32)
+    token_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    capability = RetrievalCapability(
+        capability_id=f"rcap_{secrets.token_hex(12)}",
+        token_digest=token_digest,
+        budget=budget,
+        issued_at=now,
+        expires_at=now + lifetime_seconds,
+    )
+    with registry._lock:
+        registry._capabilities[capability.capability_id] = capability
+        registry._by_digest[token_digest] = capability.capability_id
+        with registry._connect() as connection:
+            connection.execute(
+                """INSERT INTO retrieval_capabilities
+                   (capability_id, token_digest, budget_json, issued_at, expires_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    capability.capability_id,
+                    capability.token_digest,
+                    json.dumps(asdict(budget), sort_keys=True),
+                    capability.issued_at,
+                    capability.expires_at,
+                ),
+            )
+    return token, capability
+
+
+def test_issue_refuses_new_issuance_after_retirement(tmp_path) -> None:
+    """New native retrieval issuance fails closed (#4105/#4107)."""
+    registry = RetrievalCapabilityRegistry(tmp_path)
+    with pytest.raises(RetrievalCapabilityError) as retired:
+        registry.issue(_budget(), lifetime_seconds=60)
+    assert retired.value.reason == "retired"
+
+
 def test_capability_is_identity_bound_and_stores_only_token_digest(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
-    token, capability = registry.issue(_budget(), lifetime_seconds=60)
+    token, capability = _seed_issued_capability(registry, _budget(), lifetime_seconds=60)
 
     assert token not in repr(capability)
     assert registry.resolve(
@@ -47,7 +103,7 @@ def test_capability_is_identity_bound_and_stores_only_token_digest(tmp_path) -> 
 
 def test_query_accounting_deduplicates_and_enforces_ceiling(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
-    _, capability = registry.issue(_budget(max_queries=1), lifetime_seconds=60)
+    _, capability = _seed_issued_capability(registry, _budget(max_queries=1), lifetime_seconds=60)
 
     assert registry.begin(capability, "tool-1") is None
     result = {"kind": "retrieval_tool_result"}
@@ -59,14 +115,14 @@ def test_query_accounting_deduplicates_and_enforces_ceiling(tmp_path) -> None:
 
 def test_revoke_and_expiry_are_deterministic(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
-    token, capability = registry.issue(_budget(), lifetime_seconds=0)
+    token, capability = _seed_issued_capability(registry, _budget(), lifetime_seconds=0)
     with pytest.raises(RetrievalCapabilityError) as expired:
         registry.resolve(
             token, host_id="host-1", session_id="session-1", run_id="run-1"
         )
     assert expired.value.reason == "expired"
 
-    token, capability = registry.issue(_budget(), lifetime_seconds=60)
+    token, capability = _seed_issued_capability(registry, _budget(), lifetime_seconds=60)
     registry.revoke(capability.capability_id)
     with pytest.raises(RetrievalCapabilityError) as revoked:
         registry.resolve(
@@ -77,7 +133,7 @@ def test_revoke_and_expiry_are_deterministic(tmp_path) -> None:
 
 def test_evidence_is_bounded_and_contains_no_capability_secret(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
-    token, capability = registry.issue(_budget(), lifetime_seconds=60)
+    token, capability = _seed_issued_capability(registry, _budget(), lifetime_seconds=60)
     ref = registry.record(
         capability,
         {
@@ -98,7 +154,7 @@ def test_evidence_is_bounded_and_contains_no_capability_secret(tmp_path) -> None
 
 def test_capability_accounting_and_revocation_survive_registry_restart(tmp_path) -> None:
     first = RetrievalCapabilityRegistry(tmp_path)
-    token, capability = first.issue(_budget(max_queries=2), lifetime_seconds=60)
+    token, capability = _seed_issued_capability(first, _budget(max_queries=2), lifetime_seconds=60)
     first.begin(capability, "tool-1")
     first.finish(capability, "tool-1", {"deliveryState": "delivery_unknown"})
 
@@ -122,7 +178,7 @@ def test_capability_accounting_and_revocation_survive_registry_restart(tmp_path)
 
 def test_evidence_index_and_artifact_backed_result_survive_restart(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
-    _, capability = registry.issue(_budget(), lifetime_seconds=60)
+    _, capability = _seed_issued_capability(registry, _budget(), lifetime_seconds=60)
     result_ref = registry.store_result(
         capability, "tool-1", {"items": [{"text": "large result"}]}
     )
@@ -144,7 +200,7 @@ def test_evidence_index_and_artifact_backed_result_survive_restart(tmp_path) -> 
 
 def test_delivery_requires_explicit_bridge_acknowledgement(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
-    _, capability = registry.issue(_budget(), lifetime_seconds=60)
+    _, capability = _seed_issued_capability(registry, _budget(), lifetime_seconds=60)
     registry.begin(capability, "tool-1")
     registry.finish(
         capability,
@@ -166,7 +222,7 @@ def test_delivery_requires_explicit_bridge_acknowledgement(tmp_path) -> None:
 
 def test_per_minute_rate_limit_is_durable_and_deduplicated(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
-    _, capability = registry.issue(
+    _, capability = _seed_issued_capability(registry, 
         _budget(max_queries=10, max_requests_per_minute=1), lifetime_seconds=60
     )
     registry.begin(capability, "tool-1")
@@ -185,7 +241,7 @@ def test_per_minute_rate_limit_is_durable_and_deduplicated(tmp_path) -> None:
 
 def test_authorization_denial_is_correlated_without_exposing_token(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
-    token, capability = registry.issue(_budget(), lifetime_seconds=60)
+    token, capability = _seed_issued_capability(registry, _budget(), lifetime_seconds=60)
 
     with pytest.raises(RetrievalCapabilityError) as mismatch:
         registry.resolve(
@@ -206,8 +262,8 @@ def test_authorization_denial_is_correlated_without_exposing_token(tmp_path) -> 
 
 def test_revoke_scope_drains_only_the_exact_session_authority(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
-    first_token, first = registry.issue(_budget(), lifetime_seconds=60)
-    second_token, second = registry.issue(
+    first_token, first = _seed_issued_capability(registry, _budget(), lifetime_seconds=60)
+    second_token, second = _seed_issued_capability(registry, 
         _budget(session_id="session-2", step_id="step-2"), lifetime_seconds=60
     )
 
@@ -237,7 +293,7 @@ def test_revoke_scope_drains_only_the_exact_session_authority(tmp_path) -> None:
 def test_revoke_scope_refuses_partial_identity(tmp_path, scope) -> None:
     """A missing identifier must never be treated as a run-wide wildcard."""
     registry = RetrievalCapabilityRegistry(tmp_path)
-    token, _ = registry.issue(_budget(), lifetime_seconds=60)
+    token, _ = _seed_issued_capability(registry, _budget(), lifetime_seconds=60)
 
     with pytest.raises(RetrievalCapabilityError) as refused:
         registry.revoke_scope(**scope)
@@ -258,7 +314,7 @@ def test_issuance_accounting_reports_live_scope_capability(tmp_path) -> None:
     }
     assert registry.live_scope_capability(**scope) is None
 
-    _, capability = registry.issue(_budget(), lifetime_seconds=60)
+    _, capability = _seed_issued_capability(registry, _budget(), lifetime_seconds=60)
     live = registry.live_scope_capability(**scope)
     assert live is not None and live.capability_id == capability.capability_id
 
@@ -269,7 +325,7 @@ def test_issuance_accounting_reports_live_scope_capability(tmp_path) -> None:
 def test_expired_reservation_is_reclaimed_after_process_interruption(tmp_path) -> None:
     """An abandoned in-progress request must not wedge the concurrency slot."""
     registry = RetrievalCapabilityRegistry(tmp_path)
-    _, capability = registry.issue(
+    _, capability = _seed_issued_capability(registry, 
         _budget(max_queries=5, max_concurrency=1), lifetime_seconds=60
     )
     assert registry.begin(capability, "tool-1") is None
@@ -292,7 +348,7 @@ def test_expired_reservation_is_reclaimed_after_process_interruption(tmp_path) -
 def test_concurrent_retry_of_one_tool_call_is_reserved_not_duplicated(tmp_path) -> None:
     """The idempotency key must be reserved before execution, not after."""
     registry = RetrievalCapabilityRegistry(tmp_path)
-    _, capability = registry.issue(
+    _, capability = _seed_issued_capability(registry, 
         _budget(max_queries=5, max_concurrency=4), lifetime_seconds=60
     )
     assert registry.begin(capability, "tool-1") is None
@@ -309,7 +365,7 @@ def test_concurrent_retry_of_one_tool_call_is_reserved_not_duplicated(tmp_path) 
 
 def test_aborted_request_releases_its_reservation(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
-    _, capability = registry.issue(
+    _, capability = _seed_issued_capability(registry, 
         _budget(max_queries=5, max_concurrency=1), lifetime_seconds=60
     )
     registry.begin(capability, "tool-1")
@@ -321,7 +377,7 @@ def test_aborted_request_releases_its_reservation(tmp_path) -> None:
 
 def test_assert_active_rejects_authority_revoked_in_flight(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
-    _, capability = registry.issue(_budget(), lifetime_seconds=60)
+    _, capability = _seed_issued_capability(registry, _budget(), lifetime_seconds=60)
     registry.begin(capability, "tool-1")
     registry.assert_active(capability.capability_id)
 
@@ -334,8 +390,8 @@ def test_assert_active_rejects_authority_revoked_in_flight(tmp_path) -> None:
 def test_stored_results_are_namespaced_by_capability(tmp_path) -> None:
     """Two sessions in one run may reuse a tool-call id without colliding."""
     registry = RetrievalCapabilityRegistry(tmp_path)
-    _, first = registry.issue(_budget(), lifetime_seconds=60)
-    _, second = registry.issue(
+    _, first = _seed_issued_capability(registry, _budget(), lifetime_seconds=60)
+    _, second = _seed_issued_capability(registry, 
         _budget(session_id="session-2", step_id="step-2"), lifetime_seconds=60
     )
 
@@ -349,7 +405,7 @@ def test_stored_results_are_namespaced_by_capability(tmp_path) -> None:
 
 def test_stored_result_reference_is_dereferenceable(tmp_path) -> None:
     registry = RetrievalCapabilityRegistry(tmp_path)
-    _, capability = registry.issue(_budget(), lifetime_seconds=60)
+    _, capability = _seed_issued_capability(registry, _budget(), lifetime_seconds=60)
     ref = registry.store_result(capability, "tool call/1", {"pack": "value"})
 
     assert ref == (

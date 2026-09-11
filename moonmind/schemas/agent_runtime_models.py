@@ -1358,6 +1358,12 @@ class AgentRunHandle(BaseModel):
     started_at: datetime = Field(..., alias="startedAt")
     poll_hint_seconds: int | None = Field(None, alias="pollHintSeconds", ge=1)
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    # Code revision of the worker process that started the run
+    # (MoonLadderStudios/MoonMind#4224): post-incident analysis can tell which
+    # revision executed a step. Optional so retained histories still validate.
+    worker_code_revision: str | None = Field(
+        None, alias="workerCodeRevision", max_length=128
+    )
 
     @field_validator("metadata", mode="after")
     @classmethod
@@ -1386,6 +1392,11 @@ class AgentRunStatus(BaseModel):
     )
     poll_hint_seconds: int | None = Field(None, alias="pollHintSeconds", ge=1)
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    # Code revision of the worker process that reported the status
+    # (MoonLadderStudios/MoonMind#4224). Optional for retained histories.
+    worker_code_revision: str | None = Field(
+        None, alias="workerCodeRevision", max_length=128
+    )
 
     @field_validator("metadata", mode="after")
     @classmethod
@@ -1417,6 +1428,11 @@ class AgentRunResult(BaseModel):
     provider_error_code: str | None = Field(None, alias="providerErrorCode")
     retry_recommendation: str | None = Field(None, alias="retryRecommendation")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
+    # Code revision of the worker process that produced the result
+    # (MoonLadderStudios/MoonMind#4224). Optional for retained histories.
+    worker_code_revision: str | None = Field(
+        None, alias="workerCodeRevision", max_length=128
+    )
 
     @field_validator("metadata", mode="after")
     @classmethod

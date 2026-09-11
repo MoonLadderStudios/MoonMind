@@ -41,7 +41,7 @@ class _RecordedResolverChild:
         )
         info = workflow.info()
         cycle = int(info.workflow_id.rsplit(":", 1)[-1])
-        if cycle > 1:
+        if cycle > 1 and scenario != "repeated_wait":
             return {
                 "status": "success",
                 "mergeAutomationDisposition": "merged",
@@ -66,7 +66,7 @@ class _RecordedResolverChild:
             "childWorkflowId": info.workflow_id,
             "childRunId": info.run_id,
         }
-        if scenario == "new_timed":
+        if scenario in {"new_timed", "repeated_wait"}:
             continuation["retryAfterSeconds"] = 2
         if scenario == "rejected":
             top_level_child_run_id = "forged-run"
@@ -98,6 +98,7 @@ def _payload(scenario: str) -> dict[str, Any]:
         },
         "mergeAutomationConfig": {
             "timeouts": {"fallbackPollSeconds": 2},
+            "reviewLoop": {"enabled": scenario == "repeated_wait", "maxConsecutiveNoProgressCycles": 2},
         },
         "resolverTemplate": {"model": scenario},
     }
@@ -111,6 +112,7 @@ def _payload(scenario: str) -> dict[str, Any]:
         ("new_timed", "merged"),
         ("legacy_untimed", "merged"),
         ("rejected", "failed"),
+        ("repeated_wait", "blocked"),
     ],
 )
 async def test_continuation_histories_replay_deterministically(
