@@ -5746,7 +5746,9 @@ async def test_codex_session_record_uses_step_workflow_checkpoint_authority(
         client_adapter=object(),
     )
 
-    async def put(payload: bytes, _content_type: str, kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, kind: str, link: object = None
+    ) -> str:
         return f"artifact://{kind}/{hashlib.sha256(payload).hexdigest()}"
 
     activities._put_managed_checkpoint_artifact = put
@@ -5942,7 +5944,9 @@ async def test_retry_before_execution_captures_terminal_prior_workspace(
         client_adapter=object(),
     )
 
-    async def put(payload: bytes, _content_type: str, kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, kind: str, link: object = None
+    ) -> str:
         return f"artifact://{kind}/{hashlib.sha256(payload).hexdigest()}"
 
     activities._put_managed_checkpoint_artifact = put
@@ -6201,7 +6205,9 @@ async def test_checkpoint_capture_heartbeat_backpressure_replay(
         run_store=run_store, artifact_service=object(), client_adapter=object()
     )
 
-    async def put(payload: bytes, _content_type: str, kind: str) -> str:
+    async def put(
+        payload: bytes, _content_type: str, kind: str, link: object = None
+    ) -> str:
         return f"artifact://{kind}/{hashlib.sha256(payload).hexdigest()}"
 
     activities._put_managed_checkpoint_artifact = put

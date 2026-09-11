@@ -137,13 +137,18 @@ def _capture_harness(tmp_path, files: dict[str, bytes | str]):
         run_store=store, artifact_service=object(), client_adapter=object()
     )
     stored: dict[str, tuple[bytes, str, str]] = {}
+    put_links: list[object] = []
 
-    async def put(payload: bytes, content_type: str, kind: str) -> str:
+    async def put(
+        payload: bytes, content_type: str, kind: str, link: object = None
+    ) -> str:
         ref = "artifact://" + hashlib.sha256(payload).hexdigest()
         stored[kind] = (payload, content_type, ref)
+        put_links.append(link)
         return ref
 
     activities._put_managed_checkpoint_artifact = put
+    activities.captured_put_links = put_links
     digest = resolve_runtime_execution_capabilities("codex_cli").capability_digest
     return repo, activities, stored, digest
 
@@ -315,6 +320,41 @@ def test_export_scan_binds_digest_and_reports_limits_explicitly() -> None:
     assert spanning["disposition"] == "blocked"
     # A redacted preview is never a byte-identical restorable source.
     assert redacted_preview_is_restorable() is False
+
+
+def test_export_scan_ignores_benign_code_and_redacted_sentinels() -> None:
+    for benign in (
+        b"token = str(explicit_token)\n",
+        b"password: [REDACTED]\n",
+        b"password: '[REDACTED]'\n",
+    ):
+        assert (
+            scan_saved_work_export(
+                benign, export_digest="sha256:abc", location="checkpoint.archive"
+            )["disposition"]
+            == "clean"
+        )
+    # Real credential values still block, including quoted secrets.
+    assert (
+        scan_saved_work_export(
+            b"password = \"hunter2-hunter2\"",
+            export_digest="sha256:abc",
+            location="checkpoint.archive",
+        )["disposition"]
+        == "blocked"
+    )
+
+
+def test_export_scan_detects_secrets_spanning_wide_chunk_boundaries() -> None:
+    key = b"-----BEGIN RSA PRIVATE KEY-----\n" + b"A" * 3000 + b"\n-----END RSA PRIVATE KEY-----"
+    first, second = key[:1500], key[1500:]
+    assert len(first) > 256  # beyond the old overlap, inside the new one
+    assert (
+        scan_saved_work_export_stream(
+            [first, second], export_digest="sha256:abc", location="c.a"
+        )["disposition"]
+        == "blocked"
+    )
 
 
 def test_commit_requires_manifest_and_keeps_preview_failures_separate() -> None:
@@ -535,6 +575,27 @@ async def test_capture_blocks_secret_bearing_exports(tmp_path) -> None:
         await activities.agent_runtime_capture_workspace_checkpoint(
             _request(digest=digest)
         )
+
+
+@pytest.mark.asyncio
+async def test_capture_links_saved_work_artifacts_to_owning_execution(
+    tmp_path,
+) -> None:
+    _repo, activities, _stored, digest = _capture_harness(
+        tmp_path, {"tracked.txt": "evidence\n"}
+    )
+    result = await activities.agent_runtime_capture_workspace_checkpoint(
+        _request(digest=digest)
+    )
+    assert result["status"] == "captured"
+    # Archive, manifest, delta, and saved-work uploads each carry the
+    # capture identity/namespace so the workflow owner keeps read access.
+    assert len(activities.captured_put_links) == 4
+    for link in activities.captured_put_links:
+        assert link.namespace == "step-checkpoints/implement"
+        assert link.workflow_id == "wf-1"
+        assert link.run_id == "run-1"
+        assert link.link_type == "output.checkpoint"
 
 
 @pytest.mark.asyncio
