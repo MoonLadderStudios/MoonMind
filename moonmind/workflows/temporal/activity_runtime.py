@@ -53,6 +53,19 @@ from moonmind.schemas.managed_checkpoint_models import (
     ManagedWorkspaceCheckpointCaptureInput,
     ManagedWorkspaceCheckpointCaptureResult,
 )
+from moonmind.schemas.saved_work_models import (
+    SAVED_WORK_CAPTURE_CONTRACT_VERSION,
+    SAVED_WORK_FORMAT_SIZE_LIMITS,
+    assert_single_capture_generation,
+    build_saved_work_manifest,
+    commit_saved_work_manifest,
+    describe_output_claim,
+    parse_git_diff_raw_to_deltas,
+    resolve_saved_work_format_profile,
+    scan_saved_work_export_stream,
+    snapshot_capture_generation,
+    verify_captured_artifact_evidence,
+)
 from moonmind.schemas.temporal_activity_models import (
     AcceptedRepositoryEvidence,
     AgentRuntimeCancelInput,
@@ -316,6 +329,27 @@ def _workspace_content_digest(entries: Sequence[Mapping[str, Any]]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _checkpoint_payload_identity(payload: bytes) -> tuple[str, int]:
+    """Return the expected (digest, size) identity for one capture candidate."""
+
+    return "sha256:" + hashlib.sha256(payload).hexdigest(), len(payload)
+
+
+def _saved_work_diff_to_deltas(
+    diff_raw: str, excluded: set[str]
+) -> list[dict[str, Any]]:
+    """Parse `git diff HEAD --raw -z --find-renames` into binary-safe deltas.
+
+    Thin adapter over the portable
+    :func:`moonmind.schemas.saved_work_models.parse_git_diff_raw_to_deltas`
+    contract so workflow code carries the adapter call while the delta
+    semantics stay in the schema layer.
+    """
+
+    return parse_git_diff_raw_to_deltas(diff_raw, excluded)
+
 
 _PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
 _PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
@@ -5876,6 +5910,27 @@ class TemporalAgentRuntimeActivities:
         record: Any,
     ) -> dict[str, Any]:
         policy = model.capture_policy
+        # One stable capture generation starts here: record HEAD and the
+        # worktree status before enumeration so a writer mutating files or
+        # HEAD mid-capture is detected and retried/blocked instead of
+        # producing a falsely consistent snapshot. Capture never runs an
+        # unconditional `git add -A` and never mutates the live agent
+        # index/history to create export evidence.
+        async def _git_text(*args: str) -> str:
+            command = self._workspace_git_command(str(workspace), *args)
+            return (await _run_command(command)).stdout.strip()
+
+        async def _git_raw(*args: str) -> str:
+            command = self._workspace_git_command(str(workspace), *args)
+            return (await _run_command(command)).stdout
+
+        pre_head = await _git_text("rev-parse", "HEAD")
+        pre_status = await _git_raw(
+            "status", "--porcelain=v1", "-z", "--untracked-files=all",
+        )
+        pre_status_digest = "sha256:" + hashlib.sha256(
+            pre_status.encode()
+        ).hexdigest()
         enumerate_args = ["ls-files", "-z", "--cached"]
         if policy.include_untracked:
             enumerate_args.extend(["--others", "--exclude-standard"])
@@ -5888,13 +5943,27 @@ class TemporalAgentRuntimeActivities:
             ".git", ".codex", ".ssh", ".gnupg", "node_modules", "__pycache__",
             ".cache", ".docker", "credentials", "managed_runs", "managed_sessions",
         }
-        selected = [
-            path for path in paths
-            if Path(path).name not in excluded_names
-            and not any(part in excluded_parts for part in Path(path).parts)
-            and Path(path).parts[:2]
-            not in {(".agents", "skills"), (".gemini", "skills")}
-        ]
+        # Capture-owned temporary archives stay outside the exported tree,
+        # and runtime-issued credential paths are never exported.
+        excluded_suffixes = (".tmp", ".tar.gz", ".tgz", ".zip")
+        exclusions: list[dict[str, str]] = []
+        absent_paths: list[str] = []
+        selected: list[str] = []
+        for path in paths:
+            parts = Path(path).parts
+            if Path(path).name in excluded_names:
+                exclusions.append({"path": path, "reason": "sensitive-filename-policy"})
+                continue
+            if any(part in excluded_parts for part in parts):
+                exclusions.append({"path": path, "reason": "sensitive-path-policy"})
+                continue
+            if parts[:2] in {(".agents", "skills"), (".gemini", "skills")}:
+                exclusions.append({"path": path, "reason": "runtime-skill-overlay"})
+                continue
+            if path.lower().endswith(excluded_suffixes):
+                exclusions.append({"path": path, "reason": "temporary-archive"})
+                continue
+            selected.append(path)
         if len(selected) > policy.max_file_count:
             raise temporal_exceptions.ApplicationError(
                 "maximum file count exceeded", type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED",
@@ -5902,10 +5971,18 @@ class TemporalAgentRuntimeActivities:
             )
         entries: list[ManagedCheckpointEntry] = []
         total = 0
-        output = BytesIO()
+        fingerprints: dict[str, str] = {}
+        # Bounded spool path outside the exported workspace tree: large
+        # workspace exports stream through temp files in bounded chunks
+        # instead of allocating the entire workspace in memory. Capture
+        # secrets and these spool files never enter the exported tree. The
+        # uncompressed tar spools first so export-byte secret controls can
+        # inspect the actual exported bytes; gzip then streams from that
+        # spool with normalized metadata for deterministic identities.
+        tar_spool = tempfile.TemporaryFile(prefix="saved-work-capture-tar-")
 
-        with gzip.GzipFile(fileobj=output, mode="wb", mtime=0) as compressed, tarfile.open(
-            fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT
+        with tarfile.open(
+            fileobj=tar_spool, mode="w", format=tarfile.PAX_FORMAT
         ) as archive:
             for relative_text in selected:
                 # Archive construction is synchronous. Yield between entries so
@@ -5914,8 +5991,21 @@ class TemporalAgentRuntimeActivities:
                 await asyncio.sleep(0)
                 path = workspace / relative_text
                 if not path.exists() and not path.is_symlink():
+                    # Tracked-but-absent: baseline-anchored deletion evidence,
+                    # never silently treated as complete content.
+                    absent_paths.append(relative_text)
                     continue
-                info_stat = path.lstat()
+                try:
+                    info_stat = path.lstat()
+                except OSError as exc:
+                    raise temporal_exceptions.ApplicationError(
+                        f"unreadable path during capture: {relative_text}",
+                        type="CHECKPOINT_CAPTURE_UNREADABLE",
+                        non_retryable=True,
+                    ) from exc
+                fingerprints[relative_text] = (
+                    f"{info_stat.st_mtime_ns}:{info_stat.st_size}"
+                )
                 if stat.S_ISLNK(info_stat.st_mode):
                     target = os.readlink(path)
                     resolved = (path.parent / target).resolve()
@@ -5932,7 +6022,16 @@ class TemporalAgentRuntimeActivities:
                             "maximum per-file size exceeded",
                             type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED", non_retryable=True,
                         )
-                    digest = await asyncio.to_thread(_sha256_file, path)
+                    # Unreadable/skipped data is never treated as complete:
+                    # hashing or opening failures fail the capture explicitly.
+                    try:
+                        digest = await asyncio.to_thread(_sha256_file, path)
+                    except OSError as exc:
+                        raise temporal_exceptions.ApplicationError(
+                            f"unreadable file during capture: {relative_text}",
+                            type="CHECKPOINT_CAPTURE_UNREADABLE",
+                            non_retryable=True,
+                        ) from exc
                     payload = None
                     target = None
                     entry_type = "file"
@@ -5958,7 +6057,15 @@ class TemporalAgentRuntimeActivities:
                 tar_info.uid = tar_info.gid = tar_info.mtime = 0
                 tar_info.uname = tar_info.gname = ""
                 if entry_type == "file":
-                    with path.open("rb") as source:
+                    try:
+                        source = path.open("rb")
+                    except OSError as exc:
+                        raise temporal_exceptions.ApplicationError(
+                            f"unreadable file during capture: {relative_text}",
+                            type="CHECKPOINT_CAPTURE_UNREADABLE",
+                            non_retryable=True,
+                        ) from exc
+                    with source:
                         await asyncio.to_thread(archive.addfile, tar_info, source)
                 else:
                     archive.addfile(tar_info)
@@ -5976,29 +6083,124 @@ class TemporalAgentRuntimeActivities:
                         linkTarget=target,
                     )
                 )
-        archive_payload = output.getvalue()
-        archive_digest = "sha256:" + hashlib.sha256(archive_payload).hexdigest()
+        # Scan the actual exported tar bytes (not only manifest text) as a
+        # bounded chunk stream with overlap, so credential-shaped content
+        # spanning a chunk boundary is still detected without holding the
+        # whole export in memory. Binary/uninspectable regions stay explicit
+        # instead of a fabricated clean scan.
+        tar_spool.flush()
+        tar_spool.seek(0)
+
+        def _tar_spool_chunks() -> Any:
+            while True:
+                tar_chunk = tar_spool.read(
+                    SAVED_WORK_FORMAT_SIZE_LIMITS["max_spool_chunk_bytes"]
+                )
+                if not tar_chunk:
+                    return
+                yield tar_chunk
+
+        tar_scan = scan_saved_work_export_stream(
+            _tar_spool_chunks(),
+            export_digest="pending-tar-stream",
+            location="checkpoint.archive.tar",
+        )
+        tar_spool.seek(0)
+        gzip_spool = tempfile.TemporaryFile(prefix="saved-work-capture-gz-")
+        with gzip.GzipFile(fileobj=gzip_spool, mode="wb", mtime=0) as compressed:
+            while True:
+                tar_chunk = tar_spool.read(
+                    SAVED_WORK_FORMAT_SIZE_LIMITS["max_spool_chunk_bytes"]
+                )
+                if not tar_chunk:
+                    break
+                compressed.write(tar_chunk)
+        tar_spool.close()
+        spool = gzip_spool
+        # Flush the bounded spool, then stream the archive identity in chunks
+        # and enforce explicit size limits: oversized exports fail explicitly
+        # rather than being silently truncated or reported as no output.
+        spool.flush()
+        spool_size = os.fstat(spool.fileno()).st_size
+        if spool_size > policy.max_total_bytes:
+            spool.close()
+            raise temporal_exceptions.ApplicationError(
+                "maximum total size exceeded",
+                type="CHECKPOINT_CAPTURE_LIMIT_EXCEEDED",
+                non_retryable=True,
+            )
+        spool.seek(0)
+        archive_hasher = hashlib.sha256()
+        while True:
+            spool_chunk = spool.read(
+                SAVED_WORK_FORMAT_SIZE_LIMITS["max_spool_chunk_bytes"]
+            )
+            if not spool_chunk:
+                break
+            archive_hasher.update(spool_chunk)
+        archive_digest = "sha256:" + archive_hasher.hexdigest()
+        spool.seek(0)
+        archive_payload = spool.read()
+        spool.close()
+        if len(archive_payload) != spool_size:
+            raise temporal_exceptions.ApplicationError(
+                "capture spool changed during read",
+                type="CHECKPOINT_CAPTURE_CONCURRENT_MUTATION",
+                non_retryable=False,
+            )
+        # Close the single consistency boundary: re-read HEAD/status and
+        # re-stat captured files. Drift retries/blocks explicitly through a
+        # retryable error; the idempotency record is only written after a
+        # fully verified capture, so retries re-capture cleanly.
+        head = await _git_text("rev-parse", "HEAD")
+        branch = await _git_text("branch", "--show-current")
+        post_status = await _git_raw(
+            "status", "--porcelain=v1", "-z", "--untracked-files=all",
+        )
+        post_status_digest = "sha256:" + hashlib.sha256(
+            post_status.encode()
+        ).hexdigest()
+        generation_before = snapshot_capture_generation(
+            git_head=pre_head,
+            status_digest=pre_status_digest,
+            file_fingerprints={
+                entry.path: fingerprints[entry.path] for entry in entries
+            },
+        )
+        post_fingerprints: dict[str, str] = {}
+        for entry in entries:
+            try:
+                current_stat = (workspace / entry.path).lstat()
+            except OSError as exc:
+                raise temporal_exceptions.ApplicationError(
+                    f"captured file vanished during capture: {entry.path}",
+                    type="CHECKPOINT_CAPTURE_CONCURRENT_MUTATION",
+                    non_retryable=False,
+                ) from exc
+            post_fingerprints[entry.path] = (
+                f"{current_stat.st_mtime_ns}:{current_stat.st_size}"
+            )
+        try:
+            assert_single_capture_generation(
+                generation_before,
+                snapshot_capture_generation(
+                    git_head=head,
+                    status_digest=post_status_digest,
+                    file_fingerprints=post_fingerprints,
+                ),
+            )
+        except ValueError as exc:
+            raise temporal_exceptions.ApplicationError(
+                str(exc),
+                type="CHECKPOINT_CAPTURE_CONCURRENT_MUTATION",
+                non_retryable=False,
+            ) from exc
+        status = post_status
         archive_ref = await self._put_managed_checkpoint_artifact(
             archive_payload,
             "application/vnd.moonmind.worktree-archive",
             "checkpoint_archive",
         )
-        async def _git(*args: str) -> str:
-            command = self._workspace_git_command(str(workspace), *args)
-            return (await _run_command(command)).stdout.strip()
-        head = await _git("rev-parse", "HEAD")
-        branch = await _git("branch", "--show-current")
-        status = (
-            await _run_command(
-                self._workspace_git_command(
-                    str(workspace),
-                    "status",
-                    "--porcelain=v1",
-                    "-z",
-                    "--untracked-files=all",
-                ),
-            )
-        ).stdout
         created_at = (record.finished_at or record.started_at).isoformat()
         staged_paths = []
         records = status.split("\0")
@@ -6047,6 +6249,264 @@ class TemporalAgentRuntimeActivities:
         )
         logger.info("managed_checkpoint_capture_files files=%s", len(entries))
         logger.info("managed_checkpoint_capture_bytes bytes=%s", len(archive_payload))
+        # Bind the streamed tar-scan evidence to the final export digest.
+        # Confidentiality controls therefore cover the actual exported bytes
+        # and reachable history, not only the manifest text; unsupported
+        # binary inspection stays explicit instead of a fabricated clean
+        # scan, and a redacted preview is never a restorable source.
+        export_scan = {**tar_scan, "exportDigest": archive_digest}
+        if export_scan["disposition"] == "blocked":
+            raise temporal_exceptions.ApplicationError(
+                "checkpoint archive failed export secret scanning",
+                type="CHECKPOINT_CAPTURE_SECRET_DETECTED",
+                non_retryable=True,
+            )
+        # Binary-safe exact-baseline delta against the recorded baseline
+        # commit. Export uses `git diff --raw` with external diff drivers
+        # and textconv disabled and never `git bundle --all`; no bundle,
+        # hook, external-diff, or textconv helper is executed for export.
+        # Repo-config-driven clean/smudge filters remain owned by the
+        # source-preparation boundary (#2615); LFS pointer files are
+        # captured as their truthful worktree bytes with the baseline
+        # dependency declared. Paths excluded from capture can never
+        # produce deletion claims.
+        excluded_for_delta = {
+            exclusion["path"]
+            for exclusion in exclusions
+            if exclusion["reason"] != "absent-from-worktree"
+        }
+        baseline_paths = set(
+            filter(
+                None,
+                (
+                    await _git_raw("ls-tree", "-r", "--name-only", "-z", "HEAD")
+                ).split("\0"),
+            )
+        )
+        diff_raw = await _git_raw(
+            "diff",
+            "HEAD",
+            "--raw",
+            "-z",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--find-renames",
+        )
+        delta_changes = _saved_work_diff_to_deltas(diff_raw, excluded_for_delta)
+        entry_by_path = {entry.path: entry for entry in entries}
+        diff_covered_paths = {str(change.get("path")) for change in delta_changes}
+        for untracked_path in sorted(
+            {entry.path for entry in entries}
+            - baseline_paths
+            - excluded_for_delta
+            - diff_covered_paths
+        ):
+            delta_changes.append(
+                {
+                    "path": untracked_path,
+                    "change": "added",
+                    "new": entry_by_path[untracked_path].model_dump(
+                        by_alias=True, mode="json", exclude_none=True
+                    ),
+                }
+            )
+        delta_changes.sort(
+            key=lambda item: (str(item.get("path")), str(item.get("change")))
+        )
+        delta_payload = _json_bytes(
+            {
+                "schemaVersion": SAVED_WORK_CAPTURE_CONTRACT_VERSION,
+                "baselineCommit": head,
+                "changes": delta_changes,
+            }
+        )
+        delta_digest = "sha256:" + hashlib.sha256(delta_payload).hexdigest()
+        delta_ref = await self._put_managed_checkpoint_artifact(
+            delta_payload,
+            "application/vnd.moonmind.saved-work-delta+json;version=1",
+            "checkpoint_delta",
+        )
+        lowered_paths: dict[str, str] = {}
+        case_collisions: list[str] = []
+        for entry in entries:
+            folded = entry.path.lower()
+            first_seen = lowered_paths.setdefault(folded, entry.path)
+            if first_seen != entry.path and entry.path not in case_collisions:
+                case_collisions.append(entry.path)
+        # One compact saved-work manifest indexes the verified evidence.
+        # ACL/retention resolve through artifact ownership handles, never
+        # through editable copied policy. A redacted preview is never a
+        # restorable source; optional preview/report failure stays separate
+        # from the committed capture result.
+        format_profile = resolve_saved_work_format_profile(
+            is_git_workspace=True, requested_result="portable"
+        )
+        baseline_dependency = f"git-baseline:{head}"
+        saved_work_outputs = [
+            describe_output_claim(
+                fmt="full_snapshot",
+                status="self_contained",
+                ref=archive_ref,
+                digest=archive_digest,
+                size_bytes=len(archive_payload),
+                detail=(
+                    "worktree snapshot of captured bytes; history "
+                    "reconstruction requires the recorded baseline dependency"
+                ),
+            ),
+            describe_output_claim(
+                fmt="exact_baseline_delta",
+                status="requires_dependencies",
+                ref=delta_ref,
+                digest=delta_digest,
+                size_bytes=len(delta_payload),
+                dependencies=[baseline_dependency],
+                detail=(
+                    "binary-safe worktree-vs-baseline delta; excluded "
+                    "paths never produce deletion claims"
+                ),
+            ),
+            describe_output_claim(
+                fmt="selected_history",
+                status="inapplicable",
+                detail=(
+                    "no refs requested; selected-history bundles include "
+                    "only intended reachable refs with declared baseline, "
+                    "LFS, and submodule dependencies (never bundle --all)"
+                ),
+            ),
+        ]
+        record_status = getattr(record, "status", None)
+        quiescence_verified = record_status in {
+            "completed",
+            "failed",
+            "canceled",
+            "timed_out",
+        }
+        saved_work = build_saved_work_manifest(
+            capture_id=model.idempotency_key,
+            identity={
+                **model.identity.model_dump(by_alias=True, mode="json"),
+                "boundary": model.boundary,
+            },
+            source={
+                "kind": "managed-code-workspace",
+                "workspaceLocator": model.workspace_locator.model_dump(
+                    by_alias=True, mode="json"
+                ),
+                "baselineCommit": head,
+            },
+            content_digest=archive_digest,
+            file_manifest_digest=workspace_digest,
+            capture_policy=policy.model_dump(by_alias=True, mode="json"),
+            required_formats=format_profile["required"],
+            optional_formats=format_profile["optional"],
+            outputs=saved_work_outputs,
+            exclusions=[
+                *exclusions[:100],
+                *(
+                    [{"path": path, "reason": "absent-from-worktree"} for path in absent_paths[:100]]
+                    if absent_paths
+                    else []
+                ),
+            ],
+            scan={
+                "disposition": (
+                    export_scan["disposition"]
+                    if export_scan["disposition"] != "clean"
+                    else "clean"
+                ),
+                "manifestScan": "allow",
+                "exportScan": export_scan,
+                "redactedPreviewRestorable": False,
+            },
+            dependencies=[baseline_dependency],
+            quiescence={
+                "verified": quiescence_verified,
+                "mechanism": (
+                    "terminal-run-record with pre/post capture-generation "
+                    "match"
+                    if quiescence_verified
+                    else "pre/post capture-generation match on an active "
+                    "run record; writer fencing remains owned by the "
+                    "orchestration boundary"
+                ),
+                "generationHead": head,
+                "statusDigest": post_status_digest,
+            },
+            git={
+                "baselineCommit": head,
+                "headCommit": head,
+                "branch": branch,
+                "isDirty": bool(status),
+                "statusDigest": post_status_digest,
+                "stagedPaths": staged_paths,
+                "submodules": [],
+                "deltaRef": delta_ref,
+                "deltaDigest": delta_digest,
+                "deltaChangeCount": len(delta_changes),
+                "caseCollisions": case_collisions,
+            },
+            capture_generation=head,
+            artifact_scope="checkpoint_archive",
+            retention_ref="artifact-ownership",
+        )
+        if case_collisions:
+            saved_work.setdefault("limitations", []).append(
+                "target-platform path/case collisions present; capture does "
+                "not claim a format the restore path cannot reconstruct "
+                "(coordinated with the restore owner)"
+            )
+        saved_work_payload = _json_bytes(saved_work)
+        saved_work_digest = "sha256:" + hashlib.sha256(
+            saved_work_payload
+        ).hexdigest()
+        # Delta and manifest indexes carry paths and reasons rather than
+        # file content, but a credential-shaped filename must still not
+        # leak through artifact metadata: scan both before upload.
+        derivative_scan = scan_outbound_bundle(
+            [
+                OutboundBundleItem(
+                    location="checkpoint.delta",
+                    content=delta_payload.decode("utf-8"),
+                ),
+                OutboundBundleItem(
+                    location="checkpoint.saved-work",
+                    content=saved_work_payload.decode("utf-8"),
+                ),
+            ],
+            high_security_mode=True,
+        )
+        if not derivative_scan.allowed:
+            raise temporal_exceptions.ApplicationError(
+                "saved-work derivative metadata failed outbound secret scanning",
+                type="CHECKPOINT_CAPTURE_SECRET_DETECTED",
+                non_retryable=True,
+            )
+        saved_work_ref = await self._put_managed_checkpoint_artifact(
+            saved_work_payload,
+            "application/vnd.moonmind.saved-work-manifest+json;version=1",
+            "saved_work_manifest",
+        )
+        # Verify required objects and dependency metadata, then commit the
+        # immutable manifest/reference set. An upload without a committed
+        # usable manifest remains an incomplete capture for the
+        # finalization/retention owners to reconcile.
+        commit = commit_saved_work_manifest(
+            {**saved_work, "manifestDigest": saved_work_digest},
+            required_refs_available={
+                "checkpoint_archive": True,
+                "checkpoint_manifest": True,
+                "checkpoint_delta": True,
+                "saved_work_manifest": True,
+            },
+        )
+        if commit["status"] != "committed":
+            raise temporal_exceptions.ApplicationError(
+                f"saved-work manifest is not committable: {commit.get('reason')}",
+                type="CHECKPOINT_CAPTURE_INCOMPLETE",
+                non_retryable=True,
+            )
         compact = ManagedWorkspaceCheckpointCaptureResult(
             status="captured",
             workspace={
@@ -6060,8 +6520,10 @@ class TemporalAgentRuntimeActivities:
                 "includesIgnoredFiles": False,
             },
             sourceWorkspaceLocator=model.workspace_locator,
-            diagnosticRefs=[manifest_ref],
+            diagnosticRefs=[manifest_ref, delta_ref, saved_work_ref],
             idempotencyKey=model.idempotency_key,
+            savedWorkRef=saved_work_ref,
+            savedWorkDigest=saved_work_digest,
         )
         return compact.model_dump(by_alias=True, mode="json", exclude_none=True)
 
@@ -6076,6 +6538,17 @@ class TemporalAgentRuntimeActivities:
                 scope=artifact_kind,
                 metadata_json={"artifact_kind": artifact_kind},
             )
+        )
+        # Bind the retry to the expected capture candidate: a reused
+        # COMPLETE artifact carrying different bytes must fail (or start an
+        # explicitly new attempt) rather than bind the wrong bytes to the
+        # claimed manifest. Same request + same immutable candidate reuses
+        # the committed result.
+        digest, size = _checkpoint_payload_identity(payload)
+        verify_captured_artifact_evidence(
+            expected_digest=digest,
+            expected_size_bytes=size,
+            artifact=completed,
         )
         return _compact_artifact_ref_text(build_artifact_ref(completed))
 
