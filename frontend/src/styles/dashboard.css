@@ -9514,6 +9514,58 @@ button.workflow-workspace-sidebar-row:active {
   overflow-wrap: anywhere;
 }
 
+/* Shared source-context strip (MoonLadderStudios/MoonMind#4228). Compact,
+   read-only Repository + Starting Branch facts rendered in the shared detail
+   hero so the default Chat view surfaces source context without switching
+   tabs. Flex-wraps for mobile; long branch names wrap or expose full value
+   via title tooltip. */
+.td-source-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  align-items: baseline;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgb(var(--mm-border) / 0.55);
+  border-radius: 0.6rem;
+  background: rgb(var(--mm-panel) / 0.42);
+  min-width: 0;
+}
+
+.td-source-context-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.td-source-context-item dt {
+  font-size: 0.78rem;
+  color: rgb(var(--mm-muted));
+  font-weight: 500;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.td-source-context-item dd {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.td-source-context-item dd code {
+  font-size: 0.82em;
+  overflow-wrap: anywhere;
+}
+
+.td-source-context-empty {
+  color: rgb(var(--mm-muted));
+  font-weight: 500;
+}
+
 .td-summary-block {
   margin-bottom: 1.25rem;
   padding-bottom: 1.25rem;
