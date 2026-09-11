@@ -1385,46 +1385,36 @@ async def _prepare_checkpoint_branch_launch(
 def _bound_branch_follow_up_retrieval(
     authored: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Narrow a branch-turn override to deployment-owned retrieval ceilings."""
+    """Retire branch-turn retrieval overrides (MoonLadderStudios/MoonMind#4107).
+
+    Built-in vector retrieval is retired (#4105): explicit branch-turn
+    ``followUpRetrieval`` requirements fail before any artifact write or
+    persistence, without silently weakening the request. Absent/empty/disabled
+    values return ``None`` so normal branch preparation needs no vector
+    settings and stale drafts cannot reintroduce retired authority.
+    """
 
     if authored is None:
         return None
-    bounded = dict(authored)
-    budgets = bounded.pop("budgets", None)
-    if isinstance(budgets, Mapping):
-        if "maxContextTokens" not in bounded:
-            bounded["maxContextTokens"] = budgets.get("tokens")
-        if "latencyMs" not in bounded:
-            bounded["latencyMs"] = budgets.get("latency_ms")
-    allowed = tuple(
-        item.strip()
-        for item in os.getenv(
-            "MOONMIND_FOLLOWUP_RETRIEVAL_COLLECTIONS", "repo,docs"
-        ).split(",")
-        if item.strip()
+    from moonmind.workflows.executions.execution_contract import (
+        WorkflowContractError,
+        reject_retired_vector_fields,
     )
-    requested = list(dict.fromkeys(bounded.get("collections") or []))
-    if not all(isinstance(item, str) and item in allowed for item in requested):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "retrieval_collections_exceed_server_policy"},
+
+    try:
+        reject_retired_vector_fields(
+            {"followUpRetrieval": dict(authored)},
+            field_path="payload",
         )
-    bounded["collections"] = requested
-    ceilings = {
-        "topK": ("MAX_TOP_K", 8),
-        "maxContextTokens": ("MAX_CONTEXT_TOKENS", 8192),
-        "maxQueries": ("MAX_QUERIES", 12),
-        "latencyMs": ("MAX_LATENCY_MS", 5000),
-        "maxLifetimeSeconds": ("MAX_LIFETIME_SECONDS", 900),
-    }
-    for field, (env_suffix, default) in ceilings.items():
-        value = bounded.get(field)
-        if isinstance(value, int) and not isinstance(value, bool):
-            bounded[field] = min(
-                value,
-                int(os.getenv(f"MOONMIND_FOLLOWUP_RETRIEVAL_{env_suffix}", default)),
-            )
-    return bounded
+    except WorkflowContractError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "retired_vector_retrieval",
+                "message": str(exc),
+            },
+        ) from exc
+    return None
 
 
 def _branch_comparison_record(

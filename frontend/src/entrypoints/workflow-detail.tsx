@@ -31,7 +31,6 @@ import {
   compileContextRetrievalParameters,
   defaultContextRetrievalAuthoring,
   hasAuthoredContextRetrieval,
-  retrievalCeilingsFromRuntimeConfig,
 } from '../lib/contextRetrievalAuthoring';
 import {
   DashboardToastProvider,
@@ -124,7 +123,6 @@ type DashboardConfig = {
     temporal?: Record<string, string>;
     agentRuns?: Record<string, string>;
   };
-  system?: { retrievalAuthoring?: Record<string, unknown> };
 };
 
 type LiveLogsSessionTimelineRollout = 'off' | 'internal' | 'codex_managed' | 'all_managed';
@@ -4950,7 +4948,6 @@ function BranchExplorerPanel({
   latestCompare,
   onSelectBranch,
   onBranchAction,
-  retrievalCeilings,
 }: {
   apiBase: string;
   workflowId: string;
@@ -4967,7 +4964,6 @@ function BranchExplorerPanel({
   latestCompare: z.infer<typeof CheckpointBranchCompareSchema> | null;
   onSelectBranch: (branchId: string) => void;
   onBranchAction: (request: BranchMutationRequest) => void;
-  retrievalCeilings: ReturnType<typeof retrievalCeilingsFromRuntimeConfig>;
 }) {
   const profilesQuery = useQuery({
     queryKey: ['checkpoint-branch', 'profiles'],
@@ -5292,7 +5288,6 @@ function BranchExplorerPanel({
             <ContextRetrievalControls
               value={branchContextRetrieval}
               onChange={setBranchContextRetrieval}
-              ceilings={retrievalCeilings}
               showInitialControls={false}
               disabled={busy}
               description="Continue/fork turns inherit the parent run's retrieval policy. Set an override here to narrow in-session follow-up retrieval for the new turn within deployment ceilings."
@@ -8762,9 +8757,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
   const queryClient = useQueryClient();
   const toast = useDashboardToast();
   const cfg = readDashboardConfig(payload);
-  const retrievalCeilings = retrievalCeilingsFromRuntimeConfig(
-    cfg?.system?.retrievalAuthoring,
-  );
   const agentRunRoutes = readAgentRunRouteTemplates(cfg);
   const detailPoll = cfg?.pollIntervalsMs?.detail ?? 2000;
   const actionsOn = Boolean(cfg?.features?.temporalDashboard?.actionsEnabled);
@@ -10728,7 +10720,6 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                       setActionError(null);
                       checkpointBranchMutation.mutate(request);
                     }}
-                    retrievalCeilings={retrievalCeilings}
                   />
                 </>
               ) : (
