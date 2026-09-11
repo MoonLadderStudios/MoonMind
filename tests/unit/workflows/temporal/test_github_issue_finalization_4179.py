@@ -318,7 +318,9 @@ class _FakeService:
         fail_remove: str = "",
         fail_create: str = "",
         fail_close: str = "",
+        fail_update: str = "",
         unknown_update: bool = False,
+        seed_comments: list[dict[str, Any]] | None = None,
     ) -> None:
         self.labels = list(issue_labels or ["status: in-progress"])
         self.state = issue_state
@@ -326,9 +328,11 @@ class _FakeService:
         self.fail_remove = fail_remove
         self.fail_create = fail_create
         self.fail_close = fail_close
+        self.fail_update = fail_update
         self.unknown_update = unknown_update
-        self.comments: list[dict[str, Any]] = []
+        self.comments: list[dict[str, Any]] = [dict(item) for item in (seed_comments or [])]
         self.calls: list[str] = []
+        self.list_calls: list[str] = []
 
     async def resolve_github_token(self, repo: str = "") -> tuple[str | None, str]:
         _ = repo
@@ -366,15 +370,26 @@ class _FakeService:
         self.calls.append(f"remove:{label}")
         if self.fail_remove == "unknown":
             return {"ok": False, "reasonCode": "outcome_unknown", "summary": "lost response"}
+        if self.fail_remove == "failed":
+            return {"ok": False, "reasonCode": "remove_failed", "summary": "remove failed"}
         if label in self.labels:
             self.labels.remove(label)
         return {"ok": True, "reasonCode": "removed"}
 
+    async def list_issue_comments(self, *, repo: str, issue_number: int) -> dict[str, Any]:
+        _ = (repo, issue_number)
+        self.list_calls.append("list_comments")
+        return {"ok": True, "reasonCode": "listed", "comments": [dict(item) for item in self.comments]}
+
     async def update_issue_comment(self, *, repo: str, comment_id: int, body: str) -> dict[str, Any]:
         _ = repo
         self.calls.append(f"update:{comment_id}")
-        if self.unknown_update:
+        if self.unknown_update or self.fail_update == "unknown":
             return {"ok": False, "reasonCode": "outcome_unknown", "summary": "lost response"}
+        if self.fail_update == "denied":
+            return {"ok": False, "reasonCode": "denied", "summary": "update denied"}
+        if self.fail_update:
+            return {"ok": False, "reasonCode": "update_failed", "summary": "update failed"}
         for comment in self.comments:
             if comment["id"] == comment_id:
                 comment["body"] = body
@@ -877,3 +892,313 @@ def test_replayed_finalizer_respects_closed_successor_and_hold() -> None:
     )
     assert separated["unknownAuxiliaryKinds"] == ["some_future_kind"]
     assert separated["rebuyImplementation"] is True
+
+
+# -- Codex review remediation (PR #4244 follow-up) -------------------------------
+# Covers the P1 findings on the first finalizer revision: strict boolean
+# evidence parsing, cancellation-hold gating, pre-mutation reads with
+# successor abandonment, outbound scanning, canonical attempt-comment reuse,
+# pending (never released) comment-update failures, pending sync after every
+# partial mutation failure, and origin-aware transition evidence.
+
+
+@pytest.mark.parametrize("value", ["false", "False", "FALSE", "  false  ", "0", "no", "off", "", "  ", "maybe"])
+def test_truthy_rejects_false_like_strings(value: Any) -> None:
+    assert fin._truthy(value) is False
+
+
+@pytest.mark.parametrize("value", [True, "true", "True", "TRUE", "  yes  ", "Yes", "YES", "1", 1, 1.0])
+def test_truthy_accepts_only_approved_true_tokens(value: Any) -> None:
+    assert fin._truthy(value) is True
+
+
+@pytest.mark.parametrize("value", [False, None, 0, 0.0])
+def test_truthy_rejects_falsy_non_strings(value: Any) -> None:
+    assert fin._truthy(value) is False
+
+
+def test_cancellation_hold_blocks_release_despite_releasable_evidence() -> None:
+    plan = fin.plan_failed_attempt_finalization(
+        execution_event="failed",
+        writer_evidence=_writer(),
+        mutation_evidence=_mutations(),
+        preservation_evidence=_preserved(),
+        disposition_evidence={"trustworthy_no_work": True, "fresh_retry_allowed": True, "terminal_proof": True},
+        cancellation_hold=True,
+        reason="operator hold with releasable evidence",
+    )
+    assert plan.releasable is False
+    assert plan.reason_code == "cancellation_hold"
+    assert plan.workspace_retained is True
+
+
+@pytest.mark.asyncio
+async def test_activity_cancellation_hold_makes_no_github_effects(monkeypatch) -> None:
+    service = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(**_base_kwargs(cancellation_hold=True), service=service)
+    assert result["released"] is False
+    assert result["reasonCode"] == "cancellation_hold"
+    assert result["workspaceRetained"] is True
+    assert service.calls == []
+    assert service.comments == []
+
+
+@pytest.mark.asyncio
+async def test_tool_cancellation_hold_string_values(monkeypatch) -> None:
+    from moonmind.workflows.temporal import story_output_tools as tools
+
+    def _inputs(hold: Any) -> dict[str, Any]:
+        return {
+            "repository": "o/r",
+            "issueNumber": 4179,
+            "executionEvent": "failed",
+            "fromSettled": "in_progress",
+            "currentLabels": ["status: in-progress"],
+            "writerEvidence": _writer(),
+            "mutationEvidence": _mutations(),
+            "preservationEvidence": _preserved(),
+            "dispositionEvidence": {
+                "portable_work_safe": True,
+                "preservation_verified": True,
+                "handoff_published": True,
+            },
+            "attemptId": "att_test",
+            "primaryOutcome": "failed",
+            "metRequirements": ["req-a"],
+            "remainingRequirements": ["req-b"],
+            "retryHistory": "1 failed",
+            "nextAction": "continue-implementation",
+            "reason": "terminal failure with portable work",
+            "cancellationHold": hold,
+        }
+
+    service = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    held = await tools.finalize_github_issue_failed_attempt(_inputs("true"), github_service_factory=lambda: service)
+    assert held.outputs["released"] is False
+    assert held.outputs["reasonCode"] == "cancellation_hold"
+
+    releasing = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(releasing))
+    loose = await tools.finalize_github_issue_failed_attempt(_inputs("false"), github_service_factory=lambda: releasing)
+    assert loose.status == "COMPLETED"
+    assert loose.outputs["released"] is True
+
+
+@pytest.mark.asyncio
+async def test_preread_successor_abandons_before_effects(monkeypatch) -> None:
+    service = _FakeService(issue_labels=["status: recovery-needed"])
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(**_base_kwargs(), service=service)
+    assert result["released"] is False
+    assert result["reasonCode"] == "successor_observed"
+    assert result["workspaceRetained"] is True
+    assert service.calls == []
+    assert service.comments == []
+    assert service.list_calls == []
+
+
+@pytest.mark.asyncio
+async def test_preread_closed_issue_abandons(monkeypatch) -> None:
+    service = _FakeService(issue_labels=["status: in-progress"], issue_state="closed")
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(**_base_kwargs(), service=service)
+    assert result["released"] is False
+    assert result["reasonCode"] == "successor_observed"
+    assert service.calls == []
+
+
+@pytest.mark.asyncio
+async def test_omitted_current_labels_derive_from_preread(monkeypatch) -> None:
+    service = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    kwargs = _base_kwargs()
+    del kwargs["current_labels"]
+    result = await acts.finalize_failed_attempt(**kwargs, service=service)
+    assert result["released"] is True
+    assert result["disposition"] == "to_recovery_needed"
+    assert "status: recovery-needed" in service.labels
+
+
+@pytest.mark.asyncio
+async def test_stale_caller_labels_lose_to_observed_hold(monkeypatch) -> None:
+    service = _FakeService(issue_labels=["status: needs-attention"])
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(**_base_kwargs(), service=service)
+    assert result["released"] is False
+    assert result["reasonCode"] == "successor_observed"
+    assert service.calls == []
+    assert service.comments == []
+
+
+@pytest.mark.asyncio
+async def test_scan_blocks_secret_like_handoff(monkeypatch) -> None:
+    service = _FakeService()
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(
+        **_base_kwargs(met_requirements=["rotate deploy token ghp_" + "A" * 36]),
+        service=service,
+    )
+    assert result["released"] is False
+    assert result["reasonCode"] == "comment_blocked_by_scan"
+    assert result["workspaceRetained"] is True
+    assert service.calls == []
+    assert service.comments == []
+
+
+def _seeded_attempt_comment(attempt_id: str) -> dict[str, Any]:
+    marker = f"<!-- moonmind-github-attempt: {attempt_id} v1 -->"
+    body = (
+        f"{marker}\n## MoonMind attempt `{attempt_id}` — progress\n\n"
+        "<!-- moonmind.github_issue_attempt.v1 metadata (machine-readable, do not edit) -->\n"
+        f'```json\n{{"attemptId": "{attempt_id}"}}\n```\n'
+    )
+    return {"id": 7, "body": body}
+
+
+@pytest.mark.asyncio
+async def test_reuses_canonical_attempt_comment(monkeypatch) -> None:
+    from moonmind.workflows.temporal.github_issue_attempt import extract_attempt_metadata
+
+    attempt_id = "att_" + "b" * 24
+    service = _FakeService(seed_comments=[_seeded_attempt_comment(attempt_id)])
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(
+        **_base_kwargs(attempt_id=attempt_id), service=service
+    )
+    assert result["released"] is True
+    assert result["commentId"] == 7
+    assert len(service.comments) == 1
+    assert not any("create_comment" in call for call in service.calls)
+    assert "update:7" in service.calls
+    merged = service.comments[0]["body"]
+    assert "<!-- moonmind-github-attempt:" in merged
+    assert "terminal handoff" in merged
+    metadata, error = extract_attempt_metadata(merged)
+    assert error == ""
+    assert metadata is not None and metadata.get("attemptId") == attempt_id
+
+
+@pytest.mark.asyncio
+async def test_conflicting_attempt_copies_stay_pending(monkeypatch) -> None:
+    attempt_id = "att_" + "c" * 24
+    service = _FakeService(
+        seed_comments=[_seeded_attempt_comment(attempt_id), _seeded_attempt_comment(attempt_id)]
+    )
+    service.comments[1]["id"] = 8
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(
+        **_base_kwargs(attempt_id=attempt_id), service=service
+    )
+    assert result["released"] is False
+    assert result["reasonCode"] == "conflicting_attempt_copies"
+    assert result["pendingSync"] is not None
+    assert result["workspaceRetained"] is True
+    assert not any("create_comment" in call for call in service.calls)
+    assert len(service.comments) == 2
+
+
+@pytest.mark.asyncio
+async def test_released_comment_failure_stays_pending(monkeypatch) -> None:
+    service = _FakeService(fail_update="denied")
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(**_base_kwargs(), service=service)
+    assert result["released"] is False
+    assert result["reasonCode"] == "released_comment_failed"
+    assert result["pendingSync"] is not None
+    assert result["workspaceRetained"] is True
+
+
+@pytest.mark.asyncio
+async def test_remove_failure_records_pending_sync(monkeypatch) -> None:
+    service = _FakeService(fail_remove="failed")
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(**_base_kwargs(), service=service)
+    assert result["released"] is False
+    assert result["reasonCode"] == "remove_failed"
+    assert result["pendingSync"] is not None
+    assert result["workspaceRetained"] is True
+
+
+@pytest.mark.asyncio
+async def test_close_failure_records_pending_sync(monkeypatch) -> None:
+    service = _FakeService(issue_labels=["status: code-review"], issue_state="open", fail_close="boom")
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(
+        **_base_kwargs(
+            execution_event="failed",
+            from_settled="code_review",
+            current_labels=["status: code-review"],
+            disposition_evidence={"completion_verified": True},
+        ),
+        service=service,
+    )
+    assert result["released"] is False
+    assert result["reasonCode"] == "close_failed"
+    assert result["pendingSync"] is not None
+    assert result["workspaceRetained"] is True
+
+
+def test_code_review_recovery_maps_owner_guard_evidence() -> None:
+    allowed = fin.plan_failed_attempt_finalization(
+        execution_event="failed",
+        from_settled="code_review",
+        writer_evidence=_writer(),
+        mutation_evidence=_mutations(),
+        preservation_evidence=_preserved(),
+        disposition_evidence={"portable_work_safe": True, "preservation_verified": True},
+        current_labels=["status: code-review"],
+        review_owner_ended=True,
+        next_action="continue-recovery",
+        reason="review owner ended with safe portable work",
+    )
+    assert allowed.releasable is True
+    assert allowed.disposition == fin.DISPOSITION_RECOVERY_NEEDED
+    # Without owner/next-action evidence the same origin still denies.
+    denied = fin.plan_failed_attempt_finalization(
+        execution_event="failed",
+        from_settled="code_review",
+        writer_evidence=_writer(),
+        mutation_evidence=_mutations(),
+        preservation_evidence=_preserved(),
+        disposition_evidence={"portable_work_safe": True, "preservation_verified": True},
+        current_labels=["status: code-review"],
+        reason="review owner ended with safe portable work",
+    )
+    assert denied.releasable is False
+    assert denied.reason_code == "missing_guard"
+    # The needs-attention target from a code-review origin uses the same guards.
+    held = fin.plan_failed_attempt_finalization(
+        execution_event="cancelled",
+        from_settled="code_review",
+        writer_evidence=_writer(),
+        mutation_evidence=_mutations(),
+        preservation_evidence=_preserved(),
+        disposition_evidence={"intentional_cancellation": True, "blocking_reason": "operator hold"},
+        current_labels=["status: code-review"],
+        review_owner_ended=True,
+        next_action="await-operator",
+        reason="intentional cancellation",
+    )
+    assert held.releasable is True
+    assert held.disposition == fin.DISPOSITION_NEEDS_ATTENTION
+
+
+@pytest.mark.asyncio
+async def test_activity_code_review_recovery_releases(monkeypatch) -> None:
+    service = _FakeService(issue_labels=["status: code-review"], issue_state="open")
+    monkeypatch.setattr(acts, "_fetch_issue", _issue_reader(service))
+    result = await acts.finalize_failed_attempt(
+        **_base_kwargs(
+            execution_event="failed",
+            from_settled="code_review",
+            current_labels=["status: code-review"],
+            review_owner_ended=True,
+            next_action="continue-recovery",
+        ),
+        service=service,
+    )
+    assert result["released"] is True
+    assert result["disposition"] == "to_recovery_needed"
+    assert "status: recovery-needed" in service.labels

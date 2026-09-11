@@ -54,12 +54,23 @@ def _string(value: Any) -> str:
     return str(value or "").strip()
 
 
+#: Approved true tokens for string-valued evidence. Rendered tool inputs
+#: commonly carry ``"false"``/``"0"`` strings; only these tokens assert a
+#: guard fact. Mirrors the admission/lifecycle boolean convention
+#: (``github_issue_admission``, ``attempt_evidence_blocks_admission``).
+APPROVED_TRUE_TOKENS = frozenset({"1", "true", "yes"})
+
+
 def _truthy(value: Any) -> bool:
-    if value is True:
-        return True
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
     if isinstance(value, str):
-        return bool(value.strip())
-    return bool(value) and value is not False and value is not None
+        return value.strip().lower() in APPROVED_TRUE_TOKENS
+    return bool(value)
 
 
 # ---------------------------------------------------------------------------
@@ -814,11 +825,15 @@ def plan_failed_attempt_finalization(
     remaining_requirements: Sequence[Any] | None = None,
     retry_history: Any = "",
     next_action: str = "",
+    cancellation_hold: bool = False,
+    review_owner_ended: bool = False,
 ) -> FinalizationPlan:
     """Compose writer/mutation/preservation/disposition into a release plan.
 
     Returns a non-releasable plan with ``workspaceRetained=True`` whenever
     any gate fails: failed reporting never discards the only workspace.
+    An explicit cancellation hold short-circuits before evidence planning:
+    held attempts never release, whatever the disposition evidence claims.
     """
     from moonmind.workflows.temporal import github_issue_lifecycle as _lifecycle
 
@@ -843,6 +858,17 @@ def plan_failed_attempt_finalization(
             releasable=False,
             reason_code=str(gate["reasonCode"]),
             summary=str(gate["summary"]),
+            workspace_retained=True,
+        )
+    if bool(cancellation_hold) is True:
+        return FinalizationPlan(
+            releasable=False,
+            reason_code="cancellation_hold",
+            summary=(
+                "Explicit cancellation hold: no issue mutation is planned and no "
+                "replacement work is scheduled, whatever the disposition evidence claims."
+            ),
+            disposition=DISPOSITION_NEEDS_ATTENTION,
             workspace_retained=True,
         )
     writer = confirm_writer_stop(writer_evidence)
@@ -877,8 +903,15 @@ def plan_failed_attempt_finalization(
         )
     disposition = choose_disposition(disposition_evidence)
     target = str(disposition["disposition"])
+    mapping_evidence = dict(disposition_evidence or {})
+    mapping_evidence.setdefault("reviewOwnerEnded", review_owner_ended)
+    if _string(next_action):
+        mapping_evidence.setdefault("nextAction", _string(next_action))
     evidence = _transition_evidence_for_disposition(
-        target, writer_evidence=writer_evidence, disposition_evidence=disposition_evidence
+        target,
+        writer_evidence=writer_evidence,
+        disposition_evidence=mapping_evidence,
+        from_settled=from_settled,
     )
     decision = _lifecycle.plan_transition(
         from_settled=from_settled, to_target=target, evidence=evidence, reason=reason or str(disposition["summary"])
@@ -928,10 +961,26 @@ def _transition_evidence_for_disposition(
     *,
     writer_evidence: Mapping[str, Any] | None = None,
     disposition_evidence: Mapping[str, Any] | None = None,
+    from_settled: str = "",
 ) -> dict[str, Any]:
-    """Map disposition evidence onto #4176 transition guard keys."""
+    """Map disposition evidence onto #4176 transition guard keys.
+
+    The mapping is origin-aware: a code-review origin requires
+    ``owner_ended`` plus ``next_action_recorded`` (not the in-progress
+    writer/handoff keys), so review-owner recovery carries its required
+    guard evidence instead of always failing with ``missing_guard``.
+    """
     _ = writer_evidence
     data = dict(disposition_evidence or {})
+    origin = _string(from_settled).lower().replace("-", "_").replace(" ", "_")
+    if origin == "code_review" and target in {DISPOSITION_RECOVERY_NEEDED, DISPOSITION_NEEDS_ATTENTION}:
+        return {
+            "owner_ended": _truthy(
+                data.get("ownerEnded", data.get("owner_ended", data.get("reviewOwnerEnded", data.get("review_owner_ended"))))
+            ),
+            "next_action_recorded": _truthy(data.get("nextActionRecorded", data.get("next_action_recorded")))
+            or bool(_string(data.get("nextAction", data.get("next_action")))),
+        }
     if target == DISPOSITION_RECOVERY_NEEDED:
         return {
             "writers_stopped": True,
@@ -957,6 +1006,7 @@ def _transition_evidence_for_disposition(
 __all__ = [
     "ABRUPT_OUTCOME_ALIASES",
     "ADMITTED_SAVE_METHODS",
+    "APPROVED_TRUE_TOKENS",
     "AUXILIARY_FAILURE_KINDS",
     "COMPLETION_PARENT_PR_AND_MERGE",
     "COMPLETION_PR_ONLY",
