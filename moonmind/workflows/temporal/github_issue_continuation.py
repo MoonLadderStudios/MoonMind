@@ -28,7 +28,9 @@ from typing import Any, Mapping, Sequence
 # ---------------------------------------------------------------------------
 
 #: Candidate bases that are never sufficient canonical-work evidence on their
-#: own (issue required work item 1).
+#: own (issue required work item 1). The check below is a whitelist: only the
+#: validated attempt-lineage plus direct-read basis is sufficient, and every
+#: other (including unknown future) basis is rejected.
 INSUFFICIENT_EVIDENCE_KINDS = frozenset(
     {
         "title_match",
@@ -38,15 +40,32 @@ INSUFFICIENT_EVIDENCE_KINDS = frozenset(
     }
 )
 
-#: Next actions produced by discovery/routing.
-NEXT_CONTINUE_SAME_PR = "continue_same_pr"
-NEXT_VERIFY_ONLY = "verify_only"
-NEXT_FINALIZE_ONLY = "finalize_only"
-NEXT_CREATE_PR_FROM_SAVED = "create_pr_from_saved"
-NEXT_FRESH_IMPLEMENT = "fresh_implement"
-NEXT_NEEDS_ATTENTION = "needs_attention"
-NEXT_OWNER_RECOVERY = "owner_recovery"
-NEXT_BLOCKED = "blocked"
+#: The only sufficient discovery basis: validated attempt lineage plus a direct
+#: GitHub read. Compared after the same normalization as the input
+#: (lowercase, spaces/dashes to underscores).
+SUFFICIENT_EVIDENCE_BASES = frozenset(
+    {
+        "attempt_lineage+github_read",
+        "attempt_lineage_github_read",
+    }
+)
+
+#: Next actions use the canonical portable handoff vocabulary
+#: (``github_issue_attempt.NEXT_ACTIONS``: ``fresh-retry``,
+#: ``continue-implementation``, ``verify``, ``continue-review``,
+#: ``finalize-status``, ``obtain-operator-attention``) so a routing result can
+#: be copied into an ``AttemptHandoff`` without rejection or silent conversion
+#: to ``continue_implementation``. Phases that share one canonical action share
+#: its value; the finer-grained distinction stays in the ``detail``/``summary``
+#: fields and the preserved ``saved_branch``/``saved_sha`` evidence.
+NEXT_CONTINUE_SAME_PR = "continue-implementation"
+NEXT_VERIFY_ONLY = "verify"
+NEXT_FINALIZE_ONLY = "finalize-status"
+NEXT_CREATE_PR_FROM_SAVED = "continue-implementation"
+NEXT_FRESH_IMPLEMENT = "fresh-retry"
+NEXT_NEEDS_ATTENTION = "obtain-operator-attention"
+NEXT_OWNER_RECOVERY = "obtain-operator-attention"
+NEXT_BLOCKED = "obtain-operator-attention"
 
 #: PR states observed through direct GitHub reads.
 PR_STATE_OPEN = "open"
@@ -194,7 +213,7 @@ def discover_existing_work(
     except (TypeError, ValueError):
         issue_no = 0
     basis = _text(candidate_basis).lower().replace(" ", "_").replace("-", "_")
-    if basis in INSUFFICIENT_EVIDENCE_KINDS:
+    if basis not in SUFFICIENT_EVIDENCE_BASES:
         return DiscoveryResult(
             trusted=False,
             reason_code="insufficient_evidence",
@@ -241,6 +260,38 @@ def discover_existing_work(
                 detail="No preserved PR or saved branch in validated lineage.",
             ),
         )
+    if not pr_number and saved_branch:
+        # Saved-branch-only lineage (failure before PR creation): the usable
+        # preserved work routes to saved-seeded continuation, never a silent
+        # fresh start and never blocked for a nonexistent PR object. The
+        # trusted boundary must still validate the GitHub-accessible branch
+        # evidence before creating the PR under the admitted publication
+        # policy.
+        return DiscoveryResult(
+            trusted=True,
+            reason_code="saved_branch_only",
+            summary=(
+                f"Validated lineage records saved branch '{saved_branch}' "
+                "with no PR; continue preserved work and create the PR only "
+                "under the admitted publication policy."
+            ),
+            existing_work=ExistingWork(
+                repository=repo,
+                issue_number=issue_no,
+                head_branch=saved_branch,
+                head_sha=saved_sha,
+                base=base,
+                saved_branch=saved_branch,
+                saved_sha=saved_sha,
+                gate_evidence=dict(gate_evidence or {}),
+                next_action=NEXT_CREATE_PR_FROM_SAVED,
+                evidence_source="attempt_lineage+saved_branch",
+                detail=(
+                    "Saved-branch-only preserved work; create the normal PR "
+                    "only under the admitted publication policy."
+                ),
+            ),
+        )
     if github_pr is None:
         # GitHub objects that cannot be read are not treated as absent work;
         # the next action is attention, never a silent fresh start.
@@ -279,6 +330,19 @@ def discover_existing_work(
         head_data.get("repo"), Mapping
     ):
         head_repo = _text(head_data["repo"].get("full_name"))
+    if pr_number and (not read_head or not read_head_sha):
+        # A direct read that names the expected PR but omits the current head
+        # ref or revision is incomplete identity evidence: trusting it would
+        # publish an empty workspace_revision and fall back to mutable branch
+        # state instead of the promised exact-head workspace.
+        return DiscoveryResult(
+            trusted=False,
+            reason_code="github_unavailable",
+            summary=(
+                "Direct GitHub read omits the current head ref or revision; "
+                "requires attention rather than trusting an empty revision."
+            ),
+        )
     read_state = _text(github_pr.get("state")).lower()
     merged = bool(github_pr.get("merged"))
     if merged:
@@ -407,6 +471,19 @@ def route_continuation(
             reuse_accepted_work=True,
             must_not_duplicate_pr=True,
             summary="PR is not writable; requires explicit disposition.",
+        )
+    if implementation_complete and verification_current:
+        return ContinuationRouting(
+            next_action=NEXT_FINALIZE_ONLY,
+            workspace_revision=existing_work.head_sha,
+            reassess_requirements=True,
+            reuse_accepted_work=True,
+            must_not_duplicate_pr=True,
+            summary=(
+                "Implementation is complete and verification is current; "
+                "perform only the missing handoff/status finalization on the "
+                "same PR instead of reimplementing."
+            ),
         )
     if implementation_complete and not verification_current:
         return ContinuationRouting(
@@ -572,6 +649,8 @@ def resolve_lost_pr_creation(
     *,
     intended_head: Any = "",
     intended_base: Any = "",
+    intended_head_repo: Any = "",
+    intended_head_sha: Any = "",
     observed_prs: Sequence[Mapping[str, Any]] | None = None,
     publication_record_saved: bool = False,
 ) -> LostCreationResolution:
@@ -580,10 +659,14 @@ def resolve_lost_pr_creation(
     The intended publication-branch identity (preserved through the existing
     publication record and portable handoff) is inspected on a lost creation
     response or crash before saving the PR number. Ambiguous identities stay
-    blocked; a second PR is never created to reconcile the loss.
+    blocked; a second PR is never created to reconcile the loss. Branch refs
+    are not globally unique across forks, so adoption also compares the head
+    repository (and the pinned revision when supplied) before adopting.
     """
     head = _text(intended_head)
     base = _text(intended_base)
+    want_repo = _text(intended_head_repo)
+    want_sha = _text(intended_head_sha)
     if not head or not base:
         return LostCreationResolution(
             outcome="blocked_ambiguous",
@@ -611,13 +694,32 @@ def resolve_lost_pr_creation(
         base_ref = (
             _text(item_base.get("ref")) if isinstance(item_base, Mapping) else ""
         )
-        if head_ref == head and base_ref == base:
-            try:
-                number = int(item.get("number"))  # type: ignore[arg-type]
-            except (TypeError, ValueError):
+        if head_ref != head or base_ref != base:
+            continue
+        if isinstance(item_head, Mapping):
+            observed_repo = (
+                _text(item_head["repo"].get("full_name"))
+                if isinstance(item_head.get("repo"), Mapping)
+                else ""
+            )
+            observed_sha = _text(item_head.get("sha"))
+        else:
+            observed_repo = ""
+            observed_sha = ""
+        if want_repo:
+            # Fork PRs can share branch/base names; without a verified head
+            # repository the identity is ambiguous and must not be adopted.
+            if not observed_repo or observed_repo != want_repo:
                 continue
-            if number > 0:
-                matches.append(number)
+        if want_sha:
+            if not observed_sha or observed_sha != want_sha:
+                continue
+        try:
+            number = int(item.get("number"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            matches.append(number)
     if len(matches) == 1:
         return LostCreationResolution(
             outcome="adopt_existing",
@@ -903,11 +1005,17 @@ def check_publication_scope(
             owner_recovery_report=False,
             summary="Local-only scope; no remote effects requested.",
         )
+    # Fail closed: an unrecognized scalar scope (for example a malformed or
+    # unsupported persisted value such as "typo") authorizes no remote effect
+    # rather than every requested operation.
     return PublicationScopeDecision(
-        allowed=wanted,
-        qualified_local_save=False,
-        owner_recovery_report=False,
-        summary="Requested operations are within the authored scope.",
+        allowed=[],
+        qualified_local_save=True,
+        owner_recovery_report=True,
+        summary=(
+            f"Unrecognized publication scope '{scope_text}'; no push, PR, or "
+            "merge is authorized."
+        ),
     )
 
 
@@ -1022,8 +1130,72 @@ def bind_verification_to_revision(
     )
 
 
+# ---------------------------------------------------------------------------
+# Admission-boundary adapter (production consumption entrypoint)
+# ---------------------------------------------------------------------------
+
+
+def plan_issue_continuation(
+    *,
+    repository: str,
+    issue_number: int,
+    lineage_validated: bool,
+    lineage_pr_url: Any = "",
+    lineage_pr_head: Any = "",
+    lineage_pr_base: Any = "",
+    lineage_saved_branch: Any = "",
+    lineage_saved_sha: Any = "",
+    candidate_basis: Any = "attempt_lineage+github_read",
+    github_pr: Mapping[str, Any] | None = None,
+    gate_evidence: Mapping[str, Any] | None = None,
+    implementation_complete: bool = False,
+    verification_current: bool = False,
+    writable: bool = True,
+) -> dict[str, Any]:
+    """Discover trusted existing work and route it to its remaining phase.
+
+    Admission-boundary entrypoint consumed by the issue lifecycle
+    (``github_issue_lifecycle.preserved_work_continuation``): the caller passes
+    the validated attempt lineage and the direct GitHub PR read, and receives
+    the typed discovery result plus same-PR phase routing. Routing applies to
+    trusted open PRs; every other trusted outcome (saved-branch-only, merged,
+    fresh) is carried by the discovery ``nextAction`` and needs no same-PR
+    routing. Deterministic and side-effect-free.
+    """
+    discovery = discover_existing_work(
+        repository=repository,
+        issue_number=issue_number,
+        lineage_validated=lineage_validated,
+        lineage_pr_url=lineage_pr_url,
+        lineage_pr_head=lineage_pr_head,
+        lineage_pr_base=lineage_pr_base,
+        lineage_saved_branch=lineage_saved_branch,
+        lineage_saved_sha=lineage_saved_sha,
+        candidate_basis=candidate_basis,
+        github_pr=github_pr,
+        gate_evidence=gate_evidence,
+    )
+    routing: ContinuationRouting | None = None
+    if (
+        discovery.trusted
+        and discovery.existing_work is not None
+        and discovery.existing_work.pr_state == PR_STATE_OPEN
+    ):
+        routing = route_continuation(
+            discovery.existing_work,
+            implementation_complete=implementation_complete,
+            verification_current=verification_current,
+            writable=writable,
+        )
+    return {
+        "discovery": discovery.to_dict(),
+        "routing": routing.to_dict() if routing is not None else None,
+    }
+
+
 __all__ = [
     "INSUFFICIENT_EVIDENCE_KINDS",
+    "SUFFICIENT_EVIDENCE_BASES",
     "NEXT_CONTINUE_SAME_PR",
     "NEXT_VERIFY_ONLY",
     "NEXT_FINALIZE_ONLY",
@@ -1064,4 +1236,5 @@ __all__ = [
     "check_merge_transfer",
     "VerificationBinding",
     "bind_verification_to_revision",
+    "plan_issue_continuation",
 ]
