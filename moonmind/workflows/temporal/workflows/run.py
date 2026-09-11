@@ -16647,6 +16647,10 @@ class MoonMindRunWorkflow:
                 self._effective_result_outputs(execution_result)
             )
             if deferred_reason is not None:
+                if self._has_required_failed_finalization():
+                    # A required after-execution checkpoint already failed:
+                    # keep the authoritative failure instead of deferring.
+                    return
                 self._publish_status = "not_required"
                 self._publish_reason = deferred_reason
                 return
@@ -16815,6 +16819,19 @@ class MoonMindRunWorkflow:
             return None
         return self._terminal_publication_deferred_reason(outputs)
 
+    def _has_required_failed_finalization(self) -> bool:
+        for row in self._step_ledger_rows:
+            if not isinstance(row, dict):
+                continue
+            outcome = row.get("finalizationOutcome")
+            if (
+                isinstance(outcome, Mapping)
+                and outcome.get("status") == "failed"
+                and outcome.get("criticality") == "required"
+            ):
+                return True
+        return False
+
     def _apply_deferred_publication(
         self,
         *,
@@ -16822,6 +16839,20 @@ class MoonMindRunWorkflow:
         logical_step_id: str | None = None,
         updated_at: datetime | None = None,
     ) -> None:
+        if logical_step_id is not None:
+            row = self._step_ledger_row_for(logical_step_id)
+            if (
+                isinstance(row, dict)
+                and isinstance(row.get("finalizationOutcome"), Mapping)
+                and row["finalizationOutcome"].get("status") == "failed"
+                and row["finalizationOutcome"].get("criticality") == "required"
+            ):
+                # A required checkpoint or publication failure is authoritative:
+                # a later validated continuation must not replace it with a
+                # deferred outcome, otherwise the real failure is masked.
+                return
+        elif self._has_required_failed_finalization():
+            return
         self._publish_status = "not_required"
         self._publish_reason = reason
         if logical_step_id is not None:
@@ -16859,6 +16890,8 @@ class MoonMindRunWorkflow:
                 self._effective_result_outputs(execution_result)
             )
             if deferred_reason is not None:
+                if self._has_required_failed_finalization():
+                    return
                 self._publish_status = "not_required"
                 self._publish_reason = deferred_reason
                 return
