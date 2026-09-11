@@ -94,46 +94,70 @@ async def resolve_managed_github_token_from_store() -> str | None:
                 return candidate
     return None
 
+async def _read_ghcr_pull_pair_once(session: Any) -> tuple[str | None, str | None]:
+    """Read the ``GHCR_PULL_USER``/``GHCR_PULL_TOKEN`` slugs once.
+
+    Returns the raw ``(user, token)`` pair with ``None`` for unconfigured
+    slugs. Callers must verify coherence across reads; a single read alone is
+    never proof of a stable configuration revision.
+    """
+
+    from sqlalchemy import select
+
+    from api_service.db.models import ManagedSecret, SecretStatus
+
+    user_value: str | None = None
+    token_value: str | None = None
+    for slugs, target in (
+        (_MANAGED_GHCR_PULL_USER_SLUGS, "user"),
+        (_MANAGED_GHCR_PULL_TOKEN_SLUGS, "token"),
+    ):
+        found: str | None = None
+        for slug in slugs:
+            normalized = str(slug or "").strip()
+            if not normalized:
+                continue
+            result = await session.execute(
+                select(ManagedSecret).where(
+                    ManagedSecret.slug == normalized,
+                    ManagedSecret.status == SecretStatus.ACTIVE,
+                )
+            )
+            secret = result.scalar_one_or_none()
+            candidate = str(secret.ciphertext if secret else "").strip()
+            if candidate:
+                found = candidate
+                break
+        if target == "user":
+            user_value = found
+        else:
+            token_value = found
+    return user_value, token_value
+
+
 async def _resolve_managed_ghcr_pull_pair() -> tuple[str | None, str | None]:
     """Read the ``GHCR_PULL_USER``/``GHCR_PULL_TOKEN`` managed slugs coherently.
 
     Both slugs are read inside one managed-secret store session so the two
     values form one selected configuration revision instead of two independent
-    reads that could straddle a rotation. Store outages propagate to the
-    caller (fail closed); they are never treated as "no credentials".
+    reads that could straddle a rotation. The pair is read twice and compared:
+    a change between the reads (rotation, disable, or rewrite landing between
+    them) raises instead of returning a mixed pair. Store outages propagate to
+    the caller (fail closed); they are never treated as "no credentials".
     """
 
     from api_service.db.base import async_session_maker
-    from api_service.db.models import ManagedSecret, SecretStatus
 
     async with async_session_maker() as session:
-        user_value: str | None = None
-        token_value: str | None = None
-        for slugs, target in (
-            (_MANAGED_GHCR_PULL_USER_SLUGS, "user"),
-            (_MANAGED_GHCR_PULL_TOKEN_SLUGS, "token"),
-        ):
-            found: str | None = None
-            for slug in slugs:
-                normalized = str(slug or "").strip()
-                if not normalized:
-                    continue
-                result = await session.execute(
-                    select(ManagedSecret).where(
-                        ManagedSecret.slug == normalized,
-                        ManagedSecret.status == SecretStatus.ACTIVE,
-                    )
-                )
-                secret = result.scalar_one_or_none()
-                candidate = str(secret.ciphertext if secret else "").strip()
-                if candidate:
-                    found = candidate
-                    break
-            if target == "user":
-                user_value = found
-            else:
-                token_value = found
-    return user_value, token_value
+        first = await _read_ghcr_pull_pair_once(session)
+        second = await _read_ghcr_pull_pair_once(session)
+        if first != second:
+            raise ValueError(
+                "GHCR pull managed secrets changed during resolution "
+                "(possible rotation between paired reads); refusing to use "
+                "a mixed user/token pair"
+            )
+    return first
 
 
 async def resolve_ghcr_pull_credentials_for_launch(
@@ -180,7 +204,8 @@ async def resolve_ghcr_pull_credentials_for_launch(
     2. Deployment plaintext pair from process environment (``GHCR_PULL_USER`` +
        ``GHCR_PULL_TOKEN`` as set by the operator for the deployment).
     3. Managed-secret slug pair (``GHCR_PULL_USER`` + ``GHCR_PULL_TOKEN``),
-       read coherently in one store session.
+        read coherently in one store session and verified stable across the
+        paired reads (a rotation landing between reads raises).
     4. Omitted configuration: return ``None`` for the public-anonymous path,
        which performs no registry authentication and queries no secret store
        beyond the GHCR slug lookup above.
@@ -275,6 +300,12 @@ async def resolve_ghcr_pull_credentials_for_launch(
     try:
         stored_user, stored_token = await _resolve_managed_ghcr_pull_pair()
     except asyncio.CancelledError:
+        raise
+    except ValueError:
+        # Coherence failures (partial pair reads, rotation detected between
+        # the paired reads) already describe the registry-boundary outcome;
+        # never relabel them as a store outage or fall back to another
+        # identity.
         raise
     except Exception as exc:
         raise ValueError(
