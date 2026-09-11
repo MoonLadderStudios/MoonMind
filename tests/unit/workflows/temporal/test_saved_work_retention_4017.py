@@ -680,3 +680,215 @@ async def test_retention_graph_helpers_reject_unsafe_shapes() -> None:
     )
     assert ttl <= retention.SAVED_WORK_MAX_DOWNLOAD_TTL_SECONDS
     assert "does not retract" in statement
+
+
+async def test_bare_service_denied_across_data_plane_with_admitted_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Uniform owner policy on every data surface; scope must be carried.
+
+    A bare ``service:`` principal without ``admitted_principal`` cannot
+    read, stream, download, preview, or list another owner's quarantined
+    artifact, and ``allow_restricted_raw=True`` never bypasses that.
+    Carrying the admitted user scope through the same calls succeeds.
+    """
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = _service(session, tmp_path)
+            artifact = await _complete_artifact(
+                service,
+                principal="owner-1",
+                payload=b"quarantined-bytes",
+                redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+                metadata_json={"quarantine": "true"},
+            )
+            bare = "service:restore-worker"
+
+            for call in (
+                service.read(artifact_id=artifact.artifact_id, principal=bare),
+                service.read(
+                    artifact_id=artifact.artifact_id,
+                    principal=bare,
+                    allow_restricted_raw=True,
+                ),
+                service.read_chunks(
+                    artifact_id=artifact.artifact_id, principal=bare
+                ),
+                service.read_path(
+                    artifact_id=artifact.artifact_id, principal=bare
+                ),
+                service.get_metadata(
+                    artifact_id=artifact.artifact_id, principal=bare
+                ),
+                service.presign_download(
+                    artifact_id=artifact.artifact_id, principal=bare
+                ),
+                service.compute_preview(
+                    artifact_id=artifact.artifact_id, principal=bare
+                ),
+            ):
+                with pytest.raises(TemporalArtifactAuthorizationError):
+                    await call
+
+            # Listing surfaces filter instead of leaking the row.
+            listed, _total = await service.list_authorized_collection(
+                principal=bare, category="artifacts", query=None, offset=0, limit=50
+            )
+            assert artifact.artifact_id not in {
+                item.artifact_id for item, _links in listed
+            }
+
+            # Carrying the admitted user scope succeeds on every surface.
+            _meta, payload = await service.read(
+                artifact_id=artifact.artifact_id,
+                principal=bare,
+                admitted_principal="owner-1",
+            )
+            assert payload == b"quarantined-bytes"
+            _meta, _chunks = await service.read_chunks(
+                artifact_id=artifact.artifact_id,
+                principal=bare,
+                admitted_principal="owner-1",
+            )
+            _meta, _path = await service.read_path(
+                artifact_id=artifact.artifact_id,
+                principal=bare,
+                admitted_principal="owner-1",
+            )
+            _meta, _links, _pinned, policy = await service.get_metadata(
+                artifact_id=artifact.artifact_id,
+                principal=bare,
+                admitted_principal="owner-1",
+            )
+            assert policy is not None
+            _art, _expires, url = await service.presign_download(
+                artifact_id=artifact.artifact_id,
+                principal=bare,
+                admitted_principal="owner-1",
+            )
+            assert url
+            preview = await service.compute_preview(
+                artifact_id=artifact.artifact_id,
+                principal=bare,
+                admitted_principal="owner-1",
+            )
+            assert preview.artifact_id != artifact.artifact_id
+            listed_admitted, _total = await service.list_authorized_collection(
+                principal=bare,
+                admitted_principal="owner-1",
+                category="artifacts",
+                query=None,
+                offset=0,
+                limit=50,
+            )
+            assert artifact.artifact_id in {
+                item.artifact_id for item, _links in listed_admitted
+            }
+
+
+async def test_phantom_insert_blocked_across_transactions_during_hard_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Insert-vs-delete protocol across independent transactions.
+
+    Session A hard-deletes a content-addressed blob with a failing object
+    store, leaving a committed tombstone + deletion intent. Session B, on an
+    independent connection to the same database file, must refuse to attach
+    a phantom logical reference to the same storage key until the sweeper
+    reconciles; the retry then re-uploads bytes instead of pointing at
+    removed objects.
+    """
+    monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
+    db_path = tmp_path / "phantom_race.db"
+    db_url = f"sqlite+aiosqlite:///{db_path}"
+    engine_a = create_async_engine(db_url, future=True)
+    engine_b = create_async_engine(db_url, future=True)
+    try:
+        async with engine_a.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        maker_a = sessionmaker(
+            engine_a, class_=AsyncSession, expire_on_commit=False
+        )
+        maker_b = sessionmaker(
+            engine_b, class_=AsyncSession, expire_on_commit=False
+        )
+        payload = b"phantom-shared-bytes"
+        digest = hashlib.sha256(payload).hexdigest()
+
+        async with maker_a() as session_a:
+            service_a = _service(session_a, tmp_path)
+            artifact_a = await _complete_artifact(
+                service_a,
+                principal="owner-1",
+                payload=payload,
+                content_addressed_scope="saved-work",
+                size_bytes=len(payload),
+                sha256=digest,
+            )
+            storage_key = artifact_a.storage_key
+            await service_a.soft_delete(
+                artifact_id=artifact_a.artifact_id, principal="owner-1"
+            )
+            real_delete = service_a._store.delete
+
+            def _flaky_delete(_storage_key: str) -> None:
+                raise OSError("object-store unavailable")
+
+            monkeypatch.setattr(service_a._store, "delete", _flaky_delete)
+            with pytest.raises(TemporalArtifactStateError, match="DELETE_RETRY"):
+                await service_a.hard_delete(
+                    artifact_id=artifact_a.artifact_id, principal="owner-1"
+                )
+            monkeypatch.setattr(service_a._store, "delete", real_delete)
+
+        # Independent transaction observes the committed intent and refuses.
+        async with maker_b() as session_b:
+            service_b = _service(session_b, tmp_path)
+            assert await service_b._repository.has_pending_deletion_for_storage_key(
+                storage_backend=artifact_a.storage_backend,
+                storage_key=storage_key,
+            )
+            with pytest.raises(
+                TemporalArtifactStateError, match="SAVED_WORK_STORAGE_RACE"
+            ):
+                await service_b.create(
+                    principal="owner-1",
+                    content_type="application/octet-stream",
+                    size_bytes=len(payload),
+                    sha256=digest,
+                    content_addressed_scope="saved-work",
+                )
+            await session_b.rollback()
+
+        # Sweeper reconciliation converges the failed delete (bytes removed,
+        # intent cleared); the retry then re-uploads instead of dangling.
+        async with maker_a() as session_a2:
+            service_a2 = _service(session_a2, tmp_path)
+            reconciled = await service_a2.reconcile_deletion_intents(
+                principal="service:lifecycle"
+            )
+            assert reconciled >= 1
+
+        async with maker_b() as session_b2:
+            service_b2 = _service(session_b2, tmp_path)
+            retried, _upload = await service_b2.create(
+                principal="owner-1",
+                content_type="application/octet-stream",
+                size_bytes=len(payload),
+                sha256=digest,
+                content_addressed_scope="saved-work",
+            )
+            completed = await service_b2.write_complete(
+                artifact_id=retried.artifact_id,
+                principal="owner-1",
+                payload=payload,
+                content_type="application/octet-stream",
+            )
+            _meta, kept = await service_b2.read(
+                artifact_id=completed.artifact_id, principal="owner-1"
+            )
+            assert kept == payload
+    finally:
+        await engine_a.dispose()
+        await engine_b.dispose()
