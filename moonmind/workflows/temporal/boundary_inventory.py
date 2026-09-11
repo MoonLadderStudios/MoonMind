@@ -222,6 +222,28 @@ _CONTRACTS: tuple[TemporalBoundaryContract, ...] = (
         rationale="Existing API-facing update model still carries bounded patch fields while workflow call sites migrate.",
         metadataFields=("parametersPatch",),
     ),
+    TemporalBoundaryContract(
+        kind="update",
+        name="SetTitle",
+        owner="MoonMind.UserWorkflow",
+        requestModel=_model(
+            module=_TEMPORAL_MODELS,
+            name="UpdateExecutionRequest",
+            role="request",
+        ),
+        responseModel=_model(
+            module=_TEMPORAL_MODELS,
+            name="UpdateExecutionResponse",
+            role="response",
+        ),
+        status="modeled",
+        schemaHome=_TEMPORAL_MODELS,
+        coverageIds=("DESIGN-REQ-001", "DESIGN-REQ-002", "DESIGN-REQ-008"),
+        rationale="MoonLadderStudios/MoonMind#4099: canonical display-title update "
+        "with the shared workflow-owned transition (manual rename and "
+        "automatic issue-search enrichment); object payload carrying title.",
+        metadataFields=("title",),
+    ),
 )
 
 _INVENTORY = TemporalBoundaryInventory(
