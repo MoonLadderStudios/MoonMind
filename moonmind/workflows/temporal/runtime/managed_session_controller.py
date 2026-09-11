@@ -959,6 +959,8 @@ class DockerCodexManagedSessionController:
             try:
                 os.close(fd)
             except OSError:
+                # fd may already be closed by fdopen failure path; the
+                # config dir removal below is the authoritative cleanup.
                 pass
             shutil.rmtree(config_dir, ignore_errors=True)
             raise
@@ -2848,7 +2850,6 @@ class DockerCodexManagedSessionController:
             # in `docker run`; remove it before the session is usable so no
             # registry credential lingers on the host beyond launch.
             self._remove_ghcr_pull_config(ghcr_config_dir)
-            ghcr_config_dir = None
         try:
             await self._wait_ready(container_id=container_id)
             container_job_capability_metadata = {

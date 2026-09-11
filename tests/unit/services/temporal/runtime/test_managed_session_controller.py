@@ -7233,6 +7233,7 @@ def test_active_session_observations_merges_authoritative_intervention_journal()
     assert observations[-1]["metadata"]["auditRef"] == "artifact://interventions/request-1"
 
 
+@pytest.mark.asyncio
 async def test_launch_session_uses_ephemeral_ghcr_config_for_private_image(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
