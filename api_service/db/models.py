@@ -5144,6 +5144,12 @@ class RepositoryConnectionRecord(Base):
     credential_config: Mapped[dict[str, Any]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
     )
+    projection_policy: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True, default=None
+    )
+    merge_coordinator_policy: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        mutable_json_dict(), nullable=True, default=None
+    )
     lifecycle: Mapped[str] = mapped_column(
         String(16), nullable=False, default="active", server_default="active"
     )
@@ -5222,18 +5228,19 @@ class RepositoryConnectionAssignment(Base):
 class RepositoryRouteDefault(Base):
     """At most one default per (scope, repository, capability bundle).
 
-    ``scope_ref`` is NULL for system scope (NULLs are distinct under both
-    SQLite and Postgres unique indexes per the nullable-key contract, and the
-    service normalizes system scope to NULL so the uniqueness rule holds).
-    ``capability_bundle`` is the sorted, comma-joined operation bundle so one
-    role cannot split reads and writes across different credentials.
+    ``scope_ref`` is NULL for system scope, and NULLs compare distinct under
+    both SQLite and Postgres unique indexes, so the uniqueness key uses the
+    non-null ``scope_key`` (``"system"`` or ``"workspace:<ref>"``) instead of
+    the raw nullable ``scope_ref``.  ``scope_type``/``scope_ref`` remain as
+    readable data columns.  ``capability_bundle`` is the sorted, comma-joined
+    operation bundle so one role cannot split reads and writes across
+    different credentials.
     """
 
     __tablename__ = "repository_route_defaults"
     __table_args__ = (
         UniqueConstraint(
-            "scope_type",
-            "scope_ref",
+            "scope_key",
             "endpoint_normalized",
             "repo_key",
             "capability_bundle",
@@ -5245,6 +5252,7 @@ class RepositoryRouteDefault(Base):
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     scope_type: Mapped[str] = mapped_column(String(16), nullable=False)
     scope_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    scope_key: Mapped[str] = mapped_column(String(300), nullable=False)
     endpoint_normalized: Mapped[str] = mapped_column(String(1024), nullable=False)
     repo_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     capability_bundle: Mapped[str] = mapped_column(String(1024), nullable=False)

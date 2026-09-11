@@ -63,6 +63,8 @@ def upgrade() -> None:
         sa.Column("allowed_operations", sa.JSON(), nullable=False),
         sa.Column("client_policy", sa.JSON(), nullable=False),
         sa.Column("credential_config", sa.JSON(), nullable=False),
+        sa.Column("projection_policy", sa.JSON(), nullable=True),
+        sa.Column("merge_coordinator_policy", sa.JSON(), nullable=True),
         sa.Column(
             "lifecycle",
             sa.String(length=16),
@@ -165,6 +167,10 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("scope_type", sa.String(length=16), nullable=False),
         sa.Column("scope_ref", sa.String(length=255), nullable=True),
+        # Non-null uniqueness key ("system" or "workspace:<ref>"): NULL
+        # scope_ref values compare distinct in unique indexes on both
+        # PostgreSQL and SQLite, so the uniqueness constraint keys on this.
+        sa.Column("scope_key", sa.String(length=300), nullable=False),
         sa.Column("endpoint_normalized", sa.String(length=1024), nullable=False),
         sa.Column("repo_key", sa.String(length=1024), nullable=False),
         sa.Column("capability_bundle", sa.String(length=1024), nullable=False),
@@ -190,8 +196,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
-            "scope_type",
-            "scope_ref",
+            "scope_key",
             "endpoint_normalized",
             "repo_key",
             "capability_bundle",
