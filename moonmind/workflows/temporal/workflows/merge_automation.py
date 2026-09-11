@@ -669,6 +669,24 @@ class MoonMindMergeAutomationWorkflow:
         self._resolver_verdict_cycles.append(cycle)
         return cycle
 
+    @staticmethod
+    def _normalize_remediation_artifact_ref(value: Any) -> str:
+        """Normalize a terminal evidence ref to an ``artifact://`` ref.
+
+        The runtime materializer only recognizes top-level ``gateResultRef`` /
+        ``remainingWorkRef`` values using the ``artifact://`` scheme, while the
+        ``remediate-issue`` Skill requires materialized local paths and stops
+        when it receives only an unreadable reference.
+        """
+
+        candidate = str(value or "").strip()
+        if not candidate:
+            return ""
+        if candidate.startswith("artifact://"):
+            remainder = candidate.removeprefix("artifact://").strip()
+            return candidate if remainder else ""
+        return f"artifact://{candidate}"
+
     def _build_remediation_run_request(
         self,
         *,
@@ -677,42 +695,82 @@ class MoonMindMergeAutomationWorkflow:
     ) -> dict[str, Any]:
         """Build a bounded remediate-issue child request from Skill evidence.
 
-        The Skill's validated evidence ref becomes the remediation
-        ``remainingWorkPath``; MoonMind only routes, it never reclassifies the
-        blocker or invents a fix plan.
+        The Skill's validated evidence ref is routed through the supported
+        ``gateResultRef`` / ``remainingWorkRef`` fields so the Activity can
+        materialize it, and the child runs in the authoritative PR-head
+        workspace with a workflow-owned publication handoff. MoonMind only
+        routes, it never reclassifies the blocker or invents a fix plan.
         """
 
         pr = self._input.pull_request if self._input is not None else None
+        evidence_ref = self._normalize_remediation_artifact_ref(
+            verdict.get("terminalContractEvidenceRef")
+        )
+        head_sha = str(verdict.get("headSha") or "").strip()
+        final_reason = str(verdict.get("finalReason") or "").strip()
+        repo = pr.repo if pr is not None else ""
+        head_branch = (
+            str(pr.head_branch or "").strip()
+            if pr is not None and pr.head_branch
+            else ""
+        )
+        base_branch = (
+            str(pr.base_branch or "").strip()
+            if pr is not None and pr.base_branch
+            else ""
+        )
+        target_branch = head_branch or base_branch
+        initial_parameters: dict[str, Any] = {
+            "repository": repo,
+            "repo": repo,
+            "publishMode": "auto",
+            "task": {
+                "instructions": (
+                    "Apply the bounded remediate-issue Skill contract to the "
+                    "validated pr-resolver terminal evidence. "
+                    f"Reason: {final_reason or 'unknown'}. "
+                    "Do not reimplement Skill semantics."
+                ),
+                "tool": {"type": "skill", "name": "remediate-issue"},
+                "skill": {
+                    "id": "remediate-issue",
+                    "args": {
+                        "gateResultRef": evidence_ref,
+                        "remainingWorkRef": evidence_ref,
+                        "remainingWorkPath": str(
+                            verdict.get("terminalContractEvidenceRef") or ""
+                        ),
+                        "headSha": head_sha,
+                        "finalReason": final_reason,
+                        "resolverChildWorkflowId": resolver_workflow_id,
+                    },
+                },
+                "publish": {"mode": "auto"},
+            },
+            "workspaceSpec": {
+                "repository": repo,
+                "branch": head_branch,
+                "startingBranch": base_branch or target_branch,
+                "targetBranch": target_branch,
+            },
+        }
+        if evidence_ref:
+            initial_parameters["gateResultRef"] = evidence_ref
+            initial_parameters["remainingWorkRef"] = evidence_ref
+        if pr is not None:
+            initial_parameters["mergeGate"] = {
+                "parentWorkflowId": self._resolver_parent_workflow_id(),
+                "pullRequestUrl": pr.url,
+                "headSha": head_sha or pr.head_sha,
+            }
         return {
             "workflowType": "MoonMind.UserWorkflow",
             "parentWorkflowId": self._resolver_parent_workflow_id(),
             "title": (
-                f"Remediate {verdict.get('finalReason') or 'pr-resolver blocker'} "
+                f"Remediate {final_reason or 'pr-resolver blocker'} "
                 f"for PR #{pr.number if pr is not None else '?'}"
             ),
-            "initial_parameters": {
-                "repository": pr.repo if pr is not None else "",
-                "task": {
-                    "instructions": (
-                        "Apply the bounded remediate-issue Skill contract to the "
-                        "validated pr-resolver terminal evidence. "
-                        f"Reason: {verdict.get('finalReason') or 'unknown'}. "
-                        "Do not reimplement Skill semantics."
-                    ),
-                    "tool": {"type": "skill", "name": "remediate-issue"},
-                    "skill": {
-                        "id": "remediate-issue",
-                        "args": {
-                            "remainingWorkPath": str(
-                                verdict.get("terminalContractEvidenceRef") or ""
-                            ),
-                            "headSha": str(verdict.get("headSha") or ""),
-                            "finalReason": str(verdict.get("finalReason") or ""),
-                            "resolverChildWorkflowId": resolver_workflow_id,
-                        },
-                    },
-                },
-            },
+            "initial_parameters": initial_parameters,
         }
 
     async def _run_bounded_remediation(
