@@ -183,9 +183,9 @@ def test_rejected_continuation_does_not_defer_publication(
 def test_deferred_ledger_outcome_validates_against_schema(
     deferred_workflow: MoonMindRunWorkflow,
 ) -> None:
-    """The deferred ledger row must pass StepLedgerSnapshotModel validation."""
+    """The deferred ledger row must pass StepFinalizationOutcomeModel validation."""
 
-    from moonmind.schemas.temporal_models import StepLedgerSnapshotModel
+    from moonmind.schemas.temporal_models import StepFinalizationOutcomeModel
 
     deferred_workflow._step_ledger_rows = [
         {
@@ -207,8 +207,9 @@ def test_deferred_ledger_outcome_validates_against_schema(
         reason=deferred_workflow._publish_reason or "deferred",
         logical_step_id="resolve-pr",
     )
-    ledger = deferred_workflow.get_step_ledger()
-    StepLedgerSnapshotModel.model_validate(ledger)
+    row = deferred_workflow._step_ledger_row_for("resolve-pr")
+    assert row is not None
+    StepFinalizationOutcomeModel.model_validate(row["finalizationOutcome"])
 
 
 def test_reenter_gate_completion_is_not_a_publication_failure(

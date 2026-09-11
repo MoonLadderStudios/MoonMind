@@ -16,7 +16,7 @@ import pytest
 
 pytest.importorskip("temporalio")
 
-from moonmind.schemas.temporal_models import StepLedgerSnapshotModel
+from moonmind.schemas.temporal_models import StepFinalizationOutcomeModel
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.run import (
     RUN_DEFER_PUBLICATION_ON_TERMINAL_CONTINUATION_PATCH,
@@ -111,7 +111,7 @@ def test_deferred_publication_replay_defers_on_new_history(
     assert outcome.get("failureCode") == want["failureCode"]
 
     # Ledger must validate for dashboard/API projection.
-    StepLedgerSnapshotModel.model_validate(workflow.get_step_ledger())
+    StepFinalizationOutcomeModel.model_validate(outcome)
 
     status, _message, failed = workflow._determine_publish_completion(
         parameters={"publishMode": "auto"}
