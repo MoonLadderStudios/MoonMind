@@ -630,6 +630,132 @@ def resolve_free_default_model(
     raise NoEligibleFreeModelError(last_reasons)
 
 
+def catalog_ids_from_evidence(evidence: Mapping[str, Any] | None) -> list[str]:
+    """Extract exact qualified model IDs from persisted catalog evidence.
+
+    MoonLadderStudios/MoonMind#4021 req-1/req-3: production consumers thread
+    the exact observed catalog (``model_catalog_evidence_json``) through this
+    helper so execution selection can require an exact qualified-ID match.
+    Only well-formed ``provider/model`` strings are returned, sorted and
+    deduplicated; name fragments, display labels, and a successful list
+    request alone never qualify. Returns [] when no persisted catalog exists,
+    in which case callers defer to exact-host qualification instead of
+    inventing eligibility.
+    """
+    if not isinstance(evidence, Mapping):
+        return []
+    models = evidence.get("models")
+    if not isinstance(models, list):
+        return []
+    ids: list[str] = []
+    for item in models:
+        if isinstance(item, Mapping):
+            qid = str(item.get("qualifiedId") or "").strip()
+        else:
+            qid = str(item or "").strip()
+        if qid and "/" in qid and len(qid) <= 255 and qid not in ids:
+            ids.append(qid)
+    return sorted(ids)
+
+
+def require_exact_catalog_match(
+    qualified_id: str,
+    catalog_ids: list[str],
+) -> str:
+    """Require the exact qualified ID in the observed catalog (fail closed).
+
+    Raises :class:`NoEligibleFreeModelError` with the availability axis when
+    the observed catalog is non-empty and lacks the ID. An empty catalog
+    (no persisted evidence yet) is not proof of absence: it raises
+    :class:`FreeModelUnavailableError` so the caller defers to exact-host
+    qualification instead of blocking or fabricating eligibility.
+    """
+    wanted = qualified_id.strip()
+    if catalog_ids:
+        if wanted not in catalog_ids:
+            raise NoEligibleFreeModelError(
+                {"availability": f"not_in_catalog:{wanted}"}
+            )
+        return wanted
+    raise FreeModelUnavailableError(
+        f"Credentialless {FREE_PROFILE_ID} model {wanted!r} has no persisted "
+        "exact-host catalog yet; deferring to exact-host qualification.",
+        requested=wanted,
+    )
+
+
+def free_model_launch_gate(
+    *,
+    qualified_id: str,
+    catalog_ids: list[str],
+    requested_effort: str,
+    env: Mapping[str, Any] | None = None,
+) -> tuple[str, str]:
+    """Production launch gate for the credentialless free route.
+
+    MoonLadderStudios/MoonMind#4021 req-1/req-3/req-4: combines the three
+    axes with real production evidence before a new model send:
+
+    - availability: exact qualified-ID match in the observed catalog; an
+      empty catalog defers to exact-host qualification (non-blocking here).
+    - capability: effort validated against the selected model's actual
+      supported values, never the seeded default.
+    - privacy: the recorded per-policy-version authorization from the
+      existing Settings authority.
+
+    Pricing is deliberately NOT evaluated here: no trusted pricing feed has
+    a production source yet, and fabricating a zero would violate req-2.
+    Pricing/capability-feed axes stay hermetic-tested until that feed exists.
+    Raises :class:`NoEligibleFreeModelError` (failing axis) or
+    :class:`FreeModelUnavailableError` (deferred catalog), never substitutes.
+    """
+    from moonmind.omnigent.bootstrap.opencode import validate_effort_for_model
+
+    wanted = qualified_id.strip()
+    try:
+        require_exact_catalog_match(wanted, catalog_ids)
+    except FreeModelUnavailableError:
+        # No persisted catalog yet: exact-host qualification owns the
+        # availability verdict; keep enforcing effort and privacy here.
+        pass
+    try:
+        effort = validate_effort_for_model(requested_effort.strip(), wanted)
+    except ValueError as exc:
+        raise NoEligibleFreeModelError(
+            {"capability": f"unsupported_effort:{requested_effort.strip()}"}
+        ) from exc
+    privacy_reason = zen_free_route_blocked_reason(FREE_PROVIDER_ID, env=env)
+    if privacy_reason is not None:
+        raise NoEligibleFreeModelError({"privacy": privacy_reason})
+    return wanted, effort
+
+
+def recheck_resolved_free_attempt(
+    resolved: Any,
+    *,
+    catalog: Any,
+    pricing: Mapping[str, Any] | None,
+    data_use_version: str,
+    selection_policy_version: str = SELECTION_POLICY_VERSION,
+) -> tuple[bool, str]:
+    """Recheck the frozen bundle persisted with an attempt, if any.
+
+    Returns (True, "no_frozen_attempt") when the attempt carries no bundle
+    so first-time qualification proceeds; otherwise delegates to
+    :func:`recheck_frozen_attempt` without rewriting active inputs.
+    """
+    frozen = frozen_attempt_from_resolved(resolved)
+    if frozen is None:
+        return True, "no_frozen_attempt"
+    return recheck_frozen_attempt(
+        frozen,
+        catalog=catalog,
+        pricing=pricing,
+        data_use_version=data_use_version,
+        selection_policy_version=selection_policy_version,
+    )
+
+
 __all__ = [
     "FREE_MATERIALIZER_REF",
     "FREE_PROFILE_ID",
@@ -650,15 +776,19 @@ __all__ = [
     "attach_frozen_attempt_to_resolved",
     "build_eligibility_input",
     "build_live_qualification_record",
+    "catalog_ids_from_evidence",
     "evaluate_data_use",
     "evaluate_eligibility",
     "evaluate_pricing",
     "format_no_eligible_free_model",
     "freeze_attempt",
+    "free_model_launch_gate",
     "frozen_attempt_from_resolved",
     "parse_cost_value",
     "rank_approved_candidates",
     "recheck_frozen_attempt",
+    "recheck_resolved_free_attempt",
+    "require_exact_catalog_match",
     "resolve_free_default_model",
     "zen_free_data_use_decision_from_settings",
     "zen_free_route_blocked_reason",

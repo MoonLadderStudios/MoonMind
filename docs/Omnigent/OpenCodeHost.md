@@ -429,6 +429,45 @@ behavior as production:
 
 MoonMind does not substitute a configured model when the provider catalog is empty. It does not silently select another model when the prior default disappears.
 
+### Credentialless free-route admission (MoonLadderStudios/MoonMind#4021)
+
+The `opencode-zen-free`/`none@1` route is admitted through one first-result
+path that reuses the existing owners; no new free-model profile family, no
+marketplace, and no new consent subsystem exist:
+
+- plan-time admission (`_enforce_free_route_exact_catalog`) requires the
+  selected model to appear exactly in the Provider Profile's persisted
+  exact-host catalog before launch. A persisted catalog that lacks the ID
+  fails closed with the `no_eligible_free_model` availability axis; a profile
+  with no persisted catalog yet defers to exact-host qualification.
+- bootstrap qualification (`_qualify_and_publish`) resolves the selected
+  model with `resolve_model_exact` against the exact observed catalog, then
+  freezes model ID, route/materializer, catalog/pricing/data-use evidence,
+  and selection-policy version with the admitted attempt
+  (`FrozenFreeModelAttempt` on `BootstrapResolved.freeModelAttempt`).
+  A previously frozen bundle is rechecked before the renewed attempt without
+  rewriting active inputs; expiry only refreshes the bundle at qualification
+  time, never swaps provider/model inside a billed request.
+- catalog readiness (`free_model_gate_reasons_for_profile`) surfaces the
+  blocking axes through the normal Runtime/Profile UI with a clear reason and
+  an explicit valid alternative: availability (exact catalog presence),
+  capability (default effort against the model's actual supported values),
+  and privacy (the recorded per-policy-version authorization from Settings).
+  Saturated capacity stays on `omnigent_capacity_wait` /
+  `profile_capacity_unavailable` as a wait state.
+
+Explicit scope: no trusted pricing feed has a production source yet, so
+production admission never fabricates a zero price. Pricing-axis evaluation
+and multi-candidate approved-set ranking (`rank_approved_candidates`) run
+hermetically against inline fixtures until that feed exists; production
+admission is the single-route blocked check above. Likewise
+`build_live_qualification_record` defines the bounded, non-sensitive live
+record shape (exact model/image/runtime/materializer, evidence references,
+request bounds, blocked/unexecuted cases) for an explicitly authorized,
+budgeted qualification run; no live inference is claimed by hermetic tests.
+No extra mandatory free-model UI controls are added: the existing
+Runtime/Profile surfaces carry the reason.
+
 ## 9. Revalidation and freshness
 
 OpenCode model-catalog evidence binds:

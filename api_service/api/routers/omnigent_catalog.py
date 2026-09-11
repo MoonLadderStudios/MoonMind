@@ -437,6 +437,74 @@ def _reason(code: str) -> GateReason:
     return GateReason(code=code, message=message, remediationHref=href)
 
 
+def free_model_gate_reasons_for_profile(row: Any) -> dict[str, str]:
+    """Combine real-evidence axes for the credentialless free route.
+
+    MoonLadderStudios/MoonMind#4021 req-5/req-8: the normal Runtime/Profile
+    UI surfaces why the credentialless default is blocked with separate
+    availability, capability, and privacy reasons plus an explicit valid
+    alternative. Every axis reported here comes from production evidence:
+
+    - availability: the profile's persisted exact-host catalog
+      (``model_catalog_evidence_json``) either contains the default model
+      exactly or the verdict is deferred to exact-host qualification when no
+      persisted catalog exists yet. A successful list request, a name
+      containing "free", or an installed binary never qualifies.
+    - capability: the default effort is checked against the selected model's
+      actual supported values, never the seeded default.
+    - privacy: the recorded per-policy-version authorization from the
+      existing Settings authority.
+
+    Pricing is never fabricated here: no trusted pricing feed has a
+    production source yet (req-2), so that axis is evaluated by hermetic
+    tests only until the feed exists. Saturated capacity stays a separate
+    wait state (``omnigent_capacity_wait`` /
+    ``profile_capacity_unavailable``) that never requalifies a model or
+    selects a paid fallback.
+    """
+    provider_id = str(getattr(row, "provider_id", "") or "")
+    if provider_id != "opencode":
+        return {}
+    reasons: dict[str, str] = {}
+    default_model = str(getattr(row, "default_model", "") or "").strip()
+    evidence = getattr(row, "model_catalog_evidence_json", None)
+    if (
+        isinstance(evidence, dict)
+        and isinstance(evidence.get("models"), list)
+        and evidence["models"]
+    ):
+        from moonmind.omnigent.bootstrap.free_model_eligibility import (
+            catalog_ids_from_evidence,
+        )
+
+        if default_model and default_model not in catalog_ids_from_evidence(
+            evidence
+        ):
+            reasons["availability"] = f"not_in_catalog:{default_model}"
+    privacy_reason: str | None = None
+    if provider_id == "opencode":
+        from moonmind.omnigent.bootstrap.free_model_eligibility import (
+            zen_free_route_blocked_reason,
+        )
+
+        privacy_reason = zen_free_route_blocked_reason(provider_id)
+    if privacy_reason is not None:
+        reasons["privacy"] = privacy_reason
+    if default_model:
+        from moonmind.omnigent.bootstrap.opencode import get_supported_efforts
+
+        supported = get_supported_efforts(default_model)
+        default_effort = str(getattr(row, "default_effort", "") or "").strip()
+        if (
+            supported is not None
+            and default_effort
+            and default_effort.lower()
+            not in {item.lower() for item in supported}
+        ):
+            reasons["capability"] = f"unsupported_effort:{default_effort}"
+    return reasons
+
+
 def free_model_gate_reason(reasons: dict[str, str]) -> GateReason:
     """Build the catalog gate reason for the no_eligible_free_model signal.
 
@@ -1086,32 +1154,28 @@ async def get_omnigent_codex_catalog_readiness(
             saturated_by_profile[row.profile_id] = busy and not queue_when_busy
         # MoonLadderStudios/MoonMind#4021 req-4/req-5: the credentialless free
         # route additionally needs the recorded per-policy-version data-use
-        # authorization from the existing Settings authority. Default
+        # authorization from the existing Settings authority, the exact
+        # observed catalog ID, and per-model effort support. Default
         # deployments accept, so they observe no change; an explicit operator
-        # decline surfaces here through the normal Runtime/Profile UI with the
-        # evaluated privacy reason instead of fabricated pricing/capability
-        # axes. A blocked default is structural, never capacity pressure, so
-        # it stays out of the saturation bookkeeping below.
-        free_route_blocked_reason: str | None = None
+        # decline or a catalog/effort mismatch surfaces here through the
+        # normal Runtime/Profile UI with the evaluated axes instead of
+        # fabricated pricing/capability axes. A blocked default is
+        # structural, never capacity pressure, so it stays out of the
+        # saturation bookkeeping below.
+        free_route_blocked_reasons: dict[str, str] = {}
         if (
             compatible
             and bool(readiness["launch_ready"])
             and runtime_id == "opencode"
             and str(getattr(row, "provider_id", "") or "") == "opencode"
         ):
-            from moonmind.omnigent.bootstrap.free_model_eligibility import (
-                zen_free_route_blocked_reason,
-            )
-
-            free_route_blocked_reason = zen_free_route_blocked_reason(
-                str(getattr(row, "provider_id", "") or "")
-            )
-        if free_route_blocked_reason is not None:
+            free_route_blocked_reasons = free_model_gate_reasons_for_profile(row)
+        if free_route_blocked_reasons:
             saturated_by_profile.pop(row.profile_id, None)
         if (
             compatible
             and readiness["launch_ready"]
-            and free_route_blocked_reason is None
+            and not free_route_blocked_reasons
             and (not busy or queue_when_busy)
         ):
             eligible_by_runtime[runtime_id] = eligible_by_runtime.get(runtime_id, 0) + 1
@@ -1134,12 +1198,12 @@ async def get_omnigent_codex_catalog_readiness(
             ):
                 codes.append("profile_capacity_unavailable")
             gate_reasons: list[GateReason]
-            if free_route_blocked_reason is not None:
-                # The profile is launch-ready but the free-route data-use
-                # policy blocks it: show exactly that reason, not the generic
-                # validation fallback.
+            if free_route_blocked_reasons:
+                # The profile is launch-ready but the free-route policy blocks
+                # it: show exactly those axes, not the generic validation
+                # fallback.
                 gate_reasons = [
-                    free_model_gate_reason({"privacy": free_route_blocked_reason})
+                    free_model_gate_reason(free_route_blocked_reasons)
                 ]
             else:
                 gate_reasons = [
