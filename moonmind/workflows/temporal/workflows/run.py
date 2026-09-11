@@ -72,6 +72,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.executions.routing import _coerce_bool
     from moonmind.workflows.executions.preset_readiness import (
+        GITHUB_ISSUE_SEARCH_SCOPE_REFRESH_PATCH,
         SAVED_PRESET_CAPABILITY_READINESS_PATCH,
         github_issue_search_scope_refresh_needed,
         saved_preset_capability_check,
@@ -11926,17 +11927,22 @@ class MoonMindRunWorkflow:
                 # with refresh-required before any new selection; refresh
                 # through current authoring materializes false. Capability
                 # gaps report first; this check is deterministic in the saved
-                # parameters. Historical versioning stays with the
-                # patch/continuation guards above, and already-selected
+                # parameters. A fresh patch ID keeps replay of pre-change
+                # histories on their original command sequence: histories
+                # recorded before this branch take the old path instead of
+                # raising where the original run proceeded. Already-selected
                 # issues continue without a new search downstream.
-                scope_refresh = github_issue_search_scope_refresh_needed(parameters)
-                if scope_refresh is not None:
-                    raise exceptions.ApplicationError(
-                        str(scope_refresh["message"]),
-                        dict(scope_refresh),
-                        type="saved_preset_capabilities_stale",
-                        non_retryable=True,
+                if workflow.patched(GITHUB_ISSUE_SEARCH_SCOPE_REFRESH_PATCH):
+                    scope_refresh = github_issue_search_scope_refresh_needed(
+                        parameters
                     )
+                    if scope_refresh is not None:
+                        raise exceptions.ApplicationError(
+                            str(scope_refresh["message"]),
+                            dict(scope_refresh),
+                            type="saved_preset_capabilities_stale",
+                            non_retryable=True,
+                        )
         if plan_ref:
             return plan_ref
 

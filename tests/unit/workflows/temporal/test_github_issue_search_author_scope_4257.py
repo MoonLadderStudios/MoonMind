@@ -347,7 +347,10 @@ async def test_no_self_authored_match_never_broadens(http_plan: type[_Client]) -
 
 
 def test_include_all_authors_parsing_is_strict() -> None:
-    assert _parse_include_all_authors({}) is False
+    # Omission preserves legacy all-author behavior for pre-change in-flight
+    # payloads; newly expanded preset calls always send explicit false for
+    # the self-only default.
+    assert _parse_include_all_authors({}) is True
     assert _parse_include_all_authors({"includeAllAuthors": False}) is False
     assert _parse_include_all_authors({"includeAllAuthors": True}) is True
     for malformed in ("false", "true", 1, 0, None, [], {}):
@@ -393,7 +396,12 @@ async def test_loader_revalidates_fresh_detail_author(monkeypatch: pytest.Monkey
         GitHubService, "resolve_github_token", AsyncMock(return_value=("t", None))
     )
     result = await load_github_issue_preset_brief(
-        {"repository": REPOSITORY, "issueSearch": "dashboard"}, None
+        {
+            "repository": REPOSITORY,
+            "issueSearch": "dashboard",
+            "includeAllAuthors": False,
+        },
+        None,
     )
     assert result.status == "FAILED"
     assert result.outputs["reasonCode"] == "author_mismatch"
@@ -701,7 +709,12 @@ async def test_completed_brief_carries_author_evidence_without_research(
         tools, "_github_admission_claim_and_identity", lambda **kwargs: {}
     )
     result = await load_github_issue_preset_brief(
-        {"repository": REPOSITORY, "issueSearch": "dashboard"}, None
+        {
+            "repository": REPOSITORY,
+            "issueSearch": "dashboard",
+            "includeAllAuthors": False,
+        },
+        None,
     )
     assert result.status == "COMPLETED"
     outputs = result.outputs

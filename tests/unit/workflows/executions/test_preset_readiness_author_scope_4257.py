@@ -113,3 +113,23 @@ def test_workflow_node_is_supported() -> None:
         "workflow": {"appliedStepTemplates": [_applied(None)]},
     }
     assert github_issue_search_scope_refresh_needed(parameters) is not None
+
+
+def test_wrapper_inputs_survive_composition() -> None:
+    """Expanded wrappers keep root inputs; composition holds topology only."""
+    wrapper = _applied({"include_all_authors": False})
+    wrapper["composition"] = {
+        "slug": SEARCH,
+        "includes": [{"slug": "child", "inputMapping": {}}],
+    }
+    assert github_issue_search_scope_refresh_needed(_parameters([wrapper])) is None
+
+
+def test_snake_case_templates_require_refresh() -> None:
+    parameters = {
+        "system": {"recurrence": {"definitionId": "def-1"}},
+        "task": {"applied_step_templates": [_applied(None)]},
+    }
+    payload = github_issue_search_scope_refresh_needed(parameters)
+    assert payload is not None
+    assert payload["code"] == "github_issue_search_author_scope_stale"

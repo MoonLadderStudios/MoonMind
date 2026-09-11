@@ -4646,18 +4646,22 @@ def _github_brief_prior_work_pr(
 
 
 def _parse_include_all_authors(inputs: Mapping[str, Any]) -> bool | ToolResult:
-    """Strictly parse the all-authors opt-in; omitted input means False.
+    """Strictly parse the all-authors opt-in; omitted input means True.
 
-    Only actual booleans are accepted. Stringified values such as "true" /
-    "false", integers, null, arrays, or objects are rejected rather than
-    coerced with truthiness.
+    Pre-change plans and in-flight ``github.load_issue_preset_brief``
+    activities omit this field because it did not exist. They retain the
+    legacy all-author behavior. Newly expanded preset calls always send an
+    explicit boolean (``false`` for the new self-only default), so omission
+    never occurs for fresh authoring. Only actual booleans are accepted.
+    Stringified values such as "true" / "false", integers, null, arrays, or
+    objects are rejected rather than coerced with truthiness.
     """
     if "includeAllAuthors" in inputs:
         raw = inputs.get("includeAllAuthors")
     elif "include_all_authors" in inputs:
         raw = inputs.get("include_all_authors")
     else:
-        return False
+        return True
     if type(raw) is bool:
         return raw
     return ToolResult(
@@ -4665,7 +4669,7 @@ def _parse_include_all_authors(inputs: Mapping[str, Any]) -> bool | ToolResult:
         outputs={
             "error": (
                 "includeAllAuthors must be a boolean value; "
-                'omit it for the default self-authored search or use true/false.'
+                'send explicit true/false (false for the self-authored default).'
             ),
             "reasonCode": "invalid_author_scope_input",
             "field": "includeAllAuthors",

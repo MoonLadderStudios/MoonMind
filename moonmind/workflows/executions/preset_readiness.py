@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 SAVED_PRESET_CAPABILITY_READINESS_PATCH = "run-saved-preset-capability-readiness-v1"
 
+GITHUB_ISSUE_SEARCH_SCOPE_REFRESH_PATCH = "run-github-issue-search-scope-refresh-v1"
+
 GITHUB_ISSUE_SEARCH_PRESET_SLUG = "github-issue-search-and-implement"
 GITHUB_ISSUE_SEARCH_SCOPE_INPUT = "include_all_authors"
 
@@ -47,6 +49,13 @@ def saved_preset_capability_check(
             add(child, scope)
 
     for applied in task.get("appliedStepTemplates") or []:
+        composition = applied.get("composition")
+        add(
+            composition if isinstance(composition, Mapping) and composition else applied
+        )
+    for applied in task.get("applied_step_templates") or []:
+        if not isinstance(applied, Mapping):
+            continue
         composition = applied.get("composition")
         add(
             composition if isinstance(composition, Mapping) and composition else applied
@@ -111,7 +120,7 @@ def github_issue_search_scope_refresh_needed(
     if not isinstance(task, Mapping):
         return None
     applied = task.get("appliedStepTemplates")
-    if isinstance(applied, str):
+    if not isinstance(applied, Sequence) or isinstance(applied, (str, bytes)):
         applied = task.get("applied_step_templates")
     if not isinstance(applied, Sequence) or isinstance(applied, (str, bytes)):
         return None
@@ -119,11 +128,13 @@ def github_issue_search_scope_refresh_needed(
     for template in applied:
         if not isinstance(template, Mapping):
             continue
-        composition = template.get("composition")
-        if isinstance(composition, Mapping) and composition:
-            missing.extend(_applied_search_templates_missing_scope(composition))
-        else:
-            missing.extend(_applied_search_templates_missing_scope(template))
+        # The applied wrapper carries root inputs (including
+        # include_all_authors) while its composition root holds only slug and
+        # topology (included nodes use inputMapping). Checking only the
+        # composition discards the explicit choice, so inspect the wrapper
+        # itself: the helper checks the wrapper slug/inputs and recurses
+        # into composition/includes children.
+        missing.extend(_applied_search_templates_missing_scope(template))
     if not missing:
         return None
     system = parameters.get("system")
