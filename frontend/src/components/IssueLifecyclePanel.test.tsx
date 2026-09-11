@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, cleanup, fireEvent } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
 import { IssueLifecyclePanel, issueLifecycleEvidenceFromExecution } from './IssueLifecyclePanel';
 
@@ -83,7 +83,12 @@ describe('IssueLifecyclePanel', () => {
     );
     await waitFor(() => expect(screen.getByTestId('issue-lifecycle-panel')).not.toBeNull());
     expect(screen.getByText(/A safe continuation handoff is available/)).not.toBeNull();
-    expect((screen.getByRole('button', { name: 'Continue existing work' }) as HTMLButtonElement).disabled).toBe(false);
+    // Continuation requires explicit stop proof; confirm it before asserting availability.
+    const stopProof = screen.getByRole('checkbox') as HTMLInputElement;
+    fireEvent.click(stopProof);
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Continue existing work' }) as HTMLButtonElement).disabled).toBe(false),
+    );
     expect((screen.getByRole('button', { name: 'Resolve competing-attempt conflict' }) as HTMLButtonElement).disabled).toBe(true);
     // Prior failure history is preserved and visible.
     expect(screen.getByText(/Prior failed attempts preserved: 1/)).not.toBeNull();
