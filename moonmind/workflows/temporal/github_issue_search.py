@@ -447,14 +447,13 @@ async def resolve_issue(
                 # Same shared exact-issue admission boundary as explicit /
                 # orchestration / continuation paths (issue #4178): the
                 # search entrypoint admits with its pinned identity plus the
-                # full Req-1 bundle. The fallback-scan path already resolves
-                # trusted blocker evidence per candidate and reuses that read
-                # for admission. The query path resolves blockers for the
-                # admitted candidate only (one bounded read): a blocked
-                # admitted candidate is skipped rather than selected.
-                candidate_blockers: list[dict[str, Any]] | None = None
-                if not query:
-                    candidate_blockers = await blockers_from_issue(normalized)
+                # full Req-1 bundle. Trusted blocker evidence is resolved per
+                # candidate and threaded into the admit decision itself (not a
+                # post-hoc skip): a blocked candidate is denied as
+                # blocked_prerequisite on both the query and fallback paths.
+                candidate_blockers: list[dict[str, Any]] | None = await blockers_from_issue(
+                    normalized
+                )
                 shared = admit_for_entrypoint(
                     ENTRYPOINT_SEARCH,
                     repository=repository,
@@ -469,12 +468,8 @@ async def resolve_issue(
                 )
                 if not shared.allowed:
                     continue
-                if not query and candidate_blockers:
+                if candidate_blockers:
                     continue
-                if query:
-                    admitted_blockers = await blockers_from_issue(normalized)
-                    if admitted_blockers:
-                        continue
                 return candidate["number"], evidence
             if len(candidates) < 100:
                 return None, {

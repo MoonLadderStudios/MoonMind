@@ -1979,21 +1979,57 @@ def _github_downstream_workflow_payload(
         issue_number=issue_number,
         summary=summary,
     )
+    # Acceptance A (issue #4178): downstream GitHub orchestrate/implement
+    # children are real orchestration producers for the shared admission
+    # boundary. The child brief infers ENTRYPOINT_ORCHESTRATION from these
+    # trusted signals via _github_admission_entrypoint (orchestrationRunId /
+    # parentWorkflowId / nestedImplement). Continuation/retry lineage present
+    # in the parent channel is preserved so the same boundary infers
+    # continuation/retry instead of falling back to explicit.
+    child_inputs: dict[str, Any] = {
+        **configured_inputs,
+        "github_issue": github_issue_input,
+        "github_issue_ref": github_issue_ref,
+        "source_design_path": source_design_path,
+        "source_claim_ids": source_claim_ids,
+        "constraints": (
+            f"Preserve source issue {source_issue_key} traceability."
+            if source_issue_key
+            else ""
+        ),
+    }
+    for signal_source in (task_payload, configured_inputs, traceability, mapping):
+        if not isinstance(signal_source, Mapping):
+            continue
+        for key in (
+            "orchestrationRunId",
+            "orchestration_run_id",
+            "parentWorkflowId",
+            "parent_workflow_id",
+            "predecessorAttemptId",
+            "predecessor_attempt_id",
+            "predecessorStopped",
+            "predecessor_stopped",
+            "handoffUsable",
+            "handoff_usable",
+            "retryOf",
+            "retry_of",
+            "attemptRetry",
+            "attempt_retry",
+            "linkedAttempts",
+            "linked_attempts",
+        ):
+            if key in signal_source and key not in child_inputs:
+                child_inputs[key] = signal_source.get(key)
+    if source_issue_key and not _string(
+        child_inputs.get("parentWorkflowId") or child_inputs.get("parent_workflow_id")
+    ):
+        child_inputs["parentWorkflowId"] = source_issue_key
+    child_inputs["nestedImplement"] = True
     task: dict[str, Any] = {
         "title": f"Run {preset_label} for {github_issue_ref}: {summary}",
         "instructions": instructions,
-        "inputs": {
-            **configured_inputs,
-            "github_issue": github_issue_input,
-            "github_issue_ref": github_issue_ref,
-            "source_design_path": source_design_path,
-            "source_claim_ids": source_claim_ids,
-            "constraints": (
-                f"Preserve source issue {source_issue_key} traceability."
-                if source_issue_key
-                else ""
-            ),
-        },
+        "inputs": child_inputs,
         "taskTemplate": {
             "slug": preset_slug,
         },
@@ -4698,13 +4734,12 @@ async def load_github_issue_preset_brief(
         "artifacts/github-issue-implement-brief.json",
     )
     # Req 2 + Req 3 (issue #4178): for eligible Available / Recovery-needed
-    # work, plan the stable attempt announcement + in-progress BEFORE expensive
-    # assessment/implementation and persist the selected issue + predecessor
-    # exactly once with the trusted input context. Advisory only: a claim
-    # plan never bypasses prerequisite/authority/readiness checks, and the
-    # persisted identity flows forward so retry/replay/recovery cannot
-    # silently substitute a different issue. The caller re-reads after the
-    # announcement and immediately before launching work.
+    # work, announce the stable attempt and apply in-progress BEFORE expensive
+    # assessment/implementation, then re-read after the announcement. Advisory
+    # only: a claim never bypasses prerequisite/authority/readiness checks, and
+    # the persisted identity flows forward so retry/replay/recovery cannot
+    # silently substitute a different issue. substitution_denied blocks the
+    # brief; contender/resume observations block the announcement write.
     brief_settled = interpret_issue(
         {"state": issue.get("state", "open"), "labels": issue.get("labels") or []}
     ).settled
@@ -4718,6 +4753,49 @@ async def load_github_issue_preset_brief(
             settled=brief_settled,
             current_labels=[str(label) for label in labels],
         )
+        persisted_check = _mapping(admission_handoff.get("admissionPersisted"))
+        if _string(persisted_check.get("reasonCode")) == "substitution_denied":
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "repository": repository,
+                    "issueNumber": int(issue.get("number") or issue_number),
+                    "reasonCode": "substitution_denied",
+                    "decision": "blocked",
+                    **admission_handoff,
+                    "error": str(
+                        persisted_check.get("summary")
+                        or "Retry/replay candidate differs from the persisted admitted identity."
+                    ),
+                },
+            )
+        claim_check = _mapping(admission_handoff.get("admissionClaim"))
+        if bool(claim_check.get("planned")):
+            claim_execution = await _execute_brief_admission_claim(
+                repository=repository,
+                issue_number=int(issue.get("number") or issue_number),
+                settled=brief_settled,
+                current_labels=[str(label) for label in labels],
+                claim=dict(claim_check),
+                inputs=inputs,
+                context=_context,
+                github_service_factory=github_service_factory,
+            )
+            admission_handoff["admissionClaimExecuted"] = claim_execution
+            if bool(claim_execution.get("blocked")):
+                return ToolResult(
+                    status="FAILED",
+                    outputs={
+                        "repository": repository,
+                        "issueNumber": int(issue.get("number") or issue_number),
+                        "reasonCode": str(claim_execution.get("reasonCode") or "claim_blocked"),
+                        "decision": "blocked",
+                        **admission_handoff,
+                        "error": str(
+                            claim_execution.get("summary") or "Advisory claim execution blocked."
+                        ),
+                    },
+                )
     return ToolResult(
         status="COMPLETED",
         outputs={
@@ -5811,6 +5889,241 @@ def _github_admission_claim_and_identity(
             "admissionPersisted": persisted}
 
 
+async def _execute_brief_admission_claim(
+    *,
+    repository: str,
+    issue_number: int,
+    settled: str,
+    current_labels: Sequence[str] | None = None,
+    claim: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> dict[str, Any]:
+    """Execute the Req-2 advisory claim write and re-read (issue #4178).
+
+    The brief path announces a stable attempt and applies in-progress BEFORE
+    expensive assessment/implementation, then re-reads after the announcement.
+    Prerequisite/authority/readiness checks stay intact: contender and resume
+    observations block the write, readiness gates the label mutation, and a
+    failed re-read blocks launching work on unknown evidence. The mutation is
+    the planned add-before-remove ops from ``announce_before_assessment``;
+    read-back mismatch is recorded honestly (unfenced race) without claiming
+    exclusivity.
+    """
+    issue_ref = f"{repository}#{issue_number}"
+    bundle = _github_admission_bundle(inputs, context)
+    own_attempt_id = _string(bundle.get("own_attempt_id")) or _string(
+        _mapping(inputs.get("previousOutputs")).get("attemptId")
+    )
+    if bundle.get("released") or bundle.get("superseded") or bundle.get(
+        "known_successor_attempt_id"
+    ) or bundle.get("operator_hold"):
+        gate = should_stop_on_resume(
+            own_attempt_id=own_attempt_id,
+            released=bool(bundle.get("released")),
+            superseded=bool(bundle.get("superseded")),
+            known_successor_attempt_id=_string(bundle.get("known_successor_attempt_id")),
+            operator_hold=bool(bundle.get("operator_hold")),
+        )
+        if gate["stop"]:
+            return {
+                "executed": False,
+                "blocked": True,
+                "reasonCode": str(gate.get("reasonCode") or "resume_blocked"),
+                "summary": str(gate.get("summary") or "Resume blocked; claim not executed."),
+                "issueRef": issue_ref,
+            }
+    if bundle.get("observed_contenders") or bundle.get("contradictory_evidence"):
+        gate = contender_quiesce_decision(
+            own_attempt_id=own_attempt_id,
+            observed_contenders=bundle.get("observed_contenders"),
+            operator_hold=bool(bundle.get("operator_hold")),
+            contradictory_evidence=bool(bundle.get("contradictory_evidence")),
+        )
+        if gate["quiesce"]:
+            return {
+                "executed": False,
+                "blocked": True,
+                "reasonCode": str(gate.get("reasonCode") or "contender_observed"),
+                "summary": str(gate.get("summary") or "Contender observed; claim not executed."),
+                "issueRef": issue_ref,
+            }
+    mutation = _mapping(claim.get("mutation"))
+    labels_to_add = [str(item) for item in _list(mutation.get("labelsToAdd")) if _string(item)]
+    labels_to_remove = [
+        str(item) for item in _list(mutation.get("labelsToRemove")) if _string(item)
+    ]
+    if not labels_to_add and not labels_to_remove:
+        reread_data, reread_error = await _fetch_github_issue(
+            repository=repository,
+            issue_number=issue_number,
+            github_service_factory=github_service_factory,
+        )
+        if reread_data is None:
+            return {
+                "executed": False,
+                "blocked": True,
+                "reasonCode": "read_failure",
+                "summary": (
+                    f"Advisory claim for {issue_ref} has no label change but the "
+                    f"re-read failed ({reread_error or 'unknown'}); unknown evidence "
+                    "blocks launching work."
+                ),
+                "issueRef": issue_ref,
+            }
+        reread_issue = _github_issue_payload(reread_data, repository)
+        return {
+            "executed": True,
+            "blocked": False,
+            "reasonCode": "already_applied",
+            "summary": f"Advisory claim for {issue_ref} already applied; re-read confirmed.",
+            "issueRef": issue_ref,
+            "appliedActions": [],
+            "rereadLabels": reread_issue.get("labels"),
+            "rereadSettled": interpret_issue(reread_issue).settled,
+            "rereadOk": True,
+        }
+    service = github_service_factory()
+    if hasattr(service, "check_issue_label_readiness"):
+        try:
+            readiness = await service.check_issue_label_readiness(
+                repo=repository, issue_number=issue_number, required_labels=labels_to_add
+            )
+        except Exception as exc:
+            return {
+                "executed": False,
+                "blocked": True,
+                "reasonCode": "readiness_failed",
+                "summary": f"Advisory claim readiness check failed for {issue_ref}: {exc}.",
+                "issueRef": issue_ref,
+            }
+        if isinstance(readiness, Mapping) and not readiness.get("ready"):
+            return {
+                "executed": False,
+                "blocked": True,
+                "reasonCode": str(readiness.get("reasonCode") or "readiness_failed"),
+                "summary": str(
+                    readiness.get("summary")
+                    or f"Advisory claim readiness failed for {issue_ref}."
+                ),
+                "issueRef": issue_ref,
+                "readiness": dict(readiness),
+            }
+    applied: list[str] = []
+    for label in labels_to_add:
+        try:
+            result = await service.add_issue_labels(
+                repo=repository, issue_number=issue_number, labels=[label]
+            )
+        except Exception as exc:
+            return {
+                "executed": False,
+                "blocked": True,
+                "reasonCode": "claim_write_failed",
+                "summary": f"Advisory claim label add failed for {issue_ref}: {exc}.",
+                "issueRef": issue_ref,
+                "appliedActions": applied,
+            }
+        if not (isinstance(result, Mapping) and result.get("ok")):
+            code = _string(result.get("reasonCode") if isinstance(result, Mapping) else "")
+            summary = _string(result.get("summary") if isinstance(result, Mapping) else "")
+            return {
+                "executed": False,
+                "blocked": True,
+                "reasonCode": code or "claim_write_failed",
+                "summary": summary or f"Advisory claim label add denied for {issue_ref}.",
+                "issueRef": issue_ref,
+                "appliedActions": applied,
+            }
+        applied.append(f"add_label:{label}")
+    for label in labels_to_remove:
+        try:
+            result = await service.remove_issue_label(
+                repo=repository, issue_number=issue_number, label=label
+            )
+        except Exception as exc:
+            return {
+                "executed": False,
+                "blocked": True,
+                "reasonCode": "claim_write_failed",
+                "summary": f"Advisory claim label remove failed for {issue_ref}: {exc}.",
+                "issueRef": issue_ref,
+                "appliedActions": applied,
+            }
+        if not (isinstance(result, Mapping) and result.get("ok")):
+            # A failed removal after a successful add leaves the destination
+            # applied; report honestly without rolling back shared state.
+            code = _string(result.get("reasonCode") if isinstance(result, Mapping) else "")
+            summary = _string(result.get("summary") if isinstance(result, Mapping) else "")
+            reread_data, _ = await _fetch_github_issue(
+                repository=repository,
+                issue_number=issue_number,
+                github_service_factory=github_service_factory,
+            )
+            reread_labels: list[str] = []
+            reread_settled = settled
+            if reread_data is not None:
+                reread_issue = _github_issue_payload(reread_data, repository)
+                reread_labels = [str(item) for item in reread_issue.get("labels") or []]
+                try:
+                    reread_settled = interpret_issue(reread_issue).settled
+                except Exception:
+                    pass
+            return {
+                "executed": True,
+                "blocked": True,
+                "reasonCode": code or "claim_remove_failed",
+                "summary": summary or f"Advisory claim removal failed for {issue_ref}.",
+                "issueRef": issue_ref,
+                "appliedActions": applied,
+                "rereadLabels": reread_labels,
+                "rereadSettled": reread_settled,
+                "rereadOk": reread_data is not None,
+            }
+        applied.append(f"remove_label:{label}")
+    reread_data, reread_error = await _fetch_github_issue(
+        repository=repository,
+        issue_number=issue_number,
+        github_service_factory=github_service_factory,
+    )
+    if reread_data is None:
+        return {
+            "executed": True,
+            "blocked": True,
+            "reasonCode": "read_failure",
+            "summary": (
+                f"Advisory claim for {issue_ref} applied {applied} but the re-read "
+                f"failed ({reread_error or 'unknown'}); unknown evidence blocks "
+                "launching work."
+            ),
+            "issueRef": issue_ref,
+            "appliedActions": applied,
+            "rereadOk": False,
+        }
+    reread_issue = _github_issue_payload(reread_data, repository)
+    try:
+        reread_settled = interpret_issue(reread_issue).settled
+    except Exception:
+        reread_settled = settled
+    return {
+        "executed": True,
+        "blocked": False,
+        "reasonCode": "claim_executed",
+        "summary": (
+            f"Announced attempt for {issue_ref} and applied in-progress before "
+            "assessment; re-read after the announcement. GitHub offers no "
+            "conditional ownership acquisition, so the remaining check-to-write "
+            "race stays unfenced."
+        ),
+        "issueRef": issue_ref,
+        "appliedActions": applied,
+        "rereadLabels": reread_issue.get("labels"),
+        "rereadSettled": reread_settled,
+        "rereadOk": True,
+    }
+
+
 def _github_recandidate_context(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
@@ -5851,8 +6164,31 @@ def _github_child_attempt_gate(
     if not child_kind:
         return None
     bundle = _github_admission_bundle(inputs, context)
-    controlling = _string(bundle.get("own_attempt_id")) or _string(
-        inputs.get("controllingAttemptId") or inputs.get("controlling_attempt_id")
+    # Controlling-attempt sourcing fallback chain (Req 6): explicit
+    # controlling id first, then the shared attempt id from the trusted
+    # channel (direct inputs, previous outputs, workflow context), then
+    # attempt ids carried in previous/context outputs. The first non-empty
+    # value wins; an empty chain denies the handoff.
+    previous = _mapping(inputs.get("previousOutputs"))
+    context_previous = _mapping((context or {}).get("previousOutputs"))
+    controlling = (
+        _string(bundle.get("own_attempt_id"))
+        or _string(
+            inputs.get("controllingAttemptId") or inputs.get("controlling_attempt_id")
+        )
+        or _string(
+            previous.get("controllingAttemptId")
+            or previous.get("controlling_attempt_id")
+            or previous.get("attemptId")
+            or previous.get("attempt_id")
+        )
+        or _string(
+            context_previous.get("controllingAttemptId")
+            or context_previous.get("controlling_attempt_id")
+            or context_previous.get("attemptId")
+            or context_previous.get("attempt_id")
+        )
+        or _string((context or {}).get("controllingAttemptId"))
     )
     pr_url = _string(
         inputs.get("pullRequestUrl") or inputs.get("pull_request_url") or inputs.get("prUrl")
