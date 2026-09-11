@@ -318,19 +318,22 @@ async def test_production_private_pull_never_sees_source_pat(
         "api_service.db.base.async_session_maker", _FakeSessionMaker(store)
     )
     _forbid_source_token_resolution(monkeypatch)
-    launch = {
-        "GITHUB_TOKEN": SOURCE_PAT_A,
-        "GHCR_PULL_USER": "agent-user",
-        "GHCR_PULL_TOKEN": "agent-token",
-    }
 
-    creds = await resolve_ghcr_pull_credentials_for_launch(launch)
+    # Deployment-scoped resolver takes no launch mapping: agent-smuggled
+    # GHCR_PULL_*/GITHUB_TOKEN fields cannot be supplied.
+    creds = await resolve_ghcr_pull_credentials_for_launch()
 
     assert creds == (IDENTITY_B_USER, IDENTITY_B_TOKEN)
     assert SOURCE_PAT_A not in creds
 
+    async def _wired_resolver(ref: str) -> RegistryCredential:
+        assert ref == "db://ghcr"
+        assert creds is not None
+        user, token = creds
+        return RegistryCredential(username=user, secret=token)
+
     daemon = _RecordingDaemon()
-    backend = _backend(daemon, tmp_path)
+    backend = _backend(daemon, tmp_path, resolver=_wired_resolver)
     result = await backend.acquire_image(
         _private_request(workspace=tmp_path, job_suffix="b" * 32)
     )
@@ -369,12 +372,7 @@ async def test_production_public_pull_without_identity_uses_no_auth(
     )
     _forbid_source_token_resolution(monkeypatch)
 
-    assert (
-        await resolve_ghcr_pull_credentials_for_launch(
-            {"GITHUB_TOKEN": SOURCE_PAT_A}
-        )
-        is None
-    )
+    assert await resolve_ghcr_pull_credentials_for_launch() is None
     # The omitted path queries no secret store beyond the GHCR slug check.
     assert set(store.seen_slugs) <= {"GHCR_PULL_USER", "GHCR_PULL_TOKEN"}
 
@@ -452,7 +450,7 @@ async def test_managed_slug_rotation_between_reads_raises_not_mixed(
     _forbid_source_token_resolution(monkeypatch)
 
     with pytest.raises(ValueError, match="mixed|rotation|changed"):
-        await resolve_ghcr_pull_credentials_for_launch({})
+        await resolve_ghcr_pull_credentials_for_launch()
 
     assert maker.calls == 1
 
@@ -469,7 +467,7 @@ async def test_stable_managed_slug_pair_resolves_coherently(
     monkeypatch.setattr("api_service.db.base.async_session_maker", maker)
     _forbid_source_token_resolution(monkeypatch)
 
-    assert await resolve_ghcr_pull_credentials_for_launch({}) == (
+    assert await resolve_ghcr_pull_credentials_for_launch() == (
         "pull-user",
         "pull-token",
     )
@@ -598,7 +596,7 @@ async def test_cancelled_private_pull_cleans_up_only_own_config(
     await asyncio.sleep(0.05)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        _ = await task  # noqa: B018 - awaiting propagates cancellation by design
     release.set()
 
     assert not backend._auth_dir(request).exists()
