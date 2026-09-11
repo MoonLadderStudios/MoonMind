@@ -264,6 +264,10 @@ def test_parse_git_diff_raw_reports_rename_and_filters_exclusions(tmp_path) -> N
     _commit_all(repo)
     (repo / "a.txt").rename(repo / "renamed.txt")
     (repo / "gone.txt").unlink()
+    # Stage the rename so `git diff HEAD` surfaces it: an unstaged rename
+    # is a tracked deletion plus an untracked path, and `git diff HEAD`
+    # never reports untracked paths, so rename detection cannot run.
+    _git(repo, "add", "-A")
     raw = _git(
         repo,
         "diff",
@@ -539,6 +543,13 @@ async def test_put_managed_artifact_verifies_reused_evidence(tmp_path) -> None:
         tmp_path, {"tracked.txt": "evidence\n"}
     )
     payload = b"capture candidate"
+    # _capture_harness stubs _put_managed_checkpoint_artifact with an
+    # instance attribute; remove the stub so this test exercises the real
+    # retry-binding path (artifact-service reuse + evidence verification).
+    try:
+        del activities._put_managed_checkpoint_artifact
+    except AttributeError:
+        pass
 
     class ReusingService:
         async def put_content_addressed_payload_complete(
