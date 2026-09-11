@@ -712,22 +712,46 @@ class BootstrapController:
                     )
             # Update record resolved
             # Resolve model for image selection. Credentialless opencode/*
-            # qualified IDs never resolve pre-validation: resolve_bootstrap_model
-            # fails closed without the exact observed catalog, while friendly
-            # display aliases remain valid here for image resolution only.
+            # qualified IDs require the exact observed catalog for execution
+            # selection, but image selection must not fail closed before
+            # catalog sync/qualification: defer exact-ID validation to
+            # _qualify_and_publish (exact-host authority via
+            # resolve_model_exact). Friendly display aliases remain valid
+            # here for image resolution only.
             # Execution qualification still requires the exact catalog (step 7
             # of OpenCodeHost §8) via resolve_model_exact before launch.
             try:
                 model_info = resolve_bootstrap_model(display)
             except ValueError as exc:
-                record = record.model_copy(
-                    update={
-                        "state": BootstrapState.failed,
-                        "failure": {"code": "model_unavailable", "message": str(exc)},
+                text = display.strip()
+                prefix, sep, provider_model_id = text.partition("/")
+                if sep and prefix.strip() == "opencode" and provider_model_id.strip():
+                    # MoonLadderStudios/MoonMind#4021 P1: fresh
+                    # opencode-zen-free default stores its qualified
+                    # opencode/... model in desired with no catalog yet.
+                    # Use the qualified ID directly for image selection and
+                    # let _qualify_and_publish enforce exact-catalog
+                    # authority before launch.
+                    logger.info(
+                        "Deferring exact catalog validation for %r to "
+                        "qualification; using qualified ID for image "
+                        "selection.",
+                        text,
+                    )
+                    model_info = {
+                        "displayName": display,
+                        "providerModelId": provider_model_id.strip(),
+                        "qualifiedId": text,
                     }
-                )
-                save_bootstrap_record(record)
-                raise
+                else:
+                    record = record.model_copy(
+                        update={
+                            "state": BootstrapState.failed,
+                            "failure": {"code": "model_unavailable", "message": str(exc)},
+                        }
+                    )
+                    save_bootstrap_record(record)
+                    raise
 
             qualified = model_info["qualifiedId"]
             provider_model = model_info["providerModelId"]
