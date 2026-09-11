@@ -56,7 +56,6 @@ from moonmind.workflows.temporal.github_issue_lifecycle import (
     interpret_issue,
     plan_label_mutation,
     plan_transition,
-    should_abandon_retry,
 )
 
 #: Entrypoints that share this ONE admission boundary (acceptance A). The
@@ -345,6 +344,27 @@ def admit_exact_issue(
             entrypoint=entrypoint,
             issue_ref=issue_ref,
         )
+    distinct_prs = {
+        _string(
+            item.get("prUrl")
+            or item.get("pull_request_url")
+            or item.get("pullRequestUrl")
+            or item.get("url")
+            or item.get("number")
+            or item.get("id")
+        ).strip().lower()
+        for item in pr_list
+    }
+    distinct_prs.discard("")
+    if len(distinct_prs) > 1:
+        return _deny(
+            reason_code="ambiguous_pr_identity",
+            summary=f"{issue_ref or 'Issue'} has multiple distinct open PR identities; "
+            "no silent canonical selection is made.",
+            settled=settled,
+            entrypoint=entrypoint,
+            issue_ref=issue_ref,
+        )
     linked = _linked_attempts(attempt_context)
     if linked or (retry_policy is not None):
         retry_state = _attempt.derive_retry_state(
@@ -473,6 +493,8 @@ def announce_before_assessment(
     attempt_id: str,
     current_labels: Sequence[Any] | None = None,
     reason: str = "",
+    predecessor_stopped: Any = None,
+    handoff_usable: Any = None,
 ) -> dict[str, Any]:
     """Plan the advisory claim (attempt announcement + in-progress) for Req 2.
 
@@ -480,7 +502,9 @@ def announce_before_assessment(
     attempt and apply in-progress BEFORE expensive assessment/implementation.
     Callers re-read after the announcement and immediately before launching
     work. Claiming for assessment never authorizes changing blocked code or
-    bypassing completion gates.
+    bypassing completion gates. Recovery-needed claims require the caller's
+    validated recovery handoff (predecessor_stopped plus handoff_usable);
+    fabricated defaults are never substituted.
     """
     issue_ref = f"{repository}#{issue_number}"
     if settled == SETTLED_AVAILABLE:
@@ -491,6 +515,18 @@ def announce_before_assessment(
             reason=reason or f"Advisory claim for {issue_ref} before assessment",
         )
     elif settled == SETTLED_RECOVERY_NEEDED:
+        if predecessor_stopped is not True or handoff_usable is not True:
+            return {
+                "planned": False,
+                "reasonCode": "recovery_handoff_missing",
+                "summary": (
+                    f"{issue_ref} is recovery-needed but the validated recovery "
+                    "handoff (predecessor_stopped plus handoff_usable) is absent; "
+                    "the transition is denied until the caller supplies observed handoff evidence."
+                ),
+                "transition": None,
+                "mutation": None,
+            }
         decision = plan_transition(
             from_settled=settled,
             to_target=TO_IN_PROGRESS,
@@ -591,14 +627,26 @@ def persist_admission_identity(
             ),
             "identity": dict(previous),
         }
-    merged = dict(previous)
-    if predecessor and not _string(merged.get("predecessorAttemptId")):
-        merged["predecessorAttemptId"] = predecessor
+    prev_predecessor = _string(
+        previous.get("predecessorAttemptId") or previous.get("predecessor_attempt_id")
+    )
+    if predecessor != prev_predecessor:
+        return {
+            "persisted": False,
+            "reasonCode": "substitution_denied",
+            "summary": (
+                "Replay predecessor "
+                f"{predecessor or '<absent>'} differs from persisted "
+                f"{prev_predecessor or '<absent>'}; continuation lineage and "
+                "preserved-work ownership cannot change after first persistence."
+            ),
+            "identity": dict(previous),
+        }
     return {
         "persisted": True,
         "reasonCode": "already_persisted",
         "summary": "Persisted identity unchanged across retry/replay.",
-        "identity": merged,
+        "identity": dict(previous),
     }
 
 
