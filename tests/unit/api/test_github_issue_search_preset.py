@@ -202,7 +202,7 @@ async def test_full_issue_brief_reaches_fresh_assessment_workspace(
             activity_boundary.activities._artifact_service = service
             result = await activity_boundary.execute(
                 "github.load_issue_preset_brief",
-                {"repository": REPOSITORY, "issueSearch": ""},
+                {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
             )
             assert result.status == "COMPLETED"
             wf = MoonMindRunWorkflow()
@@ -248,7 +248,7 @@ async def test_issue_loader_fails_before_handoff_when_brief_cannot_be_persisted(
     with pytest.raises(RuntimeError, match="storage unavailable"):
         await activity_boundary.execute(
             "github.load_issue_preset_brief",
-            {"repository": REPOSITORY, "issueSearch": ""},
+            {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
         )
 
 
@@ -394,7 +394,7 @@ async def test_rendered_child_lists_control_selection_and_preflight(
             ] = issue(number, state="open")
         selected = await activity_boundary.execute(
             "github.load_issue_preset_brief",
-            {"repository": REPOSITORY, "issueSearch": ""},
+            {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
         )
         assert selected.status == "COMPLETED", case["name"]
         assert selected.outputs["issue"]["number"] == expected["number"], case["name"]
@@ -503,7 +503,7 @@ async def test_child_issue_replay_selection_and_fresh_preflight(
             issue(number, state=child_state)
         )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == expected["number"]
@@ -544,7 +544,7 @@ async def test_child_reopening_at_confirmation_cannot_admit_parent(activity_boun
         lambda: issue(10, state=next(states))
     )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "FAILED"
     assert "changed or could not be confirmed" in result.outputs["error"]
@@ -559,7 +559,7 @@ async def test_unknown_child_state_cannot_admit_parent(activity_boundary, state)
         10, state=state
     )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "FAILED"
     assert "prerequisite identity or state is invalid" in result.outputs["error"]
@@ -595,7 +595,7 @@ async def test_related_open_issue_does_not_block_selection_or_preflight(
     )
     activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/20"] = issue(20)
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
     preflight = await activity_boundary.execute(
@@ -627,7 +627,7 @@ async def test_scan_reuses_prerequisite_evidence_across_all_500_candidates(
                 f"/repos/{repository}/issues/{number}"
             ] = issue(number, state="closed" if number < 20 else "open")
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 500
@@ -650,7 +650,7 @@ async def test_scan_stops_before_exceeding_aggregate_prerequisite_budget(
             issue(number, state="open" if number % 2 else "closed")
         )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "FAILED"
     assert "100-request prerequisite lookup budget" in result.outputs["error"]
@@ -670,7 +670,7 @@ async def test_selected_issue_confirmation_refreshes_cached_prerequisite_state(
         lambda: issue(10, state=next(states))
     )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "FAILED"
     assert "changed or could not be confirmed" in result.outputs["error"]
@@ -691,7 +691,7 @@ async def test_maximum_prerequisite_list_has_fresh_confirmation_budget(
             issue(number, state="closed")
         )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
     # +1 for the credential-bound identity lookup +5 for live comment
@@ -723,7 +723,7 @@ async def test_prerequisite_cache_preserves_cross_repository_identity(
             )
         )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 3
@@ -748,7 +748,7 @@ async def test_dependency_gate_selection_and_preflight_use_fresh_github_state(
     activity_boundary.dependency_details[dependency_path] = issue(2615, state=state)
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY, "issueSearch": ""},
+        {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
     )
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == candidate["number"]
@@ -784,7 +784,7 @@ async def test_unverifiable_dependency_state_cannot_admit_an_issue(
     )
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY, "issueSearch": ""},
+        {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
     )
     assert result.status == "FAILED"
     assert "prerequisite identity or state is invalid" in result.outputs["error"]
@@ -902,7 +902,7 @@ async def test_search_pagination_skips_blocked_issues_and_pull_requests(
         [issue(200, pull_request={}), issue()],
     ]
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == 4025
@@ -932,7 +932,7 @@ async def test_search_stops_on_empty_bounded_or_degraded_evidence(
     activity_boundary.pages[:] = pages
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY, "issueSearch": query},
+        {"repository": REPOSITORY, "issueSearch": query, "includeAllAuthors": False},
     )
     assert result.status == "FAILED"
     assert expected in result.outputs["error"]
@@ -943,7 +943,7 @@ async def test_search_stops_on_empty_bounded_or_degraded_evidence(
 async def test_repository_scope_is_case_insensitive(activity_boundary):
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY.lower(), "issueSearch": ""},
+        {"repository": REPOSITORY.lower(), "issueSearch": "", "includeAllAuthors": False},
     )
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == 4025
@@ -953,7 +953,7 @@ async def test_repository_scope_is_case_insensitive(activity_boundary):
 async def test_query_search_and_previous_explicit_issue_payload(activity_boundary):
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY, "issueSearch": "dashboard"},
+        {"repository": REPOSITORY, "issueSearch": "dashboard", "includeAllAuthors": False},
     )
     assert result.status == "COMPLETED"
     search_requests = [
@@ -995,7 +995,7 @@ async def test_selected_issue_is_revalidated_before_loading_brief(
 ):
     activity_boundary.detail.update(changed)
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "FAILED"
     assert "could not be confirmed" in result.outputs["error"]
@@ -1013,7 +1013,7 @@ async def test_incomplete_selected_details_cannot_produce_a_trusted_brief(
     else:
         activity_boundary.detail[field] = {"unexpected": "shape"}
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "FAILED"
     assert "trustedSource" not in result.outputs
@@ -1031,7 +1031,7 @@ async def test_search_skips_in_progress_issues_and_revalidates_fresh_detail(
     ]
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY, "issueSearch": query},
+        {"repository": REPOSITORY, "issueSearch": query, "includeAllAuthors": False},
     )
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == 4025
@@ -1040,7 +1040,7 @@ async def test_search_skips_in_progress_issues_and_revalidates_fresh_detail(
     activity_boundary.detail.update({"labels": [{"name": "status: in-progress"}]})
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY, "issueSearch": query},
+        {"repository": REPOSITORY, "issueSearch": query, "includeAllAuthors": False},
     )
     assert result.status == "FAILED"
     assert "could not be confirmed" in result.outputs["error"]
