@@ -80,7 +80,8 @@ async def finalize_failed_attempt(
     """Finalize one failed/canceled controlling attempt at the durable boundary.
 
     Ordered effects: plan (pure) -> create proposed terminal comment ->
-    apply destination labels add-before-remove -> read back issue -> classify
+    apply destination labels add-before-remove -> close the issue when the
+    destination is a closed terminal -> read back issue -> classify
     mutation outcome -> publish released terminal comment update. Any unknown
     or failed step returns ``released=False`` with ``pending`` detail and
     ``workspaceRetained=True``; only an observed label outcome plus a
@@ -201,6 +202,28 @@ async def finalize_failed_attempt(
                 return base
             base["reasonCode"] = code
             base["summary"] = str(removed.get("summary") or "Label remove failed.")
+            return base
+    # Step 2b: close the issue when the destination is a closed terminal.
+    # Mirrors the success-path update_github_issue_status close step: without
+    # this, a to_closed mutation plan could never observe closed on read-back
+    # and failure-after-merge could never release.
+    if close_issue:
+        try:
+            closed = await service.close_issue(repo=repository, issue_number=issue_number)
+        except Exception as exc:  # noqa: BLE001
+            base["reasonCode"] = "close_unknown"
+            base["summary"] = f"Issue close result unknown: {exc.__class__.__name__}."
+            base["pendingSync"] = finalization.record_pending_sync(reason="issue close unknown")
+            return base
+        if not closed.get("ok"):
+            code = str(closed.get("reasonCode") or "close_failed")
+            if code == "outcome_unknown":
+                base["reasonCode"] = "close_unknown"
+                base["summary"] = "Issue close result unknown; pending state remains distinguishable and repairable."
+                base["pendingSync"] = finalization.record_pending_sync(reason="issue close unknown")
+            else:
+                base["reasonCode"] = code
+                base["summary"] = str(closed.get("summary") or "Issue close failed.")
             return base
     # Step 3: read back and classify before claiming release.
     read = await _fetch_issue(service=service, repository=repository, issue_number=issue_number)

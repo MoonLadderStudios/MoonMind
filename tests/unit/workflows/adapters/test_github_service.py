@@ -1441,3 +1441,81 @@ async def test_evaluate_pull_request_readiness_blocks_changes_requested_review(m
     assert result.ready is False
     assert result.automated_review_complete is False
     assert result.blockers[0]["summary"] == "Automated review has requested changes."
+
+
+# ---------------------------------------------------------------------------
+# close_issue (#4179 failed-attempt finalization close step)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_close_issue_success_patches_state_closed(monkeypatch):
+    """close_issue PATCHes state=closed and reports closed."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.patch = AsyncMock(return_value=_mock_response(200, {"state": "closed"}))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("moonmind.workflows.adapters.github_service.httpx.AsyncClient", return_value=mock_client):
+        svc = GitHubService()
+        result = await svc.close_issue(repo="o/r", issue_number=4179)
+
+    assert result["ok"] is True
+    assert result["reasonCode"] == "closed"
+    _args, kwargs = mock_client.patch.call_args
+    assert kwargs["json"] == {"state": "closed"}
+    assert "o/r/issues/4179" in _args[0]
+
+
+@pytest.mark.asyncio
+async def test_close_issue_denied_never_reports_closed(monkeypatch):
+    """A 403 close reports denied, never closed."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    denied = _mock_response(403, {"message": "forbidden"})
+    mock_client.patch = AsyncMock(
+        side_effect=httpx.HTTPStatusError("forbidden", request=denied.request, response=denied)
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("moonmind.workflows.adapters.github_service.httpx.AsyncClient", return_value=mock_client):
+        svc = GitHubService()
+        result = await svc.close_issue(repo="o/r", issue_number=4179)
+
+    assert result["ok"] is False
+    assert result["reasonCode"] == "denied"
+
+
+@pytest.mark.asyncio
+async def test_close_issue_transport_loss_is_outcome_unknown(monkeypatch):
+    """Transport loss during close is outcome_unknown, not failure proof."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.patch = AsyncMock(side_effect=httpx.ConnectError("lost"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("moonmind.workflows.adapters.github_service.httpx.AsyncClient", return_value=mock_client):
+        svc = GitHubService()
+        result = await svc.close_issue(repo="o/r", issue_number=4179)
+
+    assert result["ok"] is False
+    assert result["reasonCode"] == "outcome_unknown"
+
+
+@pytest.mark.asyncio
+async def test_close_issue_missing_token_is_auth_unavailable(monkeypatch):
+    """No token resolves to auth_unavailable before any GitHub write."""
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("MOONMIND_GITHUB_TOKEN", raising=False)
+
+    svc = GitHubService()
+    result = await svc.close_issue(repo="o/r", issue_number=4179)
+
+    assert result["ok"] is False
+    assert result["reasonCode"] == "auth_unavailable"
