@@ -883,6 +883,7 @@ const ExecutionDetailSchema = z
     summary: z.string(),
     taskInstructions: z.string().nullable().optional(),
     status: z.string(),
+    completionDisposition: z.string().nullable().optional(),
     state: z.string(),
     rawState: z.string().optional(),
     temporalStatus: z.string().optional(),
@@ -9938,6 +9939,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
             <p className="page-meta">Workflow {taskId || '—'}</p>
             {execution ? (
               <WorkflowLifecycleStatusPill
+                completionDisposition={execution.completionDisposition}
                 status={resolveWorkflowDisplayStatus(
                   execution.rawState,
                   execution.state,
@@ -10109,6 +10111,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                 workflowTitle={workflowSubject}
                 statusPill={
                   <WorkflowLifecycleStatusPill
+                    completionDisposition={execution.completionDisposition}
                     status={resolveWorkflowDisplayStatus(
                       execution.rawState,
                       execution.state,

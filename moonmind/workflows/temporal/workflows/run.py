@@ -11139,6 +11139,14 @@ class MoonMindRunWorkflow:
                 non_retryable=True,
             )
 
+        if self._gated_continuation_request and workflow.patched(
+            "run-completion-disposition-visibility-v1"
+        ):
+            output_message = (
+                "Execution handed off to its owning workflow; "
+                "the requested outcome remains pending."
+            )
+
         terminal_state = (
             STATE_NO_COMMIT if output_status == "no_commit" else STATE_COMPLETED
         )
@@ -23975,6 +23983,13 @@ class MoonMindRunWorkflow:
             memo_dict["incident_reconstruction_ref"] = self._incident_reconstruction_ref
         if self._pull_request_url:
             memo_dict["pull_request_url"] = self._pull_request_url
+        if (
+            workflow.patched("run-completion-disposition-visibility-v1")
+            and self._state == STATE_COMPLETED
+            and self._gated_continuation_request
+        ):
+            memo_dict["completionDisposition"] = "gated_continuation"
+
         merge_automation_summary = self._merge_automation_summary_from_context()
         if merge_automation_summary:
             memo_dict["merge_automation"] = merge_automation_summary

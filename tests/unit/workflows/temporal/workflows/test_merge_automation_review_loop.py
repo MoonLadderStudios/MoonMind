@@ -1117,3 +1117,59 @@ async def test_review_clean_is_rejected_when_merge_authority_was_granted(
     assert result["status"] == "failed"
     assert result["blockers"][0]["kind"] == "resolver_disposition_invalid"
     assert "granted merge authority" in result["summary"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signature", ["fe7be0bb2682|3984847667|", None])
+@pytest.mark.parametrize("budget", [2, 5])
+async def test_repeated_reenter_handoff_exhausts_shared_progress_budget(
+    monkeypatch, signature, budget
+):
+    def result(child_id, attempt):
+        value = _request_review_result(child_workflow_id=child_id, head_sha=HEAD_1)
+        value["mergeAutomationDisposition"] = "reenter_gate"
+        value["gatedContinuation"].update(
+            schemaVersion="gated-continuation/v1",
+            action="reenter_gate",
+            reason="automated_review_wait",
+            retryAfterSeconds=60,
+            progressSignature=signature,
+        )
+        return value
+
+    harness = _Harness(monkeypatch, readiness=[_ready(HEAD_1)], child_results=result)
+    outcome = await MoonMindMergeAutomationWorkflow().run(
+        _payload(maxConsecutiveNoProgressCycles=budget)
+    )
+    assert outcome["status"] == "blocked"
+    assert outcome["blockers"][0]["kind"] == "review_loop_no_progress"
+    assert len(harness.child_workflow_ids) == budget + 1
+    assert outcome["reviewLoop"]["noProgressCycles"] == budget
+    assert not harness.request_payloads
+
+
+@pytest.mark.asyncio
+async def test_reenter_progress_budget_preserves_pre_patch_history(monkeypatch):
+    def result(child_id, attempt):
+        if attempt == 5:
+            return {"status": "success", "mergeAutomationDisposition": "merged"}
+        value = _request_review_result(child_workflow_id=child_id, head_sha=HEAD_1)
+        value["mergeAutomationDisposition"] = "reenter_gate"
+        value["gatedContinuation"].update(
+            schemaVersion="gated-continuation/v1",
+            action="reenter_gate",
+            reason="ci_running",
+            retryAfterSeconds=60,
+        )
+        return value
+
+    harness = _Harness(monkeypatch, readiness=[_ready(HEAD_1)], child_results=result)
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda name: name != "merge-automation-bound-reenter-progress-v1",
+    )
+    assert (await MoonMindMergeAutomationWorkflow().run(_payload()))[
+        "status"
+    ] == "merged"
+    assert len(harness.child_workflow_ids) == 5

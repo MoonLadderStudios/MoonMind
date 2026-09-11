@@ -230,6 +230,7 @@ const ExecutionRowSchema = z
     taskSkills: z.array(z.string()).nullable().optional(),
     title: z.string(),
     status: z.string(),
+    completionDisposition: z.string().nullable().optional(),
     state: z.string(),
     rawState: z.string().optional(),
     temporalStatus: z.string().optional(),
@@ -2572,7 +2573,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           </td>
                           {isColumnVisible('status') ? (
                             <td className="queue-table-cell-status">
-                              <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} />
+                              <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} completionDisposition={row.completionDisposition} />
                               {statusSupplements.map((item) => (
                                 <div key={item} className="workflow-list-status-supplement small">
                                   {item}
@@ -2632,7 +2633,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         </a>
                       </div>
                       <div className="queue-card-status">
-                        <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} />
+                        <WorkflowLifecycleStatusPill status={resolveWorkflowDisplayStatus(row.rawState, row.state, row.status)} completionDisposition={row.completionDisposition} />
                         {statusSupplements.map((item) => (
                           <div key={item} className="workflow-list-status-supplement small">
                             {item}

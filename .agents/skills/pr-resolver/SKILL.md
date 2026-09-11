@@ -146,7 +146,9 @@ metadata flag.
    ```
 2. Run the finalize gate checker. It refreshes PR metadata, CI, the complete
    comment inventory, and automated-review evidence for the exact head SHA
-   before deciding whether merge is allowed. Always pass the review-loop inputs
+   before deciding whether merge is allowed. Review/reaction retrieval errors
+   must fail with their diagnostics; they are never evidence of a pending or
+   absent review. Always pass the review-loop inputs
    exactly as supplied; omitting them silently disables the fresh-review
    requirement:
 

@@ -4068,6 +4068,9 @@ class ExecutionModel(BaseModel):
         "failed",
         "canceled",
     ] = Field(..., alias="status")
+    completion_disposition: Literal["gated_continuation"] | None = Field(
+        None, alias="completionDisposition"
+    )
     dashboard_status: Literal[
         "queued",
         "running",
@@ -4249,6 +4252,9 @@ class ExecutionListItemModel(BaseModel):
         "failed",
         "canceled",
     ] = Field(..., alias="status")
+    completion_disposition: Literal["gated_continuation"] | None = Field(
+        None, alias="completionDisposition"
+    )
     dashboard_status: Literal[
         "queued",
         "running",
