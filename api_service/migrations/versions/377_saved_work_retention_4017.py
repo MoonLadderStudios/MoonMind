@@ -18,7 +18,18 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 
-__all__ = ["revision", "down_revision", "upgrade", "downgrade"]
+# Alembic discovers migration identity from these module attributes (it
+# reads ``branch_labels``/``depends_on`` via getattr with None defaults, so
+# only the non-null chain links are declared here); ``__all__`` keeps that
+# external contract explicit for static analysis.
+__all__ = [
+    "revision",
+    "down_revision",
+    "branch_labels",
+    "depends_on",
+    "upgrade",
+    "downgrade",
+]
 
 revision: str = "377_saved_work_retention_4017"
 down_revision: Union[str, None] = "376_drop_manifest_registry_4192"

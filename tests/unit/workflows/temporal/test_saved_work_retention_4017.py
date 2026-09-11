@@ -705,31 +705,37 @@ async def test_bare_service_denied_across_data_plane_with_admitted_scope(
             )
             bare = "service:restore-worker"
 
-            for call in (
-                service.read(artifact_id=artifact.artifact_id, principal=bare),
-                service.read(
+            # Lazily build each denied call so the await itself is the
+            # effectful statement (eager coroutines in a tuple read as a
+            # no-effect statement to static analysis).
+            denied_calls = [
+                lambda: service.read(
+                    artifact_id=artifact.artifact_id, principal=bare
+                ),
+                lambda: service.read(
                     artifact_id=artifact.artifact_id,
                     principal=bare,
                     allow_restricted_raw=True,
                 ),
-                service.read_chunks(
+                lambda: service.read_chunks(
                     artifact_id=artifact.artifact_id, principal=bare
                 ),
-                service.read_path(
+                lambda: service.read_path(
                     artifact_id=artifact.artifact_id, principal=bare
                 ),
-                service.get_metadata(
+                lambda: service.get_metadata(
                     artifact_id=artifact.artifact_id, principal=bare
                 ),
-                service.presign_download(
+                lambda: service.presign_download(
                     artifact_id=artifact.artifact_id, principal=bare
                 ),
-                service.compute_preview(
+                lambda: service.compute_preview(
                     artifact_id=artifact.artifact_id, principal=bare
                 ),
-            ):
+            ]
+            for make_call in denied_calls:
                 with pytest.raises(TemporalArtifactAuthorizationError):
-                    await call
+                    await make_call()
 
             # Listing surfaces filter instead of leaking the row.
             listed, _total = await service.list_authorized_collection(
