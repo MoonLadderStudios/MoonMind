@@ -379,7 +379,9 @@ def bounded_story_loop_scope_guard(
 
 _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _PR_OPTIONAL_TASK_SKILLS = frozenset({"jira-implement", *_PR_OPTIONAL_AGENT_SKILLS})
-_CANONICAL_NO_COMMIT_TASK_PRESETS = frozenset({"github-issue-implement"})
+_CANONICAL_NO_COMMIT_TASK_PRESETS = frozenset(
+    {"github-issue-implement", "github-issue-search-and-implement"}
+)
 _EXTERNAL_INTEGRATION_MONITOR_IDS = frozenset({"codex_cloud", "jules"})
 _PUBLISH_NOT_REQUIRED_STATUSES = frozenset(
     {

@@ -2163,6 +2163,58 @@ async def test_github_issue_implement_no_commit_closure_finalizes_as_no_commit(
     ]
 
 
+def test_github_issue_search_and_implement_no_commit_finalizes_as_no_commit(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    """Search-and-implement shares the implement no-commit outcome.
+
+    Regression for mm:2898e272-c0ac-4eba-b546-056e3f4a4986-2026-09-11T16:25:00Z:
+    a FULLY_IMPLEMENTED assessment with no repository changes correctly
+    produces ``push_status=no_commits`` on branch ``main``. The run must
+    finalize as ``no_commit`` (issue already implemented, Done side effect
+    preserved), not fail with "no publishable diff was produced".
+    """
+
+    mock_run_workflow._canonical_no_commit_outcome_enabled = True
+    parameters = {
+        "publishMode": "pr",
+        "workflow": {
+            "tool": {"type": "skill", "name": "auto"},
+            "skill": {"name": "auto"},
+            "appliedStepTemplates": [
+                {"slug": "github-issue-search-and-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+    no_commit_result = {
+        "outputs": {
+            "push_status": "no_commits",
+            "push_branch": "main",
+            "push_base_ref": "main",
+            "push_commit_count": 0,
+            "operator_summary": "GitHub issue #4175 was already implemented.",
+        }
+    }
+    mock_run_workflow._record_execution_context(
+        node_id="create-pull-request",
+        execution_result=no_commit_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result=no_commit_result,
+    )
+
+    assert mock_run_workflow._publish_status == "not_required"
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters=parameters
+    )
+
+    assert status == "no_commit"
+    assert "No pull request was required" in message
+    assert "no publishable diff was produced" not in message
+    assert publish_failure is False
+
+
 @pytest.mark.asyncio
 async def test_already_implemented_no_commit_pr_handoff_completes_jira_done(
     mock_run_workflow: MoonMindRunWorkflow,
