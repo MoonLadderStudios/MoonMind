@@ -1,9 +1,11 @@
 slug: github-issue-search-and-implement
 title: GitHub Issue Search and Implement
-description: Search GitHub issues for the best available match (skipping issues already
-  marked status in-progress), or the first unblocked issue skipping in-progress
-  work when the search is blank, then implement it following the GitHub Issue Implement
-  workflow, creating a pull request and updating the issue.
+description: Search GitHub issues for the best eligible match under the shared lifecycle
+  eligibility decision (Available means no MoonMind status label; Recovery-needed
+  is a continuation candidate only with sufficient stopped-writer, prior-work, retry,
+  and policy evidence), or the first eligible unblocked issue when the search is blank,
+  then implement it following the GitHub Issue Implement workflow, adopting any safely
+  recoverable partial PR and updating the issue.
 scope: global
 tags:
 - github
@@ -48,10 +50,16 @@ annotations:
       issue_search:
         type: string
         title: GitHub issue search
-        description: Free-text search used as '<search> is:issue state:open' (skipping
-          issues already marked status in-progress). Leave blank to fall back to scanning
-          open issues for the first one without blocking dependencies and without an
-          in-progress status.
+        description: Free-text search used as '<search> is:issue state:open' for candidate
+          discovery only; every candidate is revalidated through the shared lifecycle
+          eligibility decision (Available means no MoonMind status label, not no labels
+          at all; Recovery-needed continuations require stopped-writer, prior-work,
+          retry, and policy evidence; in-progress, code-review, needs-attention, closed,
+          mixed/unknown states, unresolved active comments, and unsafe or incomplete
+          handoffs are excluded). Leave blank to fall back to a bounded repository
+          scan for the first eligible candidate without blocking dependencies. Safe
+          recoveries within equivalent scope/priority are preferred under a bounded
+          fair policy so one difficult issue cannot monopolize recurring runs.
       repository:
         type: string
         title: Repository
@@ -99,10 +107,40 @@ steps:
 - title: Resolve GitHub issue and load trusted brief
   type: tool
   instructions: >-
-    Resolve the best available open issue matching issueSearch (skipping issues already
-    marked status in-progress), or the first unblocked open issue skipping in-progress
-    work when blank, within 500 candidates. Load its trusted issue brief and
-    preserve the resolved identity and search evidence for downstream steps.
+    Resolve one eligible open issue through the shared lifecycle eligibility decision
+    and load its trusted issue brief, preserving the resolved identity and search
+    evidence for downstream steps.
+
+    Available means no MoonMind status label (ordinary labels do not block); a
+    Recovery-needed issue is a continuation candidate only with sufficient
+    stopped-writer, prior-work, retry, and policy evidence. Exclude in-progress,
+    code-review, needs-attention, closed, mixed/unknown states, unresolved active
+    comments, and unsafe or incomplete handoffs. Existing explicit blockers and
+    prerequisite rules continue to apply. Search and cached results discover
+    candidates only: directly revalidate issue, comments, relevant PRs, and admission
+    state for the pinned repository identity, honoring the requested repository,
+    query, explicit labels, constraints, and priority scope. Prefer safe recoveries
+    within equivalent scope/priority under a bounded fair policy.
+
+    Preserve bounded candidate, comment-page, prerequisite, and request budgets
+    (500 candidates across five pages of 100; 100-request prerequisite budget).
+    Return distinct no-eligible-candidate, incomplete-evidence, cooldown/hold,
+    permission, and GitHub-unavailable outcomes. Do not silently widen the query,
+    treat a rate-limited scan as empty, or launch a fresh attempt to escape
+    exhausted retry history; inherit cross-device retry/cooldown/hold history.
+
+    Recovery evidence arrives through the trusted workflow input channel only:
+    a scheduler or reconciler that queues a continuation supplies the stopped
+    predecessor and usable-handoff evidence (plus the exact prior PR selector)
+    as workflow context, which this step forwards to the trusted tool. A fresh
+    invocation without such evidence correctly admits only Available candidates;
+    Recovery-needed candidates are passed over until sufficient evidence is
+    supplied. The trusted tool never invents handoff evidence from prose.
+
+    The trusted brief tool announces before expensive assessment and settles this
+    attempt's own announcement/writers before any recandidation on a detected
+    competitor. Preserve the resolved issue and predecessor across replay/retry and
+    never repeat search during recovery of an already selected issue.
   tool:
     id: github.load_issue_preset_brief
     requiredCapabilities:
@@ -111,6 +149,9 @@ steps:
       repository: '{{ inputs.repository or context.get(''repository'', '''') }}'
       issueSearch: '{{ inputs.issue_search }}'
       artifactPath: artifacts/github-issue-implement-brief.json
+      predecessorStopped: '{{ context.get(''predecessorStopped'', context.get(''predecessor_stopped'', '''')) }}'
+      handoffUsable: '{{ context.get(''handoffUsable'', context.get(''handoff_usable'', '''')) }}'
+      priorWorkPullRequest: '{{ context.get(''priorWorkPullRequest'', context.get(''prior_work_pull_request'', context.get(''pullRequest'', context.get(''pull_request'', '''')))) }}'
 - title: Assess resolved issue implementation state
   repositoryOperation: read
   type: skill
@@ -159,6 +200,22 @@ steps:
       targetStatus: In Progress
       mode: start
       assessmentArtifactPath: artifacts/github-issue-implement-assessment.json
+- title: Resolve existing pull request target
+  type: skill
+  annotations:
+    issueImplementRole: existing-pr-resolution
+  instructions: |-
+    Read the resolved issue from MoonMind trusted previous step context and artifacts/github-issue-implement-brief.json before doing anything.
+
+    Best-effort existing-PR resolution for a safely recoverable continuation: when the trusted brief carries prior-work evidence with an exact existing PR (the prior_work_pull_request / priorWorkPullRequest selector routed from the trusted input channel for a safely released partial PR from a stopped writer, e.g. a scheduled run on another device continuing this run's predecessor), dispatch the registered github.resolve_pull_request_target tool with the resolved repository and that PR selector so workspace preparation and downstream steps receive the exact existing PR and its validated current head. When the brief carries no prior-work PR selector, report resolution as skipped without failing and without creating a pull request. Never reset a continuation to the base branch. A partial PR is not a fully-implemented verdict; accepted evidence must match current requirements and code revision.
+  skill:
+    id: auto
+    args:
+      brief_artifact_path: artifacts/github-issue-implement-brief.json
+      assessment_artifact_path: artifacts/github-issue-implement-assessment.json
+    requiredCapabilities:
+    - git
+    - gh
 - title: Implement resolved issue
   type: skill
   instructions: |-
@@ -167,6 +224,8 @@ steps:
     {{ inputs.constraints }}
 
     Following the GitHub Issue Implement preset (github-issue-implement) work-PR implement stage for the resolved issue: if the verdict is FULLY_IMPLEMENTED, make no code changes and report implementation as skipped. If BLOCKED, stop without changes. If PARTIALLY_IMPLEMENTED, treat the assessment's unmet and partially-met requirements as the authoritative bounded backlog. If NOT_IMPLEMENTED, implement the work described by the brief. Scope strictly to the brief and acceptance criteria. Add or update tests covering the behavior changes.
+
+    When the existing-PR resolution step produced an exact existing PR and validated current head, continue that same PR from its validated head: prepare the workspace from the existing head, implement only the remaining requirements, and update that PR. Preserve the resolved issue and predecessor across replay/retry. Never repeat search during recovery of an already selected issue, reset a continuation to the base branch, or create a second PR just because the preset normally produces one. Keep internal remediation within this one issue attempt.
 
     Preserve the resolved repository and issue number in commit messages so downstream verification and the pull request can reference them. Do not create a pull request from this step; verification and publication are owned by later steps.
   skill:
@@ -263,7 +322,7 @@ steps:
 
     {{ inputs.constraints }}
 
-    The initial assessment verdict and the later verification verdict have different roles. Skip PR creation only when the initial assessment in artifacts/github-issue-implement-assessment.json was FULLY_IMPLEMENTED and this run produced no repository changes. If the initial assessment was BLOCKED, stop without changes. If it was NOT_IMPLEMENTED or PARTIALLY_IMPLEMENTED, publish the implementation produced by this run even when the restored work branch is clean and its commits are already pushed. A later FULLY_IMPLEMENTED verification approves that implementation for publication; it does not mean the work was already on the base branch and does not authorize a no-change outcome.
+    The initial assessment verdict and the later verification verdict have different roles. Skip PR creation only when the initial assessment in artifacts/github-issue-implement-assessment.json was FULLY_IMPLEMENTED and this run produced no repository changes. If the initial assessment was BLOCKED, stop without changes. If it was NOT_IMPLEMENTED or PARTIALLY_IMPLEMENTED, publish the implementation produced by this run even when the restored work branch is clean and its commits are already pushed. When an exact existing PR and validated current head were resolved for this continuation, update that same PR rather than creating a second PR. A later FULLY_IMPLEMENTED verification approves that implementation for publication; it does not mean the work was already on the base branch and does not authorize a no-change outcome.
 
     {% if inputs.run_verify %}Only proceed when the latest controlling post-remediation moonspec-verify verdict in artifacts/github-issue-implement-verify.json is FULLY_IMPLEMENTED. If the verifier reported ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, or FAILED_UNRECOVERABLE, or if 6 remediation attempts have been exhausted without FULLY_IMPLEMENTED, stop without creating a pull request.{% else %}Confirm implementation is complete and the focused tests required by the issue have passed; verification was disabled for this run so do not require artifacts/github-issue-implement-verify.json.{% endif %}
 
@@ -284,6 +343,22 @@ steps:
     issueImplementRole: code-review-handoff
   instructions: |-
     Read the resolved issue from MoonMind trusted previous step context and artifacts/github-issue-implement-assessment.json (or the recorded verdict from the assess step) before changing GitHub.
+
+    Terminal finalization ownership: failed, blocked, canceled, and exhausted
+    controlling outcomes that never reach this success-path step are owned by
+    the durable failed-attempt finalization boundary (the github_issue
+    finalize_failed_attempt activity plus the periodic handoff reconciler),
+    not by preset plan sequence: the workflow engine marks remaining plan
+    nodes skipped after a failed or blocked result and returns immediately on
+    cancellation, so a success-ordered preset node cannot serve as the
+    terminal handler. This step finalizes only runs that arrive here through
+    the success path; on any other controlling outcome, stop without changing
+    GitHub and leave the attempt for the durable finalizer and reconciler.
+    Keep internal remediation within this one issue attempt and inherit
+    cross-device retry/cooldown/hold history; internal retries do not release
+    or reset the issue budget.
+
+    Route completed work to missing verification, review/merge follow-up, or status finalization under the admitted policy. Ordinary code-review issues remain excluded from implementation search; a partial PR does not constitute a fully implemented verdict and accepted evidence must match current requirements and code revision.
 
     If the recorded verdict is BLOCKED, stop without changing GitHub and report the blocking evidence. If the recorded verdict is FULLY_IMPLEMENTED, apply the configured Done strategy via the trusted GitHub update tool. Otherwise {% if inputs.run_verify %}read artifacts/github-issue-implement-verify.json and require the latest controlling verifier result to report FULLY_IMPLEMENTED before any Code Review update{% else %}confirm implementation is complete and the focused tests required by the issue have passed; verification was disabled for this run so do not require artifacts/github-issue-implement-verify.json{% endif %}. Then read artifacts/github-issue-implement-pr.json, verify it contains a pull_request_url for the resolved issue, and dispatch the registered github.update_issue_status tool with mode finalize_after_pr_or_done, the resolved repository and issue number, the PR artifact path, and the verification artifact path. {% if inputs.run_verify %}If the verifier artifact is missing, terminal, or still reports ADDITIONAL_WORK_NEEDED after remediation is exhausted, stop without changing GitHub.{% else %}If the pull request artifact is missing or lacks a confirmed pull_request_url, stop without changing GitHub.{% endif %} Do not assume a single organization's workflow; use the configured label/comment/close strategy exposed by the trusted GitHub update tool.
   tool:
