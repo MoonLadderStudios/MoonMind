@@ -6317,6 +6317,26 @@ async def update_github_issue_status(
                 ),
             },
         )
+    if (
+        outcome.outcome == "already_applied"
+        and interpretation.settled == "code_review"
+        and target == "to_code_review"
+        and pull_request_url
+    ):
+        # Competing-PR contention: the code-review label was already set,
+        # possibly by another contender's PR. This run does not choose a
+        # canonical PR and does not change labels; it records its own verified
+        # PR link below so the review journey sees both. The review/merge
+        # owner decides which PR advances. Each contender mints its own
+        # attempt (bound to its workflow/run when supplied); same-input
+        # Temporal retries reuse the existing list-by-marker reconciliation
+        # below rather than overwriting another attempt's comment.
+        warnings.append(
+            "Issue already in code-review; recorded additional PR "
+            f"{pull_request_url} without changing labels. Multiple open PRs "
+            "for one issue require a review-owner decision; this run does not "
+            "select a canonical PR."
+        )
     handoff = None
     comment_body = ""
     pr_url = pull_request_url

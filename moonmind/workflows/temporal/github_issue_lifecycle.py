@@ -505,14 +505,29 @@ def plan_transition(
         )
     required = _TRANSITION_REQUIREMENTS.get((from_settled, to_target))
     if required is None:
-        return TransitionDecision(
-            allowed=False,
-            from_settled=from_settled,
-            to_target=to_target,
-            reason=cleaned_reason,
-            reason_code="unsupported_transition",
-            summary=f"Transition {from_settled} -> {to_target} requires an explicit decision under the existing authority contracts.",
-        )
+        # Idempotent code-review retry: already in the desired state is
+        # success, not a workflow failure. A lost finalize retry, a re-run,
+        # or a losing contender that observed the winner's code-review label
+        # reconciles to already_applied (empty mutation plan) rather than
+        # failed_unrecoverable. Same evidence bar as a normal move to code
+        # review: do not claim already-in-review without verified PR
+        # evidence. All other unlisted pairs still require an explicit
+        # decision; in particular there is no reason-only release to
+        # Available that could publish false release evidence.
+        if (
+            from_settled == SETTLED_CODE_REVIEW
+            and to_target == TO_CODE_REVIEW
+        ):
+            required = ("gates_satisfied", "pr_url_verified")
+        else:
+            return TransitionDecision(
+                allowed=False,
+                from_settled=from_settled,
+                to_target=to_target,
+                reason=cleaned_reason,
+                reason_code="unsupported_transition",
+                summary=f"Transition {from_settled} -> {to_target} requires an explicit decision under the existing authority contracts.",
+            )
     missing = tuple(key for key in required if not _truthy_evidence(evidence_mapping.get(key)))
     if not cleaned_reason:
         missing = (*missing, "reason")
