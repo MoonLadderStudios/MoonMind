@@ -1034,6 +1034,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "github_issue_finalize_failed_attempt",
     ),
+    "github_issue.reconcile_handoffs": (
+        "integrations",
+        "github_issue_reconcile_handoffs",
+    ),
     "pr_resolver.resolve_selector": (
         "integrations",
         "pr_resolver_resolve_selector",
@@ -5135,6 +5139,60 @@ class TemporalIntegrationActivities:
             "repository": repository,
             "issueNumber": issue_number,
             **outputs,
+        }
+
+    async def github_issue_reconcile_handoffs(self, payload, /, **kwargs):
+        """Reconcile interrupted issue handoffs through the bounded scan (durable entrypoint).
+
+        Durable counterpart to periodic maintenance: the default scheduled
+        ``MoonMind.GitHubIssueReconcile`` workflow executes
+        ``github_issue.reconcile_handoffs`` instead of relying on an agent
+        to repair stranded handoffs. Only ``repository`` is required;
+        ``issueNumbers`` optionally narrows the run. Pending-sync evidence
+        persists across worker restarts via ``stateDir``.
+        """
+        from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import (
+            reconcile_github_issue_handoffs,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "github_issue.reconcile_handoffs requires an object"
+            )
+        config = payload.get("reconciliation")
+        if not isinstance(config, Mapping):
+            config = payload
+
+        def _first(*keys: str) -> Any:
+            for key in keys:
+                if key in config and config[key] is not None:
+                    return config[key]
+            return None
+
+        repository = str(_first("repository", "repo") or "").strip()
+        if not repository:
+            raise TemporalActivityRuntimeError(
+                "github_issue.reconcile_handoffs requires repository"
+            )
+        raw_numbers = _first("issueNumbers", "issue_numbers")
+        issue_numbers = None
+        if isinstance(raw_numbers, (list, tuple)):
+            parsed: list[int] = []
+            for raw in raw_numbers:
+                try:
+                    parsed.append(int(raw))  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    continue
+            issue_numbers = parsed
+        result = await reconcile_github_issue_handoffs(
+            repository=repository,
+            issue_numbers=issue_numbers,
+            state_dir=_first("stateDir", "state_dir"),
+        )
+        return {
+            "status": "succeeded" if result.get("ok") else "failed",
+            "repository": repository,
+            **result,
         }
 
     async def pr_resolver_resolve_selector(self, payload, /, **kwargs):
