@@ -1,7 +1,7 @@
 """Add saved-work use-claim and deletion-intent retention tables.
 
-Revision ID: 377_saved_work_retention_4017
-Revises: 376_drop_manifest_registry_4192
+Revision ID: 378_saved_work_retention_4017
+Revises: 377_repository_connections_4005
 Create Date: 2026-09-11
 
 MoonLadderStudios/MoonMind#4017: operation-scoped multi-owner retention
@@ -31,8 +31,8 @@ __all__ = [
     "downgrade",
 ]
 
-revision: str = "377_saved_work_retention_4017"
-down_revision: Union[str, None] = "376_drop_manifest_registry_4192"
+revision: str = "378_saved_work_retention_4017"
+down_revision: Union[str, None] = "377_repository_connections_4005"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
