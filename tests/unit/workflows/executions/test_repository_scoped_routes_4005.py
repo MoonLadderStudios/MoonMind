@@ -207,7 +207,6 @@ def test_github_app_is_discriminated_variant() -> None:
 
 
 def test_zero_assignments_grant_nothing_and_legacy_is_refused() -> None:
-    connection = _pat_connection("repository-connection:team-a")
     identity = _identity("repo-id-1")
     with pytest.raises(RepositoryRouteError, match="REPOSITORY_SETUP_REQUIRED"):
         admit_scoped_route(
