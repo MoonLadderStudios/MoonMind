@@ -71,5 +71,6 @@ async def test_registry_exposes_and_dispatches_authenticated_bounded_read() -> N
             "include_content": True,
             "max_content_bytes": 1024,
             "principal": "user:owner",
+            "admitted_principal": None,
         }
     ]
