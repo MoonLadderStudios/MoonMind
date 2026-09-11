@@ -36,6 +36,10 @@ from moonmind.workflows.temporal.github_issue_attempts import (
     render_attempt_comment,
     resolve_installation_id,
 )
+from moonmind.workflows.temporal.github_issue_admission import (
+    ENTRYPOINT_EXPLICIT,
+    admit_for_entrypoint,
+)
 from moonmind.workflows.temporal.github_issue_lifecycle import (
     attempt_evidence_blocks_admission,
     classify_mutation_outcome,
@@ -4605,9 +4609,18 @@ async def load_github_issue_preset_brief(
         or not is_lifecycle_selectable_candidate(
             issue_data, _github_status_attempt_context(inputs, _context)
         )
+        or not admit_for_entrypoint(
+            ENTRYPOINT_EXPLICIT,
+            repository=repository,
+            issue_number=issue_number,
+            issue=issue_data,
+            attempt_context=_github_status_attempt_context(inputs, _context),
+        ).allowed
     ):
         # Direct issue loads run the same admission policy as search: an
         # explicit issue reference is not a bypass around lifecycle state.
+        # Both paths route through the one shared exact-issue admission
+        # boundary (issue #4178); search uses ENTRYPOINT_SEARCH instead.
         return ToolResult(
             status="FAILED",
             outputs={
@@ -6308,8 +6321,34 @@ async def update_github_issue_status(
     interpretation = interpret_issue({"state": issue.get("state", "open"), "labels": current_labels})
     # Re-read validated attempt context before mutating: a missing
     # in-progress label never overrides supplied unresolved active-attempt
-    # evidence.
+    # evidence. The start transition additionally revalidates through the one
+    # shared exact-issue admission boundary (issue #4178).
     attempt_context = _github_status_attempt_context(inputs, _context)
+    if target == "to_in_progress":
+        shared_admission = admit_for_entrypoint(
+            ENTRYPOINT_EXPLICIT,
+            repository=repository,
+            issue_number=issue_number,
+            issue={"state": issue.get("state", "open"), "labels": current_labels},
+            attempt_context=attempt_context,
+        )
+        if not shared_admission.allowed and shared_admission.reason_code in {
+            "active_attempt_conflict",
+            "missing_label_with_active_attempt",
+            "manual_in_progress_without_trusted_owner",
+        }:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "issueRef": issue_ref,
+                    "decision": "blocked",
+                    "lifecycleSettled": interpretation.settled,
+                    "reasonCode": shared_admission.reason_code,
+                    "summary": (
+                        f"Skipped GitHub issue update for {issue_ref}: {shared_admission.summary}"
+                    ),
+                },
+            )
     if target == "to_in_progress" and attempt_evidence_blocks_admission(attempt_context):
         return ToolResult(
             status="FAILED",
