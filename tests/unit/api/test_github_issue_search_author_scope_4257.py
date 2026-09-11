@@ -41,7 +41,7 @@ async def catalog_db(tmp_path):
 @asynccontextmanager
 async def seeded_catalog(tmp_path):
     seed_dir = tmp_path / "seeds"
-    seed_dir.mkdir()
+    seed_dir.mkdir(exist_ok=True)
     shutil.copy(SEED_FILE, seed_dir / SEED_FILE.name)
     async with catalog_db(tmp_path) as maker:
         async with maker() as session:

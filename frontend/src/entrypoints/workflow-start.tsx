@@ -4552,7 +4552,7 @@ function serializeToolInputValues(values: Record<string, unknown>): string {
   return JSON.stringify(values, null, 2);
 }
 
-function SchemaCapabilityFields({
+export function SchemaCapabilityFields({
   fields,
   detail,
   values,

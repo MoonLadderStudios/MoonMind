@@ -1276,8 +1276,10 @@ def _search_candidate(number: int, labels: list[str]) -> dict[str, Any]:
 
 
 class _SearchFakeResponse:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(self, payload: dict[str, Any], status_code: int = 200) -> None:
         self._payload = payload
+        self.status_code = status_code
+        self.headers: dict[str, str] = {}
 
     def raise_for_status(self) -> None:
         return None

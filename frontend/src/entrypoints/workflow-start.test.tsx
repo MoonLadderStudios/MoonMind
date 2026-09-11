@@ -38,6 +38,7 @@ import {
   resolveDefaultProviderProfileId,
   resolveLoadedProviderProfileId,
   resolveObjectiveInstructions,
+  SchemaCapabilityFields,
   workflowStartFormSnapshot,
   WORKFLOW_START_HEADING_QUOTES,
   WorkflowStartPage,
@@ -22825,5 +22826,101 @@ describe("Task Create MM-937 step hover containment", () => {
     expect(dashboardCss).toMatch(
       /#queue-dependency-list\s+\.queue-step-icon-button\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;[^}]*align-self:\s*center;[^}]*justify-self:\s*end;/s,
     );
+  });
+});
+
+describe("GitHub issue search author-scope checkbox (#4257)", () => {
+  // Mirrors api_service/data/presets/github-issue-search-and-implement.yaml
+  // annotations.inputSchema property order and exact label/help text. The
+  // backend suite pins those values against the seed; this suite pins that
+  // the shared schema renderer (not a preset-specific form) surfaces them.
+  const LABEL = "Include issues created by other users";
+  const HELP =
+    "By default, only issues created by the GitHub account used for this search are eligible.";
+  const fields: Array<[string, unknown]> = [
+    [
+      "issue_search",
+      {
+        type: "string",
+        title: "GitHub issue search",
+        description: "Free-text search for candidate discovery only.",
+      },
+    ],
+    [
+      "include_all_authors",
+      { type: "boolean", title: LABEL, description: HELP, default: false },
+    ],
+    [
+      "repository",
+      {
+        type: "string",
+        title: "Repository",
+        description: "GitHub owner/repository to search.",
+      },
+    ],
+  ];
+  const detail = {
+    uiSchema: {},
+    defaults: { include_all_authors: false },
+  };
+
+  function renderScopeFields(
+    values: Record<string, unknown>,
+    onChange: (name: string, value: unknown) => void,
+  ) {
+    return renderWithClient(
+      <SchemaCapabilityFields
+        fields={fields}
+        detail={detail}
+        values={values}
+        errors={{}}
+        disabled={false}
+        repositoryOptions={[]}
+        branchOptions={[]}
+        onChange={onChange}
+      />,
+    );
+  }
+
+  it("renders the unchecked checkbox immediately below the search field", () => {
+    const view = renderScopeFields({}, vi.fn());
+    const checkbox = view.getByLabelText(LABEL) as HTMLInputElement;
+    expect(checkbox.type).toBe("checkbox");
+    expect(checkbox.checked).toBe(false);
+    // Exact help text is visible alongside the control.
+    expect(view.getByText(HELP)).toBeTruthy();
+    // Field order follows the schema declaration: search, scope, repository.
+    const labels = Array.from(view.container.querySelectorAll("label")).map(
+      (element) => element.textContent,
+    );
+    expect(labels.length).toBe(3);
+    expect(labels[0]).toContain("GitHub issue search");
+    expect(labels[1]).toContain(LABEL);
+    expect(labels[2]).toContain("Repository");
+    view.unmount();
+  });
+
+  it("is visible without opening advanced settings", () => {
+    // No `advanced` uiSchema hint and no visibility gate: the field renders
+    // in the primary preset options block.
+    const view = renderScopeFields({}, vi.fn());
+    expect(view.getByLabelText(LABEL)).toBeTruthy();
+    view.unmount();
+  });
+
+  it("carries real booleans through the authoring path and persists drafts", () => {
+    const onChange = vi.fn();
+    const view = renderScopeFields({}, onChange);
+    const checkbox = view.getByLabelText(LABEL) as HTMLInputElement;
+    fireEvent.click(checkbox);
+    expect(onChange).toHaveBeenCalledWith("include_all_authors", true);
+    view.unmount();
+
+    // An explicitly authored opt-in re-renders checked (draft persistence).
+    const optedIn = renderScopeFields({ include_all_authors: true }, vi.fn());
+    expect(
+      (optedIn.getByLabelText(LABEL) as HTMLInputElement).checked,
+    ).toBe(true);
+    optedIn.unmount();
   });
 });
