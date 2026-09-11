@@ -8152,6 +8152,9 @@ async def test_existing_pr_survives_unchanged_omnigent_publication(
 
     def github_api(request):
         requests.append(request)
+        if "/comments" in request.url.path:
+            # Live comment readability gate expects a GitHub comment list.
+            return httpx.Response(200, json=[])
         if request.url.path.endswith("/pulls"):
             assert request.method == "GET"  # Adoption must never create a duplicate PR.
             assert request.url.params["head"] == f"MoonLadderStudios:{branch}"

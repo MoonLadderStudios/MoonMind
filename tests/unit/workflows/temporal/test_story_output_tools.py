@@ -368,7 +368,15 @@ async def test_load_github_issue_preset_brief_uses_requested_artifact_path(
         "artifacts/github-issue-orchestrate-brief.json"
     )
     assert result.outputs["issue"]["number"] == 1067
-    assert service.token_requests == ["MoonLadderStudios/MoonMind"]
+    # Req 2 (issue #4178): the eligible brief announces the attempt and
+    # re-reads, so the initial fetch plus the post-claim re-read each resolve
+    # a token.
+    assert service.token_requests == [
+        "MoonLadderStudios/MoonMind",
+        "MoonLadderStudios/MoonMind",
+    ]
+    assert result.outputs["admissionClaim"]["planned"] is True
+    assert result.outputs["admissionClaimExecuted"]["executed"] is True
 
 
 @pytest.mark.asyncio
