@@ -599,6 +599,66 @@ async def test_post_merge_github_completion_applies_done_status(
     }
     assert result["status"] == "succeeded"
     assert result["confirmedLabels"] == ["status: done"]
+
+
+async def test_github_issue_finalize_failed_attempt_binding_routes_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The durable failed-attempt entrypoint schedules the finalizer tool.
+
+    Regression for the unreferenced-registration gap: failed/canceled
+    controlling exits dispatch ``github_issue.finalize_failed_attempt``
+    through the durable activity boundary instead of relying on an agent to
+    invoke the skill.
+    """
+    from moonmind.workflows.temporal import story_output_tools
+
+    captured: dict[str, Any] = {}
+
+    async def fake_finalize_failed_attempt(inputs, _context=None):
+        captured.update(inputs)
+        return SimpleNamespace(
+            status="COMPLETED",
+            outputs={
+                "released": True,
+                "reasonCode": "released",
+                "disposition": "to_recovery_needed",
+            },
+        )
+
+    monkeypatch.setattr(
+        story_output_tools,
+        "finalize_github_issue_failed_attempt",
+        fake_finalize_failed_attempt,
+    )
+
+    result = await TemporalIntegrationActivities.github_issue_finalize_failed_attempt(
+        object(),
+        {
+            "repository": "MoonLadderStudios/MoonMind",
+            "issueNumber": 4179,
+            "executionEvent": "failed",
+            "fromSettled": "in_progress",
+            "attemptId": "att_test",
+            "nextAction": "continue-implementation",
+        },
+    )
+
+    assert captured["repository"] == "MoonLadderStudios/MoonMind"
+    assert captured["issueNumber"] == 4179
+    assert captured["executionEvent"] == "failed"
+    assert captured["fromSettled"] == "in_progress"
+    assert captured["attemptId"] == "att_test"
+    assert result["status"] == "succeeded"
+    assert result["released"] is True
+    assert result["disposition"] == "to_recovery_needed"
+
+
+async def test_github_issue_finalize_failed_attempt_requires_issue_identity() -> None:
+    with pytest.raises(Exception, match="requires repository and issueNumber"):
+        await TemporalIntegrationActivities.github_issue_finalize_failed_attempt(
+            object(), {"executionEvent": "failed"}
+        )
 from moonmind.workflows.temporal.report_artifacts import validate_report_bundle_result
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workloads.registry import RunnerProfileRegistry
