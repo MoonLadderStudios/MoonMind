@@ -26,6 +26,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
     RUN_CANONICAL_GIT_REPOSITORY_PROJECTION_PATCH,
     RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH,
+    RUN_CANONICAL_NO_COMMIT_SEARCH_PRESET_PATCH,
     RUN_LATE_REMEDIATION_HEAD_ATTEMPT_ORDINAL_PATCH,
     RUN_MANAGED_SESSION_CHECKPOINT_LOCATOR_PATCH,
     RUN_MOONSPEC_TITLE_REMEDIATION_DETECTION_PATCH,
@@ -897,6 +898,17 @@ def test_canonical_no_commit_patch_is_snapshotted_at_workflow_start() -> None:
     patch_name = "RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH"
 
     assert RUN_CANONICAL_NO_COMMIT_OUTCOME_PATCH.endswith("-v1")
+    assert source.count(patch_name) == 1
+    assert source.index(patch_name) < source.index(
+        "Starting MoonMind.UserWorkflow workflow"
+    )
+
+
+def test_canonical_no_commit_search_preset_patch_is_snapshotted_at_workflow_start() -> None:
+    source = inspect.getsource(MoonMindRunWorkflow.run)
+    patch_name = "RUN_CANONICAL_NO_COMMIT_SEARCH_PRESET_PATCH"
+
+    assert RUN_CANONICAL_NO_COMMIT_SEARCH_PRESET_PATCH.endswith("-v1")
     assert source.count(patch_name) == 1
     assert source.index(patch_name) < source.index(
         "Starting MoonMind.UserWorkflow workflow"
