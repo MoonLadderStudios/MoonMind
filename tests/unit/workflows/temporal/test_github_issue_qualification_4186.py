@@ -65,6 +65,7 @@ from moonmind.workflows.temporal.github_issue_finalization import (
     DISPOSITION_RECOVERY_NEEDED,
     choose_disposition,
     confirm_writer_stop,
+    preserve_authoritative_output,
     separate_objective_from_execution,
     settle_shared_mutations,
     should_finalize_controlling_attempt,
@@ -79,8 +80,12 @@ from moonmind.workflows.temporal.github_issue_lifecycle import (
     SETTLED_IN_PROGRESS,
     SETTLED_NEEDS_ATTENTION,
     SETTLED_RECOVERY_NEEDED,
+    TO_RECOVERY_NEEDED,
     attempt_evidence_blocks_admission,
+    classify_mutation_outcome,
     interpret_issue,
+    plan_label_mutation,
+    plan_transition,
 )
 from moonmind.workflows.temporal.github_issue_search import (
     is_lifecycle_selectable_candidate,
@@ -154,6 +159,21 @@ class ModeledGitHubService:
 
     def snapshot_issue(self) -> dict[str, Any]:
         return {"state": self.issue_state, "labels": list(self.labels), "number": ISSUE_NUMBER}
+
+    def apply_label_mutation(self, plan: Any) -> dict[str, Any]:
+        """Hermetic GitHub adapter: apply a production label-mutation plan.
+
+        Mirrors the trusted Activity boundary: destination labels are added
+        before old blockers are removed, unrelated labels are untouched, and
+        the caller must verify via read-back classification.
+        """
+        for label in plan.labels_to_add:
+            if label not in self.labels:
+                self.labels.append(label)
+        for label in plan.labels_to_remove:
+            if label in self.labels:
+                self.labels.remove(label)
+        return self.snapshot_issue()
 
 
 class DeploymentLocalState:
@@ -660,13 +680,59 @@ def test_best_effort_contract_across_three_deployments() -> None:
     assert topo.isolated()
 
     # Device A: failed partial implementation with portable work preserved.
+    # Drive the terminal handoff through the real production boundaries
+    # (finalization -> lifecycle transition -> hermetic GitHub mutation)
+    # instead of assigning the recovery label directly.
     topo.github.labels = ["status: in-progress"]
     topo.github.comments.append({"attemptId": "att_" + "a" * 24, "activity": "active"})
+    stop = confirm_writer_stop(
+        {
+            "writers_stopped": True,
+            "stop_method": "runtime_quiescence",
+            "stop_evidence": "device-a runtime quiescence for att_aaa",
+            "stop_proof": "process_wait_verified",
+        }
+    )
+    assert stop["stopped"] is True
+    settled = settle_shared_mutations(
+        {"push_outcome": "confirmed", "pr_outcome": "confirmed", "merge_outcome_absent": True}
+    )
+    assert settled["settled"] is True
+    preserved = preserve_authoritative_output(
+        {
+            "save_method": "pr_head_verified",
+            "pr_url": f"https://github.com/{REPO}/pull/7",
+            "revision": "a" * 40,
+            "preservation_verified": True,
+        }
+    )
+    assert preserved["preserved"] is True
+    handoff_published = bool(settled["settled"] and preserved["preserved"])
+    assert handoff_published is True
     disposition_a = choose_disposition({"portable_work_safe": True, "preservation_verified": True})
     assert disposition_a["disposition"] == DISPOSITION_RECOVERY_NEEDED
     assert disposition_a["disposition"] == "to_recovery_needed"
-    topo.github.labels = ["status: recovery-needed"]
+    from_settled = interpret_issue(topo.github.snapshot_issue()).settled
+    assert from_settled == SETTLED_IN_PROGRESS
+    transition = plan_transition(
+        from_settled=from_settled,
+        to_target=TO_RECOVERY_NEEDED,
+        evidence={"writers_stopped": True, "handoff_published": "handoff-device-a"},
+        reason="Device A finalization publishes the verified handoff for att_aaa",
+    )
+    assert transition.allowed is True, transition.summary
+    mutation_plan = plan_label_mutation(
+        from_settled=from_settled,
+        to_target=TO_RECOVERY_NEEDED,
+        current_labels=list(topo.github.labels),
+    )
+    assert "status: recovery-needed" in list(mutation_plan.labels_to_add)
+    # The observed GitHub PR read comes from the trusted Activity boundary;
+    # discovery/routing below validates it rather than trusting local state.
     topo.github.prs[7] = _open_pr()
+    read_back = topo.github.apply_label_mutation(mutation_plan)
+    outcome = classify_mutation_outcome(plan=mutation_plan, read_back=read_back)
+    assert outcome.outcome == "applied", outcome.detail
     topo.deployments["a"].pending_sync.append({"effect": "terminal-handoff", "attempt": "a"})
 
     # Device B: separate local state, same shared GitHub; continues the PR.

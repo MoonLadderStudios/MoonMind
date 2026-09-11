@@ -29,6 +29,8 @@ try:
 
     load_dotenv()
 except ImportError:
+    # dotenv is an optional local convenience for loading a disposable-repo
+    # probe configuration; the provider checks read os.environ directly.
     pass
 
 _TOKEN = os.environ.get("GITHUB_TOKEN", "").strip() or os.environ.get("GH_TOKEN", "").strip()
