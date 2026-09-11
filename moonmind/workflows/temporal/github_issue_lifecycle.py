@@ -350,6 +350,54 @@ def is_selectable_candidate(
     return True, interpretation
 
 
+def preserved_work_continuation(
+    *,
+    repository: str,
+    issue_number: int,
+    lineage_validated: bool,
+    lineage_pr_url: Any = "",
+    lineage_pr_head: Any = "",
+    lineage_pr_base: Any = "",
+    lineage_saved_branch: Any = "",
+    lineage_saved_sha: Any = "",
+    candidate_basis: Any = "attempt_lineage+github_read",
+    github_pr: Mapping[str, Any] | None = None,
+    gate_evidence: Mapping[str, Any] | None = None,
+    implementation_complete: bool = False,
+    verification_current: bool = False,
+    writable: bool = True,
+) -> dict[str, Any]:
+    """Route validated preserved-work evidence to its continuation phase.
+
+    Production lifecycle consumption of the portable prior-work
+    discovery/routing boundary (``github_issue_continuation``): recovery-needed
+    admission passes the validated attempt lineage and the direct GitHub PR
+    read, and receives the typed discovery result plus same-PR phase routing.
+    Deterministic and side-effect-free; GitHub reads stay at the trusted
+    Activity/service boundary.
+    """
+    from moonmind.workflows.temporal import (
+        github_issue_continuation as _continuation,
+    )
+
+    return _continuation.plan_issue_continuation(
+        repository=repository,
+        issue_number=issue_number,
+        lineage_validated=lineage_validated,
+        lineage_pr_url=lineage_pr_url,
+        lineage_pr_head=lineage_pr_head,
+        lineage_pr_base=lineage_pr_base,
+        lineage_saved_branch=lineage_saved_branch,
+        lineage_saved_sha=lineage_saved_sha,
+        candidate_basis=candidate_basis,
+        github_pr=github_pr,
+        gate_evidence=gate_evidence,
+        implementation_complete=implementation_complete,
+        verification_current=verification_current,
+        writable=writable,
+    )
+
+
 _SETTLED_TO_LABEL: dict[str, str | None] = {
     SETTLED_AVAILABLE: None,
     SETTLED_IN_PROGRESS: STATUS_IN_PROGRESS,
@@ -773,6 +821,7 @@ __all__ = [
     "interpret_issue",
     "attempt_evidence_blocks_admission",
     "is_selectable_candidate",
+    "preserved_work_continuation",
     "plan_transition",
     "plan_label_mutation",
     "classify_mutation_outcome",
