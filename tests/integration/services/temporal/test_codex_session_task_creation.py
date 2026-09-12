@@ -10,6 +10,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -23,19 +24,26 @@ from moonmind.workflows.temporal.runtime.managed_session_controller import (
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 
-@pytest.fixture(autouse=True)
-def _public_ghcr_image(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Session launch and child-task creation use a fake container runner here.
-    # Model public image acquisition explicitly so this hermetic journey does
-    # not depend on the deployment's managed-secret database.
-    async def _no_ghcr_credentials() -> tuple[str, str] | None:
-        return None
-
+@pytest.fixture
+def empty_ghcr_credential_store(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    # These launch fixtures fake Docker acquisition. Supply an empty registry
+    # store at its boundary while retaining the real public-image auth policy.
+    for key in (
+        "GHCR_PULL_USER",
+        "GHCR_PULL_TOKEN",
+        "MOONMIND_GHCR_PULL_USER_SECRET_REF",
+        "MOONMIND_GHCR_PULL_TOKEN_SECRET_REF",
+        "WORKFLOW_GHCR_PULL_USER_SECRET_REF",
+        "WORKFLOW_GHCR_PULL_TOKEN_SECRET_REF",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    lookup = AsyncMock(return_value=("", ""))
     monkeypatch.setattr(
-        "moonmind.workflows.temporal.runtime.managed_session_controller"
-        ".resolve_ghcr_pull_credentials_for_launch",
-        _no_ghcr_credentials,
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "_resolve_managed_ghcr_pull_pair",
+        lookup,
     )
+    return lookup
 
 
 class _CreateTaskHandler(BaseHTTPRequestHandler):
@@ -237,13 +245,10 @@ def _expected_child_idempotency_key(
 async def test_codex_session_launch_environment_can_create_child_tasks(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    empty_ghcr_credential_store: AsyncMock,
 ) -> None:
     monkeypatch.setenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", "disabled")
     monkeypatch.setenv("MOONMIND_WORKFLOW_DOCKER_MODE", "disabled")
-    # The child submission targets this test's loopback HTTP server, even when
-    # the container inherits an outbound proxy for external services.
-    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
-    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     _CreateTaskHandler.requests = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _CreateTaskHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -315,6 +320,7 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
 
     try:
         await controller.launch_session(request)
+        empty_ghcr_credential_store.assert_awaited_once_with()
         run_command, run_env = _managed_session_run_command(commands)
 
         assert ("--network", "moonmind_control-plane-network") == (
@@ -390,6 +396,7 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
 async def test_codex_session_launch_command_uses_workspace_and_explicit_auth_target(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    empty_ghcr_credential_store: AsyncMock,
 ) -> None:
     monkeypatch.setenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", "disabled")
     monkeypatch.setenv("MOONMIND_WORKFLOW_DOCKER_MODE", "disabled")
@@ -456,6 +463,7 @@ async def test_codex_session_launch_command_uses_workspace_and_explicit_auth_tar
     )
 
     await controller.launch_session(request)
+    empty_ghcr_credential_store.assert_awaited_once_with()
 
     run_command, run_env = _managed_session_run_command(commands)
 

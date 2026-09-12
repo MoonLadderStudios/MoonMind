@@ -19,6 +19,9 @@ Create one queue task per open pull request so each PR branch can be resolved by
 This parent batch skill does not publish repository changes itself. It records
 child workflow queueing evidence in `artifacts/batch_pr_resolver_result.json`;
 each queued `pr-resolver` child owns its repository publishing outcome.
+The coordinator's execution-local publish mode `none` does not override the
+children's `auto` publishing contract. Preserve any explicit user restriction
+on child publishing; do not infer one from the coordinator's local mode.
 
 ## Inputs (skill args)
 
@@ -36,6 +39,13 @@ each queued `pr-resolver` child owns its repository publishing outcome.
 - `runtimeProviderProfile` (string, optional): Explicit provider-profile override to stamp onto each queued `pr-resolver` task.
 
 ## Workflow
+
+The helper requires Python 3 and `httpx`, plus `gh` for discovery. Keep the
+portable `_shared/workflow_execution_client.py` beside the skill directories;
+resolved snapshots include it automatically. No MoonMind or API-service
+installation is required. In a managed run, resolve the
+helper from `$MOONMIND_ACTIVE_SKILLS_DIR/batch-pr-resolver/bin/batch_pr_resolver.py`.
+Use the repository path below only outside MoonMind when no active path is set.
 
 1. Run the helper script:
 

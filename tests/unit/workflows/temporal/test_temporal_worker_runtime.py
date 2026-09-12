@@ -99,6 +99,95 @@ def test_publish_mode_agent_instructions_distinguish_auto_none_and_managed() -> 
     assert _publish_mode_agent_instructions("branch") == managed
 
 
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "omnigent"])
+@pytest.mark.parametrize("step_count", [1, 2])
+@pytest.mark.parametrize("publish", [{}, {"mode": "none"}])
+def test_batch_coordinator_publish_scope_survives_parent_and_child_planning(
+    runtime, step_count, publish,
+) -> None:
+    """Replay the incident through normalization, planning, and portable child authoring."""
+    import runpy
+    from pathlib import Path
+
+    from moonmind.workflows.executions.execution_contract import (
+        build_canonical_workflow_view,
+    )
+
+    repo_root = Path(__file__).resolve().parents[4]
+    incident = json.loads(
+        (repo_root / "tests/integration/reliability/replays"
+         / "batch-pr-resolver-portable-startup/manifest.json").read_text()
+    )
+    runtime_config = {
+        "mode": runtime, "model": "test-model-exact", "effort": "xhigh",
+        "executionProfileRef": "test-profile-exact",
+    }
+    parent = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": incident["repository"],
+            "task": {
+                "skill": {"name": "batch-pr-resolver"},
+                "runtime": runtime_config, "publish": publish,
+                "stepCount": step_count,
+            },
+        },
+    )
+    assert "execution.fanout" in parent["requiredCapabilities"]
+    assert parent["workflow"]["publish"]["mode"] == incident["parentPublishMode"]
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(digest="reg:test", artifact_ref="art_registry_test")
+    plan = planner(inputs=parent, parameters={}, snapshot=snapshot)
+    assert len(plan["nodes"]) == step_count
+    for node in plan["nodes"]:
+        assert node["inputs"]["publishMode"] == "none"
+        instructions = node["inputs"]["instructions"]
+        assert "this execution's repository workspace" in instructions
+        assert "Children use their own admitted publishing settings" in instructions
+        assert "Preserve explicit user restrictions" in instructions
+        assert "Publishing is disabled for this task." not in instructions
+
+    bundle = runpy.run_path(str(repo_root / ".agents/skills/batch-pr-resolver"
+                               / "bin/batch_pr_resolver.py"))
+    for pr in incident["pullRequests"]:
+        child_request = bundle["_build_queue_request"](
+            incident["repository"], pr["number"], pr["headRefName"],
+            runtime=bundle["RuntimeSelection"](
+                mode=runtime, model=runtime_config["model"], effort="xhigh",
+                provider_profile="test-profile-exact",
+            ),
+            merge_method="squash", max_iterations=5, priority=0, max_attempts=3,
+            batch_scope=incident["incidentWorkflowId"],
+            inherit_runtime_from_caller=True,
+        )
+        child = build_canonical_workflow_view(
+            job_type=child_request["type"], payload=child_request["payload"],
+        )
+        child_plan = planner(inputs=child, parameters={}, snapshot=snapshot)
+        child_inputs = child_plan["nodes"][0]["inputs"]
+        assert child_inputs["publishMode"] == incident["childPublishMode"]
+        assert child_inputs["runtime"] == runtime_config
+        assert child_inputs["startingBranch"] == pr["headRefName"]
+        assert "commit, push, or merge only when required by the selected skill" in child_inputs["instructions"]
+
+
+def test_local_publish_scope_preserves_explicit_user_child_restriction() -> None:
+    restriction = "Do not allow any child workflow to commit, push, or merge."
+    plan = _build_runtime_planner()(
+        inputs={"task": {
+            "instructions": restriction,
+            "skill": {"name": "batch-pr-resolver"},
+            "publish": {"mode": "none"},
+            "runtime": {"mode": "codex_cli"},
+        }},
+        parameters={},
+        snapshot=SimpleNamespace(digest="reg:test", artifact_ref="art_registry_test"),
+    )
+    instructions = plan["nodes"][0]["inputs"]["instructions"]
+    assert instructions.startswith(restriction)
+    assert "Preserve explicit user restrictions" in instructions
+
+
 def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields(
     monkeypatch,
 ) -> None:
