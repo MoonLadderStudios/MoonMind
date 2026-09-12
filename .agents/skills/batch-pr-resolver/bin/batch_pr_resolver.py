@@ -18,8 +18,6 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from moonmind.workflows.executions.execution_contract import resolve_publish_mode_for_skill
-from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +221,9 @@ def _runtime_text(value: Any) -> str | None:
 def _runtime_modes_match(left: str | None, right: str | None) -> bool:
     if not left or not right:
         return False
-    return normalize_runtime_id(left) == normalize_runtime_id(right)
+    # Compare canonical runtime identities supplied by the host. The portable
+    # helper must not import the API application or invent runtime aliases.
+    return _normalize_runtime_mode(left) == _normalize_runtime_mode(right)
 
 def _session_artifact_spool_path() -> Path | None:
     raw = _runtime_text(os.getenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH"))
@@ -488,7 +488,6 @@ def _build_queue_request(
     batch_scope: str | None = None,
     inherit_runtime_from_caller: bool = False,
 ) -> dict[str, Any]:
-    publish_mode = resolve_publish_mode_for_skill("pr-resolver", "auto")
     runtime_payload: dict[str, Any] = {}
     if runtime.mode:
         runtime_payload["mode"] = runtime.mode
@@ -519,7 +518,7 @@ def _build_queue_request(
                 "startingBranch": branch,
                 "branch": branch,
             },
-            "publish": {"mode": publish_mode},
+            "publish": {"mode": "auto"},
         },
     }
     idempotency_key = _child_idempotency_key(

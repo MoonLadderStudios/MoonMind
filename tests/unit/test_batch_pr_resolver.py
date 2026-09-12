@@ -3,12 +3,133 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import runpy
+import shutil
+import subprocess
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "omnigent"])
+def test_portable_bundle_replays_discovery_submission_and_verification(
+    tmp_path: Path, runtime: str,
+) -> None:
+    """Run the shipped CLI across process/HTTP/artifact boundaries without the API package."""
+    repo_root = Path(__file__).resolve().parents[2]
+    incident = json.loads((repo_root / "tests/integration/reliability/replays"
+                           / "batch-pr-resolver-portable-startup/manifest.json").read_text())
+    bundle = tmp_path / "skills_active" / "batch-pr-resolver"
+    shutil.copytree(repo_root / ".agents/skills/batch-pr-resolver", bundle)
+    helper = bundle / "bin/batch_pr_resolver.py"
+    discovery = [
+        {**pr, "isCrossRepository": False,
+         "headRepository": {"name": "Tactics"},
+         "headRepositoryOwner": {"login": "MoonLadderStudios"}}
+        for pr in incident["pullRequests"]
+    ]
+    gh = tmp_path / "gh"
+    gh.write_text(f"#!{sys.executable}\nprint({json.dumps(discovery)!r})\n")
+    gh.chmod(0o755)
+    context = tmp_path / "task_context.json"
+    runtime_config = {"mode": runtime, "model": "test-model-exact",
+                      "effort": "xhigh", "profileId": "test-profile-exact"}
+    context.write_text(json.dumps({"repository": incident["repository"],
+                                   "runtimeConfig": runtime_config}))
+    capability_file = tmp_path / "fanout-capability"
+    capability_file.write_text("test-scoped-capability")
+    submissions: list[dict[str, Any]] = []
+    descriptions: list[str] = []
+    records: dict[str, dict[str, str]] = {}
+
+    class ExecutionAPI(BaseHTTPRequestHandler):
+        def log_message(self, *_args: Any) -> None:
+            pass
+
+        def respond(self, body: dict[str, Any], status: int = 200) -> None:
+            assert self.headers["Authorization"] == "Bearer test-scoped-capability"
+            assert self.headers["X-MoonMind-Execution-Fanout"] == "v1"
+            assert self.headers["X-MoonMind-Task-Workflow-Id"] == incident["incidentWorkflowId"]
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(body).encode())
+
+        def do_POST(self) -> None:
+            assert self.path == "/api/executions"
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            submissions.append(body)
+            key = body["payload"]["idempotencyKey"]
+            record = records.setdefault(key, {"workflowId": f"mm:test-child-{len(records)}",
+                                              "runId": f"test-run-{len(records)}",
+                                              "state": "running"})
+            self.respond(record, 201)
+
+        def do_GET(self) -> None:
+            workflow_id = unquote(self.path.removeprefix("/api/executions/"))
+            descriptions.append(workflow_id)
+            self.respond(next(row for row in records.values() if row["workflowId"] == workflow_id))
+
+    # Block installed server packages as well as checkout imports. Ordinary
+    # in-process tests can hide this regression by importing MoonMind first.
+    isolated_entrypoint = """
+import runpy, sys
+class NoServerPackages:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'moonmind', 'api_service'}:
+            raise ModuleNotFoundError(f'Forbidden server dependency: {fullname}')
+sys.meta_path.insert(0, NoServerPackages())
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name='__main__')
+"""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), ExecutionAPI)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    spool = tmp_path / "artifacts"
+    env = {
+        "PATH": str(tmp_path) + os.pathsep + os.defpath,
+        "MOONMIND_URL": f"http://127.0.0.1:{server.server_port}",
+        "MOONMIND_TASK_WORKFLOW_ID": incident["incidentWorkflowId"],
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": str(capability_file),
+        "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH": str(spool),
+    }
+    try:
+        for _ in range(2):
+            result = subprocess.run(
+                [sys.executable, "-I", "-c", isolated_entrypoint, str(helper),
+                 "--task-context-path", str(context)],
+                cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30,
+            )
+            assert result.returncode == 0, result.stdout + result.stderr
+            summary = json.loads((spool / "batch_pr_resolver_result.json").read_text())
+            assert summary["created"] == 4
+            assert summary["errors"] == []
+            assert {item["workflowId"] for item in summary["queued"]} == {
+                item["workflowId"] for item in records.values()
+            }
+        assert len(records) == 4  # A retry reuses each child's stable identity.
+        assert len(descriptions) == len(submissions) == 8
+        for body in submissions:
+            payload = body["payload"]
+            assert payload["repository"] == incident["repository"]
+            assert payload["runtimeInheritance"] == "caller"
+            assert payload["task"]["runtime"] == {
+                "mode": runtime, "model": runtime_config["model"],
+                "effort": "xhigh", "executionProfileRef": "test-profile-exact",
+            }
+            assert payload["task"]["publish"] == {"mode": "auto"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
 
 def _load_module() -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[2]
