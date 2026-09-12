@@ -862,9 +862,8 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
         }
     )
     assert previous["searchEvidence"] == result.outputs["searchEvidence"]
-    # Req-2 claim already applied in-progress during load; reset to Available
-    # so the explicit In Progress step exercises its own mutation path.
-    activity_boundary.detail["labels"] = [{"name": "bug"}]
+    # Keep the loader's real claim across the assessment/blocker handoffs.
+    # Clearing the label here masked incident mm:7adff7fd's self-claim failure.
     # No local workspace, issue-number injection, or assistant-text parsing.
     for step in steps[2:4]:
         tool = step["tool"]
@@ -883,16 +882,16 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
     mutations = [
         request for request in activity_boundary.requests if request.method != "GET"
     ]
-    # 1 claim POST from load (advisory in-progress labels) + 2 from the
-    # explicit In Progress step (labels + handoff comment).
+    # Only the initial announcement and label mutate GitHub. The redundant
+    # start must recognize the persisted, verified owner without another write.
     assert [(request.method, request.url.path) for request in mutations] == [
         ("POST", f"/repos/{REPOSITORY}/issues/4025/comments"),
         ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
-        ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
     ]
     assert json.loads(mutations[1].content) == {"labels": ["status: in-progress"]}
-    assert result.outputs["mutationOutcome"] == "applied"
-    assert set(result.outputs["confirmedLabels"]) == {"bug", "status: in-progress"}
+    assert result.outputs["decision"] == "already_applied"
+    assert result.outputs["mutationOutcome"] == "already_applied"
+    assert {label["name"] for label in activity_boundary.detail["labels"]} == {"bug", "status: in-progress"}
     # Finalization still requires its verification / PR evidence before mutation.
     final_tool = steps[-1]["tool"]
     final = await activity_boundary.execute(
