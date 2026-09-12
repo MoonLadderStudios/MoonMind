@@ -14,6 +14,7 @@ from urllib.parse import unquote
 
 import httpx
 import pytest
+from tests.support.issue_claims import issue_claim_store  # noqa: F401
 
 from api_service.services.presets.catalog import PresetCatalogService
 from moonmind.workflows.adapters.github_service import GitHubService

@@ -66,7 +66,7 @@ class RecordingRunner:
         *,
         verification_succeeded: bool = True,
         verification_status: str | None = None,
-        target_repo_digests: tuple[str, ...] = (),
+        target_repo_digests: tuple[str, ...] = ("ghcr.io/moonladderstudios/moonmind@sha256:" + "a" * 64,),
         target_build_id: str | None = None,
         block_on_before: bool = False,
     ) -> None:
@@ -208,6 +208,33 @@ def _executor(
     )
 
 
+@pytest.mark.asyncio
+async def test_digest_mismatch_stops_before_desired_state_or_recreation():
+    events = []
+    executor, store, _, runner, _ = _executor(
+        runner=RecordingRunner(events, target_repo_digests=("ghcr.io/moonladderstudios/moonmind@sha256:" + "c" * 64,)),
+        events=events,
+    )
+    with pytest.raises(ToolFailure) as error:
+        await executor.execute(_inputs())
+    assert error.value.error_code == "DEPLOYMENT_IMAGE_IDENTITY_UNVERIFIED"
+    assert not store.records
+    assert not any(phase == "up" for phase, _ in runner.commands)
+
+
+@pytest.mark.asyncio
+async def test_recreation_and_verification_use_pulled_digest():
+    executor, store, evidence, runner, _ = _executor()
+    result = await executor.execute(_inputs())
+    assert result.status == "COMPLETED"
+    logs = next(payload for kind, payload in evidence.records if kind == "command-log")
+    expected = "ghcr.io/moonladderstudios/moonmind@sha256:" + "a" * 64
+    assert logs["up"]["result"]["requestedImage"] == expected
+    verification = next(payload for kind, payload in evidence.records if kind == "verification")
+    assert verification["details"]["requestedImage"] == expected
+    assert store.records[0]["resolvedDigest"] == "sha256:" + "a" * 64
+
+
 class DeploymentControlRunner(RecordingRunner):
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         self.events.append(f"runner:capture:{phase}")
@@ -303,7 +330,8 @@ class SelfHostedComposeRunner(RecordingRunner):
 
     async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
         self.events.append("runner:inspect-image")
-        return {"Id": self.target_image_id, "RepoTags": [requested_image]}
+        return {"Id": self.target_image_id, "RepoTags": [requested_image],
+                "RepoDigests": ["ghcr.io/moonladderstudios/moonmind@sha256:" + "a" * 64]}
 
 
 class SecretRecordingRunner(RecordingRunner):
@@ -424,7 +452,9 @@ async def test_file_stack_lock_rejects_second_process_boundary_acquire(tmp_path)
 
     assert exc_info.value.error_code == "DEPLOYMENT_LOCKED"
     assert exc_info.value.details["failureClass"] == "deployment_lock_unavailable"
-    assert not (tmp_path / "locks" / "moonmind.lock").exists()
+    assert (tmp_path / "locks" / "moonmind.lock").exists()
+    async with await manager.acquire("moonmind"):
+        pass
 
 
 @pytest.mark.asyncio
@@ -439,7 +469,7 @@ async def test_file_stack_lock_rejects_path_traversal_stack_name(tmp_path) -> No
 
 
 @pytest.mark.asyncio
-async def test_file_stack_lock_recovers_stale_lock_before_acquire(tmp_path) -> None:
+async def test_file_stack_lock_does_not_steal_legacy_owner_from_pid_or_age(tmp_path) -> None:
     lock_dir = tmp_path / "locks"
     lock_dir.mkdir()
     lock_path = lock_dir / "moonmind.lock"
@@ -459,13 +489,10 @@ async def test_file_stack_lock_recovers_stale_lock_before_acquire(tmp_path) -> N
     )
     manager = FileDeploymentUpdateLockManager(lock_dir=str(lock_dir))
 
-    lease = await manager.acquire("moonmind")
-    try:
-        payload = json.loads(lock_path.read_text(encoding="utf-8"))
-        assert payload["pid"] == os.getpid()
-        assert payload["stack"] == "moonmind"
-    finally:
-        await lease.release()
+    with pytest.raises(ToolFailure) as error:
+        await manager.acquire("moonmind")
+    assert error.value.details["failureClass"] == "legacy_deployment_owner"
+    assert json.loads(lock_path.read_text())["pid"] == 999999999
 
 
 @pytest.mark.asyncio

@@ -56,6 +56,7 @@ artifacts*/
 /specs/
 /deploy/state/.env.deploy
 /deploy/state/desired-state.json
+/deploy/state/operator-http-headers.json
 /deploy/state/locks/
 live_streams.spool
 .specify/feature.json

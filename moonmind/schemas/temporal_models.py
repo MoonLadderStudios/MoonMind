@@ -1450,7 +1450,11 @@ class WorkspaceCheckpointCaptureInput(BaseModel):
     artifact_namespace: str = Field(..., alias="artifactNamespace", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     base_commit: str | None = Field(None, alias="baseCommit")
-    include_untracked: bool = Field(False, alias="includeUntracked")
+    include_untracked: bool = Field(
+        default_factory=lambda data: data.get("kind") == "worktree_archive",
+        alias="includeUntracked",
+        description="Archives include untracked work by default; Git patches do not.",
+    )
     include_ignored_files: bool = Field(False, alias="includeIgnoredFiles")
     pull_auth_context_ref: str | None = Field(None, alias="pullAuthContextRef")
     provider_lease_context_ref: str | None = Field(None, alias="providerLeaseContextRef")
@@ -4399,6 +4403,7 @@ class ExecutionMetricsResponse(BaseModel):
     canceled_runs: int = Field(0, alias="canceledRuns", ge=0)
     terminal_runs: int = Field(0, alias="terminalRuns", ge=0)
     success_rate: float | None = Field(None, alias="successRate", ge=0, le=1)
+    objective_metrics: dict[str, Any] | None = Field(None, alias="objectiveMetrics")
     duration: ExecutionMetricsDurationModel = Field(
         default_factory=ExecutionMetricsDurationModel, alias="duration"
     )

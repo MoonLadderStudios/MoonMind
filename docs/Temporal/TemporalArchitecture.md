@@ -43,7 +43,7 @@ The current repo baseline is:
 - The default artifact backend is MinIO / S3-compatible storage.
 - The worker topology is a small capability-based fleet set: `workflow`, `artifacts`, `llm`, `sandbox`, `integrations`, and `agent_runtime`.
 - The live registered workflow catalog includes `MoonMind.MergeAutomation` in addition to the previously documented core workflow types.
-- The workflow helper-activity exception is narrow; the current registration is the seven handlers listed in §9.1 (four adapter/metadata helpers plus three replay-compatibility checkpoint handlers, owned by `workflow_registry.py`).
+- The workflow helper-activity exception is narrow; the current registration is the eight handlers listed in §9.1 (one release-identity probe, four adapter/metadata helpers and three replay-compatibility checkpoint handlers, owned by `workflow_registry.py`).
 - The shared Temporal data converter currently resolves to the Pydantic data converter. A payload-encryption codec is not currently visible as the shared converter contract and must not be assumed to exist.
 - Projection repair, run-history/rerun semantics, visibility semantics, type-safety rules, and error taxonomy are covered by adjacent docs and should be treated as part of this architecture.
 
@@ -469,8 +469,9 @@ A narrow helper-activity exception is allowed only when all of the following are
 - it does not block Workflow Task throughput under normal operation
 - it is explicitly listed in the activity topology
 
-Current repo-aligned registration (`workflow_registry.py::workflow_fleet_activity_handlers` — seven handlers, not one):
+Current repo-aligned registration (`workflow_registry.py::workflow_fleet_activity_handlers` — eight handlers):
 
+- immutable-release identity probe from `workflows/release_canary.py`: `release.inspect` reads the installed release manifest without credentials or external mutation.
 - adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
 - checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — retained for replay/in-flight compatibility of pre-cutover histories; no new calls route there. New writes schedule these types on the artifacts fleet behind the `checkpoint-branch-artifact-fleet-v1` patch marker; queue separation is not privilege separation until the workflow-queue registration is removed after its consumers drain.
 

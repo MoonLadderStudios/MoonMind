@@ -1,0 +1,101 @@
+{
+  "schemaVersion": "v1",
+  "incidentDate": "2026-09-11",
+  "source": "Workflow reliability review F1-F8; sanitized handoff shapes only",
+  "qualification": "hermetic; controlled provider decisions; real persistence, HTTP, Git and Temporal boundaries",
+  "cases": [
+    {
+      "failure": "source hashing blocks worker progress and exceeds the supervisor timeout",
+      "test": "tests/integration/reliability/test_worker_progress_journey.py",
+      "invariant": "one off-loop scan; bounded cached readiness; Temporal progress continues"
+    },
+    {
+      "failure": "default preset rejects its own claim after assessment",
+      "test": "tests/integration/reliability/test_saved_issue_claim_journey.py",
+      "invariant": "omitted and explicit default inputs retain one SQL-backed attempt across registered activities, lost HTTP acknowledgement and replacement"
+    },
+    {
+      "failure": "heartbeat loss changes admissionEpoch from 1 to 2 under the same bridge request",
+      "test": "tests/integration/reliability/test_admission_bridge_journey.py",
+      "invariant": "the replay branch reproduces the conflict; the new branch preserves one admission, runtime binding, bridge and semantic turn"
+    },
+    {
+      "failure": "Activity replacement cleans a still-owned provider session",
+      "test": "tests/integration/reliability/test_worker_replacement_journey.py",
+      "invariant": "revoked delivery preserves live ownership; concurrent finalization publishes once"
+    },
+    {
+      "failure": "portable pr-resolver intermediate CI action is treated as terminal failure",
+      "test": "tests/integration/reliability/test_portable_resolver_continuation_journey.py",
+      "invariant": "one cumulative continuation budget consumes the portable action, pushes corrected work and verifies the fresh head; actual deferrals remain blocked"
+    },
+    {
+      "failure": "verification infrastructure failure repeats implementation",
+      "test": "tests/integration/reliability/test_verification_retry_journey.py",
+      "invariant": "the same candidate and profile are verified after service recovery with zero additional implementation attempts"
+    },
+    {
+      "failure": "cold resume loses unpublished Git history or misreads a repeated managed restore",
+      "tests": [
+        "tests/integration/reliability/test_saved_workspace_journey.py",
+        "tests/integration/reliability/test_checkpoint_cold_resume.py"
+      ],
+      "invariant": "remote artifact read-back restores selected history and exact file evidence after source loss; repeated restore revalidates bytes and Git identity"
+    },
+    {
+      "failure": "cleanup saves a turn without compute; surviving candidate or partially staged index differs at finalization",
+      "tests": [
+        "tests/unit/omnigent/test_attempt_completion.py",
+        "tests/integration/reliability/test_saved_workspace_journey.py",
+        "tests/integration/reliability/test_checkpoint_cold_resume.py"
+      ],
+      "invariant": "recorded turns resume verification without provider re-execution; saved candidate adoption verifies files, HEAD and index; archive restoration preserves staged and unstaged content separately"
+    },
+    {
+      "failure": "retained releases or stopped updater images defeat current-service verification",
+      "test": "tests/integration/reliability/test_release_compose_configuration.py",
+      "invariant": "image identity joins the normal running Compose service inventory; old or unknown current image identity still fails"
+    },
+    {
+      "failure": "release qualification cannot authenticate the existing protected dashboard and API",
+      "test": "tests/integration/reliability/test_deployment_surface_auth.py",
+      "invariant": "startup-classified accounts mode validates an existing registered cookie or bearer session through real HTTP and PostgreSQL; missing, invalid and revoked sessions cannot qualify; probe receipts omit credentials"
+    },
+    {
+      "failure": "a module launched with python -m uses __main__ as the child module name",
+      "test": "tests/unit/workflows/skills/test_deployment_release.py",
+      "invariant": "both imported and __main__ entrypoints launch the canonical module and reconcile lost acknowledgements"
+    },
+    {
+      "failure": "promotion strands independently routed activities or in-flight release owners",
+      "test": "tests/integration/reliability/test_release_routing_journey.py",
+      "invariant": "all queues qualify before CAS promotion; pinned and upgradeable histories preserve their server-authorized routing"
+    },
+    {
+      "failure": "release completes without proving the operator route, or repeats admission after verified primary success",
+      "tests": [
+        "tests/unit/workflows/skills/test_release_authority_handoffs.py",
+        "tests/integration/reliability/test_release_compose_configuration.py"
+      ],
+      "invariant": "omitted defaults derive preserved fixed bindings; HTTP/TLS authority survives host transport; unknown access cannot complete; primary success owns cleanup-only resumption"
+    },
+    {
+      "failure": "dependency-only changes share a worker release identity",
+      "test": "tests/unit/workflows/skills/test_release_authority_handoffs.py",
+      "invariant": "copied dependency manifests, Dockerfile and verified source revision contribute to release identity"
+    },
+    {
+      "failure": "a failed brief read leaves an unannounced reservation permanently held",
+      "tests": [
+        "tests/unit/workflows/temporal/test_issue_claim_journey.py",
+        "tests/integration/reliability/test_issue_claim_concurrency_journey.py"
+      ],
+      "invariant": "all failed exits release only SQL-verified unannounced self-owned reservations; announced and inherited claims remain pinned"
+    },
+    {
+      "failure": "cleanup precedes terminal validation and a recorded provider turn is lost on retry",
+      "test": "tests/unit/omnigent/test_attempt_completion.py",
+      "invariant": "revalidate durable turn evidence and publish the same saved candidate without a new billed provider turn"
+    }
+  ]
+}

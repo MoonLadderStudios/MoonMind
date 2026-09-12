@@ -19,6 +19,7 @@ from pr_resolver_core import (
 )
 
 from moonmind.config.settings import AppSettings, TemporalSettings, settings
+from moonmind.release_identity import installed_release
 from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
@@ -270,19 +271,25 @@ def build_worker_spec(
         ).hexdigest()
     )
     build_sha = str(env.get("MOONMIND_BUILD_SHA") or "").strip() or None
+    release = installed_release()
     image_digest = str(env.get("MOONMIND_IMAGE_DIGEST") or "").strip() or None
+    if release is not None:
+        build_sha = str(release.get("sourceRevision") or "").strip() or build_sha
     build_id = build_sha or image_digest or fingerprint.split(":", 1)[1][:32]
+    if release is not None:
+        build_id = release["digest"]
     deployment_id = str(
         env.get("TEMPORAL_WORKER_DEPLOYMENT_NAME") or "moonmind-workflow-fleet"
     ).strip()
-    versioning_enabled = str(
-        env.get("TEMPORAL_WORKER_VERSIONING_ENABLED") or "false"
-    ).strip().lower() in {"1", "true", "yes", "on"}
+    versioning_value = str(env.get("TEMPORAL_WORKER_VERSIONING_ENABLED") or "auto").strip().lower()
+    versioning_enabled = bool(release) if versioning_value == "auto" else versioning_value in {"1", "true", "yes", "on"}
     deployment_mode = (
-        str(env.get("MOONMIND_DEPLOYMENT_MODE") or "development").strip().lower()
+        str(env.get("MOONMIND_DEPLOYMENT_MODE") or "auto").strip().lower()
     )
-    immutable_release_identity = bool(build_sha or image_digest)
-    if deployment_mode == "production" and not immutable_release_identity:
+    if deployment_mode == "auto":
+        deployment_mode = "production" if release else "development"
+    immutable_release_identity = release is not None
+    if deployment_mode == "production" and not (release or build_sha or image_digest):
         raise TemporalWorkerBootstrapError(
             "production workflow workers require MOONMIND_BUILD_SHA or "
             "MOONMIND_IMAGE_DIGEST"

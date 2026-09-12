@@ -3557,6 +3557,13 @@ async def run_omnigent_execution(
     except asyncio.CancelledError:
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)
+        from moonmind.omnigent.activity_ownership import delivery_was_revoked
+
+        if run_store is not None and delivery_was_revoked():
+            # Close this delivery's transports, retaining the durable bridge
+            # identity and remote session for its Temporal retry. Explicit
+            # workflow cancellation still owns stop/capture/delete below.
+            raise
         if client is not None and session_id:
             async with omnigent_httpx_client(transport_pool) as cleanup_httpx_client:
                 cleanup_client = OmnigentHttpClient(

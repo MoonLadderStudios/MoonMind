@@ -113,6 +113,9 @@ class OmnigentArtifactGateway:
     async def read_bytes(self, artifact_ref: str) -> bytes:
         return (await self.read_text(artifact_ref)).encode("utf-8")
 
+    async def restore_checkpoint(self, *, restore_request, authority_root):
+        raise OmnigentArtifactError("This artifact gateway does not provide durable checkpoint restoration")
+
 
 class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
     """Persist generic-host evidence through MoonMind's durable artifact store."""
@@ -238,6 +241,16 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
 
     async def read_text(self, artifact_ref: str) -> str:
         return (await self.read_bytes(artifact_ref)).decode("utf-8")
+
+    async def restore_checkpoint(self, *, restore_request, authority_root):
+        from moonmind.workflows.temporal.artifacts import TemporalArtifactRepository, TemporalArtifactService
+        from moonmind.workflows.temporal.runtime.checkpoint_restore import ManagedCheckpointRestoreService
+        async with self._session_factory() as session:
+            service = ManagedCheckpointRestoreService(
+                authority_root=authority_root,
+                artifact_service=TemporalArtifactService(TemporalArtifactRepository(session)),
+            )
+            return await service.restore(restore_request, admitted_principal=self._principal)
 
     async def read_bytes(self, artifact_ref: str) -> bytes:
         from moonmind.workflows.temporal.artifacts import (

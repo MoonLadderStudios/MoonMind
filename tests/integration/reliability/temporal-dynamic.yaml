@@ -1,0 +1,6 @@
+# Accelerate the server-owned drainage observation in this disposable fixture.
+# Production keeps Temporal's visibility grace period and refresh defaults.
+matching.wv.VersionDrainageStatusVisibilityGracePeriod:
+  - value: 5s
+matching.wv.VersionDrainageStatusRefreshInterval:
+  - value: 5s

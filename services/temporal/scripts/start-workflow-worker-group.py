@@ -17,7 +17,7 @@ from typing import Callable, Iterable, Mapping, Protocol, Sequence
 
 START_WORKER_SCRIPT = "/app/services/temporal/scripts/start-worker.sh"
 DEFAULT_HEALTHCHECK_PORT = 8080
-DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 20.0
+DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 330.0
 CHILD_HEALTHCHECK_PORTS = {
     "normal-workflow-worker": 8081,
     "merge-automation-workflow-worker": 8082,
@@ -67,13 +67,14 @@ class GroupHealthState:
         )
 
     def is_ready(self) -> bool:
+        return self.ready_from(self.read_children())
+
+    def read_children(self) -> list[dict[str, object]]:
+        return [_read_child_readiness(url) for url in self.child_health_urls]
+
+    def ready_from(self, children: Sequence[Mapping[str, object]]) -> bool:
         if not self.is_live():
             return False
-        children = [
-            payload
-            for url in self.child_health_urls
-            if (payload := _read_child_readiness(url)) is not None
-        ]
         if len(children) != len(self.child_health_urls):
             return False
         if not all(child.get("ready") is True for child in children):
@@ -89,12 +90,6 @@ class GroupHealthState:
             if child.get("buildId")
         }
         return len(fingerprints) <= 1 and len(build_ids) <= 1
-
-    def is_healthy(self) -> bool:
-        """Backward-compatible internal name; Compose now probes readiness."""
-
-        return self.is_ready()
-
 
 def _env_default(env: Mapping[str, str], name: str, default: str) -> str:
     value = env.get(name)
@@ -213,36 +208,46 @@ def _format_child_log_line(role_name: str, line: str) -> str:
 
 def _read_child_readiness(
     url: str, *, timeout_seconds: float = 0.5
-) -> dict[str, object] | None:
+) -> dict[str, object]:
     try:
-        with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url, timeout=timeout_seconds) as response:
             payload = json.loads(response.read())
-        return payload if isinstance(payload, dict) else None
-    except (OSError, ValueError, urllib.error.URLError, TimeoutError):
-        return None
+        if isinstance(payload, dict):
+            return payload
+        return {"ready": False, "reasonCode": "invalid_readiness_response"}
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read())
+        except (OSError, ValueError):
+            payload = {}
+        return {
+            **(payload if isinstance(payload, dict) else {}),
+            "ready": False,
+            "httpStatus": exc.code,
+        }
+    except (OSError, ValueError, urllib.error.URLError, TimeoutError) as exc:
+        return {"ready": False, "reasonCode": "child_readiness_unavailable", "errorType": type(exc).__name__}
 
 
 class _HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         state: GroupHealthState = self.server.state  # type: ignore[attr-defined]
         readiness = self.path == "/readyz"
-        healthy = state.is_ready() if readiness else state.is_live()
+        children = state.read_children() if readiness else []
+        ready = state.ready_from(children) if readiness else False
+        healthy = ready if readiness else state.is_live()
         status = 200 if healthy else 503
         body: dict[str, object] = {
             "status": (
                 "ready" if readiness and healthy else "ok" if healthy else "unhealthy"
             ),
             "live": state.is_live(),
-            "ready": state.is_ready(),
             "workers": len(state.children),
             "shutting_down": state.shutting_down,
         }
         if readiness:
-            children = [
-                payload
-                for url in state.child_health_urls
-                if (payload := _read_child_readiness(url)) is not None
-            ]
+            body["ready"] = ready
             body["children"] = children
             workflow_types = sorted(
                 {

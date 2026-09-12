@@ -395,7 +395,7 @@ def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}, "parent": None},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     
@@ -1069,7 +1069,7 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
     workflow_info = type(
         "WorkflowInfo",
         (),
-        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}, "parent": None},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
     monkeypatch.setattr(run_workflow_module.workflow, "patched", _all_patches_except_empty_skillset)
@@ -3989,6 +3989,66 @@ async def test_dynamic_verifier_preserves_legacy_attempt_payload_before_evidence
     assert "MoonMind authoritative verifier evidence:" not in (
         remediation_inputs["instructions"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_dynamic_evidence_retry_materializes_only_verifier_for_exact_candidate(
+    mock_run_workflow, monkeypatch, enabled,
+):
+    mock_run_workflow._initialize_remediation_loop_controller(
+        ordered_nodes=[_loop_controller_node(_dynamic_loop_spec_payload())]
+    )
+    mock_run_workflow._remediation_loop_state = mock_run_workflow._remediation_loop_state.model_copy(
+        update={"workspace_head_ref": "artifact://candidate/exact"}
+    )
+    mock_run_workflow._step_ledger_rows = []
+    mock_run_workflow._write_json_artifact = AsyncMock(return_value="artifact://decision/evidence")
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch: enabled and patch == "run-materialize-evidence-retry-v1")
+    source = {
+        "id": "verify-original", "tool": {"type": "agent_runtime", "name": "omnigent"},
+        "inputs": {"selectedSkill": "moonspec-verify", "instructions": "Verify this issue.",
+                   "runtime": {"mode": "omnigent", "executionProfileRef": "selected-profile"}},
+    }
+    nodes = [source]
+    admitted = await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=nodes, verdict="NO_DETERMINATION", gate_result_ref="artifact://gate/missing",
+        remaining_work_ref=None, logical_step_id=source["id"], current_index=1,
+        recoverable_evidence=True,
+    )
+    assert admitted is enabled
+    state = mock_run_workflow._remediation_loop_state
+    assert state.consumed_budgets.attempts == 0
+    assert state.consumed_budgets.evidence_retries == 1
+    assert state.workspace_head_ref == "artifact://candidate/exact"
+    if not enabled:
+        assert len(nodes) == 1  # Retained history has no newly scheduled command.
+        return
+    assert len(nodes) == 2
+    retry = nodes[1]
+    assert retry["tool"] == source["tool"]
+    assert retry["inputs"]["runtime"] == source["inputs"]["runtime"]
+    assert retry["inputs"]["remediationWorkspaceHeadRef"] == "artifact://candidate/exact"
+    assert retry["inputs"]["readOnlyWorkspaceHead"] is True
+    assert retry["inputs"]["repositoryOperation"] == "read"
+    assert retry["annotations"]["verificationEvidenceRetry"] == 1
+    assert mock_run_workflow._moonspec_remediation_attempt_metadata(retry)[0] == 0
+    verification_inputs = dict(retry["inputs"])
+    mock_run_workflow._inject_remediation_verification_baseline(node=retry, node_inputs=verification_inputs)
+    assert verification_inputs["remediationWorkspaceHeadRef"] == "artifact://candidate/exact"
+    assert mock_run_workflow._step_ledger_rows[0]["status"] == "ready"
+    # Exhaustion preserves the candidate and doesn't invent human authority.
+    assert not await mock_run_workflow._evaluate_dynamic_remediation_verification(
+        ordered_nodes=nodes, verdict="NO_DETERMINATION", gate_result_ref="artifact://gate/still-missing",
+        remaining_work_ref=None, logical_step_id=retry["id"], current_index=2,
+        recoverable_evidence=True,
+    )
+    assert len(nodes) == 2
+    state = mock_run_workflow._remediation_loop_state
+    assert state.phase.value == "blocked"
+    assert state.consumed_budgets.attempts == 0
+    assert state.workspace_head_ref == "artifact://candidate/exact"
+    assert mock_run_workflow._publish_context["objectiveOutcome"] == "verification_blocked"
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,32 @@
+# Disposable dependencies for authority-handoff qualification; never the installed stack.
+services:
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-02-03T21-03-04Z@sha256:a62e44a7db506b8ed114a44e67b4996c4f1ecca981d9c6e40aa2581334999313
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: reliability
+      MINIO_ROOT_PASSWORD: reliability-test-only
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: reliability-test-only
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  temporal:
+    image: temporalio/auto-setup:1.29.1
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PWD: reliability-test-only
+      POSTGRES_SEEDS: postgres
+      SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES: 'true'
+      DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/reliability-dynamic.yaml
+    volumes:
+      - ./temporal-dynamic.yaml:/etc/temporal/reliability-dynamic.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy

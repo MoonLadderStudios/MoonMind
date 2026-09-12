@@ -18,6 +18,7 @@ route rename fails a unit test instead of the Tier-1 job on a valid image.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -109,6 +110,7 @@ def test_worker_readiness_probe_targets_the_real_readyz_key(
         WorkerHealthState,
         _build_response_body,
     )
+    from moonmind.workflows.temporal.worker_code_identity import WorkerCodeIdentity
 
     assert templates["worker_ready"] == "/readyz"
     state = WorkerHealthState(
@@ -116,10 +118,15 @@ def test_worker_readiness_probe_targets_the_real_readyz_key(
         workers_constructed=True,
         pollers_started=True,
         readiness_metadata={"taskQueues": ["agent-runtime"]},
+        code_revision="probe-release",
+    )
+    state.record_checkout_identity(
+        WorkerCodeIdentity(revision="probe-release"), started_at=time.monotonic()
     )
     body = json.loads(_build_response_body(state, readiness=True))
     # The worker probe reads exactly these keys off the /readyz payload.
     assert body["ready"] is True
+    assert body["codeIdentityStatus"] == "healthy"
     assert body["taskQueues"] == ["agent-runtime"]
 
 
