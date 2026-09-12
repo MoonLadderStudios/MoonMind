@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import type { ProviderProfile } from './ProviderProfilesManager';
 import {
@@ -2126,7 +2126,16 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     expect(screen.getAllByText('Not used')).toHaveLength(2);
   });
 
-  it('creates a backend-preset profile and opens the one-way OpenAI API-key drawer', async () => {
+  it.each([
+    'in order',
+    'late OAuth preset',
+    'late OAuth error',
+  ])('creates a backend-preset profile and opens the one-way OpenAI API-key drawer (%s)', async (responseOrder) => {
+    let finishOAuthPreset!: () => void;
+    const oauthPresetPending = new Promise<void>((resolve) => {
+      finishOAuthPreset = resolve;
+    });
+    let oauthPresetSignal: AbortSignal | null | undefined;
     const savedProfile = {
       profile_id: 'codex-guided-key',
       runtime_id: 'codex_cli',
@@ -2146,6 +2155,22 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       const creationResponse = openAiCreationResponse(url);
+      if (
+        responseOrder !== 'in order' &&
+        url.includes('/creation-preset?') &&
+        url.includes('authentication_method=oauth')
+      ) {
+        oauthPresetSignal = init?.signal;
+        return {
+          ok: responseOrder !== 'late OAuth error',
+          json: async () => {
+            await oauthPresetPending;
+            return responseOrder === 'late OAuth error'
+              ? { detail: 'Superseded OAuth preset failed.' }
+              : creationResponse!.json();
+          },
+        } as Response;
+      }
       if (creationResponse) return creationResponse;
       if (url === '/api/v1/provider-profiles') {
         const payload = JSON.parse(String(init?.body));
@@ -2170,6 +2195,12 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     });
     await selectOpenAiApiKeyCreation();
     await screen.findByText(/Backend preset provider-profile-creation-v1 loaded/);
+    if (responseOrder !== 'in order') {
+      // Decode the superseded request after the selected API-key preset loads.
+      expect(oauthPresetSignal?.aborted).toBe(true);
+      await act(async () => finishOAuthPreset());
+      expect(screen.queryByText('Superseded OAuth preset failed.')).toBeNull();
+    }
     fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
 
     expect(
