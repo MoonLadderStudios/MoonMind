@@ -13,10 +13,24 @@ EGRESS_CLEANUP_AUTHORITY_VERSION = 1
 
 
 def canonical_omnigent_session_id(
-    *, workflow_id: str, step_execution_id: str, agent_run_id: str
+    *,
+    workflow_id: str,
+    step_execution_id: str,
+    agent_run_id: str,
+    admission_epoch: int = 0,
 ) -> str:
+    # Preserve historical and first-admission identities. Re-admission owns new
+    # resources; it must never reopen the prior attempt's completed cleanup.
+    parts: list[str | int] = [
+        "omnigent-session/v1",
+        workflow_id,
+        step_execution_id,
+        agent_run_id,
+    ]
+    if admission_epoch > 1:
+        parts.extend(["admission", admission_epoch])
     authority = json.dumps(
-        ["omnigent-session/v1", workflow_id, step_execution_id, agent_run_id],
+        parts,
         separators=(",", ":"),
     ).encode("utf-8")
     return "oms_" + hashlib.sha256(authority).hexdigest()[:40]

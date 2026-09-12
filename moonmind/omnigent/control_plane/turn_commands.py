@@ -78,6 +78,7 @@ class CanonicalSessionBootstrap:
     source_idempotency_key: str
     execution_plan_ref: str | None = None
     owner_principal: str | None = None
+    admission_epoch: int = 0
 
 
 def _bootstrap_metadata(
@@ -237,6 +238,7 @@ class CanonicalTurnCommandService:
                 workflow_id=workflow_id,
                 step_execution_id=bootstrap.step_execution_id,
                 agent_run_id=bootstrap.agent_run_id,
+                admission_epoch=bootstrap.admission_epoch,
             )
             existing_session = await repos.sessions.get(bootstrap_session_id)
             if existing_session is not None:

@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "escaped-failure-replay/v1",
+  "incidentWorkflowId": "mm:07161650-68db-4325-8583-c6711e2cb8bc-2026-09-12T18:25:00Z",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "epochs": [1, 2],
+  "capacityFailure": {
+    "code": "OMNIGENT_HOST_CAPACITY_UNAVAILABLE",
+    "message": "Waiting for machine resource capacity; missing_condition=machine_cpu; utilization_percent={'cpu': 89, 'memory': 73, 'processes': 11, 'temporaryStorage': 6}."
+  },
+  "observedRetryFailure": "canonical turn admission returned cold_restore",
+  "recordedSession": {"providerSessionRef": null, "runtimeBindingRef": null, "cleanupState": "complete"},
+  "expected": "Re-admission owns a distinct session, command, runtime binding and cleanup aggregate; same-epoch redelivery reuses terminal evidence."
+}
