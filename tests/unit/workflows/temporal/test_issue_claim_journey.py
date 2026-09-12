@@ -64,7 +64,8 @@ async def journey(tmp_path, monkeypatch, request):
             path = self.path.split("?")[0]
             state.setdefault("reads", []).append(path)
             if path == state.get("failed_read_path"):
-                return self.respond({"message": "fixture read outage"}, 503)
+                self.respond({"message": "fixture read outage"}, 503)
+                return
             if path == "/user":
                 self.respond({"id": 123, "login": "fixture-owner"})
             elif path.endswith("/comments"):
@@ -86,6 +87,7 @@ async def journey(tmp_path, monkeypatch, request):
                 )
             else:
                 self.respond({"message": "unknown fixture route"}, 404)
+            return
 
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -111,7 +113,8 @@ async def journey(tmp_path, monkeypatch, request):
         def do_PATCH(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             if "/issues/comments/" not in self.path:
-                return self.respond({}, 404)
+                self.respond({}, 404)
+                return
             comment = next(
                 item
                 for item in state["comments"]
@@ -119,13 +122,15 @@ async def journey(tmp_path, monkeypatch, request):
             )
             released = '"activity":"released"' in payload["body"]
             if released and state.get("reject_release"):
-                return self.respond({"message": "fixture temporary failure"}, 503)
+                self.respond({"message": "fixture temporary failure"}, 503)
+                return
             comment["body"] = payload["body"]
             if released and state.get("lose_release_ack"):
                 state["lose_release_ack"] = False
                 self.close_connection = True
                 return
             self.respond(comment)
+            return
 
         def do_DELETE(self):
             label = unquote(self.path.rsplit("/", 1)[1])
