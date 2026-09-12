@@ -1479,6 +1479,9 @@ export function ProviderProfilesManager({
         return payload as ProviderProfileCreationPreset;
       })
       .then((preset) => {
+        // A superseded request may finish decoding after cancellation. Only
+        // the active request owns the preset and its form updates.
+        if (controller.signal.aborted) return;
         if (
           !preset ||
           typeof preset.version !== 'string' ||
@@ -1506,7 +1509,7 @@ export function ProviderProfilesManager({
         }
       })
       .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === 'AbortError') return;
+        if (controller.signal.aborted) return;
         setCreationPresetError(
           error instanceof Error
             ? error.message
