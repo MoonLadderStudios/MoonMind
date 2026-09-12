@@ -76,8 +76,24 @@ async def resolve_github_credential(
     *,
     repo: str | None = None,
 ) -> ResolvedGitHubCredential:
-    """Resolve GitHub auth with one project-wide precedence model."""
+    """Resolve GitHub auth with one project-wide precedence model.
 
+    ``explicit_token=None`` means omitted (ambient sources may apply).
+    An explicitly passed-but-blank token (``""``/whitespace) is a distinct
+    configured-empty state and fails closed instead of selecting ambient
+    credentials (MoonLadderStudios/MoonMind#4007).
+    """
+
+    if explicit_token is not None and not str(explicit_token).strip():
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName="explicit",
+            repo=repo,
+            diagnostic=(
+                "Explicit GitHub credential is configured but empty"
+                + (f" for {repo}." if repo else ".")
+            ),
+        )
     token = str(explicit_token or "").strip()
     if token:
         return ResolvedGitHubCredential(
@@ -115,6 +131,7 @@ async def resolve_github_credential(
                     + (f" for {repo}." if repo else ".")
                 ),
             )
+        token = str(token or "").strip()
         if token:
             return ResolvedGitHubCredential(
                 token=token,
@@ -122,6 +139,17 @@ async def resolve_github_credential(
                 sourceName=env_name,
                 repo=repo,
             )
+        # A configured reference resolving empty is fail-closed (#4007):
+        # it must not fall through to ambient credentials.
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName=env_name,
+            repo=repo,
+            diagnostic=(
+                f"GitHub credential reference from {env_name} resolved empty"
+                + (f" for {repo}." if repo else ".")
+            ),
+        )
 
     from moonmind.config.settings import settings
 
@@ -141,6 +169,7 @@ async def resolve_github_credential(
                     + (f" for {repo}." if repo else ".")
                 ),
             )
+        token = str(token or "").strip()
         if token:
             return ResolvedGitHubCredential(
                 token=token,
@@ -148,6 +177,15 @@ async def resolve_github_credential(
                 sourceName="settings.github.github_token_secret_ref",
                 repo=repo,
             )
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName="settings.github.github_token_secret_ref",
+            repo=repo,
+            diagnostic=(
+                "GitHub credential reference from settings resolved empty"
+                + (f" for {repo}." if repo else ".")
+            ),
+        )
 
     for env_name in _SETTINGS_REF_ENVS:
         secret_ref = str(os.environ.get(env_name, "")).strip()
@@ -167,6 +205,7 @@ async def resolve_github_credential(
                     + (f" for {repo}." if repo else ".")
                 ),
             )
+        token = str(token or "").strip()
         if token:
             return ResolvedGitHubCredential(
                 token=token,
@@ -174,6 +213,15 @@ async def resolve_github_credential(
                 sourceName=env_name,
                 repo=repo,
             )
+        return ResolvedGitHubCredential(
+            source=GitHubCredentialSource.UNRESOLVABLE,
+            sourceName=env_name,
+            repo=repo,
+            diagnostic=(
+                f"GitHub credential reference from {env_name} resolved empty"
+                + (f" for {repo}." if repo else ".")
+            ),
+        )
 
     target = f" for {repo}" if repo else ""
     return ResolvedGitHubCredential(
