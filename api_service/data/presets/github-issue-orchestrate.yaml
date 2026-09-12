@@ -106,6 +106,12 @@ inputs:
   type: boolean
   required: false
   default: true
+- name: completion_target_ref
+  description: Optional refs/heads/ branch ref; blank uses the remote default branch.
+  label: Completion Target Ref
+  type: text
+  required: false
+  default: ''
 steps:
 - title: Load GitHub issue brief
   type: tool
@@ -135,6 +141,7 @@ steps:
     issue_url: '{{ inputs.github_issue.url | default('''') }}'
     brief_artifact_path: artifacts/github-issue-orchestrate-brief.json
     assessment_artifact_path: artifacts/github-issue-orchestrate-assessment.json
+    completion_target_ref: '{{ inputs.completion_target_ref }}'
     constraints: '{{ inputs.constraints }}'
 - title: Check GitHub issue blockers before orchestration
   type: tool
@@ -300,29 +307,20 @@ steps:
     - git
 - title: Verify completion
   enabled: '{{ inputs.run_verify }}'
-  instructions: '/clear
+  instructions: |-
+    Run moonspec-verify against the original scope and constraints. The initial assessment is context, not objective proof. Reuse valid evidence only when it matches the current candidate content, original scope, requirement identities, completion policy, and required freshness; otherwise execute the missing checks. Bind objective success using validatedRefs.acceptance (acceptance/v1). Preserve incomplete source scope and mandatory evidence gaps; optional enrichment and diagnostics are disclosed limitations.
 
-
-    Read artifacts/github-issue-orchestrate-assessment.json before doing anything. If it records
-    FULLY_IMPLEMENTED and no MoonSpec implementation work ran, report verification as already
-    satisfied by the initial assessment and skip rerunning verification. Otherwise run moonspec-verify
-    as the final read-only gate unless an up-to-date verification report already covers the
-    current code and artifacts.
-
-    If the verdict is ADDITIONAL_WORK_NEEDED, preserve the report as the mandatory remediation
-    input for the next step.
-
-    If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or
-    context. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
-    classify it as an environment or setup failure when the verifier identifies missing runtime
-    infrastructure, stop immediately, skip all remediation attempts, and do not create a pull
-    request.
-
-    Do not create a pull request from this step. Pull request creation is allowed only after
-    the post-remediation verification step reports FULLY_IMPLEMENTED.'
+    Read artifacts/github-issue-orchestrate-brief.json as original scope and artifacts/github-issue-orchestrate-assessment.json as initial context. Completion target override: {{ inputs.completion_target_ref }} (empty resolves the remote default). Write the complete verifier result to var/artifacts/moonspec-verify/github-issue-orchestrate.json. Use the existing remediation owner for bounded gaps and evidence retries; do not publish in this read-only step.
   skill:
     id: moonspec-verify
     args:
+      completion_target_ref: '{{ inputs.completion_target_ref }}'
+      issue_provider: 'github'
+      issue_ref: '{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}'
+      brief_artifact_path: 'artifacts/github-issue-orchestrate-brief.json'
+      assessment_artifact_path: 'artifacts/github-issue-orchestrate-assessment.json'
+      constraints: '{{ inputs.constraints }}'
+      source_design_path: '{{ inputs.source_design_path }}'
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Remediate verification gaps — attempt 1 of 6
   enabled: '{{ inputs.run_verify }}'
@@ -371,32 +369,27 @@ steps:
     moonSpecRemediationAttempt: 1
     moonSpecRemediationMaxAttempts: 6
     moonSpecFinalRemediationGate: false
-  instructions: '/clear
+  instructions: |-
+    /clear
 
+    Run moonspec-verify after remediation attempt 1. Reuse identical valid objective evidence under the shared acceptance policy; otherwise execute missing verification.
 
-    Run moonspec-verify after remediation attempt 1, even when remediation was skipped because
-    the prior verdict was FULLY_IMPLEMENTED.
-
-
-    If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve
-    the verification report as the mandatory input for the next remediation attempt.
-
-    If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or
-    context unless the missing evidence is recoverable in the current runtime by the next
-    remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
-    treat it as terminal, classify runtime or infrastructure causes as environment failure,
-    skip every remaining remediation attempt, and do not create a pull request.
-
+    If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
+    If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
     Write the current reports/remediation_verification-<attempt>.json artifact with artifact_type remediation.verification before setting the final verdict. The artifact must identify the remediation attempt it verifies, reference the remediation attempt artifact, and contain the authoritative verdict for the whole target state.
 
-
-    When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
-    to "advance". The workflow runtime owns pull request creation; do not encode pull
-    request creation or any step-specific destination in recommendedNextAction.'
+    When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
   skill:
     id: moonspec-verify
     args:
+      completion_target_ref: '{{ inputs.completion_target_ref }}'
+      issue_provider: 'github'
+      issue_ref: '{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}'
+      brief_artifact_path: 'artifacts/github-issue-orchestrate-brief.json'
+      assessment_artifact_path: 'artifacts/github-issue-orchestrate-assessment.json'
+      constraints: '{{ inputs.constraints }}'
+      source_design_path: '{{ inputs.source_design_path }}'
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Remediate remaining gaps — attempt 2 of 6
   enabled: '{{ inputs.run_verify }}'
@@ -445,32 +438,27 @@ steps:
     moonSpecRemediationAttempt: 2
     moonSpecRemediationMaxAttempts: 6
     moonSpecFinalRemediationGate: false
-  instructions: '/clear
+  instructions: |-
+    /clear
 
+    Run moonspec-verify after remediation attempt 2. Reuse identical valid objective evidence under the shared acceptance policy; otherwise execute missing verification.
 
-    Run moonspec-verify after remediation attempt 2, even when remediation was skipped because
-    the prior verdict was FULLY_IMPLEMENTED.
-
-
-    If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve
-    the verification report as the mandatory input for the next remediation attempt.
-
-    If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or
-    context unless the missing evidence is recoverable in the current runtime by the next
-    remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
-    treat it as terminal, classify runtime or infrastructure causes as environment failure,
-    skip every remaining remediation attempt, and do not create a pull request.
-
+    If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
+    If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
     Write the current reports/remediation_verification-<attempt>.json artifact with artifact_type remediation.verification before setting the final verdict. The artifact must identify the remediation attempt it verifies, reference the remediation attempt artifact, and contain the authoritative verdict for the whole target state.
 
-
-    When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
-    to "advance". The workflow runtime owns pull request creation; do not encode pull
-    request creation or any step-specific destination in recommendedNextAction.'
+    When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
   skill:
     id: moonspec-verify
     args:
+      completion_target_ref: '{{ inputs.completion_target_ref }}'
+      issue_provider: 'github'
+      issue_ref: '{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}'
+      brief_artifact_path: 'artifacts/github-issue-orchestrate-brief.json'
+      assessment_artifact_path: 'artifacts/github-issue-orchestrate-assessment.json'
+      constraints: '{{ inputs.constraints }}'
+      source_design_path: '{{ inputs.source_design_path }}'
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Remediate remaining gaps — attempt 3 of 6
   enabled: '{{ inputs.run_verify }}'
@@ -519,32 +507,27 @@ steps:
     moonSpecRemediationAttempt: 3
     moonSpecRemediationMaxAttempts: 6
     moonSpecFinalRemediationGate: false
-  instructions: '/clear
+  instructions: |-
+    /clear
 
+    Run moonspec-verify after remediation attempt 3. Reuse identical valid objective evidence under the shared acceptance policy; otherwise execute missing verification.
 
-    Run moonspec-verify after remediation attempt 3, even when remediation was skipped because
-    the prior verdict was FULLY_IMPLEMENTED.
-
-
-    If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve
-    the verification report as the mandatory input for the next remediation attempt.
-
-    If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or
-    context unless the missing evidence is recoverable in the current runtime by the next
-    remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
-    treat it as terminal, classify runtime or infrastructure causes as environment failure,
-    skip every remaining remediation attempt, and do not create a pull request.
-
+    If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
+    If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
     Write the current reports/remediation_verification-<attempt>.json artifact with artifact_type remediation.verification before setting the final verdict. The artifact must identify the remediation attempt it verifies, reference the remediation attempt artifact, and contain the authoritative verdict for the whole target state.
 
-
-    When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
-    to "advance". The workflow runtime owns pull request creation; do not encode pull
-    request creation or any step-specific destination in recommendedNextAction.'
+    When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
   skill:
     id: moonspec-verify
     args:
+      completion_target_ref: '{{ inputs.completion_target_ref }}'
+      issue_provider: 'github'
+      issue_ref: '{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}'
+      brief_artifact_path: 'artifacts/github-issue-orchestrate-brief.json'
+      assessment_artifact_path: 'artifacts/github-issue-orchestrate-assessment.json'
+      constraints: '{{ inputs.constraints }}'
+      source_design_path: '{{ inputs.source_design_path }}'
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Remediate remaining gaps — attempt 4 of 6
   enabled: '{{ inputs.run_verify }}'
@@ -593,32 +576,27 @@ steps:
     moonSpecRemediationAttempt: 4
     moonSpecRemediationMaxAttempts: 6
     moonSpecFinalRemediationGate: false
-  instructions: '/clear
+  instructions: |-
+    /clear
 
+    Run moonspec-verify after remediation attempt 4. Reuse identical valid objective evidence under the shared acceptance policy; otherwise execute missing verification.
 
-    Run moonspec-verify after remediation attempt 4, even when remediation was skipped because
-    the prior verdict was FULLY_IMPLEMENTED.
-
-
-    If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve
-    the verification report as the mandatory input for the next remediation attempt.
-
-    If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or
-    context unless the missing evidence is recoverable in the current runtime by the next
-    remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
-    treat it as terminal, classify runtime or infrastructure causes as environment failure,
-    skip every remaining remediation attempt, and do not create a pull request.
-
+    If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
+    If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
     Write the current reports/remediation_verification-<attempt>.json artifact with artifact_type remediation.verification before setting the final verdict. The artifact must identify the remediation attempt it verifies, reference the remediation attempt artifact, and contain the authoritative verdict for the whole target state.
 
-
-    When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
-    to "advance". The workflow runtime owns pull request creation; do not encode pull
-    request creation or any step-specific destination in recommendedNextAction.'
+    When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
   skill:
     id: moonspec-verify
     args:
+      completion_target_ref: '{{ inputs.completion_target_ref }}'
+      issue_provider: 'github'
+      issue_ref: '{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}'
+      brief_artifact_path: 'artifacts/github-issue-orchestrate-brief.json'
+      assessment_artifact_path: 'artifacts/github-issue-orchestrate-assessment.json'
+      constraints: '{{ inputs.constraints }}'
+      source_design_path: '{{ inputs.source_design_path }}'
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Remediate remaining gaps — attempt 5 of 6
   enabled: '{{ inputs.run_verify }}'
@@ -667,32 +645,27 @@ steps:
     moonSpecRemediationAttempt: 5
     moonSpecRemediationMaxAttempts: 6
     moonSpecFinalRemediationGate: false
-  instructions: '/clear
+  instructions: |-
+    /clear
 
+    Run moonspec-verify after remediation attempt 5. Reuse identical valid objective evidence under the shared acceptance policy; otherwise execute missing verification.
 
-    Run moonspec-verify after remediation attempt 5, even when remediation was skipped because
-    the prior verdict was FULLY_IMPLEMENTED.
-
-
-    If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve
-    the verification report as the mandatory input for the next remediation attempt.
-
-    If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or
-    context unless the missing evidence is recoverable in the current runtime by the next
-    remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
-    treat it as terminal, classify runtime or infrastructure causes as environment failure,
-    skip every remaining remediation attempt, and do not create a pull request.
-
+    If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
+    If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
 
     Write the current reports/remediation_verification-<attempt>.json artifact with artifact_type remediation.verification before setting the final verdict. The artifact must identify the remediation attempt it verifies, reference the remediation attempt artifact, and contain the authoritative verdict for the whole target state.
 
-
-    When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
-    to "advance". The workflow runtime owns pull request creation; do not encode pull
-    request creation or any step-specific destination in recommendedNextAction.'
+    When the latest post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
   skill:
     id: moonspec-verify
     args:
+      completion_target_ref: '{{ inputs.completion_target_ref }}'
+      issue_provider: 'github'
+      issue_ref: '{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}'
+      brief_artifact_path: 'artifacts/github-issue-orchestrate-brief.json'
+      assessment_artifact_path: 'artifacts/github-issue-orchestrate-assessment.json'
+      constraints: '{{ inputs.constraints }}'
+      source_design_path: '{{ inputs.source_design_path }}'
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Remediate remaining gaps — attempt 6 of 6
   enabled: '{{ inputs.run_verify }}'
@@ -741,30 +714,26 @@ steps:
     moonSpecRemediationAttempt: 6
     moonSpecRemediationMaxAttempts: 6
     moonSpecFinalRemediationGate: true
-  instructions: '/clear
+  instructions: |-
+    /clear
 
+    Run moonspec-verify after remediation attempt 6. Reuse identical valid objective evidence under the shared acceptance policy; otherwise execute missing verification.
 
-    Run moonspec-verify after remediation attempt 6, even when remediation was skipped because
-    the prior verdict was FULLY_IMPLEMENTED.
-
-
-    This is the controlling verification gate for GitHub Issue Orchestrate publication. If
-    the verdict is ADDITIONAL_WORK_NEEDED or NO_DETERMINATION, the remediation budget is exhausted:
-    stop the orchestration, report the gaps or missing evidence, and do not continue to pull
-    request creation. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
-    classify runtime or infrastructure causes as environment failure, stop immediately, and
-    do not create a pull request.
-
+    This is the controlling verification gate for GitHub Issue Orchestrate publication. If the verdict is ADDITIONAL_WORK_NEEDED or NO_DETERMINATION, the remediation budget is exhausted: stop the orchestration, report the gaps or missing evidence, and do not continue to pull request creation. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify runtime or infrastructure causes as environment failure, stop immediately, and do not create a pull request.
 
     Write the current reports/remediation_verification-<attempt>.json artifact with artifact_type remediation.verification before setting the final verdict. The artifact must identify the remediation attempt it verifies, reference the remediation attempt artifact, and contain the authoritative verdict for the whole target state.
 
-
-    If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction
-    to "advance". The workflow runtime owns pull request creation; do not encode pull
-    request creation or any step-specific destination in recommendedNextAction.'
+    If this post-remediation verdict is FULLY_IMPLEMENTED, set recommendedNextAction to "advance". The workflow runtime owns pull request creation; do not encode pull request creation or any step-specific destination in recommendedNextAction.
   skill:
     id: moonspec-verify
     args:
+      completion_target_ref: '{{ inputs.completion_target_ref }}'
+      issue_provider: 'github'
+      issue_ref: '{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}'
+      brief_artifact_path: 'artifacts/github-issue-orchestrate-brief.json'
+      assessment_artifact_path: 'artifacts/github-issue-orchestrate-assessment.json'
+      constraints: '{{ inputs.constraints }}'
+      source_design_path: '{{ inputs.source_design_path }}'
       verify_artifact_path: var/artifacts/moonspec-verify/github-issue-orchestrate.json
 - title: Reconcile declarative docs
   enabled: '{{ inputs.run_verify }}'
@@ -822,92 +791,35 @@ steps:
 - title: Create pull request
   annotations:
     jiraOrchestrateRole: pull-request-handoff
-  instructions: '/clear
+  instructions: |-
+    /clear
 
+    Read artifacts/github-issue-orchestrate-assessment.json (or the recorded verdict from the assess step) before doing anything.
 
-    Read artifacts/github-issue-orchestrate-assessment.json (or the recorded verdict from
-    the assess step) before doing anything.
+    Skip publication only when objective acceptance evidence satisfies the freshly resolved intended completion target under the shared policy. A FULLY_IMPLEMENTED initial assessment alone cannot skip the PR. A later FULLY_IMPLEMENTED verifier result approves candidate work for review; it does not rewrite the initial assessment or prove landing. Publish candidate-only work through the existing PR path even when the worktree is clean and commits are already pushed. Reuse an exact existing PR for the same candidate when available.
 
+    Otherwise create a pull request for the completed work for GitHub issue {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}.
 
-    If the recorded verdict is FULLY_IMPLEMENTED and no MoonSpec implementation work ran,
-    skip pull request creation entirely and report it as skipped because there is nothing
-    new to publish. Do not write artifacts/github-issue-orchestrate-pr.json in this case.
-    The final step will apply the configured Done strategy.
+    {% if inputs.run_verify %}Before committing, inspect the latest post-remediation moonspec-verify result and confirm the verdict is FULLY_IMPLEMENTED. If the latest verdict is ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, stop without committing, pushing, creating a pull request, or changing GitHub issue status. Classify runtime or infrastructure causes as environment failure.{% else %}Before committing, confirm implementation is complete and the focused tests required by the GitHub issue have passed. Verification was disabled for this workflow execution, so do not require a moonspec-verify report before creating a pull request.{% endif %}
 
+    This GitHub Issue Orchestrate handoff step is the explicit PR-publication step for this preset. It intentionally owns pull request creation before the GitHub Code Review status update so the confirmed pull request URL is available to both GitHub issue lifecycle handling and MoonMind publish handling. If generic managed-runtime guidance says not to push or create a pull request, treat this step-specific handoff instruction as the controlling instruction for this step only. If the workflow is submitted with PR merge automation enabled, the parent workflow must use the pull request URL produced by this step as the published PR and then run merge automation against that PR. If the runtime instructions, workflow parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing GitHub issue status to Code Review and report the exact blocker.
 
-    Otherwise create a pull request for the completed work for GitHub issue {{ inputs.github_issue.repository
-    }}#{{ inputs.github_issue.number }}.
+    First confirm the working tree contains only intentional changes for {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }} and no raw credentials. Commit the work with a concise message that includes {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}. Push the current non-protected work branch and create a non-draft pull request with the available authenticated GitHub tooling.
 
+    The pull request must be ready for review, not a draft. Do not pass draft flags when creating it. If the available tool or repository default creates a draft pull request, immediately mark it ready for review and verify the final pull request isDraft value is false before continuing.
 
-    {% if inputs.run_verify %}Before committing, inspect the latest post-remediation moonspec-verify
-    result and confirm the verdict is FULLY_IMPLEMENTED. If the latest verdict is ADDITIONAL_WORK_NEEDED,
-    NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION,
-    stop without committing, pushing, creating a pull request, or changing GitHub issue status.
-    Classify runtime or infrastructure causes as environment failure.{% else %}Before committing,
-    confirm implementation is complete and the focused tests required by the GitHub issue have
-    passed. Verification was disabled for this workflow execution, so do not require a moonspec-verify
-    report before creating a pull request.{% endif %}
-
-
-    This GitHub Issue Orchestrate handoff step is the explicit PR-publication step for this
-    preset. It intentionally owns pull request creation before the GitHub Code Review status
-    update so the confirmed pull request URL is available to both GitHub issue lifecycle handling
-    and MoonMind publish handling. If generic managed-runtime guidance says not to push or
-    create a pull request, treat this step-specific handoff instruction as the controlling
-    instruction for this step only. If the workflow is submitted with PR merge automation enabled,
-    the parent workflow must use the pull request URL produced by this step as the published
-    PR and then run merge automation against that PR. If the runtime instructions, workflow parameters,
-    authentication, remote configuration, branch protection, or repository permissions prevent
-    committing, pushing, or creating the pull request in this step, stop before changing GitHub
-    issue status to Code Review and report the exact blocker.
-
-
-    First confirm the working tree contains only intentional changes for {{ inputs.github_issue.repository
-    }}#{{ inputs.github_issue.number }} and no raw credentials. Commit the work with a concise
-    message that includes {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
-    }}. Push the current non-protected work branch and create a non-draft pull request with
-    the available authenticated GitHub tooling.
-
-
-    The pull request must be ready for review, not a draft. Do not pass draft flags when creating
-    it. If the available tool or repository default creates a draft pull request, immediately
-    mark it ready for review and verify the final pull request isDraft value is false before
-    continuing.
-
-
-    The pull request title must include {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
-    }}. The pull request body must include:
-
+    The pull request title must include {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}. The pull request body must include:
     - the GitHub issue reference
-
     - the active MoonSpec feature path
-
     - verification verdict, or a note that verification was disabled for this workflow execution
-
     - tests run
-
     - remaining risks
+    - {% if inputs.run_verify %}the doc reconciliation outcome from artifacts/github-issue-orchestrate-doc-reconcile.json when present: updated canonical doc paths, the no-update rationale, or the escalation issue reference{% else %}a note that doc reconciliation was skipped because verification was disabled{% endif %}
+    - a Documentation Conformance section listing canonical sources, temporary artifacts consulted, claim coverage, and reconciliation outcomes
 
-    - {% if inputs.run_verify %}the doc reconciliation outcome from artifacts/github-issue-orchestrate-doc-reconcile.json
-    when present: updated canonical doc paths, the no-update rationale, or the escalation
-    issue reference{% else %}a note that doc reconciliation was skipped because verification
-    was disabled{% endif %}
+    {% if inputs.run_verify %}Canonical doc edits produced by the doc reconciliation step are intentional changes for this issue and must be committed in the same pull request.{% else %}Do not require doc reconciliation output before committing because verification was disabled and the doc reconciliation step was skipped.{% endif %}
 
-    - a Documentation Conformance section listing canonical sources, temporary artifacts consulted,
-    claim coverage, and reconciliation outcomes
-
-
-    {% if inputs.run_verify %}Canonical doc edits produced by the doc reconciliation step
-    are intentional changes for this issue and must be committed in the same pull request.{% else
-    %}Do not require doc reconciliation output before committing because verification was
-    disabled and the doc reconciliation step was skipped.{% endif %}
-
-
-    After creation and non-draft verification, record the confirmed pull request URL in the
-    step result and in a local handoff artifact at artifacts/github-issue-orchestrate-pr.json
-    with keys issue_provider, issue_ref, repository, issue_number, and pull_request_url. Do
-    not continue unless the pull_request_url is a GitHub pull request URL for the current
-    work branch and the pull request is confirmed non-draft.'
+    After creation and non-draft verification, record the confirmed pull request URL in the step result and in a local handoff artifact at artifacts/github-issue-orchestrate-pr.json with keys issue_provider, issue_ref, repository, issue_number, and pull_request_url. Do not continue unless the pull_request_url is a GitHub pull request URL for the current work branch and the pull request is confirmed non-draft.
   skill:
     id: auto
     args: {}
@@ -917,26 +829,10 @@ steps:
   type: tool
   annotations:
     jiraOrchestrateRole: code-review-handoff
-  instructions: 'Read artifacts/github-issue-orchestrate-assessment.json (or the recorded
-    verdict from the assess step) before changing GitHub.
+  instructions: |-
+    Use the trusted issue status tool with the original issue identity, verification artifact, PR handoff, and intended completion target. The tool validates objective evidence and re-reads the completion target before applying the already-completed path. Candidate-only work follows the configured Code Review/Review path with its confirmed PR. Missing evidence returns bounded verification work; never infer completion from assessment prose, clean worktrees, or pushed commits.
 
-
-    If the recorded verdict is BLOCKED, stop without changing GitHub and report the blocking
-    evidence. If the recorded verdict is FULLY_IMPLEMENTED and no code changes were made,
-    apply the configured Done strategy.
-
-
-    Otherwise {% if inputs.run_verify %}before using the trusted GitHub update tool, confirm
-    the latest post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED; terminal
-    verifier outcomes such as ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE,
-    or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION must stop before this status update.{% else
-    %}confirm implementation is complete and the focused tests required by the GitHub issue
-    have passed. Verification was disabled for this workflow execution, so do not require
-    a moonspec-verify report before this status update.{% endif %} Then read artifacts/github-issue-orchestrate-pr.json,
-    verify it contains a pull_request_url for {{ inputs.github_issue.repository }}#{{
-    inputs.github_issue.number }}, and apply the configured Code Review strategy with the
-    pull request URL. Do not assume a single organization workflow; use the configured label/comment/close
-    strategy exposed by the trusted GitHub update tool.'
+    Follow the resolved moonspec-verify acceptance policy for scope, mandatory versus optional evidence, reuse, and completion. Original source and constraints define acceptance; assessment backlogs prioritize work and preserve previously met requirements as regression constraints.
   tool:
     id: github.update_issue_status
     requiredCapabilities:
@@ -945,6 +841,7 @@ steps:
       repository: '{{ inputs.github_issue.repository }}'
       issueNumber: '{{ inputs.github_issue.number }}'
       mode: finalize_after_pr_or_done
+      completionTargetRef: '{{ inputs.completion_target_ref }}'
       pullRequestArtifactPath: artifacts/github-issue-orchestrate-pr.json
       verificationArtifactPath: var/artifacts/moonspec-verify/github-issue-orchestrate.json
       requireVerification: '{{ inputs.run_verify }}'

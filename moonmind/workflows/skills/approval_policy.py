@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Mapping
 
 from moonmind.workflows.skills.tool_plan_contracts import (
@@ -69,7 +70,9 @@ def recommended_next_action_for_verdict(
 
 
 def step_gate_contract_violations(
-    payload: Mapping[str, Any], *, validate_action_compatibility: bool = True
+    payload: Mapping[str, Any], *, validate_action_compatibility: bool = True,
+    require_acceptance: bool = False,
+    validation_time: datetime | None = None,
 ) -> list[str]:
     """Return the contract violations that force a fail-closed downgrade.
 
@@ -120,6 +123,18 @@ def step_gate_contract_violations(
                     f"recommendedNextAction {recommended_text!r} is incompatible "
                     f"with verdict {normalized}"
                 )
+    if require_acceptance and raw_verdict and normalized == "FULLY_IMPLEMENTED":
+        from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
+
+        evidence = acceptance_evidence(payload)
+        if evidence is None:
+            violations.append(
+                "objective success requires complete validatedRefs.acceptance "
+                "(acceptance/v1) binding subject content, original scope, "
+                "mandatory requirement evidence, freshness, and completion target"
+            )
+        elif validation_time is not None and not evidence.is_current(validation_time):
+            violations.append("required acceptance evidence expired; repeat the affected verification")
     return violations
 
 @dataclass(frozen=True, slots=True)
@@ -385,7 +400,9 @@ def parse_review_verdict(payload: Mapping[str, Any]) -> ReviewVerdict:
 
 
 def parse_step_gate_result(
-    payload: Mapping[str, Any], *, validate_action_compatibility: bool = True
+    payload: Mapping[str, Any], *, validate_action_compatibility: bool = True,
+    require_acceptance: bool = False,
+    validation_time: datetime | None = None,
 ) -> StepGateResult:
     """Normalize activity output into the canonical gate result contract."""
     declared_verdict = str(payload.get("verdict") or "").strip()
@@ -452,6 +469,13 @@ def parse_step_gate_result(
         # of raising a hard ContractValidationError from StepGateResult.
         invalid = True
         degraded = True
+    if require_acceptance and step_gate_contract_violations(
+        payload, validate_action_compatibility=validate_action_compatibility,
+        require_acceptance=True,
+        validation_time=validation_time,
+    ):
+        invalid = True
+        degraded = True
     downgrade_reason: str | None = None
     if invalid or degraded:
         # An invalid/degraded gate result must not retain a passing verdict:
@@ -460,7 +484,9 @@ def parse_step_gate_result(
         # otherwise approve publication. Downgrade the verdict and force a
         # blocking action so the gate fails closed.
         violations = step_gate_contract_violations(
-            payload, validate_action_compatibility=validate_action_compatibility
+            payload, validate_action_compatibility=validate_action_compatibility,
+            require_acceptance=require_acceptance,
+            validation_time=validation_time,
         )
         detail = (
             "; ".join(violations)

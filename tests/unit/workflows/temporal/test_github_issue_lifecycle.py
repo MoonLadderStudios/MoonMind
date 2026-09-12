@@ -33,6 +33,24 @@ from moonmind.workflows.temporal.github_issue_lifecycle import (
     should_abandon_retry,
 )
 from moonmind.workflows.temporal.story_output_tools import update_github_issue_status
+from tests.unit.workflows.skills import test_acceptance_contract as acceptance_helpers
+
+candidate = acceptance_helpers.candidate
+
+
+def _bind_verified_target(service, candidate):
+    repo, _, report = candidate
+    acceptance_helpers.git(repo, "update-ref", "refs/heads/release", acceptance_helpers.git(repo, "rev-parse", "HEAD"))
+    current = acceptance_helpers.portable.capture(repo, "example/repo", "release", target_mode=True)
+    report["validatedRefs"]["acceptance"]["completionTarget"] = current["completionTarget"]
+
+    async def read_target(repository, ref):
+        assert repository == "example/repo"
+        assert ref == ""
+        return acceptance_helpers.portable.capture(repo, repository, "release", target_mode=True)["completionTarget"]
+
+    service.read_repository_target = read_target
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -609,8 +627,8 @@ async def test_finalize_mixed_without_pr_stays_blocked(monkeypatch: pytest.Monke
     )
     assert result.status == "FAILED"
     assert result.outputs["decision"] == "blocked"
-    assert result.outputs["reasonCode"] == "reconciliation_required"
-    assert result.outputs["lifecycleSettled"] == "blocked_mixed"
+    assert result.outputs["remainingEvidence"]
+    assert interpret_issue({"state": "open", "labels": service.labels}).settled == "blocked_mixed"
     assert service.operations == []
     assert _LifecycleHttpClient.posts == []
 
@@ -1045,7 +1063,7 @@ async def test_finalize_mixed_labels_4225_recorded_failure_still_replays(
     )
     assert blocked.status == "FAILED"
     assert blocked.outputs["decision"] == "blocked"
-    assert blocked.outputs["reasonCode"] == "reconciliation_required"
+    assert blocked.outputs["remainingEvidence"]
     assert expected["withoutPrStaysBlocked"] is True
 
     # With-PR replay steers add-only to COMPLETED/attention (degraded).
@@ -1232,12 +1250,15 @@ async def test_available_release_leaves_release_evidence(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_close_applies_done_destination(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("mode", ["finalize_after_pr_or_done", "done"])
+async def test_close_applies_done_destination(monkeypatch: pytest.MonkeyPatch, candidate, mode) -> None:
     service = _LifecycleFakeService(initial_labels=["bug", "status: code-review"])
+    report = _bind_verified_target(service, candidate)
     _install(monkeypatch, service)
     result = await update_github_issue_status(
-        {"repository": "MoonLadderStudios/MoonMind", "issueNumber": 4176,
-         "mode": "finalize_after_pr_or_done"},
+        {"repository": "example/repo", "issueNumber": 1, "verificationPayload": report,
+         "mode": mode,
+         **({"pullRequestUrl": "https://github.com/example/repo/pull/2"} if mode == "done" else {})},
         github_service_factory=lambda: service,
     )
     assert result.status == "COMPLETED"
@@ -1247,14 +1268,15 @@ async def test_close_applies_done_destination(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
-async def test_closed_close_retry_reconciles_as_applied(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+async def test_closed_close_retry_reconciles_as_applied(monkeypatch: pytest.MonkeyPatch, tmp_path, candidate) -> None:
     service = _LifecycleFakeService(initial_labels=["status: code-review"])
     service.issue_state = "closed"
+    report = _bind_verified_target(service, candidate)
     _install(monkeypatch, service)
     assessment = tmp_path / "assessment.json"
     assessment.write_text('{"verdict": "FULLY_IMPLEMENTED"}', encoding="utf-8")
     result = await update_github_issue_status(
-        {"repository": "MoonLadderStudios/MoonMind", "issueNumber": 4176,
+        {"repository": "example/repo", "issueNumber": 1, "verificationPayload": report,
          "mode": "finalize_after_pr_or_done",
          "assessmentArtifactPath": str(assessment)},
         github_service_factory=lambda: service,

@@ -3354,24 +3354,9 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "ADDITIONAL_WORK_NEEDED" in expanded["steps"][11]["instructions"]
             assert "verification report's gaps" in expanded["steps"][11]["instructions"]
             assert expanded["steps"][10]["skill"]["id"] == "moonspec-verify"
-            assert "Verification robustness rules" in expanded["steps"][10][
-                "instructions"
-            ]
-            assert "embedding_provider_not_configured" in expanded["steps"][10][
-                "instructions"
-            ]
-            assert "disclosed scope exclusions" in expanded["steps"][10][
-                "instructions"
-            ]
-            assert "Verification robustness rules" in expanded["steps"][12][
-                "instructions"
-            ]
             assert expanded["steps"][22]["title"] == "Verify remediation attempt 6 of 6"
             assert expanded["steps"][22]["skill"]["id"] == "moonspec-verify"
             assert "controlling verification gate" in expanded["steps"][22][
-                "instructions"
-            ]
-            assert "Verification robustness rules" in expanded["steps"][22][
                 "instructions"
             ]
             assert expanded["steps"][23]["title"] == "Reconcile declarative docs"
@@ -3460,7 +3445,7 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
                 "issueKey": "MM-742",
                 "artifactPath": "artifacts/jira-implement-brief.json",
             }
-            assert expanded["steps"][1]["skill"]["id"] == "auto"
+            assert expanded["steps"][1]["skill"]["id"] == "moonspec-assess"
             assert (
                 expanded["steps"][1]["title"] == "Assess existing implementation state"
             )
@@ -3611,6 +3596,9 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     )
     assert expanded["steps"][1]["repositoryOperation"] == "read"
     assert expanded["steps"][1]["skill"]["args"] == {
+        "issue_provider": "github",
+        "issue_ref": "MoonLadderStudios/MoonMind#123",
+        "completion_target_ref": "",
         "brief_artifact_path": "artifacts/github-issue-implement-brief.json",
         "assessment_artifact_path": (
             "artifacts/github-issue-implement-assessment.json"
@@ -3621,6 +3609,8 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert expanded["steps"][5]["skill"]["id"] == "moonspec-verify"
     assert expanded["steps"][5]["repositoryOperation"] == "read"
     assert expanded["steps"][5]["skill"]["args"] == {
+        "completion_target_ref": "",
+        "constraints": "",
         "verification_target": "issue_brief",
         "issue_provider": "github",
         "issue_ref": "MoonLadderStudios/MoonMind#123",
@@ -3678,16 +3668,6 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
     assert "Closes MoonLadderStudios/MoonMind#123" in expanded["steps"][7][
         "instructions"
     ]
-    assert (
-        "recover that field's full content through the trusted MoonMind tool surface"
-        in expanded["steps"][1]["instructions"]
-    )
-    assert "truncated_fields" in expanded["steps"][1]["instructions"]
-    assert "must not become an assessment requirement row" in expanded["steps"][1][
-        "instructions"
-    ]
-    assert "Verification scope rules" in expanded["steps"][5]["instructions"]
-    assert "embedding_provider_not_configured" in expanded["steps"][5]["instructions"]
     assert expanded["steps"][8]["tool"]["inputs"]["verificationArtifactPath"] == (
         "artifacts/github-issue-implement-verify.json"
     )
@@ -3706,7 +3686,7 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "Finalize GitHub issue status",
     ]
     assert "Verification was disabled" in no_verify["steps"][-2]["instructions"]
-    assert "Verification was disabled" in no_verify["steps"][-1]["instructions"]
+    assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
     assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
     assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
         "github-issue-implement",
@@ -3952,6 +3932,7 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
         "repository": "MoonLadderStudios/MoonMind",
         "issueNumber": "1067",
         "mode": "finalize_after_pr_or_done",
+        "completionTargetRef": "",
         "pullRequestArtifactPath": "artifacts/github-issue-orchestrate-pr.json",
         "verificationArtifactPath": "var/artifacts/moonspec-verify/github-issue-orchestrate.json",
         "requireVerification": True,
@@ -3993,20 +3974,7 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
     assert "stop without committing, pushing, creating a pull request" in expanded["steps"][
         25
     ]["instructions"]
-    assert "terminal verifier outcomes" in expanded["steps"][26]["instructions"]
-    assert "must stop before this status update" in expanded["steps"][26][
-        "instructions"
-    ]
-    assert "FULLY_IMPLEMENTED and no MoonSpec implementation work ran" in expanded[
-        "steps"
-    ][11]["instructions"]
     assert "skip doc reconciliation" in expanded["steps"][24]["instructions"]
-    assert "skip pull request creation entirely" in expanded["steps"][25][
-        "instructions"
-    ]
-    assert "apply the configured Done strategy" in expanded["steps"][26][
-        "instructions"
-    ]
     assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
         "github-issue-orchestrate",
         "issue-implement-assessment",
@@ -4038,7 +4006,7 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
     ]
     assert all("moonspec-verify" != step["skill"]["id"] for step in no_verify["steps"] if "skill" in step)
     assert "Verification was disabled" in no_verify["steps"][-2]["instructions"]
-    assert "Verification was disabled" in no_verify["steps"][-1]["instructions"]
+    assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
     assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
 
 

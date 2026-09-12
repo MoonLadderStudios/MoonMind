@@ -1686,6 +1686,12 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
                         "statusName": {"type": "string"},
                         "status_name": {"type": "string"},
                         "mode": {"type": "string"},
+                        "repository": {"type": "string"},
+                        "completionTargetRef": {"type": "string"},
+                        "verificationArtifactPath": {"type": "string"},
+                        "verificationPayload": {"type": "object"},
+                        "pullRequestUrl": {"type": "string"},
+                        "requireVerification": {"type": "boolean"},
                         "assessmentArtifactPath": {"type": "string"},
                         "assessment_artifact_path": {"type": "string"},
                         "assessmentVerdict": {"type": "string"},
@@ -5054,6 +5060,28 @@ class TemporalIntegrationActivities:
         from moonmind.workflows.temporal.post_merge_jira_completion import (
             complete_post_merge_jira,
         )
+
+        candidate_context = payload.get("candidateContext")
+        if isinstance(candidate_context, Mapping) and "acceptanceGate" in candidate_context:
+            from moonmind.workflows.skills.acceptance_contract import (
+                acceptance_evidence,
+                validate_completion_target,
+            )
+            from moonmind.workflows.adapters.github_service import GitHubService
+
+            gate = candidate_context["acceptanceGate"]
+            gate = gate if isinstance(gate, Mapping) else {}
+            binding = acceptance_evidence(gate)
+            reason = await validate_completion_target(
+                gate,
+                repository=binding.subject.repository if binding else "",
+                source_ref=str(payload.get("jiraIssueKey") or ""),
+                expected_ref=str(candidate_context.get("completionTargetRef") or ""),
+                read_target=GitHubService().read_repository_target,
+            )
+            if reason:
+                return {"status": "blocked", "required": True, "reason": reason,
+                        "issueResolution": {"status": "invalid", "candidates": []}}
 
         service = JiraToolService()
 
@@ -8687,7 +8715,10 @@ class TemporalAgentRuntimeActivities:
                 )
                 gate_payload["validatedRefs"] = validated_refs
                 gate_payload.pop("validated_refs", None)
-            contract_violations = step_gate_contract_violations(gate_payload)
+            contract_violations = step_gate_contract_violations(
+                gate_payload,
+                require_acceptance=_metadata_text("acceptanceContract") == "acceptance/v1",
+            )
             if contract_violations:
                 # Surface violations at the boundary where the verifier JSON
                 # enters MoonMind so the workflow gate can request a bounded
@@ -10471,6 +10502,11 @@ class TemporalAgentRuntimeActivities:
         block = (
             "MoonSpec verification output contract:\n"
             f"{path_hint}"
+            "- Apply the resolved moonspec-verify acceptance policy. Objective success "
+            "carries `validatedRefs.acceptance` (acceptance/v1), binding actual "
+            "candidate content/checkpoint, original scope, requirement evidence, "
+            "freshness, and the intended completion target. Initial assessment "
+            "is not objective verification or proof of landing.\n"
             "- The JSON must include the canonical `verdict`, `recommendedNextAction`, "
             "`recoverableInCurrentRuntime`, and `remainingWork` fields.\n"
             f"- `verdict` must be exactly one of: {verdict_values}.\n"

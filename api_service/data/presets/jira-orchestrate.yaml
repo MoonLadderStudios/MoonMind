@@ -85,6 +85,12 @@ inputs:
     type: boolean
     required: false
     default: true
+  - name: completion_target_ref
+    description: Optional refs/heads/ branch ref; blank uses the remote default branch.
+    label: Completion Target Ref
+    type: text
+    required: false
+    default: ''
 steps:
   - title: Check Jira blockers before implementation
     type: tool
@@ -222,7 +228,7 @@ steps:
 
       Run moonspec-verify as the final read-only gate unless an up-to-date verification report already covers the current code and artifacts.
 
-      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
+      Follow the resolved moonspec-verify acceptance policy for scope, mandatory versus optional evidence, reuse, and completion. Original source and constraints define acceptance; assessment backlogs prioritize work and preserve previously met requirements as regression constraints.
 
       If the verdict is ADDITIONAL_WORK_NEEDED, preserve the report as the mandatory remediation input for the next step.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify it as an environment or setup failure when the verifier identifies missing runtime infrastructure, stop immediately, skip all remediation attempts, and do not create a pull request.
@@ -230,6 +236,13 @@ steps:
     skill:
       id: moonspec-verify
       args:
+        completion_target_ref: '{{ inputs.completion_target_ref }}'
+        issue_provider: 'jira'
+        issue_ref: '{{ inputs.jira_issue_key }}'
+        brief_artifact_path: 'artifacts/jira-orchestrate-brief.json'
+        assessment_artifact_path: 'artifacts/moonspec/acceptance-assessment.json'
+        constraints: '{{ inputs.constraints }}'
+        source_design_path: '{{ inputs.source_design_path }}'
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate verification gaps — attempt 1 of 6
     enabled: '{{ inputs.run_verify }}'
@@ -264,9 +277,9 @@ steps:
     instructions: |-
       /clear
 
-      Run moonspec-verify after remediation attempt 1, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+      Run moonspec-verify after remediation attempt 1. Reuse identical valid objective evidence under the shared acceptance policy; otherwise execute missing verification.
 
-      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
+      Follow the resolved moonspec-verify acceptance policy for scope, mandatory versus optional evidence, reuse, and completion. Original source and constraints define acceptance; assessment backlogs prioritize work and preserve previously met requirements as regression constraints.
 
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
@@ -277,6 +290,13 @@ steps:
     skill:
       id: moonspec-verify
       args:
+        completion_target_ref: '{{ inputs.completion_target_ref }}'
+        issue_provider: 'jira'
+        issue_ref: '{{ inputs.jira_issue_key }}'
+        brief_artifact_path: 'artifacts/jira-orchestrate-brief.json'
+        assessment_artifact_path: 'artifacts/moonspec/acceptance-assessment.json'
+        constraints: '{{ inputs.constraints }}'
+        source_design_path: '{{ inputs.source_design_path }}'
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate remaining gaps — attempt 2 of 6
     enabled: '{{ inputs.run_verify }}'
@@ -311,9 +331,9 @@ steps:
     instructions: |-
       /clear
 
-      Run moonspec-verify after remediation attempt 2, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+      Run moonspec-verify after remediation attempt 2. Reuse identical valid objective evidence under the shared acceptance policy; otherwise execute missing verification.
 
-      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
+      Follow the resolved moonspec-verify acceptance policy for scope, mandatory versus optional evidence, reuse, and completion. Original source and constraints define acceptance; assessment backlogs prioritize work and preserve previously met requirements as regression constraints.
 
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
@@ -324,6 +344,13 @@ steps:
     skill:
       id: moonspec-verify
       args:
+        completion_target_ref: '{{ inputs.completion_target_ref }}'
+        issue_provider: 'jira'
+        issue_ref: '{{ inputs.jira_issue_key }}'
+        brief_artifact_path: 'artifacts/jira-orchestrate-brief.json'
+        assessment_artifact_path: 'artifacts/moonspec/acceptance-assessment.json'
+        constraints: '{{ inputs.constraints }}'
+        source_design_path: '{{ inputs.source_design_path }}'
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate remaining gaps — attempt 3 of 6
     enabled: '{{ inputs.run_verify }}'
@@ -358,9 +385,9 @@ steps:
     instructions: |-
       /clear
 
-      Run moonspec-verify after remediation attempt 3, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+      Run moonspec-verify after remediation attempt 3. Reuse identical valid objective evidence under the shared acceptance policy; otherwise execute missing verification.
 
-      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
+      Follow the resolved moonspec-verify acceptance policy for scope, mandatory versus optional evidence, reuse, and completion. Original source and constraints define acceptance; assessment backlogs prioritize work and preserve previously met requirements as regression constraints.
 
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
@@ -371,6 +398,13 @@ steps:
     skill:
       id: moonspec-verify
       args:
+        completion_target_ref: '{{ inputs.completion_target_ref }}'
+        issue_provider: 'jira'
+        issue_ref: '{{ inputs.jira_issue_key }}'
+        brief_artifact_path: 'artifacts/jira-orchestrate-brief.json'
+        assessment_artifact_path: 'artifacts/moonspec/acceptance-assessment.json'
+        constraints: '{{ inputs.constraints }}'
+        source_design_path: '{{ inputs.source_design_path }}'
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate remaining gaps — attempt 4 of 6
     enabled: '{{ inputs.run_verify }}'
@@ -405,9 +439,9 @@ steps:
     instructions: |-
       /clear
 
-      Run moonspec-verify after remediation attempt 4, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+      Run moonspec-verify after remediation attempt 4. Reuse identical valid objective evidence under the shared acceptance policy; otherwise execute missing verification.
 
-      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
+      Follow the resolved moonspec-verify acceptance policy for scope, mandatory versus optional evidence, reuse, and completion. Original source and constraints define acceptance; assessment backlogs prioritize work and preserve previously met requirements as regression constraints.
 
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
@@ -418,6 +452,13 @@ steps:
     skill:
       id: moonspec-verify
       args:
+        completion_target_ref: '{{ inputs.completion_target_ref }}'
+        issue_provider: 'jira'
+        issue_ref: '{{ inputs.jira_issue_key }}'
+        brief_artifact_path: 'artifacts/jira-orchestrate-brief.json'
+        assessment_artifact_path: 'artifacts/moonspec/acceptance-assessment.json'
+        constraints: '{{ inputs.constraints }}'
+        source_design_path: '{{ inputs.source_design_path }}'
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate remaining gaps — attempt 5 of 6
     enabled: '{{ inputs.run_verify }}'
@@ -452,9 +493,9 @@ steps:
     instructions: |-
       /clear
 
-      Run moonspec-verify after remediation attempt 5, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+      Run moonspec-verify after remediation attempt 5. Reuse identical valid objective evidence under the shared acceptance policy; otherwise execute missing verification.
 
-      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
+      Follow the resolved moonspec-verify acceptance policy for scope, mandatory versus optional evidence, reuse, and completion. Original source and constraints define acceptance; assessment backlogs prioritize work and preserve previously met requirements as regression constraints.
 
       If the verdict is ADDITIONAL_WORK_NEEDED and another remediation attempt remains, preserve the verification report as the mandatory input for the next remediation attempt.
       If the verdict is NO_DETERMINATION, stop and report the missing evidence, commands, or context unless the missing evidence is recoverable in the current runtime by the next remediation attempt. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, treat it as terminal, classify runtime or infrastructure causes as environment failure, skip every remaining remediation attempt, and do not create a pull request.
@@ -465,6 +506,13 @@ steps:
     skill:
       id: moonspec-verify
       args:
+        completion_target_ref: '{{ inputs.completion_target_ref }}'
+        issue_provider: 'jira'
+        issue_ref: '{{ inputs.jira_issue_key }}'
+        brief_artifact_path: 'artifacts/jira-orchestrate-brief.json'
+        assessment_artifact_path: 'artifacts/moonspec/acceptance-assessment.json'
+        constraints: '{{ inputs.constraints }}'
+        source_design_path: '{{ inputs.source_design_path }}'
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Remediate remaining gaps — attempt 6 of 6
     enabled: '{{ inputs.run_verify }}'
@@ -499,9 +547,9 @@ steps:
     instructions: |-
       /clear
 
-      Run moonspec-verify after remediation attempt 6, even when remediation was skipped because the prior verdict was FULLY_IMPLEMENTED.
+      Run moonspec-verify after remediation attempt 6. Reuse identical valid objective evidence under the shared acceptance policy; otherwise execute missing verification.
 
-      Verification robustness rules: requirements provable only by manual testing, external deployment, or provider tooling unavailable in this runtime are disclosed scope exclusions — report them with reasons and do not let them block FULLY_IMPLEMENTED or force NO_DETERMINATION when every repo-verifiable in-scope requirement is VERIFIED. Optional retrieval or enrichment tooling that is unavailable or misconfigured (for example MoonMind RAG search failing with embedding_provider_not_configured) is a NOT RUN environment note and never gates the verdict. If a verification input artifact is marked truncated, recover the full content through the trusted MoonMind tool surface before treating the hidden content as unverifiable, and never treat hidden truncated content as a requirement.
+      Follow the resolved moonspec-verify acceptance policy for scope, mandatory versus optional evidence, reuse, and completion. Original source and constraints define acceptance; assessment backlogs prioritize work and preserve previously met requirements as regression constraints.
 
       This is the controlling verification gate for Jira Orchestrate publication. If the verdict is ADDITIONAL_WORK_NEEDED or NO_DETERMINATION, the remediation budget is exhausted: stop the orchestration, report the gaps or missing evidence, and do not continue to pull request creation. If the verdict is BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, classify runtime or infrastructure causes as environment failure, stop immediately, and do not create a pull request.
 
@@ -511,6 +559,13 @@ steps:
     skill:
       id: moonspec-verify
       args:
+        completion_target_ref: '{{ inputs.completion_target_ref }}'
+        issue_provider: 'jira'
+        issue_ref: '{{ inputs.jira_issue_key }}'
+        brief_artifact_path: 'artifacts/jira-orchestrate-brief.json'
+        assessment_artifact_path: 'artifacts/moonspec/acceptance-assessment.json'
+        constraints: '{{ inputs.constraints }}'
+        source_design_path: '{{ inputs.source_design_path }}'
         verify_artifact_path: var/artifacts/moonspec-verify/jira-orchestrate.json
   - title: Reconcile declarative docs
     enabled: '{{ inputs.run_verify }}'
@@ -537,6 +592,8 @@ steps:
     annotations:
       jiraOrchestrateRole: pull-request-handoff
     instructions: |-
+      Skip publication only when objective acceptance evidence satisfies the freshly resolved intended completion target under the shared policy. A FULLY_IMPLEMENTED initial assessment alone cannot skip the PR. A later FULLY_IMPLEMENTED verifier result approves candidate work for review; it does not rewrite the initial assessment or prove landing. Publish candidate-only work through the existing PR path even when the worktree is clean and commits are already pushed. Reuse an exact existing PR for the same candidate when available.
+
       /clear
 
       Create a pull request for the completed work for Jira issue {{ inputs.jira_issue_key }}.
