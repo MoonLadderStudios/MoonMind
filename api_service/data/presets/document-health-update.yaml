@@ -1,9 +1,7 @@
 slug: document-health-update
 title: Document Health Update
-description: Review the health of a documentation scope, then remediate the issues
-  the review found. Runs a document health review step that audits documentation against
-  the current implementation and records a structured health report, then a document
-  health remediate step that fixes only the reported issues.
+description: Review a bounded documentation scope, then apply authorized still-valid findings through
+  dedicated portable Skills.
 scope: global
 tags:
 - documentation
@@ -14,6 +12,15 @@ requiredCapabilities:
 annotations:
   documentWorkflow: review-then-remediate
   output: document-health-remediation
+  uiSchema:
+    report_path:
+      advanced: true
+    output_mode:
+      advanced: true
+    allowed_actions:
+      advanced: true
+    allow_destructive:
+      advanced: true
 inputs:
 - name: documentation_scope
   label: Documentation Scope
@@ -25,94 +32,74 @@ inputs:
   type: textarea
   required: false
   default: ''
+- name: report_path
+  label: Report Location
+  type: text
+  required: true
+  default: artifacts/document-health-review.json
+- name: output_mode
+  label: Report Detail
+  type: enum
+  required: true
+  default: summary
+  options:
+  - summary
+  - full_report
+  - patch_plan
+- name: allowed_actions
+  label: Permitted Actions
+  type: enum
+  required: true
+  default: content
+  options:
+  - content
+  - restructure
+  - all
+- name: allow_destructive
+  label: Allow Removal of Document Paths or Unique Content
+  type: boolean
+  required: false
+  default: false
 steps:
 - title: Document health review
   annotations:
     documentHealthRole: review
-  instructions: 'Review the health of the documentation in scope: {{ inputs.documentation_scope
-    }}.
-
-
-    Audit each in-scope document against the current implementation. Treat repository
-    source code, tests, schemas, and executable configuration as the source of truth.
-    Identify documentation health issues such as: drift or factual inaccuracy versus
-    the implementation, stale or superseded descriptions, broken or outdated cross-references
-    and links, coverage or structural gaps, missing metadata, unclear authority, missing
-    embedded rationale, duplicate contract definitions, imperative leakage in canonical
-    docs, and unverifiable canonical claims. For canonical docs under docs/, judge
-    health against the documented desired state and do not treat a buggy or incomplete
-    implementation as the target; record an implementation gap instead of downgrading
-    the doc. Group documentation architecture findings by the authority ladder in
-    docs/DocumentationArchitecture.md before severity ordering inside each group.
-
-
-    This is a review-only step. Do not edit documentation in this step.
-
-
-    Additional constraints:
-
-    {{ inputs.constraints }}
-
-
-    Write a structured health report to artifacts/document-health-review.json. The
-    report must include the reviewed scope and a findings list, where each finding
-    records the document path, the issue type, the authority ladder group when applicable,
-    a severity, the supporting evidence, and a recommended remediation. When a finding
-    implies broad cleanup across multiple documents, recommend a bounded docs/tmp/
-    improvement plan rather than direct canonical edits. When no health issues are found,
-    record an empty findings list and say so explicitly.
-
-
-    Scope this review strictly to the documentation scope above. Do not broaden scope
-    or audit unrelated documents.'
+  instructions: 'Use the selected Skill for {{ inputs.documentation_scope }}. Pass the structured report
+    at {{ inputs.report_path }} between these stages. Apply the caller constraints: {{ inputs.constraints
+    }}.'
   skill:
-    id: auto
-    args: {}
+    id: document-health-review
+    args:
+      scope: '{{ inputs.documentation_scope }}'
+      report_path: '{{ inputs.report_path }}'
+      output_mode: '{{ inputs.output_mode }}'
+      constraints: '{{ inputs.constraints }}'
+      allowed_actions: '{{ [''update'', ''reference_repair''] if inputs.allowed_actions == ''content''
+        else ([''update'', ''reference_repair'', ''merge'', ''split'', ''move'', ''archive''] if inputs.allowed_actions
+        == ''restructure'' else [''update'', ''reference_repair'', ''merge'', ''split'', ''move'', ''archive'',
+        ''delete'']) }}'
+      allow_destructive: '{{ inputs.allow_destructive }}'
     requiredCapabilities:
     - git
+  type: skill
 - title: Document health remediate
   annotations:
     documentHealthRole: remediate
-  instructions: 'Read artifacts/document-health-review.json (the structured health
-    report produced by the document health review step) before doing anything.
-
-
-    If the report records an empty findings list, make no documentation changes and
-    report that remediation is skipped because the review found no document health
-    issues.
-
-
-    Otherwise remediate ONLY the issues recorded in the review report, limited to
-    the documents named in those findings. Apply the smallest correct edit for each
-    finding so the documentation accurately describes the current implementation.
-    For canonical docs under docs/, preserve the documented desired-state framing:
-    when the implementation contradicts the intended architecture, contract, operator-visible
-    behavior, or target semantics, record the implementation gap rather than downgrading
-    the doc to match buggy behavior.
-
-
-    Additional constraints:
-
-    {{ inputs.constraints }}
-
-
-    Do not introduce new findings, redo review work that is already recorded, or broaden
-    scope beyond the documents in the report. Follow the project''s testing standards:
-    if a change touches executable content, add or update the covering tests and confirm
-    they pass before finishing.
-
-
-    Fix or explicitly report missing metadata, unclear authority, missing embedded rationale,
-    duplicate contract definitions, imperative leakage in canonical docs, and unverifiable
-    canonical claims when those findings appear in the report. Route broad, multi-document,
-    or uncertain cleanup to a bounded docs/tmp/ improvement plan instead of expanding
-    remediation beyond the approved findings.
-
-
-    Report which findings were remediated, which were intentionally left for follow-up,
-    and the evidence for each change.'
+  instructions: 'Use the selected Skill for {{ inputs.documentation_scope }}. Pass the structured report
+    at {{ inputs.report_path }} between these stages. Apply the caller constraints: {{ inputs.constraints
+    }}.'
   skill:
-    id: auto
-    args: {}
+    id: document-health-remediate
+    args:
+      scope: '{{ inputs.documentation_scope }}'
+      report_path: '{{ inputs.report_path }}'
+      output_mode: '{{ inputs.output_mode }}'
+      constraints: '{{ inputs.constraints }}'
+      allowed_actions: '{{ [''update'', ''reference_repair''] if inputs.allowed_actions == ''content''
+        else ([''update'', ''reference_repair'', ''merge'', ''split'', ''move'', ''archive''] if inputs.allowed_actions
+        == ''restructure'' else [''update'', ''reference_repair'', ''merge'', ''split'', ''move'', ''archive'',
+        ''delete'']) }}'
+      allow_destructive: '{{ inputs.allow_destructive }}'
     requiredCapabilities:
     - git
+  type: skill

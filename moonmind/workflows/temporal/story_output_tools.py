@@ -8214,6 +8214,11 @@ async def discover_documents(
         extensions = frozenset({".md", ".txt", ".tex"})
 
     normalized_directory = _normalize_document_directory(directory)
+    if ".." in Path(normalized_directory).parts:
+        return ToolResult(
+            status="FAILED",
+            outputs={"documentPaths": [], "error": "Directory traversal is not permitted"},
+        )
     local_root = _resolve_local_document_root(
         directory=normalized_directory,
         inputs=inputs,
@@ -8295,10 +8300,10 @@ async def discover_documents(
     for ext in extensions:
         pattern = f"*{ext}"
         for path in root.rglob(pattern):
-            if path.is_file():
+            if path.is_file() and path.resolve().is_relative_to(root):
                 document_paths.append(path.relative_to(output_base).as_posix())
 
-    document_paths = sorted(document_paths)
+    document_paths = sorted(set(document_paths))
 
     return ToolResult(
         status="COMPLETED",
@@ -8320,15 +8325,23 @@ def _document_update_task_payload(
     source_directory: str,
 ) -> tuple[str, dict[str, Any]]:
     instructions = (
-        f"Update the technical document at {document_path} to align with the current "
-        "codebase implementation. Follow the document-update skill workflow."
+        f"Maintain the document at {document_path} using the document-update Skill. "
+        "Resolve its role and authority before correcting drift. "
+        "Edit only this exact document; retain shared owner and reference changes "
+        "as structured handoffs for coordinated maintenance. "
+        "Report document verification separately from publication."
     )
     runtime = _mapping(task_payload.get("runtime"))
     publish = _mapping(task_payload.get("publish"))
     repository = _string(task_payload.get("repository") or task_payload.get("repo"))
+    inherited_instructions = _string(task_payload.get("instructions"))
+    if inherited_instructions:
+        instructions += "\n\nInherited execution intent:\n" + inherited_instructions
     task_inputs = {
+        **_mapping(task_payload.get("inputs")),
         "document_path": document_path,
         "source_directory": source_directory,
+        "edit_scope": "target_only",
     }
     task: dict[str, Any] = {
         "title": f"Document update: {Path(document_path).name}",
@@ -8368,15 +8381,25 @@ async def create_document_update_tasks_from_paths(
         raise ValueError("execution_creator is required for document update workflow creation.")
 
     context = _context or {}
-    previous_outputs = _mapping(context.get("previousOutputs") or context.get("previous_outputs"))
+    previous_outputs = _mapping(
+        inputs.get("previousOutputs")
+        or inputs.get("previous_outputs")
+        or context.get("previousOutputs")
+        or context.get("previous_outputs")
+    )
     document_paths: list[str] = []
-    raw_paths = inputs.get("documentPaths") or inputs.get("document_paths")
-    if isinstance(raw_paths, Sequence) and not isinstance(raw_paths, (str, bytes, bytearray)):
-        document_paths = [str(p) for p in raw_paths if _string(p)]
-    if not document_paths and previous_outputs:
-        raw_paths = previous_outputs.get("documentPaths") or previous_outputs.get("document_paths")
-        if isinstance(raw_paths, Sequence) and not isinstance(raw_paths, (str, bytes, bytearray)):
-            document_paths = [str(p) for p in raw_paths if _string(p)]
+    raw_paths = inputs.get("documentPaths", inputs.get("document_paths"))
+    if raw_paths is None and previous_outputs:
+        raw_paths = previous_outputs.get("documentPaths", previous_outputs.get("document_paths"))
+    if raw_paths is not None:
+        if not isinstance(raw_paths, list) or any(
+            not isinstance(p, str) or not p.strip() for p in raw_paths
+        ):
+            return ToolResult(
+                status="FAILED",
+                outputs={"error": "documentPaths must be a list of nonempty paths"},
+            )
+        document_paths = list(raw_paths)
 
     orchestration_payload = _mapping(
         inputs.get("documentUpdateOrchestration")
@@ -8390,12 +8413,14 @@ async def create_document_update_tasks_from_paths(
         orchestration_payload.get("traceability")
         or inputs.get("traceability")
     )
-    source_directory = _string(
-        traceability.get("sourceDirectory")
-        or traceability.get("source_directory")
-        or inputs.get("sourceDirectory")
-        or inputs.get("source_directory")
-        or ""
+    source_directory = _normalize_document_directory(
+        _string(
+            traceability.get("sourceDirectory")
+            or traceability.get("source_directory")
+            or inputs.get("sourceDirectory")
+            or inputs.get("source_directory")
+            or ""
+        )
     )
     repository = _string(task_payload.get("repository") or task_payload.get("repo"))
     owner_id = (
@@ -8410,6 +8435,43 @@ async def create_document_update_tasks_from_paths(
         or _string(context.get("ownerType") or context.get("owner_type"))
         or None
     )
+
+    # Bound this existing dispatch operation before creating any children. The
+    # dependency service still owns scheduling; children never share write scope.
+    max_documents = inputs.get("maxDocuments", 100)
+    if type(max_documents) is not int or not 1 <= max_documents <= 1000:
+        return ToolResult(
+            status="FAILED",
+            outputs={"error": "maxDocuments must be an integer from 1 to 1000"},
+        )
+    document_paths = list(dict.fromkeys(document_paths))
+    if len(document_paths) > max_documents:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "error": (
+                    f"Discovered {len(document_paths)} documents exceeds "
+                    f"maxDocuments={max_documents}; narrow the directory or explicitly raise the limit"
+                ),
+                "documentPaths": document_paths,
+            },
+        )
+    relative_scope = source_directory
+    if Path(source_directory).is_absolute():
+        local_root = _resolve_local_document_root(
+            directory=source_directory, inputs=inputs, context=context
+        )
+        if local_root is not None:
+            root, output_base = local_root
+            relative_scope = root.relative_to(output_base).as_posix()
+    for document_path in document_paths:
+        candidate = Path(document_path)
+        scope = source_directory if candidate.is_absolute() else relative_scope
+        if ".." in candidate.parts or (scope and not candidate.is_relative_to(Path(scope))):
+            return ToolResult(
+                status="FAILED",
+                outputs={"error": f"Document outside source directory: {document_path}"},
+            )
 
     tasks: list[dict[str, Any]] = []
     dependencies: list[dict[str, Any]] = []
@@ -8429,9 +8491,15 @@ async def create_document_update_tasks_from_paths(
             depends_on=depends_on,
             source_directory=source_directory,
         )
+        # Recorded pre-limit Activity inputs retain their original receipt keys
+        # on retry. Newly authored presets always carry maxDocuments.
+        bounded_dispatch = "maxDocuments" in inputs
         idempotency_key = _stable_idempotency_key(
-            source_issue_key=source_directory,
-            story_id=f"doc-{index:03d}",
+            source_issue_key=(
+                f"{repository}:{source_directory}:{_string(context.get('idempotency_key') or context.get('workflow_id'))}"
+                if bounded_dispatch else source_directory
+            ),
+            story_id="document-update" if bounded_dispatch else f"doc-{index:03d}",
             issue_key=document_path,
         )
         try:
@@ -8461,6 +8529,10 @@ async def create_document_update_tasks_from_paths(
             )
             if inspect.isawaitable(created):
                 created = await created  # type: ignore[assignment]
+            if not isinstance(created, Mapping) or not _string(
+                created.get("workflowId") or created.get("workflow_id")
+            ):
+                raise ValueError("Downstream creation returned no workflow receipt")
         except Exception as exc:
             failures.append(
                 {
@@ -8526,6 +8598,9 @@ async def create_document_update_tasks_from_paths(
                 "status": status,
                 "workflowStatus": workflow_status,
                 "documentCount": len(document_paths),
+                "maxDocuments": max_documents,
+                "documentCompletion": "not_verified",
+                "summary": "Dispatch receipts only; child verification and publication remain pending.",
                 "createdTaskCount": len(tasks),
                 "createdWorkflowCount": len(tasks),
                 "dependencyCount": len(dependencies),

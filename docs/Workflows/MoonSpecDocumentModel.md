@@ -1,5 +1,7 @@
 # MoonSpec Document Model
 
+**Document Class:** Canonical declarative
+
 This document defines the document classes MoonSpec workflows operate on, the precedence rules between them, and the reconciliation expectation that keeps canonical documentation aligned with verified implementation. MoonSpec skills and presets reference this document instead of restating its rules.
 
 ## Document Classes
@@ -22,6 +24,37 @@ This document defines the document classes MoonSpec workflows operate on, the pr
 - **Location**: `docs/tmp/` or gitignored handoff paths.
 - **Content**: checklists, status trackers, migration and rollout plans, cleanup sequences — anything whose primary framing is steps, phases, checkboxes, or status.
 - **Lifecycle**: time-bound. Delete or archive them when the work completes.
+
+## Role-first documentation maintenance
+
+Before authoring or updating a claim, resolve whether it is a factual implementation
+reference, an authorized desired-state design, or temporary execution material.
+This is a maintenance decision within the existing document classes, not a new
+viewpoint taxonomy. Code, schemas and tests establish implemented facts; owning
+contracts and authorized design intent establish desired behavior. Correct stale
+factual references. Preserve canonical intent when implementation is buggy or
+incomplete, and retain the implementation gap as evidence. Authorized proposed
+designs may be written before code exists, with truthful status and traceability.
+
+Documentation Skills discover actual repository conventions and load only relevant
+class/viewpoint references. Missing MoonMind-specific files in another repository
+do not block well-scoped work. Bounded multi-document authoring or maintenance is
+completed within existing authority; size alone does not turn it into a plan.
+
+Health review is read-only except for report artifacts. The health-update preset
+selects `document-health-review` then `document-health-remediate` with typed scope,
+report path, output mode, constraints, allowed actions and destructive permission.
+The portable report contract lives in the resolved review bundle. Remediation
+revalidates current claim evidence and caller authority, preserves unique content
+and repairs dependent links before removal is complete. Reports never grant write
+permission. Empty current findings produce a verified no-op; stale, skipped and
+blocked findings keep individual reasons and resume conditions.
+
+An unresolved owning decision retains a structured handoff with document, claim,
+evidence, owning decision, reason and resume condition. A tracker is optional and
+requires authorized mutation, actual integration metadata and a verified receipt.
+Absence or denial does not erase the handoff or authorize a desired-state rewrite.
+Verification, document edits, escalation and publication remain distinct outcomes.
 
 ## Classification And Fallback Rule
 
@@ -49,7 +82,7 @@ Reconciliation updates a canonical document only when discoveries **definitely r
 - **Unclear**: the implementation had to resolve a documented ambiguity, and the document must record the verified resolution to stay usable.
 - **Inconsistent**: the implementation correctly resolved an internal contradiction in the document, and the document must record the resolution to stay coherent.
 
-Divergence alone never qualifies: an implementation that differs from a clear, consistent, satisfiable document is an implementation defect or an unapproved desired-state change, and deliberate verification-backed divergence is escalated for an owner decision instead of applied. Stylistic preferences, additions for completeness, speculative improvements, and unverified observations never qualify either. Reconciliation preserves desired-state framing: it never downgrades a canonical document to match buggy or incomplete code, and it never inserts imperative content into canonical files. Updates that would conflict with repo guidance, README, or architecture direction are escalated as tracked issues instead of applied.
+Divergence alone never qualifies: an implementation that differs from a clear, consistent, satisfiable document is an implementation defect or an unapproved desired-state change, and deliberate verification-backed divergence requires existing authority for that specific desired-state change; otherwise it is escalated for an owner decision instead of applied. That authority does not waive the definite-discovery gate. Stylistic preferences, additions for completeness, speculative improvements, and unverified observations never qualify either. Reconciliation preserves desired-state framing: it never downgrades a canonical document to match buggy or incomplete code, and it never inserts imperative content into canonical files. Updates that would conflict with repo guidance, README, or architecture direction are escalated as tracked issues instead of applied.
 
 ## Documentation Architecture Standard
 
