@@ -2,7 +2,7 @@
 
 Status: Desired State
 Owners: MoonMind Engineering
-Last Updated: 2026-06-13
+Last Updated: 2026-09-12
 Canonical for: semantic step reattempts, checkpointed side-effect policy, gated iteration, failed-step recovery primitive, autonomous story loops
 Related: `docs/Steps/StepTypes.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowRemediation.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/ActivityCatalogAndWorkerTopology.md`, `docs/Artifacts/ArtifactPresentationContract.md`
 
@@ -672,6 +672,20 @@ Supported checkpoint kinds should be explicit.
 | `worktree_archive` | Archive of a worktree plus manifest. | Stronger for dirty worktrees and untracked files; larger artifact. |
 | `ephemeral_workspace_ref` | Reference to a still-valid managed workspace/container state. | Only valid within TTL/reachability constraints. |
 | `external_state_ref` | Provider-specific state ref for an external delegated runtime. | Adapter-specific; may not support direct restoration. |
+
+Worktree archives preserve Git's index separately from the worktree. The manifest
+references a digested binary index patch relative to the saved HEAD, so partially
+staged files retain both their staged and unstaged bytes. Index blobs and patch
+bytes pass the same bounded secret scan as other exported evidence. Historical
+clean-index manifests remain restorable; a historical staged-path list without
+index content cannot authorize reconstruction from worktree bytes.
+
+Resuming finalization validates a surviving directory against saved file digests,
+HEAD, index content, and the captured Git status before accepting it. A directory's
+existence does not prove candidate identity. Once cleanup has released provider
+authority, durable turn receipts may resume verification and publication without
+another provider turn; any required new continuation remains an explicit unfinished
+phase with its saved checkpoint.
 
 Representative workspace checkpoint:
 

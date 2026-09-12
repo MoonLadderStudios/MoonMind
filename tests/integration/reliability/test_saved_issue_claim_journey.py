@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -14,6 +15,7 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 from api_service.db import models
 from api_service.db.models import Base
 from api_service.services.presets.catalog import PresetCatalogService
+from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.github_service import GitHubService
@@ -198,6 +200,12 @@ async def test_saved_default_claim_survives_lost_ack_and_worker_replacement(
             link_type="evidence",
         )
         client = await connect()
+        # The claim store resolves ancestry through its production client.
+        # Bind it to this journey's isolated server, including on hosted CI
+        # where the deployment-only hostname "temporal" does not resolve.
+        monkeypatch.setattr(
+            settings.temporal, "address", os.environ["MOONMIND_TEST_TEMPORAL_ADDRESS"]
+        )
         queue = "saved-preset-" + uuid4().hex
 
         def bound(session):

@@ -94,3 +94,32 @@ async def test_release_verification_joins_images_to_current_services(
     assert result.succeeded is expected
     assert result.updated_services == ("api",)
     assert result.details["matchedImageCount"] == 1
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+async def test_default_operator_origin_is_executable_after_real_compose_render(
+    tmp_path, monkeypatch, explicit
+):
+    from moonmind.workflows.skills.deployment_surface import operator_urls
+
+    (tmp_path / ".env").write_text(
+        "MOONMIND_API_PUBLISH_HOST=127.0.0.1\nMOONMIND_PUBLIC_BASE_URL=\n"
+        if explicit
+        else ""
+    )
+    base = tmp_path / "compose.yaml"
+    base.write_text(
+        'services:\n  api:\n    image: example/moonmind:test\n    environment:\n      MOONMIND_PUBLIC_BASE_URL: ${MOONMIND_PUBLIC_BASE_URL:-}\n    ports:\n      - "${MOONMIND_API_PUBLISH_HOST:-127.0.0.1}:7000:8000"\n'
+    )
+    for variable in ("MOONMIND_API_PUBLISH_HOST", "MOONMIND_PUBLIC_BASE_URL"):
+        monkeypatch.delenv(variable, raising=False)
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file=str(base),
+        project_name="isolated-operator-render",
+    )
+    result = await runner._run_compose_command(
+        ("docker", "compose", "config", "--format", "json"), max_stdout_chars=None
+    )
+    assert result["exitCode"] == 0, result
+    assert operator_urls(json.loads(result["stdout"])) == ["http://127.0.0.1:7000"]

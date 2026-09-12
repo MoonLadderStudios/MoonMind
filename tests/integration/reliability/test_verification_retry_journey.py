@@ -176,8 +176,9 @@ async def test_service_recovery_verifies_exact_head_without_reimplementation(tmp
         "nodes": 2,
     }
     assert len(checks) == len(decisions) == 2
-    assert head() == original_head
-    assert (
-        subprocess.check_output(["git", "-C", str(candidate), "status", "--porcelain"])
-        == b""
+    final_head = head()
+    final_status = subprocess.check_output(
+        ["git", "-C", str(candidate), "status", "--porcelain"]
     )
+    assert final_head == original_head
+    assert final_status == b""

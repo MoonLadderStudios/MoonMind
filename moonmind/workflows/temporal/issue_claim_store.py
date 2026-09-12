@@ -166,7 +166,7 @@ class IssueClaimStore:
             row.announcement_started = True
 
     async def abandon_unannounced(self, owner: str, attempt_id: str) -> bool:
-        """Only a reservation with no authorized POST can be reselected."""
+        """Release a reservation only while no external mutation was authorized."""
         async with self.sessions() as session:
             async with session.begin():
                 row = (

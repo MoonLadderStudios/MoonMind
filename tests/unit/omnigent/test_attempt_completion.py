@@ -18,11 +18,19 @@ from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("receipt_phase", ["compute", "turn:0"])
 async def test_cleaned_attempt_finishes_publication_without_recreating_provider(
     tmp_path,
+    receipt_phase,
 ):
     from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
     from moonmind.omnigent.runtime_bindings import InMemoryStableRuntimeBindingStore
+    from tests.unit.workflows.test_terminal_evidence import (
+        _auto_publish_contract,
+        _write_auto_publish_result,
+    )
+
+    _write_auto_publish_result(tmp_path)
 
     store = InMemoryStableRuntimeBindingStore()
     request = AgentExecutionRequest.model_validate(
@@ -32,6 +40,11 @@ async def test_cleaned_attempt_finishes_publication_without_recreating_provider(
             "correlationId": "workflow-1",
             "idempotencyKey": "attempt-finalization",
             "workspaceSpec": {"repository": "owner/repo"},
+            "terminalContract": {
+                key: value
+                for key, value in _auto_publish_contract().items()
+                if key != "skillId"
+            },
         }
     )
     binding = await store.create_initial(
@@ -53,7 +66,7 @@ async def test_cleaned_attempt_finishes_publication_without_recreating_provider(
         },
     )
     await sink.record_phase(
-        "compute",
+        receipt_phase,
         AgentRunResult(summary="verified compute").model_dump(
             by_alias=True, mode="json"
         ),
@@ -72,6 +85,16 @@ async def test_cleaned_attempt_finishes_publication_without_recreating_provider(
     realizer = object.__new__(GenericOmnigentHostRealizer)
     realizer._runtime_bindings = store
     published = []
+    inspected = []
+
+    async def inspect(bound):
+        inspected.append(1)
+        return evaluate_terminal_evidence(
+            bound.terminal_contract.model_dump(by_alias=True),
+            workspace_path=str(tmp_path),
+        )
+
+    realizer._inspect_terminal = inspect
 
     async def publish(bound, result):
         assert bound.workspace_spec["workspaceLocator"]["workspaceId"] == "recorded"
@@ -86,6 +109,7 @@ async def test_cleaned_attempt_finishes_publication_without_recreating_provider(
     assert first == second
     assert first.summary == "remote publication verified"
     assert published == [1]
+    assert inspected == ([1] if receipt_phase == "turn:0" else [])
 
 
 @pytest.mark.asyncio

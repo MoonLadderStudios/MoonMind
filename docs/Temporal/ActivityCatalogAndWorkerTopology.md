@@ -254,8 +254,9 @@ The activity catalog maps activity types onto the following fleets.
 The workflow fleet is primarily for workflow code. It may also host **small helper activities** when needed to preserve deterministic workflow behavior without creating unnecessary routing complexity.
 
 Current registration (`workflow_registry.py::workflow_fleet_activity_handlers`,
-verified against the function body — seven handlers, not one):
+verified against the function body — eight handlers):
 
+- immutable-release identity probe from `workflows/release_canary.py`: `release.inspect` reads the installed release manifest without credentials or external mutation.
 - adapter/metadata helpers from `workflows/agent_run.py`: `integration.resolve_adapter_metadata`, `integration.get_activity_route`, `integration.resolve_external_adapter`, `integration.external_adapter_execution_style`
 - checkpoint-persistence handlers from `workflows/checkpoint_branch_turn.py` (via `checkpoint_branch_activity_handlers()`): `checkpoint_branch.turn.mark_running`, `checkpoint_branch.turn.persist_terminal`, `checkpoint_branch.turn.persist_terminal_rejection` — retained for replay/in-flight compatibility of pre-cutover histories; no new calls route there.
 
@@ -323,6 +324,7 @@ Measured capability inventory (workflow fleet):
 
 | Handler | Needs database | Needs provider/Docker/artifact-storage I/O |
 |---|---|---|
+| `release.inspect` | no | no (installed release manifest read only) |
 | `integration.resolve_adapter_metadata` | no | no (registry + settings read only) |
 | `integration.get_activity_route` | no | no (catalog read only) |
 | `integration.resolve_external_adapter` | no | no (registry read only) |

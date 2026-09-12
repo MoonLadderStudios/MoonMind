@@ -96,9 +96,7 @@ class OmnigentWorkspacePublicationService:
         # disposable volume (including its local owner record) was lost.
         SandboxWorkspaceRecordStore(self._workspace_root).ensure(
             SandboxWorkspaceRecord(expected_id, workflow_id, step_id, "repo"))
-        workspace = self.resolve_request_workspace(request, must_exist=False)
-        if workspace.exists():
-            return None
+        self.resolve_request_workspace(request, must_exist=False)
         source = {"workflowId": identity.workflow_id, "runId": identity.run_id,
                   "logicalStepId": identity.logical_step_id, "executionOrdinal": identity.execution_ordinal}
         plan = identity.omnigent_execution_plan

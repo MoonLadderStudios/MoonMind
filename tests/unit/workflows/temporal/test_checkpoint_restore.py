@@ -26,15 +26,17 @@ from moonmind.workflows.temporal.runtime.checkpoint_restore import (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sandbox_destination", [False, True])
-async def test_unpublished_head_restores_after_source_loss_with_owned_destination(tmp_path, sandbox_destination):
+@pytest.mark.parametrize("excluded_skill", [False, True])
+async def test_unpublished_head_restores_after_source_loss_with_owned_destination(tmp_path, sandbox_destination, excluded_skill):
     from moonmind.workflows.temporal.runtime.workspace_locators import SandboxWorkspaceRecordStore, SandboxWorkspaceRecord
     remote, _ = _repo(tmp_path / "remote")
     def git(path, *args):
         return subprocess.check_output(["git", "-C", str(path), *args]).decode().strip()
     (remote / "deleted.txt").write_text("remove me")
-    excluded = remote / ".agents" / "skills" / "owned" / "SKILL.md"
-    excluded.parent.mkdir(parents=True)
-    excluded.write_text("repository-owned skill")
+    if excluded_skill:
+        excluded = remote / ".agents" / "skills" / "owned" / "SKILL.md"
+        excluded.parent.mkdir(parents=True)
+        excluded.write_text("repository-owned skill")
     git(remote, "add", ".")
     git(remote, "commit", "-m", "baseline")
     baseline = git(remote, "rev-parse", "HEAD")
@@ -50,6 +52,10 @@ async def test_unpublished_head_restores_after_source_loss_with_owned_destinatio
     (source / "deleted.txt").unlink()
     (source / "tracked.txt").write_text("staged candidate")
     git(source, "add", "-A")
+    (source / "tracked.txt").write_text("subsequent unstaged candidate")
+    (source / "partial.bin").write_bytes(b"\x00\xff\x01")
+    git(source, "add", "partial.bin")
+    (source / "partial.bin").write_bytes(b"\x00\xff\x02")
     (source / "untracked.bin").write_bytes(b"\x00\xff\x01")
     store = InMemoryArtifactStore()
     capture = await TemporalSandboxActivities(workspace_root=tmp_path, artifact_store=store).workspace_capture_checkpoint({
@@ -80,9 +86,15 @@ async def test_unpublished_head_restores_after_source_loss_with_owned_destinatio
     assert git(restored, "rev-parse", "HEAD") == head
     assert (restored / "candidate.txt").read_text() == "unpublished commit"
     assert not (restored / "deleted.txt").exists()
-    assert (restored / ".agents/skills/owned/SKILL.md").read_text() == "repository-owned skill"
+    if excluded_skill:
+        assert (restored / ".agents/skills/owned/SKILL.md").read_text() == "repository-owned skill"
     assert (restored / "untracked.bin").read_bytes() == b"\x00\xff\x01"
-    assert git(restored, "diff", "--cached", "--name-only").splitlines() == ["deleted.txt", "tracked.txt"]
+    assert git(restored, "diff", "--cached", "--name-only").splitlines() == ["deleted.txt", "partial.bin", "tracked.txt"]
+    assert git(restored, "show", ":tracked.txt") == "staged candidate"
+    assert (restored / "tracked.txt").read_text() == "subsequent unstaged candidate"
+    staged_binary = subprocess.check_output(["git", "-C", str(restored), "show", ":partial.bin"])
+    assert staged_binary == b"\x00\xff\x01"
+    assert (restored / "partial.bin").read_bytes() == b"\x00\xff\x02"
     assert result["destinationWorkspaceLocator"]["kind"] == ("sandbox" if sandbox_destination else "managed_runtime")
     assert await service.restore(request) == result
     shutil.rmtree(restored)
@@ -115,6 +127,18 @@ def _repo(path: Path) -> tuple[Path, str]:
         ["git", "rev-parse", "HEAD"], cwd=path, text=True
     ).strip()
     return path, commit
+
+
+def test_index_capture_scans_binary_index_bytes_before_export(tmp_path):
+    from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_index_patch
+
+    workspace, head = _repo(tmp_path / "source")
+    secret_file = workspace / "binary.bin"
+    secret_file.write_bytes(b"\x00api_key=fixture-private-value\n")
+    subprocess.run(["git", "-C", str(workspace), "add", "binary.bin"], check=True)
+    secret_file.write_bytes(b"\x00redacted working copy\n")
+    with pytest.raises(ValueError, match="index failed export secret scanning"):
+        capture_git_index_patch(workspace, head)
 
 
 def _request(

@@ -898,7 +898,7 @@ class GenericOmnigentHostRealizer:
             return recorded_attempt_result(binding)
         compute = phases.get("compute")
         workspace = phases.get("workspace")
-        if compute is None or workspace is None:
+        if workspace is None or (compute is None and not any(key.startswith("turn:") for key in phases)):
             result = recorded_attempt_result(binding)
             if result is not None:
                 return result
@@ -911,6 +911,13 @@ class GenericOmnigentHostRealizer:
             restored = await self._workspace_publisher.restore_saved_request_workspace(bound, phases["saved"])
             if restored is not None:
                 await sink.record_phase("restoration", restored)
+        if compute is None:
+            result = await complete_skill_turns(
+                request=bound, sink=sink, driver=None,
+                inspect_terminal=self._inspect_terminal, recorded_turns_only=True,
+            )
+            compute = result.model_dump(by_alias=True, mode="json", exclude_none=True)
+            await sink.record_phase("compute", compute)
         return await self._finish_owned_execution(bound, sink, AgentRunResult.model_validate(compute))
 
     async def _finish_execution(self, request, sink, result):

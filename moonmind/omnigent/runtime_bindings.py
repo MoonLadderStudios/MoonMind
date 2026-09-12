@@ -354,7 +354,6 @@ class StableRuntimeBindingStore(Protocol):
 
     def finalization(self, binding_id: str):
         """Serialize save/restore/publish deliveries; yield freshly read authority."""
-        ...
 
     async def create_initial(
         self,

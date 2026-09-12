@@ -215,7 +215,7 @@ async def test_shutdown_resumes_one_fenced_session_on_replacement_worker(monkeyp
                 )
                 await asyncio.wait_for(entered.wait(), 15)
                 await first.shutdown()
-                await first_task
+                await asyncio.gather(first_task)
                 assert observations == [True]
                 assert "session-drained" not in harness.events
                 assert "provider-released" not in harness.events
@@ -253,4 +253,4 @@ async def test_shutdown_resumes_one_fenced_session_on_replacement_worker(monkeyp
             finally:
                 if not first_task.done():
                     await first.shutdown()
-                    await first_task
+                    await asyncio.gather(first_task)

@@ -4693,11 +4693,14 @@ async def load_github_issue_preset_brief(
     *,
     github_service_factory: Callable[[], GitHubService] = GitHubService,
 ) -> ToolResult:
-    """Pin side effects; reselect only a provably unannounced reservation."""
+    """Pin side effects; failed reads must not strand unannounced reservations."""
     authored_inputs = dict(inputs)
     rejected = set()
     for selection_attempt in range(3):
+        owner = None
         receipt = None
+        result = None
+        abandoned = False
         try:
             owner = claim_owner(_context)
             receipt = await IssueClaimStore().for_execution(owner)
@@ -4720,12 +4723,23 @@ async def load_github_issue_preset_brief(
             result = ToolResult(status="FAILED", outputs={"candidateDisposition": "ineligible",
                 "reasonCode": str(exc).split(":")[0], "error": str(exc)})
         except ValueError as exc:
-            return ToolResult(status="FAILED", outputs={"reasonCode": str(exc).split(":")[0], "error": str(exc)})
+            result = ToolResult(status="FAILED", outputs={"reasonCode": str(exc).split(":")[0], "error": str(exc)})
+        finally:
+            # A reservation is not an external claim until POST intent is
+            # committed. Release it on every unsuccessful exit, including a
+            # failed retry's initial evidence read or an unexpected exception.
+            # The store locks and rechecks current mutation evidence so a
+            # concurrent announcement can never be released by this cleanup.
+            if owner and (result is None or result.status == "FAILED"):
+                receipt = receipt or await IssueClaimStore().get(owner)
+                if receipt is not None and receipt.owner == owner:
+                    abandoned = await IssueClaimStore().abandon_unannounced(
+                        owner, receipt.attempt_id
+                    )
         if ("issueSearch" not in authored_inputs or result.status != "FAILED"
                 or result.outputs.get("candidateDisposition") != "ineligible"):
             return result
-        receipt = receipt or await IssueClaimStore().get(owner)
-        if receipt is None or receipt.owner != owner or not await IssueClaimStore().abandon_unannounced(owner, receipt.attempt_id):
+        if not abandoned:
             return result
         rejected.add(receipt.issue_number)
     return ToolResult(status="FAILED", outputs={"reasonCode": "candidate_selection_exhausted",

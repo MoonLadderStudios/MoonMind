@@ -61,6 +61,8 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
     git("add", ".")
     git("commit", "-qm", "candidate")
     head = git("rev-parse", "HEAD")
+    (workspace / "file.txt").write_text("staged candidate\n")
+    git("add", "file.txt")
     (workspace / "file.txt").write_text("validated candidate\n")
     (workspace / "new.bin").write_bytes(b"\x00\xff\x80")
     (workspace / "cache").mkdir()
@@ -167,6 +169,44 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
         service = OmnigentWorkspacePublicationService(root, artifact_gateway=gateway)
         evidence = await service.save_request_workspace(request)
         assert evidence["archiveRef"].startswith("artifact://art_")
+        from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
+
+        # A still-present directory has no authority merely by existing. Both
+        # worktree corruption and different index bytes with the same MM status
+        # must fail before finalization can publish it.
+        (workspace / "file.txt").write_text("corrupted candidate\n")
+        with pytest.raises(
+            CheckpointRestoreError, match="CHECKPOINT_ENTRY_DIGEST_MISMATCH"
+        ):
+            await service.restore_saved_request_workspace(request, evidence)
+        (workspace / "file.txt").write_text("different staged bytes\n")
+        git("add", "file.txt")
+        (workspace / "file.txt").write_text("validated candidate\n")
+        with pytest.raises(
+            CheckpointRestoreError, match="CHECKPOINT_ENTRY_DIGEST_MISMATCH"
+        ):
+            await service.restore_saved_request_workspace(request, evidence)
+        (workspace / "file.txt").write_text("staged candidate\n")
+        git("add", "file.txt")
+        (workspace / "file.txt").write_text("validated candidate\n")
+        git(
+            "-c",
+            "user.name=Qualification",
+            "-c",
+            "user.email=qualification@example.invalid",
+            "commit",
+            "--allow-empty",
+            "--only",
+            "-m",
+            "different head",
+        )
+        with pytest.raises(
+            CheckpointRestoreError, match="CHECKPOINT_BASE_COMMIT_MISMATCH"
+        ):
+            await service.restore_saved_request_workspace(request, evidence)
+        git("reset", "--soft", head)
+        surviving = await service.restore_saved_request_workspace(request, evidence)
+        assert surviving["restorationEvidenceRef"]
         # Source state is gone. Fresh gateway/service instances must recover
         # solely from PostgreSQL and the operator-owned artifact volume.
         shutil.rmtree(root)
@@ -183,9 +223,9 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
         )
         assert git("rev-parse", "HEAD") == head
         assert (workspace / "committed.txt").read_text() == "unpublished work\n"
-        assert (
-            await replacement.restore_saved_request_workspace(request, evidence) is None
-        )
+        repeated = await replacement.restore_saved_request_workspace(request, evidence)
+        assert repeated == restored_original
+        assert git("show", ":file.txt") == "staged candidate"
         archive = await gateway.read_bytes(evidence["archiveRef"])
         assert (
             "sha256:" + hashlib.sha256(archive).hexdigest() == evidence["archiveDigest"]
@@ -255,12 +295,14 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
                 restore_request, admitted_principal="service:omnigent-generic-host"
             )
         restored = root / "temporal_sandbox" / destination_id / "repo"
-        assert (
-            subprocess.check_output(
-                ["git", "-C", str(restored), "rev-parse", "HEAD"], text=True
-            ).strip()
-            == head
-        )
+        restored_head = subprocess.check_output(
+            ["git", "-C", str(restored), "rev-parse", "HEAD"], text=True
+        ).strip()
+        assert restored_head == head
         assert (restored / "file.txt").read_text() == "validated candidate\n"
+        restored_index = subprocess.check_output(
+            ["git", "-C", str(restored), "show", ":file.txt"], text=True
+        )
+        assert restored_index == "staged candidate\n"
         assert (restored / "committed.txt").read_text() == "unpublished work\n"
         assert result["restorationEvidenceRef"].startswith("art_")

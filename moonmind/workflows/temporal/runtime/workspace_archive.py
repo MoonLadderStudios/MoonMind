@@ -17,21 +17,6 @@ from moonmind.schemas.saved_work_models import (
 )
 
 
-def staged_paths_from_status(status):
-    records = iter(status.split("\0"))
-    paths = []
-    for line in records:
-        if len(line) < 4:
-            continue
-        if line[0] not in {" ", "?"}:
-            paths.append(line[3:])
-        if line[0] in {"R", "C"}:
-            original = next(records, "")
-            if original:
-                paths.append(original)
-    return paths
-
-
 def build_workspace_archive(workspace: Path, *, members: set[str] | None = None):
     """Never upload an unstable, oversized, or credential-shaped export."""
     limits = SAVED_WORK_FORMAT_SIZE_LIMITS

@@ -44,7 +44,7 @@ async def journey(tmp_path, monkeypatch, request):
                 "number": 3970,
                 "title": "Implement bounded work",
                 "user": {"id": 123, "login": "fixture-owner"},
-                "body": "Acceptance: automated fixture passes.",
+                "body": state.get("body", "Acceptance: automated fixture passes."),
                 "html_url": f"https://github.com/{repository}/issues/3970",
                 "state": state.get("state", "open"),
                 "labels": [{"name": label} for label in state["labels"]],
@@ -62,12 +62,24 @@ async def journey(tmp_path, monkeypatch, request):
 
         def do_GET(self):
             path = self.path.split("?")[0]
+            state.setdefault("reads", []).append(path)
+            if path == state.get("failed_read_path"):
+                return self.respond({"message": "fixture read outage"}, 503)
             if path == "/user":
                 self.respond({"id": 123, "login": "fixture-owner"})
             elif path.endswith("/comments"):
                 self.respond(state["comments"])
             elif path.endswith("/issues/3970"):
                 self.respond(self.issue())
+            elif path.endswith("/issues/42"):
+                self.respond(
+                    {
+                        **self.issue(),
+                        "number": 42,
+                        "state": "closed",
+                        "html_url": f"https://github.com/{repository}/issues/42",
+                    }
+                )
             elif path.endswith("/issues"):
                 self.respond(
                     [self.issue()] if state.get("state", "open") == "open" else []
@@ -363,3 +375,146 @@ async def test_reselection_requires_proof_no_announcement_was_authorized(
         assert result.status == "COMPLETED", result.outputs
         assert result.completion_disposition == "idle"
         assert retained is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stage,read,post_authorized",
+    [
+        ("selection", "comments", False),
+        ("selection", "prerequisite", False),
+        ("resume", "comments", False),
+        ("resume", "issue", False),
+        ("resume", "comments", True),
+        ("resume", "issue", True),
+    ],
+)
+async def test_failed_brief_reads_release_only_unannounced_reservations(
+    journey, monkeypatch, stage, read, post_authorized
+):
+    state, service, sessions = journey
+    owner = "default/read-failure"
+    store = IssueClaimStore(sessions)
+    context = {"execution_owner": owner}
+    inputs = {
+        "repository": "example/repo",
+        "issueSearch": "",
+        "includeAllAuthors": False,
+    }
+    paths = {
+        "comments": "/repos/example/repo/issues/3970/comments",
+        "issue": "/repos/example/repo/issues/3970",
+        "prerequisite": "/repos/example/repo/issues/42",
+    }
+    if read == "prerequisite":
+        state["body"] = "Depends on #42.\nAcceptance: automated fixture passes."
+    prepare = tools._prepare_github_issue_claim
+    reservations = []
+
+    async def reserve_then_fail_read(**kwargs):
+        receipt = await prepare(**kwargs)
+        reservations.append(receipt)
+        # Fault begins only after the real SQL commit. Subsequent evidence
+        # reads fail through the real GitHub HTTP adapter, before any POST.
+        state["failed_read_path"] = paths[read]
+        return receipt
+
+    if stage == "resume":
+        receipt = await prepare(
+            inputs=inputs,
+            context=context,
+            repository="example/repo",
+            issue_number=3970,
+            service=service,
+        )
+        reservations.append(receipt)
+        if post_authorized:
+            await store.start_announcement(owner, receipt.attempt_id)
+        state["failed_read_path"] = paths[read]
+    else:
+        monkeypatch.setattr(tools, "_prepare_github_issue_claim", reserve_then_fail_read)
+
+    result = await tools.load_github_issue_preset_brief(
+        inputs, context, github_service_factory=lambda: service
+    )
+    assert result.status == "FAILED", result.outputs
+    assert len(reservations) == 1  # Read failure does not trigger candidate reselection.
+    assert paths[read] in state["reads"]
+    assert state["posts"] == 0 and state["labels"] == []
+    retained = await IssueClaimStore(sessions).get(owner)
+    if post_authorized:
+        assert retained and retained.announcement_started
+        assert not retained.released
+        assert retained.attempt_id == reservations[0].attempt_id
+    else:
+        assert retained is None
+        # A different durable workflow can select this issue after the outage;
+        # the partial unique index must not retain the failed reader's claim.
+        state.pop("failed_read_path")
+        monkeypatch.setattr(tools, "_prepare_github_issue_claim", prepare)
+        successor = await tools.load_github_issue_preset_brief(
+            inputs,
+            {"execution_owner": "default/next-scheduled-run"},
+            github_service_factory=lambda: service,
+        )
+        assert successor.status == "COMPLETED", successor.outputs
+        assert state["posts"] == 1
+        assert successor.outputs["attemptId"] != reservations[0].attempt_id
+
+
+@pytest.mark.asyncio
+async def test_unexpected_pre_mutation_exception_does_not_strand_reservation(
+    journey, monkeypatch
+):
+    state, service, sessions = journey
+    owner = "default/unexpected-read-failure"
+    prepare = tools._prepare_github_issue_claim
+
+    async def interrupted_after_reservation(**kwargs):
+        await prepare(**kwargs)
+        raise RuntimeError("fixture failed before mutation")
+
+    monkeypatch.setattr(
+        tools, "_prepare_github_issue_claim", interrupted_after_reservation
+    )
+    with pytest.raises(RuntimeError, match="fixture failed before mutation"):
+        await tools.load_github_issue_preset_brief(
+            {"repository": "example/repo", "issueSearch": ""},
+            {"execution_owner": owner},
+            github_service_factory=lambda: service,
+        )
+    retained = await IssueClaimStore(sessions).get(owner)
+    assert retained is None
+    assert state["posts"] == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_child_brief_read_keeps_parent_reservation(journey, monkeypatch):
+    state, service, sessions = journey
+    parent = "default/claim-parent"
+    child = parent + "/child"
+    receipt = await tools._prepare_github_issue_claim(
+        inputs={"repository": "example/repo", "issueNumber": 3970},
+        context={"execution_owner": parent},
+        repository="example/repo",
+        issue_number=3970,
+        service=service,
+    )
+    original_for_execution = IssueClaimStore.for_execution
+
+    async def inherited(self, owner):
+        if owner == child:
+            return receipt
+        return await original_for_execution(self, owner)
+
+    monkeypatch.setattr(IssueClaimStore, "for_execution", inherited)
+    state["failed_read_path"] = "/repos/example/repo/issues/3970/comments"
+    result = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueSearch": ""},
+        {"execution_owner": child},
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "FAILED"
+    retained = await IssueClaimStore(sessions).get(parent)
+    assert retained == receipt
+    assert state["posts"] == 0

@@ -15,6 +15,7 @@ from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
 from tests.integration.reliability.test_release_routing_journey import connect
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 from tests.unit.workflows.temporal.test_issue_claim_journey import (
+    test_failed_brief_reads_release_only_unannounced_reservations as run_read_failure_journey,
     test_failed_finalization_releases_durable_claim_after_remote_confirmation as run_finalization_journey,
 )
 
@@ -176,3 +177,21 @@ async def test_child_claim_inherits_only_server_recorded_parent(journey, monkeyp
     async with sessions() as session:
         rows = (await session.execute(select(GitHubIssueClaim))).scalars().all()
     assert len(rows) == 1 and rows[0].owner == f"{client.namespace}/{queue}"
+
+
+@pytest.mark.parametrize("journey", ["postgres"], indirect=True)
+@pytest.mark.parametrize(
+    "stage,read,post_authorized",
+    [
+        ("selection", "comments", False),
+        ("selection", "prerequisite", False),
+        ("resume", "comments", False),
+        ("resume", "issue", False),
+        ("resume", "comments", True),
+        ("resume", "issue", True),
+    ],
+)
+async def test_pre_mutation_read_failure_does_not_strand_postgres_claim(
+    journey, monkeypatch, stage, read, post_authorized
+):
+    await run_read_failure_journey(journey, monkeypatch, stage, read, post_authorized)

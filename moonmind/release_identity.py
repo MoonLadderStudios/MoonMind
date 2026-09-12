@@ -25,14 +25,23 @@ RELEASE_ROOTS = (
     "omnigent",
     "init_db",
     "release",
+    "pyproject.toml",
+    "poetry.lock",
+    "package.json",
+    "package-lock.json",
 )
 
 
 def build_release(root: Path, revision: str = "") -> dict:
     digest = hashlib.sha256()
+    # The verified source revision distinguishes semantic build changes even
+    # when they do not alter a copied runtime file (for example build tooling).
+    digest.update(revision.encode() + b"\0")
     count = 0
     for name in RELEASE_ROOTS:
-        for path in sorted((root / name).rglob("*")):
+        source = root / name
+        paths = [source] if source.is_file() else sorted(source.rglob("*"))
+        for path in paths:
             if not path.is_file() or any(
                 part in {"__pycache__", ".git", "node_modules"} for part in path.parts
             ):

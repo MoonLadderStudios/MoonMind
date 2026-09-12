@@ -191,9 +191,10 @@ def test_workflow_fleet_helpers_match_registry_boundary() -> None:
     )
 
     handlers = workflow_fleet_activity_handlers()
-    assert len(handlers) == 7
+    assert len(handlers) == 8
     handler_names = {h.__name__ for h in handlers}
     assert handler_names == {
+        "inspect_release_activity",
         "resolve_adapter_metadata",
         "get_activity_route",
         "resolve_external_adapter",
@@ -206,6 +207,7 @@ def test_workflow_fleet_helpers_match_registry_boundary() -> None:
     for doc_path in (TOPOLOGY, ARCHITECTURE):
         doc = _normalized(_read(doc_path))
         for activity_type in (
+            "release.inspect",
             "integration.resolve_adapter_metadata",
             "integration.get_activity_route",
             "integration.resolve_external_adapter",
