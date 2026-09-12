@@ -354,6 +354,8 @@ steps:
     Use the trusted issue status tool with the original issue identity, verification artifact, PR handoff, and intended completion target. The tool validates objective evidence and re-reads the completion target before applying the already-completed path. Candidate-only work follows the configured Code Review/Review path with its confirmed PR. Missing evidence returns bounded verification work; never infer completion from assessment prose, clean worktrees, or pushed commits.
 
     Follow the resolved moonspec-verify acceptance policy for scope, mandatory versus optional evidence, reuse, and completion. Original source and constraints define acceptance; assessment backlogs prioritize work and preserve previously met requirements as regression constraints.
+
+    Terminal finalization ownership: failed, blocked, canceled, and exhausted controlling outcomes that never reach this success-path step remain owned by the durable failed-attempt finalization boundary (the github_issue finalize_failed_attempt activity plus the periodic handoff reconciler). A success-ordered preset node cannot own those outcomes because remaining plan nodes are skipped. Keep internal remediation within this one issue attempt and inherit cross-device retry/cooldown/hold history; internal retries do not release or reset the issue budget. A partial PR does not constitute objective acceptance or completion.
   tool:
     id: github.update_issue_status
     requiredCapabilities:

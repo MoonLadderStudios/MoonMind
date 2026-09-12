@@ -56,16 +56,20 @@ def test_seed_uses_shared_eligibility_language():
     assert "without an\n          in-progress status" not in text
 
 
-def test_seed_has_no_new_ordinary_inputs_and_no_second_recovery_preset():
+def test_seed_has_optional_completion_target_and_no_second_recovery_preset():
     import yaml
 
     seed = yaml.safe_load(_seed_text())
     assert sorted(i["name"] for i in seed["inputs"]) == [
+        "completion_target_ref",
         "constraints",
         "issue_search",
         "repository",
         "run_verify",
     ]
+    target = next(i for i in seed["inputs"] if i["name"] == "completion_target_ref")
+    assert target["required"] is False
+    assert target["default"] == ""
     slugs = [
         s.get("preset_slug")
         for s in seed["steps"]

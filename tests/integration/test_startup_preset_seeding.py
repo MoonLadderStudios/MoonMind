@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import selectinload, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from api_service.db import base as db_base
 from api_service.db.models import Base, Preset, PresetScopeType
@@ -371,10 +371,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             for step in expanded_steps
         ]
         assert jira_implement_steps[0] == "jira.load_preset_brief"
-        assert jira_implement_steps[1] == "auto"
+        assert jira_implement_steps[1] == "moonspec-assess"
         assert jira_implement_steps[2] == "jira.check_blockers"
         assert jira_implement_steps[3] == "jira.update_issue_status"
-        assert jira_implement_steps[-1] == "jira-issue-updater"
+        assert jira_implement_steps[-1] == "jira.update_issue_status"
         assert len(jira_implement_steps) == 9
         implement_step_titles = [step["title"] for step in expanded_steps]
         assert implement_step_titles[0] == "Load Jira preset brief"
@@ -413,16 +413,16 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert (
             "FULLY_IMPLEMENTED" in implement_blocker_step["instructions"]
         )
-        assert implement_assessment_step["skill"]["id"] == "auto"
-        assert (
-            "FULLY_IMPLEMENTED" in implement_assessment_step["instructions"]
-        )
-        assert (
-            "PARTIALLY_IMPLEMENTED" in implement_assessment_step["instructions"]
-        )
-        assert (
-            "NOT_IMPLEMENTED" in implement_assessment_step["instructions"]
-        )
+        assert implement_assessment_step["skill"]["id"] == "moonspec-assess"
+        assert implement_assessment_step["skill"]["args"] == {
+            "issue_provider": "jira",
+            "issue_ref": "MM-999",
+            "completion_target_ref": "",
+            "brief_artifact_path": "artifacts/jira-implement-brief.json",
+            "assessment_artifact_path": "artifacts/jira-implement-assessment.json",
+        }
+        assert "immutable initial inspection" in implement_assessment_step["instructions"]
+        assert "Follow the portable Skill" in implement_assessment_step["instructions"]
         assert (
             "artifacts/jira-implement-assessment.json"
             in implement_assessment_step["instructions"]
@@ -470,6 +470,8 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         assert verify_step["skill"]["id"] == "moonspec-verify"
         assert verify_step["skill"]["args"] == {
+            "completion_target_ref": "",
+            "constraints": "",
             "verification_target": "issue_brief",
             "issue_provider": "jira",
             "issue_ref": "MM-999",
@@ -491,10 +493,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert remediation_loop["kind"] == "remediation_loop"
         assert remediation_loop["budgets"]["hardMaxAttempts"] == "6"
         assert remediation_loop["workspacePolicy"] == "continue_from_loop_head"
-        assert (
-            "assessment_artifact_path"
-            not in remediation_loop["remediationTool"]["inputs"]
-        )
+        assert remediation_loop["remediationTool"]["inputs"][
+            "brief_artifact_path"
+        ] == "artifacts/jira-implement-brief.json"
         assert remediation_loop["verificationTool"]["inputs"][
             "verify_artifact_path"
         ] == "artifacts/jira-implement-verify.json"
@@ -519,16 +520,20 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "FULLY_IMPLEMENTED" in implement_pr_step["instructions"]
         implement_finalize_step = expanded_steps[-1]
         assert implement_finalize_step["title"] == "Finalize Jira status"
-        assert implement_finalize_step["skill"]["id"] == "jira-issue-updater"
-        assert "Done" in implement_finalize_step["instructions"]
-        assert "status Review" in implement_finalize_step["instructions"]
-        assert "pull_request_url" in implement_finalize_step["instructions"]
-        assert "artifacts/jira-implement-verify.json" in (
-            implement_finalize_step["instructions"]
-        )
-        assert (
-            "FULLY_IMPLEMENTED" in implement_finalize_step["instructions"]
-        )
+        assert implement_finalize_step["type"] == "tool"
+        assert implement_finalize_step["tool"]["id"] == "jira.update_issue_status"
+        assert implement_finalize_step["tool"]["inputs"] == {
+            "issueKey": "MM-999",
+            "repository": "MoonLadderStudios/MoonMind",
+            "mode": "finalize_after_pr_or_done",
+            "completionTargetRef": "",
+            "assessmentArtifactPath": "artifacts/jira-implement-assessment.json",
+            "pullRequestArtifactPath": "artifacts/jira-implement-pr.json",
+            "verificationArtifactPath": "artifacts/jira-implement-verify.json",
+            "requireVerification": True,
+        }
+        assert "re-reads the completion target" in implement_finalize_step["instructions"]
+        assert "with its confirmed PR" in implement_finalize_step["instructions"]
 
         expanded_without_verify = await PresetCatalogService(session).expand_template(
             slug="jira-implement",
@@ -565,8 +570,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         no_verify_finalize_step = expanded_without_verify["steps"][-1]
         assert no_verify_finalize_step["title"] == "Finalize Jira status"
-        assert "Verification was disabled" in no_verify_finalize_step["instructions"]
-        assert "verifier result" not in no_verify_finalize_step["instructions"]
+        assert no_verify_finalize_step["tool"]["inputs"]["requireVerification"] is False
+        assert "Missing evidence returns bounded verification work" in (
+            no_verify_finalize_step["instructions"]
+        )
 
         result = await session.execute(
             select(Preset)
