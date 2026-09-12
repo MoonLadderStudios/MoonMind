@@ -29,8 +29,10 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.realizers.turn_delivery import (
+    admission_epoch,
     deliver_canonical_turn,
     execution_identity as _execution_identity,
+    resolve_admission_session_id,
 )
 from moonmind.omnigent.runtime_bindings import (
     RuntimeBindingSessionAuthoritySink,
@@ -64,21 +66,6 @@ def _cleanup_outcome_label(*, cancelled: bool, released: bool) -> str:
     if cancelled:
         return "cancelled_clean" if released else "cancelled_incomplete"
     return "completed_clean" if released else "leaked"
-
-
-def _admission_epoch(request: AgentExecutionRequest) -> int:
-    """Return the admission attempt this request was dispatched for.
-
-    A re-admission after lost capacity releases the previous attempt's host,
-    credentials and provider lease, so it must not resume that attempt's
-    terminally cleaned aggregate. The workflow already stamps its monotonic
-    epoch on the capacity ticket; the attempt identity is derived from it here
-    so the pre-admission read and the allocation name the same one.
-    """
-
-    return int(
-        getattr(request.admitted_provider_capacity, "admission_epoch", 0) or 0
-    )
 
 
 def _carry_host_logs(host_evidence: Any, prior_host_evidence: Any) -> Any:
@@ -208,7 +195,7 @@ class GenericOmnigentHostRealizer:
             stable_binding_id(
                 execution_plan_ref=plan.planRef,
                 idempotency_key=request.idempotency_key,
-                admission_epoch=_admission_epoch(request),
+                admission_epoch=admission_epoch(request),
             )
         )
         if completed is not None and completed.state is RuntimeBindingState.cleaned:
@@ -220,6 +207,9 @@ class GenericOmnigentHostRealizer:
             plan=plan,
             command_type="execute_admitted_plan",
             operation=lambda: self._execute_lifecycle(request, plan),
+            session_id=(
+                await self._recovered_session_id(completed) if completed else None
+            ),
         )
 
     async def _execute_lifecycle(
@@ -231,7 +221,7 @@ class GenericOmnigentHostRealizer:
             stable_binding_id(
                 execution_plan_ref=plan.planRef,
                 idempotency_key=request.idempotency_key,
-                admission_epoch=_admission_epoch(request),
+                admission_epoch=admission_epoch(request),
             )
         )
         if prior is not None and prior.state is RuntimeBindingState.cleaned:
@@ -309,7 +299,7 @@ class GenericOmnigentHostRealizer:
                 execution_plan_ref=plan.planRef,
                 idempotency_key=request.idempotency_key,
                 provider_leases=provider_authority,
-                admission_epoch=_admission_epoch(request),
+                admission_epoch=admission_epoch(request),
                 initial_phase_results=initial_phases,
             )
             if binding.state is RuntimeBindingState.cleaned:
@@ -1004,7 +994,8 @@ class GenericOmnigentHostRealizer:
             return binding, host_lease
 
         cleanup_claim = await self._claim_canonical_cleanup(
-            self._canonical_session_id(request)
+            await self._recovered_session_id(binding)
+            or await resolve_admission_session_id(self._turn_commands, request)
         )
         if cleanup_claim is _CLEANUP_NOT_OWNED:
             # Another owner holds this session's cleanup, or an admitted turn
@@ -1127,26 +1118,12 @@ class GenericOmnigentHostRealizer:
             )
         return evidence
 
-    def _canonical_session_id(self, request: AgentExecutionRequest) -> str:
-        """Return the canonical session this realizer's turn bootstrapped."""
-
-        from moonmind.omnigent.control_plane.identities import (
-            canonical_omnigent_session_id,
-        )
-
-        workflow_id, step_execution_id = _execution_identity(request)
-        return canonical_omnigent_session_id(
-            workflow_id=workflow_id,
-            step_execution_id=step_execution_id,
-            agent_run_id=request.correlation_id,
-        )
-
     async def _recovered_session_id(self, binding: StableRuntimeBinding) -> str:
         """Resolve the canonical session a recovery scan is about to clean up.
 
         Recovery has no admitted request, so it resolves the session through the
-        provider session the turn boundary attached to it. A binding with no
-        attached provider session never reached a canonical turn.
+        provider session the turn boundary attached to it. Before attachment,
+        in-band cleanup resolves persisted canonical admission authority.
         """
 
         if self._cleanup_authority is None or not binding.omnigentSessionId:
@@ -1259,6 +1236,7 @@ class GenericOmnigentHostRealizer:
                 self._turn_commands, request=turn_request, plan=plan,
                 command_type="terminal_contract_continuation", operation=deliver,
                 recorded_result=recorded_result,
+                session_id=await self._recovered_session_id(sink.binding),
             )
 
         async def complete_attempt():

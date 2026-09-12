@@ -2059,6 +2059,9 @@ async def _generic_publication_harness(
         async def cleanup_prepared(self, _prepared):
             events.append("inputs-cleaned")
 
+        async def cleanup_authorities(self, _authorities):
+            events.append("inputs-cleaned")
+
     host_class = HostClass.model_validate(
         {
             "hostClassId": "omnigent-opencode",
@@ -2194,7 +2197,7 @@ async def _generic_publication_harness(
     )
 
 
-async def _prime_attested_host_binding(harness, plan) -> None:
+async def _prime_attested_host_binding(harness, plan, *, admission_epoch=0) -> None:
     """Leave one durable binding on an attested, ready host.
 
     This is the state a retry of an interrupted generic execution actually
@@ -2241,6 +2244,7 @@ async def _prime_attested_host_binding(harness, plan) -> None:
         execution_plan_ref=plan.planRef,
         idempotency_key=harness.publish_request.idempotency_key,
         provider_leases=provider_authority,
+        admission_epoch=admission_epoch,
     )
     binding = await harness.runtime_store.update(
         binding.bindingId,
