@@ -288,6 +288,110 @@ def _recovery_handoff_usable(handoff: Mapping[str, Any] | None) -> bool:
     return _truthy(stopped) and _truthy(usable)
 
 
+_AUTHOR_QUALIFIER_RE = re.compile(
+    r"(?P<neg>[-+])?\bauthor\s*:\s*(?P<value>\"[^\"]*\"|'[^']*'|[^\s()]+)",
+    re.IGNORECASE,
+)
+
+
+def _is_inside_quotes(text: str, pos: int) -> bool:
+    """Return True when *pos* sits inside a single/double-quoted literal."""
+    in_single = False
+    in_double = False
+    for ch in text[:pos]:
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+    return in_single or in_double
+
+
+def _strip_author_qualifiers(query: str) -> tuple[str, list[dict[str, Any]]]:
+    """Remove backend-recognized author qualifiers outside quoted literals."""
+    found: list[dict[str, Any]] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        if _is_inside_quotes(query, match.start()):
+            return match.group(0)
+        found.append(
+            {
+                "raw": match.group(0),
+                "negated": bool(match.group("neg")) and match.group("neg") == "-",
+                "value": match.group("value"),
+            }
+        )
+        return " "
+
+    cleaned = _AUTHOR_QUALIFIER_RE.sub(_replace, query)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned, found
+
+
+def _normalize_author_value(value: str) -> str:
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        text = text[1:-1].strip()
+    return text
+
+
+def _validated_author_scope(
+    *,
+    query: str,
+    authenticated_login: str,
+) -> tuple[str, dict[str, Any] | None]:
+    """Apply the self-only author constraint or return a field error.
+
+    Returns ``(effective_query, error)`` where error carries ``reasonCode``
+    ``conflicting_author_filter`` and ``field`` ``issueSearch`` when the
+    user's own author qualifiers conflict with the required scope.
+    """
+    cleaned, qualifiers = _strip_author_qualifiers(query)
+    if not qualifiers:
+        return f"({query.strip()}) author:{authenticated_login}" if query.strip() else f"author:{authenticated_login}", None
+    for qualifier in qualifiers:
+        raw_value = _normalize_author_value(str(qualifier["value"]))
+        if not raw_value:
+            return "", {
+                "reasonCode": "conflicting_author_filter",
+                "field": "issueSearch",
+                "error": (
+                    "Unsupported author qualifier in the GitHub issue search field. "
+                    'Remove the author: filter or explicitly enable "Include issues '
+                    'created by other users" to search other accounts.'
+                ),
+            }
+        negated = bool(qualifier["negated"])
+        is_self = raw_value.casefold() in {"@me"} or raw_value.casefold() == authenticated_login.casefold()
+        if negated or not is_self:
+            return "", {
+                "reasonCode": "conflicting_author_filter",
+                "field": "issueSearch",
+                "error": (
+                    "The GitHub issue search field contains an author filter for another "
+                    'account. Remove it or explicitly enable "Include issues created by '
+                    'other users" to search other accounts.'
+                ),
+            }
+    # All qualifiers reference the same authenticated account: normalize to a
+    # single constraint without duplicates.
+    if cleaned:
+        return f"({cleaned}) author:{authenticated_login}", None
+    return f"author:{authenticated_login}", None
+
+
+def _selected_author_identity(candidate: Mapping[str, Any]) -> dict[str, Any] | None:
+    user = candidate.get("user")
+    if not isinstance(user, Mapping):
+        return None
+    user_id = user.get("id")
+    login = user.get("login")
+    if type(user_id) is not int or user_id <= 0:
+        return None
+    if not isinstance(login, str) or not login.strip():
+        return None
+    return {"id": user_id, "login": login.strip()}
+
+
 async def resolve_issue(
     *,
     repository: str,
@@ -304,6 +408,7 @@ async def resolve_issue(
     own_announcement_abandoned: bool | None = None,
     writers_settled: bool | None = None,
     reserve_candidate: Callable[[int], Awaitable[bool]] | None = None,
+    include_all_authors: bool = False,
 ) -> tuple[int | None, dict[str, Any]]:
     """Select the best search match, or first unblocked open issue, within 500 rows.
 
@@ -333,6 +438,12 @@ async def resolve_issue(
         raise ValueError(
             "GitHub issue search requires an explicit owner/repository scope."
         )
+    if type(include_all_authors) is not bool:
+        raise ValueError(
+            "GitHub issue search requires include_all_authors to be a boolean."
+        )
+    normalized_query = query if isinstance(query, str) else ""
+    is_blank_search = not normalized_query.strip()
     # Req 4 recandidate gate (issue #4178): a search may consider another
     # candidate only after its own abandoned announcement and writers are
     # conclusively settled. Ordinary first selections pass no signals and
@@ -346,17 +457,21 @@ async def resolve_issue(
         if not gate["allowed"]:
             return None, {
                 "searchEvidence": {
-                    "fallbackScanning": not query,
+                    "authorScope": "all" if include_all_authors else "authenticated_user",
+                    "fallbackScanning": is_blank_search,
                     "pagesExamined": 0,
                     "candidatesExamined": 0,
+                    "authorMismatchesSkipped": 0,
                 },
                 "error": gate["summary"],
             }
     evidence: dict[str, Any] = {
         "searchEvidence": {
-            "fallbackScanning": not query,
+            "authorScope": "all" if include_all_authors else "authenticated_user",
+            "fallbackScanning": is_blank_search,
             "pagesExamined": 0,
             "candidatesExamined": 0,
+            "authorMismatchesSkipped": 0,
         }
     }
     counts = evidence["searchEvidence"]
@@ -367,12 +482,51 @@ async def resolve_issue(
             "error": error or "GitHub issue search is unavailable.",
         }
 
+    authenticated_user: dict[str, Any] | None = None
+    effective_query = normalized_query
+    if not include_all_authors:
+        authenticated_user, identity_failure = await github_service.get_authenticated_user(
+            token=token
+        )
+        if authenticated_user is None:
+            failure = identity_failure or {}
+            return None, {
+                **evidence,
+                "error": str(
+                    failure.get("summary")
+                    or "MoonMind could not determine the GitHub account used for this search."
+                ),
+                "reasonCode": str(failure.get("reasonCode") or "identity_unavailable"),
+                **(
+                    {"httpStatus": failure["httpStatus"]}
+                    if failure.get("httpStatus") is not None
+                    else {}
+                ),
+            }
+        counts["authenticatedUser"] = dict(authenticated_user)
+        if not is_blank_search:
+            effective_query, scope_error = _validated_author_scope(
+                query=normalized_query,
+                authenticated_login=str(authenticated_user["login"]),
+            )
+            if scope_error is not None:
+                return None, {
+                    **evidence,
+                    **scope_error,
+                }
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         for page in range(1, 6):
-            if query:
+            if not is_blank_search:
                 url = "https://api.github.com/search/issues"
+                if include_all_authors:
+                    scoped_q = f"{normalized_query} repo:{repository} is:issue is:open"
+                else:
+                    scoped_q = (
+                        f"{effective_query} repo:{repository} is:issue is:open"
+                    )
                 params = {
-                    "q": f"{query} repo:{repository} is:issue is:open",
+                    "q": scoped_q,
                     "per_page": 100,
                     "page": page,
                 }
@@ -385,31 +539,66 @@ async def resolve_issue(
                     "per_page": 100,
                     "page": page,
                 }
+                if not include_all_authors and authenticated_user is not None:
+                    params["creator"] = str(authenticated_user["login"])
             try:
                 response = await client.get(
                     url, params=params, headers=github_service._github_headers(token)
                 )
                 response.raise_for_status()
                 payload = response.json()
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status in {401, 403}:
+                    return None, {
+                        **evidence,
+                        "error": (
+                            "GitHub issue search is not authorized for this repository."
+                        ),
+                        "reasonCode": "search_auth_failure",
+                        "httpStatus": status,
+                    }
+                if status == 429:
+                    return None, {
+                        **evidence,
+                        "error": "GitHub rate limit reached during issue search.",
+                        "reasonCode": "provider_rate_limited",
+                        "httpStatus": status,
+                    }
+                if status >= 500:
+                    return None, {
+                        **evidence,
+                        "error": "GitHub is unavailable during issue search.",
+                        "reasonCode": "provider_unavailable",
+                        "httpStatus": status,
+                    }
+                return None, {
+                    **evidence,
+                    "error": f"GitHub issue search failed: {type(exc).__name__}.",
+                    "reasonCode": "provider_unavailable",
+                }
             except (httpx.HTTPError, ValueError) as exc:
                 return None, {
                     **evidence,
                     "error": f"GitHub issue search failed: {type(exc).__name__}.",
+                    "reasonCode": "provider_unavailable",
                 }
             counts["pagesExamined"] += 1
-            if query and (
+            if not is_blank_search and (
                 not isinstance(payload, Mapping)
                 or payload.get("incomplete_results") is not False
             ):
                 return None, {
                     **evidence,
                     "error": "GitHub returned incomplete or malformed search evidence.",
+                    "reasonCode": "incomplete_evidence",
                 }
-            candidates = payload.get("items") if query else payload
+            candidates = payload.get("items") if not is_blank_search else payload
             if not isinstance(candidates, list) or len(candidates) > 100:
                 return None, {
                     **evidence,
                     "error": "GitHub returned malformed issue candidates.",
+                    "reasonCode": "incomplete_evidence",
                 }
             for candidate in candidates:
                 counts["candidatesExamined"] += 1
@@ -417,6 +606,7 @@ async def resolve_issue(
                     return None, {
                         **evidence,
                         "error": "GitHub returned a malformed issue candidate.",
+                        "reasonCode": "incomplete_evidence",
                     }
                 if "pull_request" in candidate:
                     continue
@@ -424,7 +614,32 @@ async def resolve_issue(
                     return None, {
                         **evidence,
                         "error": "GitHub candidate identity, state, or blocker evidence is invalid.",
+                        "reasonCode": "invalid_author_evidence"
+                        if authenticated_user is not None
+                        and not isinstance(candidate.get("user"), Mapping)
+                        else "incomplete_evidence",
                     }
+                # Self-only author validation happens before expensive
+                # dependency/attempt checks and before any announcement or
+                # mutation. Compare durable account IDs: a matching login with
+                # a different ID does not qualify, while a matching ID with an
+                # updated login is the same account.
+                if authenticated_user is not None:
+                    selected_author = _selected_author_identity(candidate)
+                    if selected_author is None:
+                        return None, {
+                            **evidence,
+                            "error": (
+                                "GitHub returned an issue candidate without verifiable "
+                                "author identity."
+                            ),
+                            "reasonCode": "invalid_author_evidence",
+                        }
+                    if selected_author["id"] != authenticated_user["id"]:
+                        counts["authorMismatchesSkipped"] = (
+                            int(counts.get("authorMismatchesSkipped") or 0) + 1
+                        )
+                        continue
                 normalized = dict(candidate)
                 labels = candidate["labels"]
                 normalized["labels"] = [label["name"] for label in labels]
@@ -494,17 +709,50 @@ async def resolve_issue(
                     continue
                 if interpret_issue(current).settled == SETTLED_RECOVERY_NEEDED and not _recovery_handoff_usable(recovery_handoff):
                     continue
+                # Recheck author scope on the authoritative issue read before
+                # granting a durable claim; a search hit alone is not authority.
+                selected_author = _selected_author_identity(current)
+                if authenticated_user is not None:
+                    if selected_author is None:
+                        return None, {**evidence, "error": "Candidate confirmation author evidence is incomplete.", "reasonCode": "invalid_author_evidence"}
+                    if selected_author["id"] != authenticated_user["id"]:
+                        counts["authorMismatchesSkipped"] += 1
+                        continue
+                if selected_author is not None:
+                    counts["selectedIssueAuthor"] = dict(selected_author)
                 if reserve_candidate is not None and not await reserve_candidate(int(candidate["number"])):
                     continue
                 evidence["selectedIssue"] = dict(current)
                 return candidate["number"], evidence
             if len(candidates) < 100:
+                if authenticated_user is not None:
+                    return None, {
+                        **evidence,
+                        "disposition": "idle",
+                        "summary": (
+                            "No eligible open GitHub issue created by the authenticated "
+                            "search account was found; candidate pages exhausted. "
+                            "No other author's issue was selected."
+                        ),
+                        "reasonCode": "no_eligible_self_authored_issue",
+                    }
                 return None, {
                     **evidence,
                     "disposition": "idle",
                     "summary": "No eligible open GitHub issue found; candidate pages exhausted.",
                 }
+    if authenticated_user is not None:
+        return None, {
+            **evidence,
+            "error": (
+                "No eligible GitHub issue created by the authenticated search account "
+                "was found within the 500-candidate scan limit. No other author's "
+                "issue was selected."
+            ),
+            "reasonCode": "no_eligible_self_authored_issue",
+        }
     return None, {
         **evidence,
         "error": "No eligible GitHub issue found within the 500-candidate scan limit.",
+        "reasonCode": "no_eligible_candidate",
     }

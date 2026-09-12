@@ -716,3 +716,61 @@ async def test_update_fails_when_restarted_worker_stays_unknown(
     assert exc_info.value.error_code == "DEPLOYMENT_STALE_WORKER_CODE"
     assert len(calls) >= 3  # initial check + bounded post-restart rechecks
     assert "stale_code" in str(exc_info.value.details)
+
+
+# ---------------------------------------------------------------------------
+# Author-scope cutover (MoonLadderStudios/MoonMind#4257, AC14/R7)
+# ---------------------------------------------------------------------------
+
+
+def test_author_scope_enforcement_modules_are_inside_digest_roots() -> None:
+    """Old workers cannot silently run the new author scope.
+
+    Every production module that enforces the self-authored default is a
+    ``*.py`` file under the worker digest roots, so any worker whose code
+    predates enforcement reports a different digest and the stale-code
+    admission gate (or a coordinated drain-and-replace cutover) keeps new
+    author-scoped executions off it. Shipping the checkbox ahead of
+    enforcement would require these modules to live outside the hashed
+    sources.
+    """
+    import moonmind.workflows.adapters.github_service as github_service_module
+    import moonmind.workflows.executions.preset_readiness as readiness_module
+    import moonmind.workflows.temporal.github_issue_search as search_module
+    import moonmind.workflows.temporal.story_output_tools as tools_module
+    from pathlib import Path
+
+    roots = [root.resolve() for root in wci._default_digest_roots()]
+    assert roots, "worker digest must cover at least one source root"
+    for module in (
+        search_module,
+        tools_module,
+        github_service_module,
+        readiness_module,
+    ):
+        path = Path(module.__file__).resolve()
+        assert path.suffix == ".py"
+        assert any(
+            path.is_relative_to(root) for root in roots
+        ), f"{path} must sit under a worker digest root"
+
+
+def test_stale_only_fleet_rejects_new_author_scoped_execution() -> None:
+    """New author-scoped UserWorkflows stop before search on stale workers.
+
+    The admission gate runs before any issue-search activity: when every
+    known worker predates enforcement, ``enforce_worker_code_admission``
+    raises ``stale_code`` instead of admitting the execution. Unknown
+    readiness stays fail-open and visible in the readiness detail.
+    """
+    checkout = WorkerCodeIdentity(revision="new", source="git")
+    stale_fleet = [
+        evaluate_worker_freshness(
+            name=name,
+            startup=WorkerCodeIdentity(revision="old", source="git"),
+            current=checkout,
+        )
+        for name in ("workflow", "integrations")
+    ]
+    with pytest.raises(WorkerCodeAdmissionError, match="stale_code"):
+        enforce_worker_code_admission(stale_fleet)
