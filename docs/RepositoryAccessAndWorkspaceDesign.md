@@ -338,6 +338,16 @@ Capture includes meaningful untracked output and records exclusions. It does not
 
 MoonMind-issued credentials are forbidden in exports. Required outbound controls cover reports, snapshots, deltas, bundles, and publication. Unsafe recoverable content is quarantined/restricted with safe diagnostics, not exposed or silently discarded. Source confidentiality continues to govern artifact access and model data-use policy.
 
+Checkpoint exports use the existing `MOONMIND_HIGH_SECURITY_MODE` outbound
+scan policy. Omitted and explicit `false` inputs preserve the default capture
+path and record `not_scanned` evidence with no clean-scan claim. Explicit `true`
+enforces export-byte and metadata scanning, rejecting detected archive content
+before upload. Runtime credential-path exclusions and workspace containment
+apply in both modes. Repository files, test fixtures, and source history do not grant
+exceptions to an enabled scanner. Completed immutable captures retain their
+recorded scan evidence when reused; later publication applies the current
+destination policy independently.
+
 ### INV-007 Verified saving precedes destructive cleanup
 
 The finalization handoff is:
