@@ -85,13 +85,19 @@ async def test_bind_mounted_module_change_reports_stale_code_until_restart(
         assert body["codeIdentityStatus"] == "healthy"
 
         # Host rewrites a bind-mounted module without restarting the worker.
-        # The checkout digest is recomputed live (never cached), so the next
-        # probe observes the rewrite immediately.
+        # The bounded background refresh detects the rewrite without making
+        # any HTTP request perform the source scan.
         module.write_text("HANDLER_VERSION = 2\n", encoding="utf-8")
 
-        code, body = await loop.run_in_executor(None, _get_readyz)
+        async with asyncio.timeout(7):
+            while True:
+                code, body = await loop.run_in_executor(None, _get_readyz)
+                if body.get("codeIdentityStatus") == "stale":
+                    break
+                await asyncio.sleep(0.05)
         assert code == 503, body
-        assert body["ready"] is True  # pollers still run; the code is stale
+        assert body["ready"] is False  # stale code must not accept new work
+        assert state.pollers_started is True
         assert body["codeIdentityStatus"] == "stale"
         assert body["reasonCode"] == "stale_code"
         assert body["staleCode"]["worker"] == "workflow"

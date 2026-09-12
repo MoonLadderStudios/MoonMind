@@ -178,6 +178,7 @@ state["containers"] = [
 ]
 state["images"] = [
     {
+        "ContainerName": "replay-temporal-worker-agent-runtime-1",
         "ID": TARGET_ID,
         "Repository": "ghcr.io/moonladderstudios/moonmind",
         "Service": AGENT_SERVICE,
@@ -185,12 +186,14 @@ state["images"] = [
     },
     {
         "ID": "sha256:" + "c" * 64,
+        "ContainerName": "replay-sandbox-egress-proxy-1",
         "Repository": "ubuntu/squid",
         "Service": PROXY_SERVICE,
         "Tag": "latest",
     },
     {
         "ID": "sha256:" + "d" * 64,
+        "ContainerName": "replay-temporal-worker-deployment-control-1",
         "Repository": "ghcr.io/moonladderstudios/moonmind",
         "Service": RUNNER_SERVICE,
         "Tag": "latest",

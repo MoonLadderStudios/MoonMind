@@ -13,6 +13,11 @@ from moonmind.workflows.temporal.workflows.managed_runtime_workspace_cleanup imp
 )
 
 
+@pytest.fixture(autouse=True)
+def new_history(monkeypatch):
+    monkeypatch.setattr(cleanup_module.workflow, "patched", lambda _: True)
+
+
 @pytest.mark.asyncio
 async def test_managed_runtime_workspace_cleanup_invokes_cleanup_activity(
     monkeypatch: pytest.MonkeyPatch,
@@ -42,6 +47,8 @@ async def test_managed_runtime_workspace_cleanup_invokes_cleanup_activity(
                 "deleted_roots": 0,
                 "errors": (),
             }
+        if activity_name == "release.reconcile":
+            return {"jobs": [], "errors": []}
         assert activity_name == "artifact.lifecycle_sweep"
         assert payload == {"principal": "service:storage-maintenance"}
         return {
@@ -77,6 +84,7 @@ async def test_managed_runtime_workspace_cleanup_invokes_cleanup_activity(
         "agent_runtime.cleanup_managed_runtime_files",
         "agent_runtime.reclaim_docker_storage",
         "artifact.lifecycle_sweep",
+        "release.reconcile",
     ]
     assert details == [
         "Maintaining deployment storage",
@@ -206,3 +214,30 @@ async def test_scheduled_storage_maintenance_keeps_workspace_success_when_artifa
     assert result["deletedRoots"] == 2
     assert result["maintenanceErrors"] == ["Artifact lifecycle sweep failed"]
     assert search_attributes[-1]["IsDegraded"] == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("new_history", [True, False])
+async def test_workspace_failure_cannot_starve_independent_release_owner(monkeypatch, new_history):
+    calls = []
+    states = []
+
+    async def execute(name, payload, **kwargs):
+        calls.append(name)
+        if name == "agent_runtime.cleanup_managed_runtime_files":
+            raise RuntimeError("workspace service unavailable")
+        return {"errors": []}
+
+    monkeypatch.setattr(cleanup_module.workflow, "patched", lambda _: new_history)
+    monkeypatch.setattr(cleanup_module.workflow, "execute_activity", execute)
+    monkeypatch.setattr(cleanup_module.workflow, "set_current_details", lambda _: None)
+    monkeypatch.setattr(cleanup_module.workflow, "upsert_search_attributes", states.append)
+    if not new_history:
+        with pytest.raises(RuntimeError, match="workspace service unavailable"):
+            await MoonMindManagedRuntimeWorkspaceCleanupWorkflow().run()
+        assert len(calls) == 1
+    else:
+        result = await MoonMindManagedRuntimeWorkspaceCleanupWorkflow().run()
+        assert calls[-1] == "release.reconcile"
+        assert result["maintenanceErrors"] == ["Managed runtime file cleanup failed"]
+        assert states[-1]["IsDegraded"] == [True]

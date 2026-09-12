@@ -1,513 +1,79 @@
+"""The portable updater selects one source/image without editing live source."""
 from __future__ import annotations
-
+import importlib.util
 import json
-import os
-import shutil
 import subprocess
 from pathlib import Path
-
+from types import SimpleNamespace
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
-UPDATE_SCRIPT = (
-    ROOT
-    / ".agents"
-    / "skills"
-    / "update-moonmind"
-    / "scripts"
-    / "run-update-moonmind.sh"
-)
-REPLAY_ROOT = (
-    ROOT
-    / "tests"
-    / "integration"
-    / "reliability"
-    / "replays"
-    / "skill-resolution-update-skew"
-)
+SPEC = importlib.util.spec_from_file_location("update_release_skill", ROOT / ".agents/skills/update-moonmind/scripts/update_release.py")
+update = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(update)
 
-
-def _run_git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-
-def _modern_bash() -> str:
-    bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("update-moonmind requires Bash")
-    version = subprocess.run(
-        [bash, "-c", 'printf "%s" "${BASH_VERSINFO[0]}"'],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    if int(version) < 4:
-        pytest.skip("update-moonmind requires Bash 4 or newer")
-    return bash
-
-
-def _run_update_scenario(
-    tmp_path: Path,
-    *,
-    changed_file: str,
-    checkout_already_current: bool = False,
-    agent_runtime_revision_state: str | None = None,
-    include_all_commands: bool = False,
-    initial_env_contents: str | None = None,
-    no_compose_pull: bool = False,
-    remove_agent_runtime_after_update: bool = False,
-    access_drift: bool = False,
-    initial_detached_head: bool = False,
-    rollback_fails: bool = False,
-) -> list[str]:
-    bash = _modern_bash()
-    seed = tmp_path / "seed"
-    remote = tmp_path / "origin.git"
-    checkout = tmp_path / "checkout"
-    fake_bin = tmp_path / "bin"
-    docker_log = tmp_path / "docker.log"
-
-    seed.mkdir()
-    _run_git("init", "-b", "main", cwd=seed)
-    _run_git("config", "user.name", "MoonMind Test", cwd=seed)
-    _run_git("config", "user.email", "moonmind-test@example.invalid", cwd=seed)
-    (seed / ".gitignore").write_text(".env\n", encoding="utf-8")
-    access_gate = seed / "moonmind/deployment_access.py"
-    access_gate.parent.mkdir(parents=True)
-    access_gate.write_bytes((ROOT / "moonmind/deployment_access.py").read_bytes())
-    _run_git("add", "moonmind/deployment_access.py", cwd=seed)
-    source_file = seed / changed_file
-    source_file.parent.mkdir(parents=True, exist_ok=True)
-    source_file.write_text("VERSION = 1\n", encoding="utf-8")
-    _run_git("add", ".gitignore", changed_file, cwd=seed)
-    _run_git("commit", "-m", "initial", cwd=seed)
-
-    _run_git("init", "--bare", str(remote), cwd=tmp_path)
-    _run_git("remote", "add", "origin", str(remote), cwd=seed)
-    _run_git("push", "-u", "origin", "main", cwd=seed)
-    _run_git("symbolic-ref", "HEAD", "refs/heads/main", cwd=remote)
-    _run_git("clone", str(remote), str(checkout), cwd=tmp_path)
-    initial_head = _run_git("rev-parse", "HEAD", cwd=checkout).stdout.strip()
-    if initial_detached_head:
-        _run_git("checkout", "--detach", cwd=checkout)
-    if initial_env_contents is not None:
-        (checkout / ".env").write_text(initial_env_contents, encoding="utf-8")
-
-    source_file.write_text("VERSION = 2\n", encoding="utf-8")
-    _run_git("add", changed_file, cwd=seed)
-    _run_git("commit", "-m", "update source", cwd=seed)
-    _run_git("push", "origin", "main", cwd=seed)
-    expected_head = _run_git("rev-parse", "HEAD", cwd=seed).stdout.strip()
-
-    if checkout_already_current:
-        _run_git("fetch", "origin", "main", cwd=checkout)
-        _run_git("reset", "--hard", expected_head, cwd=checkout)
-
-    if agent_runtime_revision_state is None:
-        agent_runtime_revision = ""
-    elif agent_runtime_revision_state == "missing":
-        agent_runtime_revision = ""
-    elif agent_runtime_revision_state == "stale":
-        agent_runtime_revision = initial_head
-    elif agent_runtime_revision_state == "current":
-        agent_runtime_revision = expected_head
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypatch, mismatch):
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+    git("init", "-b", "main")
+    git("config", "user.email", "qualification@example.invalid")
+    git("config", "user.name", "Qualification")
+    (repo / "source.txt").write_text("committed source")
+    git("add", ".")
+    git("commit", "-m", "source")
+    revision = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    (repo / "source.txt").write_text("operator edits")
+    (repo / ".env").write_text("AUTH_PROVIDER=disabled\nMOONMIND_API_PUBLISH_HOST=192.0.2.4\n")
+    original_run = subprocess.run
+    commands = []
+    digest = "sha256:" + "a" * 64
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        commands.append(args)
+        if args[1:3] == ["image", "inspect"]:
+            output = json.dumps([{"RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"], "Config": {"Labels": {"org.opencontainers.image.revision": "different" if mismatch else revision}}}])
+        elif args[1:3] == ["compose", "config"]:
+            output = '{"name":"existing-project"}'
+        elif args[1] == "run":
+            output = "services: {}"
+        elif args[1] == "compose":
+            payload = json.loads(args[-1])
+            assert payload["inputs"]["sourceRevision"] == revision
+            assert payload["inputs"]["image"]["reference"] == digest
+            assert "--submit" in args
+            assert kwargs["env"]["MOONMIND_IMAGE"].endswith("@" + digest)
+            output = ""
+        else:
+            assert args[1] == "pull"
+            assert args[2].endswith(":sha-" + revision)
+            output = ""
+        return SimpleNamespace(returncode=0, stdout=output)
+    monkeypatch.setattr(update.subprocess, "run", command)
+    if mismatch:
+        with pytest.raises(ValueError, match="source revision"):
+            update.main(["--repo", str(repo)])
+        assert not any("--submit" in item for item in commands)
     else:
-        raise AssertionError(
-            f"unsupported agent runtime revision state: {agent_runtime_revision_state}"
-        )
-
-    fake_bin.mkdir()
-    if rollback_fails:
-        real_git = shutil.which("git")
-        assert real_git is not None
-        fake_git = fake_bin / "git"
-        fake_git.write_text(
-            f"#!{bash}\n"
-            'if [[ "$1" == checkout && "${*: -1}" == "$UPDATE_INITIAL_HEAD" ]]; then\n'
-            "  exit 44\n"
-            "fi\n"
-            f'exec "{real_git}" "$@"\n',
-            encoding="utf-8",
-        )
-        fake_git.chmod(0o755)
-    fake_docker = fake_bin / "docker"
-    fake_docker_script = """#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\\n' "$*" >> "$DOCKER_LOG"
-
-if [[ "${1:-}" == "ps" ]]; then
-  if [[ "${FAKE_ACCESS_DRIFT:-false}" == "true" ]]; then
-    printf '%s\\n' installed-api
-  fi
-  exit 0
-fi
-if [[ "${1:-}" == "inspect" ]]; then
-  if [[ "${2:-}" == "installed-api" ]]; then
-    printf '%s\\n' '[{"HostConfig":{"PortBindings":{"8000/tcp":[{"HostIp":"0.0.0.0","HostPort":"7000"}]}},"Config":{"Env":["AUTH_PROVIDER=disabled"]},"NetworkSettings":{"Networks":{}}}]'
-    exit 0
-  fi
-  if [[ "$*" == *".State.Status"* ]]; then
-    printf '%s\\n' running
-  elif [[ "$*" == *"moonmind.runtime_source_revision"* ]]; then
-    printf '%s\\n' "$FAKE_AGENT_RUNTIME_SOURCE_REVISION"
-  fi
-  exit 0
-fi
-if [[ "${1:-}" != "compose" ]]; then
-  exit 0
-fi
-shift
-
-case "${1:-} ${2:-}" in
-  "version ")
-    exit 0
-    ;;
-  "config --services")
-    if [[ "__REMOVE_AGENT_RUNTIME_AFTER_UPDATE__" == "true" ]] \
-      && [[ "$(git -C "$UPDATE_CHECKOUT" rev-parse HEAD)" != "$UPDATE_INITIAL_HEAD" ]]; then
-      printf '%s\\n' api postgres temporal-worker-deployment-control temporal-worker-workflow
-    else
-      printf '%s\\n' api postgres temporal-worker-agent-runtime temporal-worker-deployment-control temporal-worker-workflow
-    fi
-    ;;
-  "config --format")
-    if [[ "__REMOVE_AGENT_RUNTIME_AFTER_UPDATE__" == "true" ]] \
-      && [[ "$(git -C "$UPDATE_CHECKOUT" rev-parse HEAD)" != "$UPDATE_INITIAL_HEAD" ]]; then
-      printf '%s\\n' '{"name":"moonmind-test-update","services":{"api":{"image":"moonmind:test","ports":[{"host_ip":"127.0.0.1","published":"7000","target":8000}],"environment":{"AUTH_PROVIDER":"disabled"}},"postgres":{"image":"postgres:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
-    else
-      printf '%s\\n' '{"name":"moonmind-test-update","services":{"api":{"image":"moonmind:test","ports":[{"host_ip":"127.0.0.1","published":"7000","target":8000}],"environment":{"AUTH_PROVIDER":"disabled"}},"postgres":{"image":"postgres:test"},"temporal-worker-agent-runtime":{"image":"moonmind:test"},"temporal-worker-deployment-control":{"image":"moonmind:test"},"temporal-worker-workflow":{"image":"moonmind:test"}}}'
-    fi
-    ;;
-  "pull ")
-    exit 0
-    ;;
-  "ps -a")
-    if [[ "${4:-}" == "temporal-worker-agent-runtime" ]] \
-      && [[ "$FAKE_AGENT_RUNTIME_CONTAINER" == "true" ]]; then
-      printf '%s\\n' container-agent-runtime
-    fi
-    ;;
-  "ps -q")
-    if [[ "${3:-}" == "temporal-worker-agent-runtime" ]] \
-      && [[ "$FAKE_AGENT_RUNTIME_CONTAINER" == "true" ]]; then
-      printf '%s\\n' container-agent-runtime
-    fi
-    ;;
-  "up -d")
-    if [[ "${FAKE_ACCESS_DRIFT:-false}" == "true" ]]; then
-      if [[ "$(git -C "$UPDATE_CHECKOUT" rev-parse HEAD)" != "$UPDATE_INITIAL_HEAD" ]] \
-        || [[ "$(cat "$UPDATE_CHECKOUT/$UPDATE_CHANGED_FILE")" != "VERSION = 1" ]]; then
-        printf 'worker resumed before source rollback\\n' >&2
-        exit 43
-      fi
-      printf '%s\\n' 'verified-pre-update-source-before-resume' >> "$DOCKER_LOG"
-    fi
-    if [[ "${MOONMIND_RUNTIME_SOURCE_REVISION:-}" != "$(git -C "$UPDATE_CHECKOUT" rev-parse HEAD)" ]]; then
-      printf 'runtime source revision was not exported for compose up\\n' >&2
-      exit 42
-    fi
-    exit 0
-    ;;
-esac
-"""
-    fake_docker.write_text(
-        fake_docker_script.replace(
-            "__REMOVE_AGENT_RUNTIME_AFTER_UPDATE__",
-            str(remove_agent_runtime_after_update).lower(),
-        ),
-        encoding="utf-8",
-    )
-    fake_docker.chmod(0o755)
-
-    env = dict(os.environ)
-    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
-    env["DOCKER_LOG"] = str(docker_log)
-    env["UPDATE_CHECKOUT"] = str(checkout)
-    env["UPDATE_INITIAL_HEAD"] = initial_head
-    env["UPDATE_CHANGED_FILE"] = changed_file
-    env["FAKE_AGENT_RUNTIME_CONTAINER"] = str(
-        agent_runtime_revision_state is not None
-    ).lower()
-    env["FAKE_AGENT_RUNTIME_SOURCE_REVISION"] = agent_runtime_revision
-    env["FAKE_ACCESS_DRIFT"] = str(access_drift).lower()
-    update_command = [
-        bash,
-        str(UPDATE_SCRIPT),
-        "--repo",
-        str(checkout),
-        "--branch",
-        "main",
-    ]
-    if no_compose_pull:
-        update_command.append("--no-compose-pull")
-    update = subprocess.run(
-        update_command,
-        cwd=ROOT,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if access_drift:
-        assert update.returncode != 0
-        assert "published interfaces/ports" in update.stdout + update.stderr
-        commands = docker_log.read_text(encoding="utf-8").splitlines()
-        if rollback_fails:
-            assert "worker remains stopped" in update.stderr
-            assert not any(line.startswith("compose up ") for line in commands)
-            return commands
-        assert _run_git("rev-parse", "HEAD", cwd=checkout).stdout.strip() == initial_head
-        assert (checkout / changed_file).read_text() == "VERSION = 1\n"
-        branch = _run_git("rev-parse", "--abbrev-ref", "HEAD", cwd=checkout).stdout.strip()
-        assert branch == ("HEAD" if initial_detached_head else "main")
-        assert not _run_git("status", "--porcelain", cwd=checkout).stdout.strip()
-        assert not any(
-            line.startswith("compose up ") and "api" in line.split()
-            for line in commands
-        )
-        assert "compose pull" not in commands
-        return commands
-    assert update.returncode == 0, (
-        f"update script failed with exit code {update.returncode}\n"
-        f"stdout:\n{update.stdout}\n"
-        f"stderr:\n{update.stderr}"
-    )
-
-    assert _run_git("rev-parse", "HEAD", cwd=checkout).stdout.strip() == expected_head
-    commands = docker_log.read_text(encoding="utf-8").splitlines()
-    if include_all_commands:
-        return commands
-    return [line for line in commands if line.startswith("compose up ")]
+        assert update.main(["--repo", str(repo)]) == 0
+        submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
+        assert update.main(["--repo", str(repo), "--resume", submission.stem]) == 0
+        assert len([item for item in commands if item[1] == "pull"]) == 1
+        assert len(list((repo / "deploy/state/release-submissions").glob("*.json"))) == 1
+    assert (repo / "source.txt").read_text() == "operator edits"
+    assert (repo / ".env").read_text() == "AUTH_PROVIDER=disabled\nMOONMIND_API_PUBLISH_HOST=192.0.2.4\n"
+    assert git("rev-parse", "HEAD") == revision
 
 
-def test_runtime_source_update_force_recreates_only_application_services(
-    tmp_path: Path,
-) -> None:
-    up_commands = _run_update_scenario(
-        tmp_path,
-        changed_file="moonmind/example.py",
-    )
-
-    assert len(up_commands) == 2
-    recreate_command = next(
-        command for command in up_commands if "--force-recreate" in command
-    )
-    restart_command = next(
-        command for command in up_commands if "--force-recreate" not in command
-    )
-    assert "api" in recreate_command
-    assert "temporal-worker-workflow" in recreate_command
-    assert "postgres" not in recreate_command
-    assert "postgres" in restart_command
-    assert all("temporal-worker-deployment-control" not in row for row in up_commands)
-
-
-def test_documentation_update_does_not_force_recreate_services(
-    tmp_path: Path,
-) -> None:
-    up_commands = _run_update_scenario(
-        tmp_path,
-        changed_file="docs/guide.md",
-    )
-
-    assert len(up_commands) == 1
-    assert "--force-recreate" not in up_commands[0]
-    assert "api" in up_commands[0]
-    assert "postgres" in up_commands[0]
-    assert "temporal-worker-workflow" in up_commands[0]
-    assert "temporal-worker-deployment-control" not in up_commands[0]
-
-
-@pytest.mark.parametrize("agent_runtime_revision_state", ["missing", "stale"])
-def test_stale_runtime_source_revision_is_recreated_when_checkout_is_current(
-    tmp_path: Path,
-    agent_runtime_revision_state: str,
-) -> None:
-    up_commands = _run_update_scenario(
-        tmp_path,
-        changed_file="moonmind/example.py",
-        checkout_already_current=True,
-        agent_runtime_revision_state=agent_runtime_revision_state,
-        no_compose_pull=True,
-    )
-
-    recreate_commands = [
-        command for command in up_commands if "--force-recreate" in command
-    ]
-    assert len(recreate_commands) == 1
-    assert "temporal-worker-agent-runtime" in recreate_commands[0]
-    assert "api" not in recreate_commands[0]
-    assert "temporal-worker-workflow" not in recreate_commands[0]
-
-
-def test_current_runtime_source_revision_is_not_recreated_without_changes(
-    tmp_path: Path,
-) -> None:
-    up_commands = _run_update_scenario(
-        tmp_path,
-        changed_file="moonmind/example.py",
-        checkout_already_current=True,
-        agent_runtime_revision_state="current",
-        no_compose_pull=True,
-    )
-
-    assert all("--force-recreate" not in command for command in up_commands)
-
-
-def test_update_persists_revision_without_clobbering_operator_env(
-    tmp_path: Path,
-) -> None:
-    _run_update_scenario(
-        tmp_path,
-        changed_file="moonmind/example.py",
-        checkout_already_current=True,
-        initial_env_contents=(
-            "KEEP_ME=yes\n"
-            "export MOONMIND_RUNTIME_SOURCE_REVISION=old\n"
-            "MOONMIND_RUNTIME_SOURCE_REVISION=duplicate\n"
-            "AFTER=preserved\n"
-        ),
-        no_compose_pull=True,
-    )
-
-    checkout = tmp_path / "checkout"
-    expected_revision = _run_git("rev-parse", "HEAD", cwd=checkout).stdout.strip()
-    assert (checkout / ".env").read_text(encoding="utf-8").splitlines() == [
-        "KEEP_ME=yes",
-        f"MOONMIND_RUNTIME_SOURCE_REVISION={expected_revision}",
-        "AFTER=preserved",
-    ]
-
-
-def test_update_preserves_operator_network_access(tmp_path: Path) -> None:
-    manifest = json.loads(
-        (
-            ROOT
-            / "tests/integration/reliability/replays"
-            / "api-publish-binding-cutover/manifest.json"
-        ).read_text(encoding="utf-8")
-    )
-    operator_settings = manifest["operatorEnvironment"]
-    _run_update_scenario(
-        tmp_path,
-        changed_file="api_service/main.py",
-        initial_env_contents="".join(
-            f"{name}={value}\n" for name, value in operator_settings.items()
-        ),
-        no_compose_pull=True,
-    )
-    persisted = dict(
-        line.split("=", 1)
-        for line in (tmp_path / "checkout/.env")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    )
-    assert {name: persisted[name] for name in operator_settings} == operator_settings
-
-
-def test_update_refuses_unpinned_installed_binding_cutover(tmp_path: Path) -> None:
-    _run_update_scenario(
-        tmp_path,
-        changed_file="api_service/main.py",
-        access_drift=True,
-        initial_env_contents="KEEP_ME=yes\n",
-        no_compose_pull=True,
-    )
-    assert (tmp_path / "checkout/.env").read_text() == "KEEP_ME=yes\n"
-
-
-def test_skill_source_update_quiesces_resolver_before_checkout_mutation(
-    tmp_path: Path,
-) -> None:
-    manifest = json.loads((REPLAY_ROOT / "manifest.json").read_text(encoding="utf-8"))
-    expected = json.loads(
-        (REPLAY_ROOT / "expected-outcome.json").read_text(encoding="utf-8")
-    )
-    commands = _run_update_scenario(
-        tmp_path,
-        changed_file=manifest["changedFile"],
-        include_all_commands=True,
-    )
-
-    stop_command = expected["stopCommand"]
-    barrier_recreate = expected["recreateCommand"]
-    assert stop_command in commands
-    assert barrier_recreate in commands
-    assert commands.count(barrier_recreate) == 1
-    assert commands.index(stop_command) < commands.index(expected["composePullCommand"])
-    assert commands.index(expected["composePullCommand"]) < commands.index(
-        barrier_recreate
-    )
-    final_force_recreates = [
-        command
-        for command in commands[commands.index(barrier_recreate) + 1 :]
-        if command.startswith("compose up ") and "--force-recreate" in command
-    ]
-    assert all(
-        expected["barrierService"] not in command for command in final_force_recreates
-    )
-
-
-def test_update_uses_one_fetched_commit_without_a_second_fetching_pull() -> None:
-    script = UPDATE_SCRIPT.read_text(encoding="utf-8")
-
-    assert 'git checkout -B "$BRANCH" "$REMOTE_COMMIT"' in script
-    assert 'git pull --ff-only origin "$BRANCH"' not in script
-    assert '"$POST_PULL_COMMIT" != "$REMOTE_COMMIT"' in script
-
-
-def test_skill_barrier_does_not_restart_service_removed_by_update(
-    tmp_path: Path,
-) -> None:
-    expected = json.loads(
-        (REPLAY_ROOT / "expected-outcome.json").read_text(encoding="utf-8")
-    )
-    commands = _run_update_scenario(
-        tmp_path,
-        changed_file=".agents/skills/example/SKILL.md",
-        include_all_commands=True,
-        remove_agent_runtime_after_update=True,
-    )
-
-    assert expected["stopCommand"] in commands
-    assert expected["composePullCommand"] in commands
-    assert expected["recreateCommand"] not in commands
-
-
-@pytest.mark.parametrize("initial_detached_head", [False, True])
-def test_access_gate_restores_source_before_resuming_skill_worker(
-    tmp_path: Path, initial_detached_head: bool
-) -> None:
-    commands = _run_update_scenario(
-        tmp_path,
-        changed_file=".agents/skills/example/SKILL.md",
-        access_drift=True,
-        initial_detached_head=initial_detached_head,
-        initial_env_contents="KEEP_ME=yes\n",
-    )
-    assert "compose stop temporal-worker-agent-runtime" in commands
-    assert "verified-pre-update-source-before-resume" in commands
-    assert [line for line in commands if line.startswith("compose up ")] == [
-        "compose up -d --no-deps --force-recreate temporal-worker-agent-runtime"
-    ]
-    assert (tmp_path / "checkout/.env").read_text() == "KEEP_ME=yes\n"
-
-
-def test_failed_source_restore_leaves_quiesced_worker_stopped(tmp_path: Path) -> None:
-    commands = _run_update_scenario(
-        tmp_path,
-        changed_file=".agents/skills/example/SKILL.md",
-        access_drift=True,
-        rollback_fails=True,
-        initial_env_contents="KEEP_ME=yes\n",
-    )
-    assert "compose stop temporal-worker-agent-runtime" in commands
-    assert not any(line.startswith("compose up ") for line in commands)
-    assert (tmp_path / "checkout/.env").read_text() == "KEEP_ME=yes\n"
+def test_dry_run_never_fetches_or_launches(tmp_path, monkeypatch):
+    calls = []
+    def inspect(args, **kwargs):
+        calls.append(args)
+        return ""
+    monkeypatch.setattr(update, "run", inspect)
+    assert update.main(["--repo", str(tmp_path), "--dry-run"]) == 0
+    assert calls == [["git", "check-ref-format", "--branch", "main"]]

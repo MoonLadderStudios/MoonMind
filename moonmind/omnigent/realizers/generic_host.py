@@ -15,6 +15,7 @@ from contextlib import suppress
 from typing import Any, Awaitable, Callable
 
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+from moonmind.omnigent.attempt_completion import complete_skill_turns
 from moonmind.omnigent.credential_materializers import (
     CredentialRuntimeHandle,
     credential_runtime_identity,
@@ -128,6 +129,7 @@ class GenericOmnigentHostRealizer:
         execution_state_notifier: Callable[[str, str, str], Awaitable[None]]
         | None = None,
         deployment_validator: Callable[[Any], None] | None = None,
+        execution_owner: Callable[[], dict[str, str] | None] | None = None,
         heartbeat_interval_seconds: float = 60.0,
         heartbeat_ttl_seconds: int = 900,
     ) -> None:
@@ -157,6 +159,7 @@ class GenericOmnigentHostRealizer:
         self._session_cleanup = session_cleanup_service
         self._workspace_publisher = workspace_publisher
         self._artifacts = artifact_gateway
+        self._execution_owner = execution_owner
         self._turn_commands = turn_command_service
         # The generic host is one cleanup owner of a canonical session. It shares
         # the control-plane cleanup aggregate with the legacy session supervisor
@@ -209,12 +212,7 @@ class GenericOmnigentHostRealizer:
             )
         )
         if completed is not None and completed.state is RuntimeBindingState.cleaned:
-            if completed.terminalResult is None:
-                raise HarnessPlatformError(
-                    "cleaned generic execution has no durable terminal result",
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-                )
-            return AgentRunResult.model_validate(completed.terminalResult)
+            return await self._reconcile_finalization(request, completed)
 
         return await deliver_canonical_turn(
             self._turn_commands,
@@ -237,12 +235,7 @@ class GenericOmnigentHostRealizer:
             )
         )
         if prior is not None and prior.state is RuntimeBindingState.cleaned:
-            if prior.terminalResult is None:
-                raise HarnessPlatformError(
-                    "cleaned generic execution has no durable terminal result",
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-                )
-            return AgentRunResult.model_validate(prior.terminalResult)
+            return await self._reconcile_finalization(request, prior)
         workflow_id, step_execution_id = _execution_identity(request)
         acquired: tuple[Any, ...] = ()
         credential_handles: tuple[CredentialRuntimeHandle, ...] = ()
@@ -308,12 +301,16 @@ class GenericOmnigentHostRealizer:
                 }
                 for item in acquired
             }
-            # Acquired generations become immutable before SecretRef resolution.
+            owner = self._execution_owner() if self._execution_owner else None
+            initial_phases = {"owner": owner} if owner else None
+            # Acquired generations and their durable owner are recorded together
+            # before SecretRef resolution or host launch.
             binding = await self._runtime_bindings.create_initial(
                 execution_plan_ref=plan.planRef,
                 idempotency_key=request.idempotency_key,
                 provider_leases=provider_authority,
                 admission_epoch=_admission_epoch(request),
+                initial_phase_results=initial_phases,
             )
             if binding.state is RuntimeBindingState.cleaned:
                 # A completed binding is immutable. A duplicate execution must
@@ -321,12 +318,11 @@ class GenericOmnigentHostRealizer:
                 # released host or credential state.
                 await self._provider_leases.release_all(acquired)
                 acquired = ()
-                if binding.terminalResult is not None:
-                    return AgentRunResult.model_validate(binding.terminalResult)
-                raise HarnessPlatformError(
-                    "cleaned generic execution has no durable terminal result",
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-                )
+                return await self._reconcile_finalization(request, binding)
+            if owner and "owner" not in (binding.phaseResults or {}):
+                owner_sink = RuntimeBindingSessionAuthoritySink(self._runtime_bindings, binding)
+                await owner_sink.record_phase("owner", owner)
+                binding = owner_sink.binding
             if binding.state in {
                 RuntimeBindingState.host_allocating,
                 RuntimeBindingState.host_ready,
@@ -545,6 +541,7 @@ class GenericOmnigentHostRealizer:
                     request=self._bind_exact_host(request, plan, host_context, binding),
                     sink=sink,
                     host_lease=host_lease,
+                    plan=plan,
                 )
             finally:
                 binding = sink.binding
@@ -556,8 +553,6 @@ class GenericOmnigentHostRealizer:
                     harness_id=harness_id,
                     latency_seconds=time.monotonic() - first_turn_started,
                 )
-            if result.failure_class is None:
-                result = await self._publish_repository(request, result)
             result = result.model_copy(
                 update={
                     "metadata": {
@@ -580,6 +575,14 @@ class GenericOmnigentHostRealizer:
             )
         except BaseException as exc:
             primary_error = exc
+
+        if isinstance(primary_error, asyncio.CancelledError) and binding is not None:
+            from moonmind.omnigent.activity_ownership import delivery_was_revoked
+
+            if delivery_was_revoked():
+                # No teardown by a revoked delivery. The retry reuses the
+                # recorded host/session under the same admission generation.
+                raise primary_error
 
         if not launch_readiness_recorded and not resume_owns_terminal_outcome:
             # Only a launch that never reached an attested ready host is a
@@ -767,6 +770,7 @@ class GenericOmnigentHostRealizer:
                         ),
                         sink=sink,
                         host_lease=host_lease,
+                        plan=plan,
                     )
                 finally:
                     current = sink.binding
@@ -782,10 +786,8 @@ class GenericOmnigentHostRealizer:
                         }
                     }
                 )
-                if result.failure_class is None:
-                    result = await self._publish_repository(request, result)
                 current = await self._update_binding(
-                    sink.binding,
+                    current,
                     updates={
                         "terminalResult": result.model_dump(
                             by_alias=True, mode="json", exclude_none=True
@@ -796,6 +798,11 @@ class GenericOmnigentHostRealizer:
             # Primary boundary captures failures and cancellation for outcome
             # recording; the error is re-raised after cleanup below.
             primary_error = exc
+        if isinstance(primary_error, asyncio.CancelledError):
+            from moonmind.omnigent.activity_ownership import delivery_was_revoked
+
+            if delivery_was_revoked():
+                raise primary_error
         cleanup_error: BaseException | None = None
         try:
             current, _host_lease = await self._cleanup(
@@ -879,6 +886,97 @@ class GenericOmnigentHostRealizer:
             }
         )
 
+    async def _reconcile_finalization(self, request, binding):
+        """An interrupted save/publish resumes without a host or provider turn."""
+        async with self._runtime_bindings.finalization(binding.bindingId) as current:
+            return await self._reconcile_owned_finalization(request, current)
+
+    async def _reconcile_owned_finalization(self, request, binding):
+        from moonmind.omnigent.attempt_completion import recorded_attempt_result
+        phases = binding.phaseResults or {}
+        if binding.terminalResult is not None or "publication" in phases:
+            return recorded_attempt_result(binding)
+        compute = phases.get("compute")
+        workspace = phases.get("workspace")
+        if workspace is None or (compute is None and not any(key.startswith("turn:") for key in phases)):
+            result = recorded_attempt_result(binding)
+            if result is not None:
+                return result
+            raise HarnessPlatformError("cleaned generic execution has no durable terminal result", code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT)
+        bound = request.model_copy(update={"workspace_spec": {
+            **request.workspace_spec, "workspaceLocator": workspace["workspaceSpec"]["workspaceLocator"],
+        }})
+        sink = RuntimeBindingSessionAuthoritySink(self._runtime_bindings, binding)
+        if phases.get("saved", {}).get("checkpointRef"):
+            restored = await self._workspace_publisher.restore_saved_request_workspace(bound, phases["saved"])
+            if restored is not None:
+                await sink.record_phase("restoration", restored)
+        if compute is None:
+            result = await complete_skill_turns(
+                request=bound, sink=sink, driver=None,
+                inspect_terminal=self._inspect_terminal, recorded_turns_only=True,
+            )
+            compute = result.model_dump(by_alias=True, mode="json", exclude_none=True)
+            await sink.record_phase("compute", compute)
+        return await self._finish_owned_execution(bound, sink, AgentRunResult.model_validate(compute))
+
+    async def _finish_execution(self, request, sink, result):
+        async with self._runtime_bindings.finalization(sink.binding.bindingId) as current:
+            await sink.refresh()
+            return await self._finish_owned_execution(request, sink, result)
+
+    async def _finish_owned_execution(self, request, sink, result):
+        """Retry publication in place; a provider turn receipt is already durable."""
+        phases = sink.binding.phaseResults or {}
+        if "publication" in phases:
+            return AgentRunResult.model_validate(phases["publication"])
+        if "workspace" in phases and "saved" not in phases:
+            checkpoint = await self._workspace_publisher.save_request_workspace(request)
+            await sink.record_phase("saved", checkpoint)
+        saved = (sink.binding.phaseResults or {}).get("saved")
+        if saved:
+            result = result.model_copy(update={"metadata": {
+                **(result.metadata or {}), "savedWorkspaceCheckpoint": saved, "workPreserved": True,
+            }})
+        if result.failure_class is None:
+            # Only retry this unfinished boundary. The publisher reconciles
+            # remote branch/PR state and verifies the exact head on every call.
+            for attempt in range(3):
+                if f"publication_failure:{attempt}" in (sink.binding.phaseResults or {}):
+                    continue
+                try:
+                    result = await self._publish_repository(request, result)
+                    break
+                except HarnessPlatformError as exc:
+                    if str(exc.code) not in {
+                        "OMNIGENT_REPOSITORY_PUBLICATION_FAILED",
+                        "OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED",
+                    }:
+                        raise
+                    await sink.record_phase(f"publication_failure:{attempt}", {"code": str(exc.code)})
+                    if attempt < 2:
+                        await asyncio.sleep(2 ** attempt)
+            else:
+                result = result.model_copy(update={
+                    "failure_class": "integration_error",
+                    "provider_error_code": (sink.binding.phaseResults or {})["publication_failure:2"]["code"],
+                    "retry_recommendation": "do_not_retry",
+                    "summary": "Agent work is saved; repository publication exhausted its retry budget.",
+                    "metadata": {**(result.metadata or {}), "unfinishedPhase": "publication", "workPreserved": bool(saved)},
+                })
+        await sink.record_phase("publication", result.model_dump(mode="json", by_alias=True, exclude_none=True))
+        return result
+
+    async def _ensure_saved(self, request, binding):
+        async with self._runtime_bindings.finalization(binding.bindingId) as current:
+            phases = current.phaseResults or {}
+            if "workspace" not in phases or "saved" in phases:
+                return current
+            checkpoint = await self._workspace_publisher.save_request_workspace(request)
+            sink = RuntimeBindingSessionAuthoritySink(self._runtime_bindings, current)
+            await sink.record_phase("saved", checkpoint)
+            return sink.binding
+
     async def _cleanup(
         self,
         *,
@@ -921,6 +1019,7 @@ class GenericOmnigentHostRealizer:
             cleanup_evidence["session"] = await self._session_cleanup.drain(
                 binding.omnigentSessionId
             )
+        binding = await self._ensure_saved(request, binding)
         if host_lease is not None and host_lease.status != "cleaned":
             host_lease = await self._host_leases.claim_cleanup(
                 host_lease.leaseRef, expected_generation=host_lease.generation
@@ -1092,6 +1191,7 @@ class GenericOmnigentHostRealizer:
         request: AgentExecutionRequest,
         sink: RuntimeBindingSessionAuthoritySink,
         host_lease: Any,
+        plan: OmnigentExecutionPlanEnvelope,
     ) -> AgentRunResult:
         """Keep both durable ownership leases fresh while a turn is active."""
 
@@ -1102,6 +1202,11 @@ class GenericOmnigentHostRealizer:
             "Agent is running.",
         )
         stop = asyncio.Event()
+        if request.workspace_spec.get("workspaceLocator") and "workspace" not in (sink.binding.phaseResults or {}):
+            await sink.record_phase("workspace", request.model_dump(
+                by_alias=True, mode="json", exclude_none=True,
+                include={"agent_kind", "agent_id", "correlation_id", "idempotency_key", "step_execution"},
+            ) | {"workspaceSpec": {"workspaceLocator": request.workspace_spec["workspaceLocator"]}})
 
         async def heartbeat_loop() -> None:
             while True:
@@ -1118,9 +1223,55 @@ class GenericOmnigentHostRealizer:
                         ttl_seconds=self._heartbeat_ttl,
                     )
 
-        driver_task = asyncio.create_task(
-            self._session_driver(request, session_authority_sink=sink)
-        )
+        async def deliver_continuation(ordinal, instruction, recorded_result):
+            from moonmind.omnigent.control_plane.turn_sources import TurnSource
+            from moonmind.schemas.agent_runtime_models import CanonicalTurnLineage
+
+            if request.step_execution is None:
+                raise HarnessPlatformError(
+                    "Contract continuation requires the admitted Step Execution owner",
+                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                )
+            turn_request = request.model_copy(update={
+                "idempotency_key": f"{request.idempotency_key}:terminal-contract:{ordinal}",
+                "step_execution": request.step_execution.model_copy(update={
+                    "canonical_turn_lineage": CanonicalTurnLineage(
+                        source=TurnSource.TERMINAL_CONTRACT_CONTINUATION.value,
+                        base_step_execution_id=request.step_execution.step_execution_id,
+                    ),
+                }),
+            })
+
+            async def deliver():
+                result = await self._session_driver(
+                    turn_request, session_authority_sink=sink,
+                    resume_session_id=sink.binding.omnigentSessionId,
+                    first_message_text=instruction, allow_same_session_continuation=True,
+                )
+                # Save before command settlement: a replacement worker can
+                # reconcile the receipt without submitting another billed turn.
+                await sink.record_phase(f"turn:{ordinal}", result.model_dump(
+                    mode="json", by_alias=True, exclude_none=True,
+                ))
+                return result
+
+            return await deliver_canonical_turn(
+                self._turn_commands, request=turn_request, plan=plan,
+                command_type="terminal_contract_continuation", operation=deliver,
+                recorded_result=recorded_result,
+            )
+
+        async def complete_attempt():
+            result = await complete_skill_turns(
+                request=request, sink=sink, driver=self._session_driver,
+                inspect_terminal=self._inspect_terminal,
+                deliver_continuation=deliver_continuation,
+            )
+            if "compute" not in (sink.binding.phaseResults or {}):
+                await sink.record_phase("compute", result.model_dump(by_alias=True, mode="json", exclude_none=True))
+            return await self._finish_execution(request, sink, result)
+
+        driver_task = asyncio.create_task(complete_attempt())
         heartbeat_task = asyncio.create_task(heartbeat_loop())
         try:
             done, _pending = await asyncio.wait(
@@ -1147,6 +1298,9 @@ class GenericOmnigentHostRealizer:
                     task.cancel()
                     with suppress(asyncio.CancelledError):
                         await task
+
+    async def _inspect_terminal(self, request):
+        return await self._workspace_publisher.inspect_request_terminal(request)
 
     def _machine_reservation_ref(self, host_lease_ref: str) -> tuple[Any, str] | None:
         """Return (ledger, reservation id) for one host lease, when accounted."""
@@ -1395,6 +1549,9 @@ class GenericOmnigentHostRealizer:
         if host_lease is not None and host_lease.status != "cleaned":
             if binding.omnigentSessionId:
                 await self._session_cleanup.drain(binding.omnigentSessionId)
+            saved_request = (binding.phaseResults or {}).get("workspace")
+            if saved_request:
+                binding = await self._ensure_saved(AgentExecutionRequest.model_validate(saved_request), binding)
             claimed = await self._host_leases.claim_cleanup(
                 host_lease.leaseRef, expected_generation=host_lease.generation
             )

@@ -42,6 +42,10 @@ USER_WORKFLOW_REGISTRATION = WorkflowRegistration(
 
 STATIC_WORKFLOW_REGISTRATIONS = (
     WorkflowRegistration(
+        "moonmind.workflows.temporal.workflows.release_canary",
+        "ReleaseCanaryWorkflow", "excluded",
+    ),
+    WorkflowRegistration(
         "moonmind.workflows.temporal.workflows.container_job",
         "MoonMindContainerJobWorkflow",
         "operator",
@@ -245,7 +249,9 @@ def workflow_fleet_activity_handlers() -> tuple[Any, ...]:
         resolve_external_adapter,
     )
 
+    from moonmind.workflows.temporal.workflows.release_canary import inspect_release_activity
     return (
+        inspect_release_activity,
         resolve_adapter_metadata,
         get_activity_route,
         resolve_external_adapter,

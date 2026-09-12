@@ -141,6 +141,7 @@ _RETRYABLE_TERMINAL_CONTRACT_FAILURE_CODES = frozenset(
         "MALFORMED_TERMINAL_EVIDENCE",
         "STALE_TERMINAL_EVIDENCE",
         "missing_terminal_evidence",
+        "SKILL_CONTINUATION_REQUIRED",
     }
 )
 
@@ -918,6 +919,8 @@ class MoonMindAgentRun:
         # is gone, with the manager's terminal-owner verification.
         self._omnigent_capacity_state: str = "none"
         self._omnigent_admission_epoch: int = 0
+        self._omnigent_pending_request: AgentExecutionRequest | None = None
+        self._omnigent_pending_admitted_at: Any = None
 
     @staticmethod
     def _safe_callback_key(*parts: str) -> str:
@@ -2876,6 +2879,10 @@ class MoonMindAgentRun:
             )
         if evaluated.failure_class is None:
             return evaluated
+        if (evaluated.metadata or {}).get("terminalContractRecoveryOwner") == "runtime_binding":
+            # The host already spent the persisted continuation budget. A
+            # parent retry may reconcile receipts, but must not reset it.
+            return evaluated
         if (
             (evaluated.metadata or {}).get("terminalContractRecoveryOutcome")
             == "skill_terminal_verdict"
@@ -4263,8 +4270,20 @@ class MoonMindAgentRun:
 
         admitted_at: Any = None
         capacity_requeue_attempts = 0
+        reconcile_admission = self._workflow_patch_enabled("omnigent-resume-owned-admission-v1")
         while True:
-            if admit_capacity_before_activity:
+            resuming = (
+                reconcile_admission
+                and admit_capacity_before_activity
+                and self._omnigent_pending_request is not None
+            )
+            if resuming:
+                pending = self._omnigent_pending_request
+                if pending.idempotency_key != request.idempotency_key:
+                    raise ApplicationError("A live admission belongs to another operation", non_retryable=True)
+                request = pending
+                admitted_at = self._omnigent_pending_admitted_at
+            elif admit_capacity_before_activity:
                 request = await self._admit_omnigent_capacity_before_execution(
                     request=request,
                     admission=admission,
@@ -4285,6 +4304,9 @@ class MoonMindAgentRun:
                 # Activity may control a live host, this workflow must not
                 # release the capacity that host runs on.
                 self._omnigent_capacity_state = "consumed"
+                if reconcile_admission:
+                    self._omnigent_pending_request = request
+                    self._omnigent_pending_admitted_at = admitted_at
             handoff_bound: dict[str, Any] = {}
             if admit_capacity_before_activity:
                 # The hand-off allowance is a queue bound, not extra execution
@@ -4306,6 +4328,7 @@ class MoonMindAgentRun:
                 # runs single-shot here instead of receiving a fresh
                 # StartToClose from a server-side retry.
                 routed_overrides["retry_policy"] = retry_policy
+            activity_returned = False
             try:
                 result_payload = await self._execute_routed_activity(
                     act_name,
@@ -4336,16 +4359,19 @@ class MoonMindAgentRun:
                         else ActivityCancellationType.TRY_CANCEL
                     ),
                 )
+                activity_returned = True
             finally:
-                # The Activity owns host, session, credential, and workspace
-                # cleanup, and it has completed that cleanup by the time it
-                # returns or raises. Provider capacity is therefore released
-                # last, by its owner (invariant 10).
-                if admit_capacity_before_activity:
+                # A heartbeat timeout or worker loss is not a cleanup receipt.
+                # Keep the admitted request and lease while reconciliation may
+                # find a live session; the runtime's existing binding/turn fence
+                # owns reattachment. Only a completed Activity can release here.
+                if admit_capacity_before_activity and (activity_returned or not reconcile_admission):
                     self._omnigent_capacity_state = "granted"
                     await self._release_omnigent_provider_capacity(
                         request=request
                     )
+                    self._omnigent_pending_request = None
+                    self._omnigent_pending_admitted_at = None
             requeue_reason = (
                 self._omnigent_capacity_requeue_reason(result_payload)
                 if admit_capacity_before_activity

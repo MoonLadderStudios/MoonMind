@@ -62,6 +62,8 @@ async def test_managed_codex_checkpoint_cold_resume_uses_only_durable_state(
     source_run_root = tmp_path / "live-source"
     source_root = source_run_root / "repo"
     subprocess.run(["git", "clone", "-q", str(origin), str(source_root)], check=True)
+    (source_root / "tracked.txt").write_text("staged version\n", encoding="utf-8")
+    _git("add", "tracked.txt", cwd=source_root)
     (source_root / "tracked.txt").write_text("changed\n", encoding="utf-8")
     (source_root / "deleted.txt").unlink()
     (source_root / "binary.bin").write_bytes(b"\x00\xff\x10")
@@ -219,6 +221,7 @@ async def test_managed_codex_checkpoint_cold_resume_uses_only_durable_state(
     }
     destination = tmp_path / "destination-store" / "destination-agent-run" / "repo"
     assert (destination / "tracked.txt").read_text(encoding="utf-8") == "changed\n"
+    assert _git("show", ":tracked.txt", cwd=destination) == "staged version"
     assert not (destination / "deleted.txt").exists()
     assert (destination / "binary.bin").read_bytes() == b"\x00\xff\x10"
     assert (destination / "run.sh").stat().st_mode & 0o111

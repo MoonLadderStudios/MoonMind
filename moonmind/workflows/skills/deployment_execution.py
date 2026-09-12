@@ -30,7 +30,6 @@ DEPLOYMENT_UPDATE_MODES = frozenset({"changed_services", "force_recreate"})
 DEPLOYMENT_UPDATE_STACKS = frozenset({"moonmind"})
 DEPLOYMENT_FINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "PARTIALLY_VERIFIED"})
 DEPLOYMENT_ONE_SHOT_SERVICES = frozenset({"init-db"})
-FILE_LOCK_STALE_AFTER_SECONDS = 6 * 60 * 60
 _REDACTED = "[REDACTED]"
 _STACK_PATH_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _DOCKER_DESKTOP_HOST_MOUNT_ROOT = PurePosixPath("/run/desktop/mnt/host")
@@ -175,52 +174,61 @@ class DeploymentUpdateLockLease:
 
 @dataclass(frozen=True, slots=True)
 class FileDeploymentUpdateLockManager:
-    """Atomic per-stack lock manager backed by an allowlisted filesystem path."""
+    """Kernel-owned lock shared by every container controlling this stack.
+
+    Process IDs and elapsed time are not ownership evidence across containers.
+    The stable inode remains in place; process exit releases the kernel lease.
+    """
 
     lock_dir: str
 
     async def acquire(self, stack: str) -> "FileDeploymentUpdateLockLease":
+        import fcntl
         normalized = _validate_stack_path_component(stack)
         lock_path = Path(self.lock_dir).expanduser() / f"{normalized}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("a+")
         try:
-            await asyncio.to_thread(_create_lock_file, lock_path, normalized)
-        except FileExistsError as exc:
-            recovered = await asyncio.to_thread(
-                _recover_stale_lock_file,
-                lock_path,
-                normalized,
-            )
-            if recovered:
-                try:
-                    await asyncio.to_thread(_create_lock_file, lock_path, normalized)
-                except FileExistsError:
-                    pass
-                else:
-                    return FileDeploymentUpdateLockLease(lock_path)
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            handle.close()
             raise ToolFailure(
                 error_code="DEPLOYMENT_LOCKED",
-                message=(
-                    "Deployment update for stack "
-                    f"'{normalized}' is already running."
-                ),
-                retryable=False,
-                details={
-                    "stack": normalized,
-                    "lockPath": str(lock_path),
-                    "failureClass": "deployment_lock_unavailable",
-                },
+                message=f"Deployment update for stack '{normalized}' is already running.",
+                retryable=True,
+                details={"stack": normalized, "failureClass": "deployment_lock_unavailable"},
             ) from exc
-        return FileDeploymentUpdateLockLease(lock_path)
+        handle.seek(0)
+        previous = handle.read()
+        if previous:
+            try:
+                compatible = json.loads(previous).get("contract") == "moonmind.deployment-kernel-lock.v1"
+            except (ValueError, AttributeError):
+                compatible = False
+            if not compatible:
+                handle.close()
+                raise ToolFailure(
+                    error_code="DEPLOYMENT_LOCKED",
+                    message="A legacy deployment lock remains; its original controller must release ownership before cutover.",
+                    retryable=True,
+                    details={"failureClass": "legacy_deployment_owner"},
+                )
+        handle.seek(0)
+        handle.truncate()
+        handle.write(json.dumps({"contract": "moonmind.deployment-kernel-lock.v1", "stack": normalized}))
+        handle.flush()
+        os.fsync(handle.fileno())
+        return FileDeploymentUpdateLockLease(handle)
 
 
 @dataclass(frozen=True, slots=True)
 class FileDeploymentUpdateLockLease:
-    lock_path: Path
+    handle: Any
 
     async def release(self) -> None:
-        await asyncio.to_thread(_unlink_lock_file, self.lock_path)
+        self.handle.close()
 
-    async def __aenter__(self) -> "FileDeploymentUpdateLockLease":
+    async def __aenter__(self):
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
@@ -494,6 +502,10 @@ class HostDockerComposeRunner:
     env_file: str | None = None
     excluded_services: tuple[str, ...] = ()
 
+    # Resolved deployment-owned overrides accompany the immutable base even
+    # when its path changes for a candidate or retained release.
+    override_files: tuple[str, ...] = ()
+
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         services = await self._run_compose_json(("ps", "--format", "json"))
         images = await self._run_compose_json(("images", "--format", "json"))
@@ -563,6 +575,14 @@ class HostDockerComposeRunner:
         services = await self._run_compose_json(("ps", "--format", "json"))
         repository, reference = _split_requested_image(requested_image)
         excluded_services = _normalized_service_names(self.excluded_services)
+        # `compose images` includes stopped and one-off containers, including
+        # the deliberately retained old release. Join its actual image IDs to
+        # the normal running service inventory before deciding convergence.
+        live_containers = {
+            str(service.get("Name") or ""): str(service.get("Service") or "")
+            for service in services
+            if isinstance(service, Mapping) and service.get("State") == "running"
+        }
         matched_images = []
         for image in images:
             if not isinstance(image, Mapping):
@@ -572,15 +592,12 @@ class HostDockerComposeRunner:
             ).strip()
             if image_repository != repository:
                 continue
-            service_name = str(
-                image.get("Service")
-                or image.get("Name")
-                or image.get("Container")
-                or ""
-            ).strip()
+            service_name = live_containers.get(str(image.get("ContainerName") or ""))
+            if not service_name:
+                continue
             if _service_is_excluded(service_name, excluded_services):
                 continue
-            matched_images.append(image)
+            matched_images.append({**image, "Service": service_name})
         mismatches: list[dict[str, Any]] = []
         updated_services: list[str] = []
         for image in matched_images:
@@ -598,7 +615,7 @@ class HostDockerComposeRunner:
             tag = str(image.get("Tag") or image.get("tag") or "").strip()
             if service_name:
                 updated_services.append(service_name)
-            if target_id and image_id and image_id != target_id:
+            if not target_id or not image_id or image_id != target_id:
                 mismatches.append(
                     {
                         "service": service_name or None,
@@ -714,10 +731,20 @@ class HostDockerComposeRunner:
             "-f",
             str(compose_file),
         ]
-        if include_env_file and self.env_file:
-            env_file = Path(self.env_file).expanduser()
-            if env_file.exists():
-                command.extend(["--env-file", str(env_file)])
+        if compose_file == self._compose_file_path():
+            # A Windows rendered JSON file already includes these overrides.
+            for override in self.override_files:
+                command.extend(["-f", override])
+        if include_env_file:
+            # --env-file replaces Compose's implicit .env loading. Include the
+            # deployment-owned configuration explicitly before the image-only
+            # desired-state overlay, or unrelated auth/network values disappear.
+            environment_files = [local_dir / ".env"]
+            if self.env_file:
+                environment_files.append(Path(self.env_file).expanduser())
+            for env_file in dict.fromkeys(environment_files):
+                if env_file.exists():
+                    command.extend(["--env-file", str(env_file)])
         return command
 
     def _compose_command(
@@ -1322,6 +1349,11 @@ class DeploymentUpdateExecutor:
         context: Mapping[str, Any] | None = None,
     ) -> ToolResult:
         context = dict(context or {})
+        if (isinstance(self.runner, HostDockerComposeRunner)
+                and os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE")
+                and context.get("deployment_runner_mode") != "ephemeral_updater_container"):
+            from moonmind.workflows.skills.deployment_release import execute_detached
+            return await execute_detached(self, inputs, context)
         progress_events: list[dict[str, str]] = []
         _add_progress(progress_events, "QUEUED", "Deployment update queued.")
         _add_progress(
@@ -1455,11 +1487,19 @@ class DeploymentUpdateExecutor:
                 target_image = await self.runner.inspect_image(requested_image)
                 command_log["targetImage"] = _target_image_audit(target_image)
                 after_build_id = _target_image_build_id(target_image)
-                if not resolved_digest:
-                    resolved_digest = _resolved_digest_from_target_image(
-                        repository=str(parsed["image"]["repository"]),
-                        target_image=target_image,
+                observed_digest = _resolved_digest_from_target_image(
+                    repository=str(parsed["image"]["repository"]), target_image=target_image,
+                )
+                if not observed_digest or (resolved_digest and resolved_digest != observed_digest):
+                    raise ToolFailure(
+                        error_code="DEPLOYMENT_IMAGE_IDENTITY_UNVERIFIED",
+                        message="The pulled image does not verify the requested repository digest.",
+                        retryable=False,
+                        details={"failureClass": "image_identity_mismatch"},
                     )
+                resolved_digest = observed_digest
+                execution_image = f"{parsed['image']['repository']}@{resolved_digest}"
+                command_log["executionImage"] = execution_image
                 _ensure_runner_survives_update(
                     command_plan=service_command_plan,
                     before_state=before_state,
@@ -1481,7 +1521,6 @@ class DeploymentUpdateExecutor:
                     "createdAt": _utc_now(),
                     "sourceRunId": source_run_id,
                 }
-                await self.desired_state_store.persist(desired_payload)
 
                 if one_shot_services:
                     _add_progress(
@@ -1494,13 +1533,18 @@ class DeploymentUpdateExecutor:
                     one_shot_result = await self.runner.up(
                         stack=parsed["stack"],
                         command=tuple(one_shot_entry["command"]),
-                        requested_image=requested_image,
+                        requested_image=execution_image,
                     )
                     one_shot_entry["result"] = one_shot_result
                     _ensure_command_succeeded(
                         f"one-shot service {service_name}",
                         one_shot_result,
                     )
+
+                cohort = context.get("release_cohort")
+                if cohort is not None:
+                    command_log["releaseRouting"] = await cohort.qualify(execution_image)
+                await self.desired_state_store.persist(desired_payload)
 
                 _add_progress(
                     progress_events,
@@ -1510,7 +1554,7 @@ class DeploymentUpdateExecutor:
                 up_result = await self.runner.up(
                     stack=parsed["stack"],
                     command=service_command_plan.up_args,
-                    requested_image=requested_image,
+                    requested_image=execution_image,
                 )
                 command_log["up"]["result"] = up_result
                 _ensure_command_succeeded("up", up_result)
@@ -1532,7 +1576,7 @@ class DeploymentUpdateExecutor:
                 _add_progress(progress_events, "VERIFYING", "Verifying deployed state.")
                 verification = await self.runner.verify(
                     stack=parsed["stack"],
-                    requested_image=requested_image,
+                    requested_image=execution_image,
                     resolved_digest=resolved_digest,
                 )
                 final_status = _verification_final_status(verification)
@@ -2353,7 +2397,6 @@ def _resolved_digest_from_target_image(
     ):
         return None
     repository_prefix = f"{repository}@"
-    fallback: str | None = None
     for raw_digest in repo_digests:
         digest = str(raw_digest or "").strip()
         if "@sha256:" not in digest:
@@ -2363,8 +2406,7 @@ def _resolved_digest_from_target_image(
             continue
         if digest.startswith(repository_prefix):
             return digest_value
-        fallback = fallback or digest_value
-    return fallback
+    return None
 
 
 def _runner_already_uses_target_image(
@@ -2917,74 +2959,6 @@ def _atomic_write_bytes(
             temp_path.unlink()
 
 
-def _recover_stale_lock_file(lock_path: Path, stack: str) -> bool:
-    if not lock_path.exists():
-        return False
-    try:
-        payload = json.loads(lock_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return _unlink_lock_file_if_older_than_lease(lock_path)
-    if not isinstance(payload, Mapping):
-        return _unlink_lock_file_if_older_than_lease(lock_path)
-
-    lock_stack = str(payload.get("stack") or "").strip()
-    if lock_stack and lock_stack != stack:
-        return False
-
-    pid = _lock_file_pid(payload)
-    if pid is not None and not _pid_is_live(pid):
-        _unlink_lock_file(lock_path)
-        return True
-    if _lock_file_is_older_than_lease(payload):
-        _unlink_lock_file(lock_path)
-        return True
-    return False
-
-
-def _unlink_lock_file_if_older_than_lease(lock_path: Path) -> bool:
-    try:
-        age_seconds = datetime.now(UTC).timestamp() - lock_path.stat().st_mtime
-    except OSError:
-        return False
-    if age_seconds <= FILE_LOCK_STALE_AFTER_SECONDS:
-        return False
-    _unlink_lock_file(lock_path)
-    return True
-
-
-def _lock_file_pid(payload: Mapping[str, Any]) -> int | None:
-    try:
-        pid = int(str(payload.get("pid") or "").strip())
-    except ValueError:
-        return None
-    return pid if pid > 0 else None
-
-
-def _pid_is_live(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return True
-    return True
-
-
-def _lock_file_is_older_than_lease(payload: Mapping[str, Any]) -> bool:
-    created_at = str(payload.get("createdAt") or "").strip()
-    if not created_at:
-        return False
-    with contextlib.suppress(ValueError):
-        parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=UTC)
-        age_seconds = (datetime.now(UTC) - parsed.astimezone(UTC)).total_seconds()
-        return age_seconds > FILE_LOCK_STALE_AFTER_SECONDS
-    return False
-
-
 def _fsync_parent_directory(path: Path) -> None:
     if hasattr(os, "O_DIRECTORY"):
         with contextlib.suppress(OSError):
@@ -2993,33 +2967,6 @@ def _fsync_parent_directory(path: Path) -> None:
                 os.fsync(dir_fd)
             finally:
                 os.close(dir_fd)
-
-
-def _create_lock_file(lock_path: Path, stack: str) -> None:
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "stack": stack,
-        "pid": os.getpid(),
-        "createdAt": _utc_now(),
-    }
-    encoded = (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8")
-    fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        _fsync_parent_directory(lock_path)
-    except Exception:
-        with contextlib.suppress(FileNotFoundError):
-            lock_path.unlink()
-        raise
-
-
-def _unlink_lock_file(lock_path: Path) -> None:
-    with contextlib.suppress(FileNotFoundError):
-        lock_path.unlink()
-    _fsync_parent_directory(lock_path)
 
 
 def _write_desired_state_files(

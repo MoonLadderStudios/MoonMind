@@ -78,6 +78,17 @@ steps:
 
     If the recorded verdict is BLOCKED, stop without changing code and report the blocking evidence from the assessment.
 
+    Use the assessment requirements verification map to prepare test prerequisites
+    and reproduce the required production boundaries before editing. If historical
+    assessment rows lack executable checks, derive them from the original visible
+    issue requirements under the portable acceptance policy and persist the map in
+    subsequent evidence without overwriting the initial assessment. Preserve its
+    candidate subject, original scope, completionTarget, and prerequisite attempt
+    counts. Setup failures that can be repaired through authorized tools stay in
+    that bounded loop; only an actual missing capability or authority becomes a
+    handoff. Save completed code before retrying verification infrastructure, and
+    do not redo implementation when only evidence collection remains.
+
     If the recorded verdict is PARTIALLY_IMPLEMENTED, treat the assessment's unmet and partially-met requirements as a bounded implementation backlog. Finish only the remaining gaps. Do not redo work that is already satisfied and do not broaden scope.
 
     If the recorded verdict is NOT_IMPLEMENTED, implement the work described by {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} using the loaded issue preset brief as the authoritative implementation input.

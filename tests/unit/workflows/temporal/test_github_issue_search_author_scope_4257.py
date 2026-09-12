@@ -15,6 +15,8 @@ import httpx
 import pytest
 import yaml
 
+from tests.support.issue_claims import issue_claim_store  # noqa: F401
+
 from moonmind.workflows.adapters.github_service import GitHubService
 from moonmind.workflows.temporal import github_issue_search as search_module
 from moonmind.workflows.temporal.github_issue_search import resolve_issue
@@ -89,7 +91,11 @@ class _Client:
         if url == f"https://api.github.com/repos/{REPOSITORY}/issues":
             return _Response(list(plan.get("list_payload", [])))
         if url.startswith(f"https://api.github.com/repos/{REPOSITORY}/issues/"):
-            return _Response(dict(plan.get("detail_payload", {})))
+            if "detail_payload" in plan:
+                return _Response(dict(plan["detail_payload"]))
+            number = int(url.rsplit("/", 1)[1])
+            candidates = plan.get("list_payload", plan.get("search_payload", {}).get("items", []))
+            return _Response(next((dict(item) for item in candidates if item["number"] == number), {}))
         return _Response({}, status_code=404)
 
 
@@ -343,7 +349,8 @@ async def test_no_self_authored_match_never_broadens(http_plan: type[_Client]) -
     )
     assert number is None
     assert evidence["reasonCode"] == "no_eligible_self_authored_issue"
-    assert "No other author's" in evidence["error"]
+    assert evidence["disposition"] == "idle"
+    assert "No other author's" in evidence["summary"]
 
 
 def test_include_all_authors_parsing_is_strict() -> None:
@@ -403,8 +410,10 @@ async def test_loader_revalidates_fresh_detail_author(monkeypatch: pytest.Monkey
         },
         None,
     )
-    assert result.status == "FAILED"
-    assert result.outputs["reasonCode"] == "author_mismatch"
+    assert result.status == "COMPLETED"
+    assert result.completion_disposition == "idle"
+    assert result.outputs["reasonCode"] == "no_eligible_self_authored_issue"
+    assert not any("/comments" in url or "/labels" in url for url in requests)
     assert "trustedSource" not in result.outputs
 
 
@@ -697,7 +706,7 @@ async def test_completed_brief_carries_author_evidence_without_research(
         GitHubService,
         "list_issue_comments",
         AsyncMock(
-            return_value={"ok": False, "reasonCode": "denied", "summary": "denied"}
+            return_value={"ok": True, "comments": [], "complete": True}
         ),
     )
     monkeypatch.setattr(
@@ -804,3 +813,30 @@ async def test_identity_lookup_is_isolated_per_credential(
     again, failure = await service.get_authenticated_user(token="token-a")
     assert failure is None
     assert again == {"id": 111, "login": "search-user"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fresh_author", [SELF, OTHER, None])
+async def test_fresh_author_scope_precedes_durable_claim(http_plan, fresh_author):
+    http_plan.plan = {
+        "authenticated_user": {**SELF, "type": "user"},
+        "search_payload": {"incomplete_results": False, "items": [_candidate(60, SELF)]},
+        "detail_payload": _candidate(60, fresh_author),
+    }
+    reserve = AsyncMock(return_value=True)
+    number, evidence = await resolve_issue(
+        repository=REPOSITORY, query="dashboard", github_service=_Service(),
+        blockers_from_issue=_no_blockers, reserve_candidate=reserve,
+    )
+    if fresh_author == SELF:
+        assert number == 60
+        reserve.assert_awaited_once_with(60)
+    else:
+        assert number is None
+        reserve.assert_not_awaited()
+        if fresh_author is None:
+            assert evidence["reasonCode"] == "invalid_author_evidence"
+            assert "error" in evidence
+        else:
+            assert evidence["disposition"] == "idle"
+            assert evidence["searchEvidence"]["authorMismatchesSkipped"] == 1

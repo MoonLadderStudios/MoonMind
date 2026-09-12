@@ -197,6 +197,17 @@ steps:
     {{ inputs.constraints }}
 
     Completion target override: {{ inputs.completion_target_ref }} (empty resolves the remote default). Follow the portable Skill for source recovery, bounded assessment, and evidence. The initial verdict does not certify objective acceptance or landing.
+
+    During bounded inspection, persist a verification map for every visible
+    requirement: its stable id, owning production boundary, executable checks,
+    required capabilities, and expected terminal evidence. Preserve the candidate
+    subject, original scope, completionTarget, and prerequisite readiness, permitted
+    setup actions, and exact resume checks. Use at most two authorized setup attempts
+    per prerequisite and retain their diagnostics and attempt counts across retries.
+    Discover and attempt the repository or managed container verification path before
+    declaring tooling unavailable. Carry this map and its prerequisite ledger into
+    later implementation and verification evidence without overwriting the immutable
+    initial assessment or treating its verdict as objective acceptance or landing.
   skill:
     id: moonspec-assess
     args:

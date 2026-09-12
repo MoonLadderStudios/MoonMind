@@ -14,6 +14,7 @@ add-only to COMPLETED/attention (degraded) with the PR handoff comment.
 from __future__ import annotations
 
 import pytest
+from tests.support.issue_claims import issue_claim_store  # noqa: F401
 
 from moonmind.workflows.skills.tool_dispatcher import (
     ToolActivityDispatcher,
@@ -200,7 +201,5 @@ async def test_replay_with_pr_through_tool_activity_boundary(
     assert [op for op in service.operations if op[0] == "remove"] == []
     assert "comment" in result.outputs["appliedActions"]
     assert result.outputs["sideEffect"]["operation"] == "github.issue.update"
-    posted_bodies = [
-        str(kwargs.get("json") or "") for _url, kwargs in _LifecycleHttpClient.posts
-    ]
+    posted_bodies = [item["body"] for item in service.claim_comments]
     assert any("/pull/4210" in body for body in posted_bodies)

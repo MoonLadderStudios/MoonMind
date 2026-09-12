@@ -4321,8 +4321,10 @@ async def test_main_async_workflow_fleet(
 
     mock_worker_v2 = MagicMock()
     mock_worker_v2.run = AsyncMock()
+    mock_worker_v2.shutdown = AsyncMock()
     mock_worker_replay = MagicMock()
     mock_worker_replay.run = AsyncMock()
+    mock_worker_replay.shutdown = AsyncMock()
     mock_worker_cls.side_effect = [mock_worker_v2, mock_worker_replay]
 
     # Run
@@ -4376,9 +4378,11 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.github_issue_reconcile import (
         MoonMindGitHubIssueReconcileWorkflow,
     )
+    from moonmind.workflows.temporal.workflows.release_canary import ReleaseCanaryWorkflow, inspect_release_activity
 
     assert kwargs["workflows"] == (
         MoonMindUserWorkflow,
+        ReleaseCanaryWorkflow,
         MoonMindContainerJobWorkflow,
             MoonMindControlStopContinuationWorkflow,
         MoonMindProviderProfileManagerWorkflow,
@@ -4396,6 +4400,7 @@ async def test_main_async_workflow_fleet(
         MoonMindGitHubIssueReconcileWorkflow,
     )
     assert kwargs["activities"] == (
+        inspect_release_activity,
         resolve_adapter_metadata,
         get_activity_route,
         resolve_external_adapter,
@@ -4443,6 +4448,7 @@ async def test_main_async_activity_fleet(
     mock_worker = MagicMock()
     mock_worker_cls.return_value = mock_worker
     mock_worker.run = AsyncMock()
+    mock_worker.shutdown = AsyncMock()
 
     @activity.defn(name="test.handler")
     async def test_handler() -> None:
@@ -4459,7 +4465,8 @@ async def test_main_async_activity_fleet(
     kwargs = mock_worker_cls.call_args.kwargs
     assert kwargs["task_queue"] == "mm.activity.artifacts"
     assert kwargs["workflows"] == ()
-    assert kwargs["activities"] == (test_handler,)
+    from moonmind.workflows.temporal.workflows.release_canary import inspect_release_activity
+    assert kwargs["activities"] == (test_handler, inspect_release_activity)
     assert "deployment_config" not in kwargs
     assert "build_id" not in kwargs
     assert "use_worker_versioning" not in kwargs

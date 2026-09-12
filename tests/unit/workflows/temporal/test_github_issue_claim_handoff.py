@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 import json
 from pathlib import Path
 
@@ -34,8 +35,11 @@ from moonmind.workflows.temporal.artifacts import (
 )
 from moonmind.workflows.temporal.github_issue_attempts import (
     AttemptHandoff,
+    parse_attempt_comment,
     render_attempt_comment,
 )
+
+from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
 
 REPO = "MoonLadderStudios/MoonMind"
 FIXTURE = Path(__file__).parent / "fixtures/github_issue_claim_label_only.json"
@@ -54,7 +58,7 @@ async def journey(tmp_path, monkeypatch):
     state = {"comments": [], "writes": [], "read_error": False, "create_error": False}
 
     def serve(request):
-        path = request.url.path
+        path = request.url.path.casefold()
         if request.method == "GET":
             if path == "/user":
                 return httpx.Response(200, json={**issue["user"], "type": "User"})
@@ -62,7 +66,7 @@ async def journey(tmp_path, monkeypatch):
                 return httpx.Response(
                     503 if state["read_error"] else 200, json=state["comments"]
                 )
-            if path == f"/repos/{REPO}/issues":
+            if path == f"/repos/{REPO.casefold()}/issues":
                 return httpx.Response(200, json=[occupied, issue])
             if path == "/search/issues":
                 return httpx.Response(
@@ -70,7 +74,7 @@ async def journey(tmp_path, monkeypatch):
                 )
             if "/labels/" in path:
                 return httpx.Response(200, json={"name": path.rsplit("/", 1)[1]})
-            if path == f"/repos/{REPO}/issues/4271":
+            if path == f"/repos/{REPO.casefold()}/issues/4271":
                 return httpx.Response(200, json=issue)
         if request.method == "POST":
             body = json.loads(request.content)
@@ -107,10 +111,26 @@ async def journey(tmp_path, monkeypatch):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/artifacts.db")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+    sessions = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr(tools, "IssueClaimStore", lambda: IssueClaimStore(sessions))
+    # ActivityEnvironment supplies real native identity. Only Temporal's
+    # ancestry lookup is simulated at its service boundary (a root workflow).
+    from temporalio.api.workflowservice.v1 import DescribeWorkflowExecutionResponse
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.get_temporal_client",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                workflow_service=SimpleNamespace(
+                    describe_workflow_execution=AsyncMock(
+                        return_value=DescribeWorkflowExecutionResponse()
+                    )
+                )
+            )
+        ),
+    )
     try:
-        async with sessionmaker(
-            engine, class_=AsyncSession, expire_on_commit=False
-        )() as session:
+        async with sessions() as session:
             artifacts = TemporalArtifactService(
                 TemporalArtifactRepository(session),
                 store=LocalTemporalArtifactStore(tmp_path / "store"),
@@ -136,7 +156,7 @@ async def journey(tmp_path, monkeypatch):
             async def invoke(name, inputs):
                 # The worker-bound keyword shape persists the brief through the
                 # real artifact service; later steps receive only its ref.
-                return await environment.run(
+                result = await environment.run(
                     activities.mm_tool_execute,
                     invocation_payload={
                         "id": name,
@@ -146,6 +166,10 @@ async def journey(tmp_path, monkeypatch):
                     registry_snapshot=snapshot,
                     principal="fixture-owner",
                 )
+                state["receipt"] = await IssueClaimStore(sessions).active_for_issue(
+                    REPO, 4271
+                )
+                return result
 
             yield state, issue, invoke, fixture, artifacts
     finally:
@@ -176,8 +200,12 @@ async def test_default_search_claim_survives_assessment_and_blocker_handoffs(
     claim = loaded.outputs["admissionClaimExecuted"]
     assert claim["rereadOk"] and not claim["blocked"]
     assert len(state["comments"]) == 1
-    assert claim["attemptHandoff"]["workflowId"]
-    assert loaded.outputs["attemptId"] == claim["attemptId"]
+    receipt = state["receipt"]
+    assert receipt.confirmed
+    assert loaded.outputs["attemptId"] == receipt.attempt_id
+    assert (
+        parse_attempt_comment(receipt.comment_body).handoff.workflow_id == receipt.owner
+    )
     assert issue["labels"] == [{"name": "status: in-progress"}]
     _, persisted = await artifacts.read(
         artifact_id=loaded.outputs["briefArtifactRef"],
@@ -236,7 +264,7 @@ async def test_owned_label_never_bypasses_live_ownership_evidence(journey, damag
         {"repository": REPO, "issueSearch": ""},
     )
     assert loaded.status == "COMPLETED", loaded.outputs
-    handoff = copy.deepcopy(loaded.outputs["admissionClaimExecuted"]["attemptHandoff"])
+    handoff = parse_attempt_comment(state["receipt"].comment_body).handoff.to_dict()
     if damage == "missing":
         state["comments"].clear()
     elif damage == "untrusted":
@@ -335,7 +363,9 @@ async def test_another_execution_cannot_adopt_the_durable_brief(journey, monkeyp
     monkeypatch.setattr(
         "temporalio.activity.info",
         lambda: SimpleNamespace(
-            workflow_id="another-workflow", workflow_run_id="another-run"
+            namespace="default",
+            workflow_id="another-workflow",
+            workflow_run_id="another-run",
         ),
     )
     before = copy.deepcopy(state["writes"])

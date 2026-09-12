@@ -43,6 +43,8 @@ async def main():
     else:
         bindings = build_worker_activity_bindings(fleet=topology.fleet)
         activities = [b.handler for b in bindings]
+        from moonmind.workflows.temporal.workflows.release_canary import inspect_release_activity
+        activities.append(inspect_release_activity)
 
     spec = build_worker_spec(
         topology=topology,
@@ -55,6 +57,8 @@ async def main():
         "max_concurrent_activities": topology.concurrency_limit or 100,
         "workflow_runner": UnsandboxedWorkflowRunner(),
     }
+    from moonmind.workflows.temporal.worker_lifecycle import WORKER_DRAIN_TIMEOUT, serve_workers
+    worker_kwargs["graceful_shutdown_timeout"] = WORKER_DRAIN_TIMEOUT
     if spec.versioning_enabled:
         worker_kwargs["deployment_config"] = WorkerDeploymentConfig(
             version=WorkerDeploymentVersion(
@@ -80,9 +84,10 @@ async def main():
         ", ".join(topology.task_queues),
     )
     logger.info("Executable worker specification: %s", spec.readiness_payload())
-    async with asyncio.TaskGroup() as tg:
-        for worker in workers:
-            tg.create_task(worker.run())
+    async def ready():
+        from moonmind.workflows.temporal.release_routing import bootstrap_version_routing
+        await bootstrap_version_routing(client, spec)
+    await serve_workers(workers, ready=ready)
 
 
 if __name__ == "__main__":
