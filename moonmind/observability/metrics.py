@@ -24,6 +24,7 @@ REGISTRY = (
     MetricDefinition("moonmind_api_request_duration_seconds", "histogram", "seconds", ("outcome",), "api", ("overview", "api-slo")),
     MetricDefinition("moonmind_workflow_started", "counter", "workflows", ("outcome",), "workflows", ("overview", "workflow-slo")),
     MetricDefinition("moonmind_workflow_duration_seconds", "histogram", "seconds", ("outcome",), "workflows", ("workflow", "workflow-slo")),
+    MetricDefinition("moonmind_duplicate_effect_observations", "counter", "observations", ("component",), "workflows", ("workflow", "reliability")),
     MetricDefinition("moonmind_task_schedule_to_start_seconds", "histogram", "seconds", ("component",), "temporal", ("temporal", "queue-slo")),
     MetricDefinition("moonmind_provider_requests", "counter", "requests", ("outcome", "runtime_family"), "profiles", ("providers", "provider-slo")),
     MetricDefinition("moonmind_omnigent_session_start_seconds", "histogram", "seconds", ("outcome",), "runtime", ("omnigent", "session-slo")),
@@ -51,3 +52,17 @@ def normalize_labels(metric_name: str, labels: Mapping[str, str]) -> dict[str, s
         allowed = BOUNDED_VALUES[key]
         result[key] = value if value in allowed else "other"
     return result
+
+
+def increment_counter(metric_name: str, *, labels: Mapping[str, str]) -> None:
+    """Activity-owned, bounded telemetry; export never owns correctness."""
+    try:
+        from opentelemetry import metrics
+        metric = definition(metric_name)
+        if metric.kind != "counter":
+            raise ValueError("Metric is not a counter")
+        attributes = normalize_labels(metric_name, labels)
+        metrics.get_meter("moonmind").create_counter(metric_name, unit=metric.unit).add(1, attributes)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).debug("Metric observation failed", exc_info=True)

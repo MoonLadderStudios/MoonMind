@@ -63,6 +63,7 @@ class MoonMindManagedRuntimeWorkspaceCleanupWorkflow:
         maintenance_errors: list[str] = []
         docker_result: dict[str, Any] = {}
         artifact_result: dict[str, Any] = {}
+        release_result: dict[str, Any] = {}
 
         try:
             result = await self._execute_activity(
@@ -71,14 +72,18 @@ class MoonMindManagedRuntimeWorkspaceCleanupWorkflow:
                 summary="Clean retained managed runtime files",
             )
         except Exception:
-            workflow.set_current_details("Managed runtime file cleanup failed")
-            workflow.upsert_search_attributes(
-                {
-                    "SessionStatus": ["failed"],
-                    "IsDegraded": [True],
-                }
-            )
-            raise
+            if scheduled_maintenance and workflow.patched("independent-storage-maintenance-v1"):
+                result = {}
+                maintenance_errors.append("Managed runtime file cleanup failed")
+            else:
+                workflow.set_current_details("Managed runtime file cleanup failed")
+                workflow.upsert_search_attributes(
+                    {
+                        "SessionStatus": ["failed"],
+                        "IsDegraded": [True],
+                    }
+                )
+                raise
 
         if scheduled_maintenance:
             # Keep the pre-existing workspace Activity first so an in-flight
@@ -108,13 +113,24 @@ class MoonMindManagedRuntimeWorkspaceCleanupWorkflow:
             except ActivityError:
                 maintenance_errors.append("Artifact lifecycle sweep failed")
 
+        if scheduled_maintenance and workflow.patched("release-maintenance-v1"):
+            try:
+                raw_release_result = await self._execute_activity(
+                    "release.reconcile", {}, summary="Resume release owners and retire drained worker versions",
+                )
+                if isinstance(raw_release_result, Mapping):
+                    release_result = dict(raw_release_result)
+            except ActivityError:
+                maintenance_errors.append("Release maintenance failed")
+
         normalized = dict(result or {})
         if scheduled_maintenance:
             normalized["dockerStorage"] = docker_result
             normalized["artifactLifecycle"] = artifact_result
             normalized["maintenanceErrors"] = maintenance_errors
+            normalized["releaseMaintenance"] = release_result
         degraded = bool(normalized.get("errors")) or bool(maintenance_errors)
-        degraded = degraded or bool(docker_result.get("errors"))
+        degraded = degraded or bool(docker_result.get("errors")) or bool(release_result.get("errors"))
         workflow.set_current_details("Deployment storage maintenance complete")
         workflow.upsert_search_attributes(
             {

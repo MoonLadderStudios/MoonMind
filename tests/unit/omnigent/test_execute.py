@@ -3167,9 +3167,11 @@ async def test_run_omnigent_execution_preserves_session_after_transport_error(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("revoked", [False, True])
 async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
     monkeypatch,
     tmp_path,
+    revoked,
 ) -> None:
     calls: list[tuple[str, object]] = []
     httpx_clients: list[object] = []
@@ -3246,6 +3248,7 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
 
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.activity_ownership.delivery_was_revoked", lambda: revoked)
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
     monkeypatch.setattr("moonmind.omnigent.execute.asyncio.sleep", cancel_immediately)
     monkeypatch.setattr(
@@ -3271,8 +3274,13 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
                 },
             ),
             artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+            run_store=_RecordingBridgeStore() if revoked else None,
         )
 
+    if revoked:
+        assert not any(name in {"interrupt", "stop_session", "delete_session", "list_changed_files"} for name, _ in calls)
+        assert len(httpx_clients) == 1
+        return
     assert ("interrupt", "session-1") in calls
     assert ("stop_session", "session-1") in calls
     assert ("list_changed_files", "session-1") in calls

@@ -2743,6 +2743,22 @@ class GitHubService:
                     "summary": f"Issue close result unknown: {exc.__class__.__name__}.",
                 }
 
+    async def issue_claim_actor(self, *, repo: str) -> dict[str, Any]:
+        """Resolve the authenticated poster before persisting an issue claim."""
+        token, error = await self.resolve_github_token(repo=repo)
+        if not token:
+            return {"ok": False, "reasonCode": "auth_unavailable", "summary": error}
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.get("https://api.github.com/user", headers=self._github_headers(token))
+                response.raise_for_status()
+                actor = response.json()
+            except (httpx.HTTPError, ValueError):
+                return {"ok": False, "reasonCode": "claim_actor_unavailable"}
+        if not isinstance(actor, dict) or not actor.get("id"):
+            return {"ok": False, "reasonCode": "claim_actor_unavailable"}
+        return {"ok": True, "actorId": str(actor["id"])}
+
     async def list_issue_comments(
         self,
         *,

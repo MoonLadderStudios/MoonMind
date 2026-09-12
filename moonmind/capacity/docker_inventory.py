@@ -104,6 +104,10 @@ OWNED_LAUNCH_CLASSES: tuple[OwnedLaunchClass, ...] = (
     OwnedLaunchClass("session_docker_sidecar", "moonmind.kind=session-docker-sidecar"),
     OwnedLaunchClass("workload", "moonmind.kind=workload"),
     OwnedLaunchClass("bounded_service", "moonmind.kind=bounded_service"),
+    # A deployment handover is control-plane recovery, not a new workload
+    # admission. Observe its inherited Compose resource limits while both
+    # releases coexist so these containers cannot read as free capacity.
+    OwnedLaunchClass("release_control_plane", "moonmind.release.owner"),
 )
 
 #: The owner labels every MoonMind-managed launch carries.

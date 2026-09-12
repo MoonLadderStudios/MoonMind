@@ -20,6 +20,7 @@ from uuid import UUID
 
 import httpx
 import pytest
+from tests.support.issue_claims import issue_claim_store  # noqa: F401
 import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -2323,6 +2324,9 @@ async def test_batch_github_fanout_preserves_checkout_authority_replay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Replay mm:f724a9b2 through child authoring and workspace checkout."""
+    # Git ref validation must run outside the Windows host's linked-worktree
+    # metadata when the fixture is mounted into its Linux test container.
+    monkeypatch.chdir(tmp_path)
     from api_service.api.routers.executions import (
         _normalize_submitted_repository,
         _validate_repository_submission_compatibility,
@@ -5526,7 +5530,15 @@ async def test_sandbox_checkpoint_git_trusts_resolved_omnigent_workspace(
     expected = load_replay(replay_id, "expected-outcome.json")
     workspace = tmp_path / "temporal_sandbox" / "workspace" / "repo"
     workspace.mkdir(parents=True)
-    (workspace / ".git").mkdir()
+    subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+    subprocess.run(
+        ["git", "-C", str(workspace), "-c", "user.name=Fixture", "-c",
+         "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "base"],
+        check=True,
+    )
+    head = subprocess.check_output(
+        ["git", "-C", str(workspace), "rev-parse", "HEAD"], text=True,
+    ).strip()
     resolved_workspace = str(workspace.resolve())
     safe_prefix = [
         "git",
@@ -5536,18 +5548,14 @@ async def test_sandbox_checkpoint_git_trusts_resolved_omnigent_workspace(
         resolved_workspace,
     ]
     commands: list[list[str]] = []
+    run_command = activity_runtime_module._run_command
 
     async def enforce_safe_directory(command, **_kwargs):
         normalized = [str(part) for part in command]
         commands.append(normalized)
         if normalized[: len(safe_prefix)] != safe_prefix:
             raise RuntimeError("fatal: detected dubious ownership")
-        operation = normalized[len(safe_prefix) :]
-        if operation[:2] == ["rev-parse", "HEAD"]:
-            return activity_runtime_module.CmdRes(b"abc123\n")
-        if operation[0] == "status":
-            return activity_runtime_module.CmdRes(b"")
-        raise AssertionError(f"unexpected git command: {operation}")
+        return await run_command(command, **_kwargs)
 
     monkeypatch.setattr(
         activity_runtime_module, "_run_command", enforce_safe_directory
@@ -5569,12 +5577,13 @@ async def test_sandbox_checkpoint_git_trusts_resolved_omnigent_workspace(
             "workspacePath": resolved_workspace,
             "artifactNamespace": "checkpoint",
             "idempotencyKey": "omnigent-sandbox-checkpoint-git-ownership",
-            "baseCommit": "abc123",
+            "baseCommit": head,
         }
     )
 
     assert result["status"] == expected["checkpointStatus"]
-    assert len(commands) == expected["gitCommandCount"]
+    assert sum(cmd[len(safe_prefix)] == "rev-parse" for cmd in commands) == expected["gitCommandCount"]
+    assert any(cmd[len(safe_prefix)] == "ls-files" for cmd in commands)
     assert all(command[: len(safe_prefix)] == safe_prefix for command in commands)
 
 
@@ -6445,13 +6454,13 @@ async def test_checkpoint_finalization_fault_is_retryable(
     original_capture = activities._capture_workspace_evidence
     fault = FinalizationFaultInjector()
 
-    async def fail_once(model: object, workspace: Path):
+    async def fail_once(model: object, workspace: Path, **kwargs):
         # The retried finalization path must reuse the durable primary execution
         # result, never re-run the agent. If a regression re-executed the agent on
         # each finalization attempt, ``agent_execution_calls`` would exceed one.
         execution = await execute_agent_once()
         assert execution["status"] == "completed"
-        return await fault.invoke(original_capture, model, workspace)
+        return await fault.invoke(original_capture, model, workspace, **kwargs)
 
     monkeypatch.setattr(activities, "_capture_workspace_evidence", fail_once)
     payload = {

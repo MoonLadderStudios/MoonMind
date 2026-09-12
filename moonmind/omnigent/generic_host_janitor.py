@@ -19,6 +19,21 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+async def temporal_owner_has_closed(binding):
+    """Stale heartbeats are not authority to steal a paused/retrying run."""
+    from temporalio.client import WorkflowExecutionStatus
+    from moonmind.config.settings import settings
+    from moonmind.workflows.temporal.client import get_temporal_client
+    owner = (binding.phaseResults or {}).get("owner", {})
+    if not all(owner.get(key) for key in ("namespace", "workflowId", "runId")):
+        return None
+    client = await get_temporal_client(settings.temporal.address, owner["namespace"])
+    execution = await client.get_workflow_handle(owner["workflowId"], run_id=owner["runId"]).describe()
+    if execution.status == WorkflowExecutionStatus.CONTINUED_AS_NEW:
+        return None  # The successor, rather than this stale binding, owns recovery.
+    return execution.status not in (None, WorkflowExecutionStatus.RUNNING)
+
+
 class GenericOmnigentHostJanitor:
     def __init__(
         self,
@@ -30,6 +45,7 @@ class GenericOmnigentHostJanitor:
         machine_capacity: Any | None = None,
         machine_backend_ref: str | None = None,
         container_inventory: Any | None = None,
+        owner_has_closed: Any = temporal_owner_has_closed,
     ) -> None:
         self._host_leases = host_leases
         self._runtime_bindings = runtime_bindings
@@ -42,6 +58,7 @@ class GenericOmnigentHostJanitor:
         # "Nothing is running" and "I could not look" must never be the same
         # value here.
         self._container_inventory = container_inventory
+        self._owner_has_closed = owner_has_closed
 
     async def _reconcile_machine_capacity(self) -> dict[str, Any] | None:
         if (
@@ -77,6 +94,9 @@ class GenericOmnigentHostJanitor:
         examined_bindings = {binding.bindingId for binding in bindings}
         for binding in bindings:
             try:
+                if await self._owner_has_closed(binding) is not True:
+                    conflicts += 1
+                    continue
                 await self._realizer.reconcile(
                     binding.executionPlanRef, binding.bindingId
                 )
@@ -106,6 +126,9 @@ class GenericOmnigentHostJanitor:
                 )
                 continue
             try:
+                if await self._owner_has_closed(binding) is not True:
+                    conflicts += 1
+                    continue
                 await self._realizer.reconcile(
                     binding.executionPlanRef, binding.bindingId
                 )

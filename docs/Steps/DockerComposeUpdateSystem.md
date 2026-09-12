@@ -2,7 +2,7 @@
 
 Status: Desired State  
 Owners: MoonMind Engineering  
-Last Updated: 2026-04-25  
+Last Updated: 2026-09-12
 Related: `docs/UI/SettingsTab.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Temporal/TemporalArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`
 
 ---
@@ -20,7 +20,7 @@ docker compose pull
 docker compose up -d --remove-orphans --wait
 ```
 
-The system uses a dedicated deployment-control worker or an ephemeral updater container to run the Docker commands. The deployment-control worker is excluded from the Compose update target list so the activity runner is not recreated while it is applying and verifying the stack update. That runner is an implementation detail. The operator-facing control is the **target MoonMind image** to deploy.
+The existing deployment-control worker submits one durable, ephemeral updater that executes from the selected immutable image. The updater can replace the service that submitted it and survives that replacement. All seven normal worker fleets use the same release identity. The operator-facing control is the **target MoonMind image** to deploy.
 
 ---
 
@@ -73,9 +73,9 @@ ghcr.io/moonladderstudios/moonmind@sha256:...
 
 ### Updater runner image
 
-The internal image used to execute Docker client commands, such as `docker:29-cli` or a MoonMind-maintained updater image.
+The same allowlisted, digest-pinned MoonMind image selected for the release. It supplies the portable release controller, Docker client, and image-owned Compose definition.
 
-The updater runner image is not normally user-selectable. It is controlled by deployment configuration because it has access to privileged host Docker capabilities.
+The updater has no independent image override. Deployment policy controls its repository and privileged Docker access.
 
 ### Deployment update run
 
@@ -126,12 +126,12 @@ The following rules are fixed.
 
 1. Deployment updates are executable MoonMind tool invocations.
 2. The UI selects the **target deployment image**, not the privileged updater runner image.
-3. The updater runner image is deployment configuration and must be allowlisted.
+3. The updater uses the target image digest, subject to the deployment repository allowlist.
 4. Compose stack targets are allowlisted by name and path.
 5. The update tool must not accept arbitrary shell snippets.
 6. The target image repository must be allowlisted.
-7. Tags are allowed, but the resolved digest must be recorded when available.
-8. Digest-pinned image references are preferred for reproducible production updates.
+7. Tags are allowed as selectors; the repository digest and source identity must be verified before launch.
+8. Every release executes from that pinned image, including application code, migrations, Compose and the controller.
 9. Only one update may run per Compose stack at a time.
 10. Before/after service state must be captured.
 11. Command output and verification output must be written to artifacts.
@@ -558,7 +558,7 @@ environment variables.
 
 ## 9.3 Mutable tag rule
 
-When the requested reference is a mutable tag, the system should resolve and record the digest before or during the update when the registry makes that possible.
+Before mutation, the system resolves every requested tag to an immutable digest and verifies its release identity. Missing or ambiguous digest or source identity fails admission with actionable diagnostics.
 
 The UI may allow mutable tags, but audit records must distinguish:
 
@@ -625,16 +625,20 @@ docker compose pull --policy always --ignore-buildable
 
 The exact flags are implementation-specific and policy-controlled. Pull output is captured in the command log artifact.
 
-After the target image can be inspected, the privileged worker checks whether
-applying the update would recreate the worker container that is executing the
-operation. If the update is unsafe for the current runner, the run fails before
-mutating persisted desired deployment state.
+The submitting worker verifies the image and records immutable inputs, owner,
+image ID and a fixed deadline. It launches or reattaches to the named updater
+using the existing deployment service's mounts, credentials and Docker boundary.
+A lost launch response requires a daemon ownership check before retry. An
+unreadable daemon never proves that the updater is absent. Legacy direct runners
+still reject self-replacement; production release jobs use the detached owner.
 
 ## 10.5 Persist desired image
 
-The tool writes the desired image reference into the allowlisted deployment env
-file or equivalent deployment-state store after runner integrity checks pass and
-before Compose commands resolve image variables for service recreation.
+After candidate qualification and routing promotion, the tool writes the desired
+image reference into the allowlisted deployment env file before normal service
+recreation. Candidate startup alone never changes desired state. Compose loads
+the operator's `.env` before the image-only desired-state overlay and retains
+the deployment-owned override. Explicit image selection wins for this job.
 
 The tool must not edit arbitrary files selected by the caller. If service
 recreation or verification fails after desired state persistence, the run records
@@ -688,6 +692,11 @@ The workflow releases the deployment lock and writes a structured result contain
 
 ## 10.10 Bind-mounted checkouts: a host `git pull` alone is not a deployment
 
+The default production Compose deployment does not overlay application source.
+Its immutable image provides release identity. Source mounts are explicit
+development configuration in `docker-compose.development.yaml`; the following
+freshness rules apply to those development overlays.
+
 Development Compose deployments bind-mount `./moonmind:/app/moonmind:ro` (and
 similar source mounts) into long-lived worker containers. A host `git pull`
 rewrites the files on disk while the running Python processes keep the old
@@ -714,8 +723,7 @@ the checkout before new runs are admitted:
    recreating services, restarts idle stale workers immediately, drains busy
    ones (bounded graceful restart — never killed mid-activity), and fails the
    update loudly with `reasonCode=stale_code` when a stale worker cannot be
-   restarted (for example the excluded deployment-control runner itself, which
-   must be recreated separately) or when a restarted worker stays
+   restarted or when a restarted worker stays
    unreachable/`unknown` after bounded rechecks (absence of evidence is not
    proof of freshness). Bare readiness URLs take their hostname as the worker
    name so restart planning stays addressable. New `MoonMind.UserWorkflow`
@@ -732,7 +740,8 @@ the checkout before new runs are admitted:
 
 ## 11. Updater runner execution model
 
-MoonMind supports two implementation modes.
+Production releases use one durable detached job on the existing deployment
+substrate. Host and workflow callers execute the same image-owned controller.
 
 ## 11.1 Privileged deployment-control worker
 
@@ -740,16 +749,15 @@ A trusted worker with `deployment_control` and `docker_admin` capabilities execu
 
 This mode is simple when the worker already runs on the host that owns the Docker daemon.
 
-The production Compose deployment should prefer this mode until the ephemeral
-updater container has an equivalent implementation. The worker is configured
-with:
+The worker supplies submission, observation and maintenance for the detached
+job. It is configured with:
 
 - `MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR` for the read-only Compose checkout
 - `MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE` for the allowlisted env file
 - `MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE` for the audit sidecar
 - `MOONMIND_DEPLOYMENT_LOCK_DIR` for durable per-stack lock files
-- `MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES` for runner services that must not be
-  targeted by `docker compose up`
+- `MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES` for explicit specialized maintenance;
+  a coherent release rejects exclusion of the deployment-control worker
 
 On Windows Docker Desktop, the Linux worker resolves Compose files through its
 local checkout mount and maps checkout bind sources into the daemon's
@@ -761,29 +769,37 @@ namespace.
 
 ## 11.2 Ephemeral updater container
 
-A privileged worker starts a one-shot updater container that mounts:
+A deployment service one-off runs `python -m
+moonmind.workflows.skills.deployment_release` from the selected image. Its
+request, attempts, routing decision, primary result and cleanup receipts live
+under the deployment-owned `release-jobs` directory. Kernel locks serialize
+stack changes and job ownership; PID age cannot transfer authority across
+container namespaces. The updater has a two-hour cumulative deadline and at
+most three attempts, preserved across restarts.
 
-- the host Docker socket
-- the allowlisted Compose project directory
-- any required deployment env file
+Candidate workers first register all workflow and Activity queues. A stable,
+pinned canary verifies their image identity through each queue. The controller
+also qualifies a candidate API's health, dashboard, assets and read-only API.
+Temporal's compare-and-set routing update promotes only that candidate. A lost
+response reuses the same canary run and verifies the server's current decision.
 
-Representative command shape:
+Before promotion, the controller retains pollers from the exact previous image.
+Pinned work remains owned by that version after normal Compose services change.
+The existing maintenance schedule retires those temporary pollers only when
+Temporal reports the version drained. Inactive private candidates require a
+terminal release owner, closed canary and server-confirmed inactive status.
+Unknown drainage or ownership keeps the cohort. Candidate pollers may retire
+after the normal fleet verifies the same image. These containers exist only for
+bounded release work and drainage; they add no idle deployment service.
 
-```bash
-docker run --rm \
-  --name moonmind-updater \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$MOONMIND_DIR:$MOONMIND_DIR" \
-  -w "$MOONMIND_DIR" \
-  docker:29-cli \
-  sh -euc 'docker compose pull --policy always --ignore-buildable && docker compose up -d --remove-orphans --wait'
-```
-
-The updater container is ephemeral and terminates after the update and verification steps complete.
+The primary result is persisted before auxiliary cleanup. Failed cleanup records
+its pending owner for `release.reconcile` without replacing verified deployment
+success. Default scheduled maintenance continues release reconciliation even
+when another storage maintenance Activity fails.
 
 ## 11.3 Runner image policy
 
-The updater runner image must be controlled by deployment configuration.
+The updater must use the verified target image digest and deployment-owned Docker policy.
 
 The Operations UI must not normally ask the operator to choose the runner image because the runner has privileged Docker access.
 
@@ -807,12 +823,11 @@ override; intentional access migrations are applied separately and verified
 through the operator URL. The preflight never infers ingress authorization or
 prints rendered environment/inspect payloads, including OIDC credentials.
 
-The host scripts require Python 3.10+ and the Docker Compose plugin (V2 or
-newer), validated before source changes or service stops. On a failed access
-preflight, the git updater restores its previous checkout before resuming a
-quiesced worker; restoration failure keeps that worker stopped. Explicit service
-targets skip the API check only when their dependency closure and orphan removal
-cannot recreate or remove the API.
+The host scripts require Python 3.10+ and Docker Compose V2, validated before
+deployment changes. Fetching a branch selects its published source-SHA image
+without changing the checkout. Failed qualification preserves current routing
+and normal services. Explicit specialized maintenance skips the API check only
+when its dependency closure and orphan removal cannot affect the API.
 
 Direct Docker Compose commands
 remain an explicit operator path and do not invoke this updater guard.
@@ -826,6 +841,37 @@ The system verifies Compose state using:
 - image IDs and repo digests where available
 
 ## 12.2 Application-level verification
+
+The updater preserves and verifies the operator origins before replacing the API,
+and verifies those same origins again before recording release success. An explicit
+`MOONMIND_PUBLIC_BASE_URL` supplies the operator origin. Otherwise, fixed published
+API bindings supply the origins; omitted and explicitly empty public URL values
+use this same path. Wildcard bindings require a declared operator origin because
+an unspecified address cannot identify the client's route. Missing targets or an
+unreachable route leave the existing release in place before replacement; a
+post-replacement failure retains the durable updater and recovery evidence.
+
+Protected dashboards require an existing authorized HTTP credential. The deployment
+owner may supply `operator-http-headers.json` beside the desired-state JSON file
+(default host path `deploy/state/operator-http-headers.json`), mapping each exact
+operator origin to its issued `Cookie` and/or `Authorization` header. The file is
+credential material and must remain outside Git with deployment-owned access
+controls. The updater does not mint sessions or infer another user. Trusted-proxy
+authentication continues through that proxy; asserted identity and forwarding
+headers are rejected. Missing, expired or revoked credentials stop verification
+before replacement and require credential renewal through the existing authority.
+Only same-origin requests receive the supplied credentials, via bounded stdin;
+credentials never enter command arguments or release artifacts.
+
+The verification probe is an ephemeral, bounded container using the pinned release
+image. Linux daemon hosts use their host network. Docker Desktop crosses its VM
+boundary through the declared host gateway for loopback connections while retaining
+the original HTTP Host header, TLS certificate validation, and server name. The
+receipt records the original operator URL, transport and verified release digest.
+Post-install checks require the API startup and current digests exposed through
+that origin to match the selected image; a healthy proxy still serving the old
+release cannot pass. A container-internal
+health check or an unknown access result cannot satisfy release completion.
 
 The system must verify the actual operator dashboard/API URL after Compose-level
 health succeeds. The hostname, published port, and ingress path are the ones the
@@ -989,9 +1035,12 @@ The system fails fast on:
 
 ## 15.2 Retry behavior
 
-Deployment updates should not use automatic multi-attempt retries by default.
-
-A failed update may leave services partially changed. Re-running the update is an explicit operator action that uses the same audited path.
+The durable owner resumes incomplete work within its original deadline and
+three-attempt budget. It never changes the selected image, resets a canary or
+silently rolls back. The caller can reattach using the recorded submission ID;
+scheduled maintenance can resume a stopped owned updater. Exhaustion preserves
+receipts and retained worker ownership and reports the exact failure. A new
+release is a distinct audited operation.
 
 ## 15.3 Rollback behavior
 
@@ -1068,7 +1117,7 @@ Update the MoonMind Docker Compose deployment by selecting the target image tag 
 ## 18.3 Mutable tag warning
 
 ```text
-This tag is mutable. MoonMind will record the resolved digest when available, but future uses of the same tag may deploy a different image.
+This tag is mutable. MoonMind pins and verifies its resolved digest before updating; future uses of the same tag may select a different image.
 ```
 
 ## 18.4 Force recreate warning
@@ -1123,7 +1172,7 @@ This document locks the following design decisions.
 9. Verification is required before a run is marked successful.
 10. Rollback is an explicit audited update to a previous target image.
 11. Docker socket access is restricted to trusted deployment-control infrastructure.
-12. Mutable tags are allowed only with explicit audit of the resolved digest when available.
+12. Mutable tags are selectors only; a verified repository digest is mandatory before release execution.
 
 ---
 
@@ -1133,4 +1182,4 @@ MoonMind should expose Docker Compose deployment updates as a small, safe, audit
 
 The operator experience is simple: choose the target image, choose the update mode, provide a reason, and start the update. The backend handles policy, locking, Docker Compose execution, verification, and artifacts.
 
-The architectural boundary is equally important: this is an executable deployment-control tool, not an agent skill and not an arbitrary shell surface. That boundary keeps the UX simple while preserving the security required for a feature that can restart and replace the MoonMind deployment itself.
+The portable `update-moonmind` Skill and the executable deployment tool use the same image-owned semantic entrypoint. The native host supplies durable execution and policy boundaries; it does not maintain a second update algorithm.

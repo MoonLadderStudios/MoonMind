@@ -45,6 +45,7 @@ from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 from .helpers import load_replay
+from tests.support.issue_claims import issue_claim_store  # noqa: F401
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.reliability_journey]
 
@@ -85,6 +86,7 @@ async def test_search_publication_recovers_missing_pr_before_status(
     expected = evidence["expected"]
     pr_url = f"https://github.com/{repository}/pull/9999"
     operations = []
+    comments = []
     search_user = {"id": 111, "login": "search-user"}
     issue = {
         "number": number,
@@ -104,8 +106,16 @@ async def test_search_publication_recovers_missing_pr_before_status(
             # Authenticated search account behind the workflow credential.
             return httpx.Response(200, json={**search_user, "type": "user"})
         if "/comments" in request.url.path:
-            # Live comment readability gate expects a GitHub comment list.
-            return httpx.Response(200, json=[])
+            if request.method == "GET":
+                return httpx.Response(200, json=comments)
+            if request.method == "POST":
+                comment = {"id": len(comments) + 1, "body": json.loads(request.content)["body"], "user": dict(search_user)}
+                comments.append(comment)
+                return httpx.Response(201, json=comment)
+            if request.method == "PATCH":
+                comment = next(item for item in comments if item["id"] == int(request.url.path.rsplit("/", 1)[1]))
+                comment["body"] = json.loads(request.content)["body"]
+                return httpx.Response(200, json=comment)
         if request.method == "PATCH":
             assert operations[0][0] == "repo.create_pr"
             issue.update(json.loads(request.content))
@@ -200,7 +210,7 @@ async def test_search_publication_recovers_missing_pr_before_status(
             "inputs": load_tool["inputs"],
         }
     )
-    assert selected.status == "COMPLETED"
+    assert selected.status == "COMPLETED", selected.outputs
     # Author scope survives catalog expansion into the eligibility decision
     # and durable brief (#4257): omitted and explicit false stay self-only,
     # explicit true broadens to all authors for the same self-authored issue.

@@ -223,6 +223,22 @@ def _write_result(
     if reason:
         payload["reason"] = reason
         payload["final_reason"] = reason
+    if status == "blocked" and next_step == "run_full_remediation":
+        # This helper diagnoses one gate. The portable Skill still owns the
+        # full remediation loop; this is not its terminal manual-review verdict.
+        payload["phase"] = "intermediate"
+        payload["skillContinuation"] = {
+            "schemaVersion": "skill-continuation/v1",
+            "executionRef": payload["executionRef"],
+            "action": "resume_skill",
+            "progressKey": f"{pr.get('headRefOid', '')}:{reason}:{next_step}",
+            "instructions": (
+                "Continue the resolved pr-resolver Skill at run_full_remediation. "
+                "Read the saved snapshot, execute its required specialized Skills, "
+                "then rerun finalize for the same PR. Retain the original cumulative "
+                "retry and elapsed-time budgets. This diagnostic is not completion."
+            ),
+        }
     if payload["mergeAutomationDisposition"] in {"reenter_gate", "request_review"}:
         try:
             payload["gatedContinuation"] = build_gated_continuation(

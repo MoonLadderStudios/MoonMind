@@ -545,8 +545,13 @@ class ToolResult:
     outputs: Mapping[str, Any] = field(default_factory=dict)
     output_artifacts: tuple[ArtifactRef, ...] = ()
     progress: Mapping[str, Any] = field(default_factory=dict)
+    completion_disposition: str | None = None
 
     def __post_init__(self) -> None:
+        if self.completion_disposition is not None and (
+            self.completion_disposition != "idle" or self.status != "COMPLETED"
+        ):
+            raise ContractValidationError("invalid_result", "idle disposition requires a completed operation")
         if self.status not in TOOL_RESULT_STATUSES:
             raise ContractValidationError(
                 "invalid_result",
@@ -569,6 +574,8 @@ class ToolResult:
             payload["output_artifacts"] = [
                 artifact.to_payload() for artifact in self.output_artifacts
             ]
+        if self.completion_disposition is not None:
+            payload["completion_disposition"] = self.completion_disposition
         return payload
 
 @dataclass(frozen=True, slots=True)

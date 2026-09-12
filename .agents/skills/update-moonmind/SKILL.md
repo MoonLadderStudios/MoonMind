@@ -1,6 +1,6 @@
 ---
 name: update-moonmind
-description: Refresh MoonMind services from git by fetching and pinning a branch snapshot, pulling compose images, then restarting changed containers with optional orchestrator inclusion.
+description: Qualify and promote one immutable MoonMind release through a durable updater, preserving in-flight work and operator access.
 metadata:
   required-capabilities:
     - git
@@ -8,52 +8,26 @@ metadata:
     - python3
 ---
 
-# Update MoonMind Deployment (default: without restarting orchestrator)
+# Update MoonMind
 
-## Prerequisites
+## Invocation
 
-The host requires Git, Bash 4 or newer, Docker with the Compose V2 plugin, and
-Python 3.10 or newer (`python3`). The access preflight uses only Python's standard
-library; no project virtual environment or Python dependencies are required.
-The script validates Python and Compose before fetching, changing the checkout,
-or stopping services.
+Run `bash .agents/skills/update-moonmind/scripts/run-update-moonmind.sh --repo <deployment-checkout> --branch <branch>` (defaults: current directory and `main`). The portable script requires Python 3.10+, Git, Bash and Docker Compose V2. It checks these before fetching or changing deployment state. `tools/update-moonmind.sh` invokes this same entrypoint.
 
-## Inputs
-- `repo` (optional): Path to the MoonMind git repository. Default `.`.
-- `branch` (optional): Branch to update from. Default `main`.
-- `allowDirty` / `allow_dirty` (optional): Allow running with uncommitted local git changes.
-- `noComposePull` / `no_compose_pull` (optional): Skip pulling updated Docker images.
-- `dryRun` / `dry_run` (optional): Print commands without executing them.
-- `restartOrchestrator` / `restart_orchestrator` (optional): Restart the `orchestrator` container too.
+## Release authority and completion
 
-## Workflow
+The entrypoint fetches the selected branch without checking out or resetting local files. It resolves the exact source SHA to its published `sha-<commit>` image, verifies the image's source-revision label, and pins the repository digest. An unpublished image is an actionable unavailable release; never substitute `latest` or rebuild a different source under that identity.
 
-1. Resolve the repository path.
-2. Run `bash .agents/skills/update-moonmind/scripts/run-update-moonmind.sh --repo <path> --branch <branch>`.
-   - Pass `--restart-orchestrator` if you need the orchestrator container restarted as well.
-3. The script will:
-   - validate `branch` as a safe git branch value
-   - `git fetch` `<branch>` from `origin`
-   - quiesce and coherently recreate the agent-runtime worker across changes to
-     the live-mounted Skill catalog or its resolver code
-   - checkout/reset local `<branch>` to the exact commit captured by that fetch
-   - run the repository's standard-library-only `moonmind/deployment_access.py`
-     deployment preflight against rendered Compose and installed API containers;
-     stop before replacement if bindings or access settings drift, preserving
-     the existing API until its deployment-owned configuration is reconciled;
-     restore the pre-update checkout before resuming a quiesced worker when the
-     gate fails, and leave that worker stopped if restoring the checkout fails
-   - optionally `docker compose pull` while the resolver worker remains quiesced
-     (unless `noComposePull` is set)
-   - recreate the resolver worker only when it still exists in the post-checkout
-     Compose topology
-   - persist the exact checked-out git revision as the non-secret
-     `MOONMIND_RUNTIME_SOURCE_REVISION` entry in the ignored project `.env`, so
-     later ordinary `docker compose up -d` runs preserve the revision evidence
-   - stamp each recreated application container with that revision and
-     force-recreate any existing application process whose recorded revision is
-     missing or stale, even when no new commit was fetched
-   - detect files changed between pre-pull and post-pull commits, force-recreate only application processes affected by bind-mounted runtime source, and use normal Compose reconciliation for other selected services
-   - restart services with image drift or stopped service state so runtime stays healthy
-   - exclude the deployment-control worker from update targets so it can finish and verify the operation
-4. By default, do not restart the `orchestrator` container, even when it changed.
+The selected image supplies the canonical Compose definition, application code, migrations, portable Skills and release controller. Deployment-owned `.env`, interfaces, authentication and explicit configuration retain their existing authority. The image-owned controller is the portable semantic entrypoint for both this Skill and MoonMind's deployment tool. Docker, durable state storage and Temporal supply the execution substrate.
+
+The controller records an immutable submission, starts one named updater with durable ownership, qualifies every affected worker queue with a pinned canary, promotes routing with a compare-and-set operation, reconciles the installed fleet, and drains temporary workers. The updater can replace the deployment-control service that launched it. A terminal release receipt and verified installed readiness establish completion. An image pull, process exit, or successful container start alone does not.
+
+## Recovery
+
+If the caller disappears, resume the printed submission with `--resume <submission-id>`. Keep its original image and inputs. Inspect the durable result before retrying any side effect; preserve primary deployment success if only cleanup remains. Report the exact unfinished phase and its recorded recovery owner when bounded recovery exhausts.
+
+## Options
+
+Optional arguments are `--compose-project <name>`, `--image-repository <repository>`, and `--dry-run` (show the intended release operation without fetching or deploying). The deployment-owned `docker-compose.override.yaml` (or `.yml`) accompanies the image's base configuration. Individual service restarts, live source overlays and source-only rebuilds are development operations and are outside this release contract.
+
+Protected operator URLs require an existing authorized credential in the deployment-owned `deploy/state/operator-http-headers.json`, mapping each exact operator origin to its issued `Cookie` and/or `Authorization` header. Preserve this file as secret material outside Git. The updater sends credentials only to that origin, never mints a session or changes identity, and stops before replacement when authentication cannot be verified. Trusted-proxy identity remains owned by the proxy; do not supply asserted-user or forwarded headers.

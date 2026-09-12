@@ -522,10 +522,10 @@ def test_workflow_worker_service_supervises_normal_and_merge_automation_roles():
         "${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY:-2}"
     )
     assert workflow_env["TEMPORAL_WORKER_VERSIONING_ENABLED"] == (
-        "${TEMPORAL_WORKER_VERSIONING_ENABLED:-false}"
+        "${TEMPORAL_WORKER_VERSIONING_ENABLED:-auto}"
     )
     assert workflow_env["MOONMIND_DEPLOYMENT_MODE"] == (
-        "${MOONMIND_DEPLOYMENT_MODE:-development}"
+        "${MOONMIND_DEPLOYMENT_MODE:-auto}"
     )
     assert workflow_env["TEMPORAL_WORKFLOW_READINESS_URL"] == (
         "${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}"
