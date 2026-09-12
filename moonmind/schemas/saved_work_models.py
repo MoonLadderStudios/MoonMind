@@ -517,15 +517,32 @@ _SCAN_CHUNK_OVERLAP_BYTES = 8 * 1024
 
 
 def scan_saved_work_export_stream(
-    chunks: Sequence[bytes] | Any, *, export_digest: str, location: str
+    chunks: Sequence[bytes] | Any,
+    *,
+    export_digest: str,
+    location: str,
+    high_security_mode: bool = True,
 ) -> dict[str, Any]:
     """Stream confidentiality/secret controls over exported bytes in chunks.
 
     Chunk windows overlap by ``_SCAN_CHUNK_OVERLAP_BYTES`` so
     credential-shaped content spanning a chunk boundary is still detected
     without holding the whole export in memory. Same evidence contract as
-    :func:`scan_saved_work_export`.
+    :func:`scan_saved_work_export`. The Activity supplies the resolved outbound
+    policy. Disabled scanning is recorded explicitly, never as a clean scan;
+    direct scanner callers retain strict scanning by default.
     """
+    if not high_security_mode:
+        return {
+            "disposition": "not_scanned",
+            "policyRef": SAVED_WORK_SCAN_POLICY_REF,
+            "exportDigest": export_digest,
+            "location": location,
+            "coverage": "none",
+            "limitations": [
+                "outbound secret scanning is disabled by MOONMIND_HIGH_SECURITY_MODE"
+            ],
+        }
     findings = 0
     decodable = True
     tail = b""

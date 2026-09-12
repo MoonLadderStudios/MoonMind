@@ -1,0 +1,50 @@
+{
+  "sourceWorkflowId": "mm:c7b23b45-a7ac-42cb-9ed9-51b1d4a912a7",
+  "sourceHead": "a1cf884d2ea4a745d9660816f77da396487ae406",
+  "failedActivityType": "agent_runtime.capture_workspace_checkpoint",
+  "failedEvents": [
+    290,
+    309
+  ],
+  "failureType": "CHECKPOINT_CAPTURE_SECRET_DETECTED",
+  "deployedHighSecurityMode": false,
+  "request": {
+    "identity": {
+      "workflowId": "mm:c7b23b45-a7ac-42cb-9ed9-51b1d4a912a7",
+      "runId": "01a09468-8194-73ea-97f0-3e4129eafa2f",
+      "logicalStepId": "tpl:github-issue-implement:02:64be9322",
+      "executionOrdinal": 1
+    },
+    "boundary": "after_execution",
+    "artifactNamespace": "step-checkpoints/tpl:github-issue-implement:02:64be9322",
+    "idempotencyKey": "mm:c7b23b45-a7ac-42cb-9ed9-51b1d4a912a7:01a09468-8194-73ea-97f0-3e4129eafa2f:tpl:github-issue-implement:02:64be9322:execution:1:checkpoint:after_execution:capture",
+    "schemaVersion": "v1",
+    "checkpointKind": "worktree_archive",
+    "expectedRuntimeId": "codex_cli",
+    "capabilitySetVersion": "runtime-execution-capabilities-v3",
+    "capabilityDigest": "fb6551508dd736e83bbc317c52e88939f88175536c67ac1bc4212cb0ac60cbfd",
+    "capturePolicy": {
+      "includeTracked": true,
+      "includeUntracked": true,
+      "includeIgnored": false,
+      "redactionProfile": "managed-code-workspace-v1"
+    },
+    "workspaceLocator": {
+      "kind": "managed_runtime",
+      "runtimeId": "codex_cli",
+      "agentRunId": "mm:c7b23b45-a7ac-42cb-9ed9-51b1d4a912a7",
+      "relativePath": "repo"
+    }
+  },
+  "files": {
+    "auth.py": "token: str | None = None\n",
+    ".github/workflows/check.yml": "steps:\n  - with:\n      token: ${{ secrets.GITHUB_TOKEN }}\n",
+    "tests/test_auth.py": "def test_example():\n    password = \"synthetic-test-password\"\n    assert password\n",
+    ".gitignore": ".env\n.codex/\ncredentials/\n"
+  },
+  "expected": {
+    "defaultCapture": "captured",
+    "defaultScan": "not_scanned",
+    "strictFailure": "CHECKPOINT_CAPTURE_SECRET_DETECTED"
+  }
+}
