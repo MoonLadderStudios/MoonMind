@@ -29,24 +29,27 @@ from moonmind.workflows.skills.deployment_execution import (
 CONTROL_SERVICE = "temporal-worker-deployment-control"
 
 
-async def docker(*args):
+async def docker(*args, input_bytes=None):
     process = await asyncio.create_subprocess_exec(
         "docker",
         *args,
+        stdin=asyncio.subprocess.PIPE if input_bytes is not None else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), 360)
+        stdout, stderr = await asyncio.wait_for(process.communicate(input_bytes), 360)
     except BaseException:
         if process.returncode is None:
             process.kill()
         await process.wait()
         raise
     if process.returncode:
-        raise RuntimeError(
-            f"Docker {args[0]} failed: {stderr.decode(errors='replace')[:300]}"
-        )
+        from moonmind.utils.logging import redact_sensitive_text
+
+        diagnostic = stderr.decode(errors="replace").strip().splitlines()
+        reason = redact_sensitive_text(diagnostic[-1] if diagnostic else "no diagnostic")
+        raise RuntimeError(f"Docker {args[0]} failed: {reason[:1000]}")
     return stdout.decode().strip()
 
 
@@ -80,6 +83,7 @@ def reserve_record(path, value):
         try:
             os.link(temporary, path)
         except FileExistsError:
+            # Another delivery published first; read its authoritative bytes.
             pass
         return json.loads(path.read_text())
     finally:
@@ -379,6 +383,7 @@ class ReleaseCohort:
                     if readiness_matches(await worker_readiness(name), expected_digest):
                         break
                 except RuntimeError:
+                    # A retained worker may still be booting; the loop is bounded.
                     pass
                 await asyncio.sleep(2)
             else:
@@ -597,6 +602,96 @@ class ReleaseCohort:
                 await docker("rm", name)
 
 
+async def verify_operator_access(image, urls, owner, *, expected_release=None):
+    """Probe published origins through the daemon's declared host transport."""
+    platform = (await docker("info", "--format", "{{.OperatingSystem}}")).strip()
+    if not platform:
+        raise ValueError("Docker host transport could not be established")
+    # Desktop's host network is its Linux VM, not the operator's host. Its
+    # explicit gateway crosses that boundary without changing HTTP/TLS authority.
+    desktop = platform == "Docker Desktop"
+    transport = "docker-host-gateway" if desktop else "host-network"
+    from moonmind.workflows.skills.deployment_surface import validate_headers
+
+    # Credentials remain deployment-owned. They are never copied into durable
+    # request/receipt artifacts or Docker command arguments, nor minted here.
+    credential_file = state_root().parent / "operator-http-headers.json"
+    credentials = {}
+    if credential_file.exists():
+        if credential_file.is_symlink() or credential_file.stat().st_size > 65536:
+            raise ValueError(
+                "Operator credential file violates its bounded file authority"
+            )
+        credentials = json.loads(credential_file.read_bytes())
+        if not isinstance(credentials, dict):
+            raise ValueError(
+                "Operator credential file must map exact origins to HTTP headers"
+            )
+    surfaces = []
+    for url in urls:
+        headers = validate_headers(credentials.get(url, {}))
+        raw = await docker(
+            "run",
+            "--rm",
+            "-i",
+            "--network",
+            "bridge" if desktop else "host",
+            "--label",
+            f"moonmind.release.owner={owner}",
+            "--entrypoint",
+            "python",
+            image,
+            "-m",
+            "moonmind.workflows.skills.deployment_surface",
+            url,
+            *(["--docker-host-gateway"] if desktop else []),
+            *(["--expected-release", expected_release] if expected_release else []),
+            input_bytes=json.dumps(headers).encode(),
+        )
+        result = json.loads(raw)
+        if (
+            result.get("status") != "verified"
+            or result.get("baseUrl") != url
+            or result.get("transport") != transport
+            or result.get("releaseDigest") != expected_release
+            or set(result.get("checks", []))
+            != {"healthz", "dashboard", "assets", "api/ui/info"}
+        ):
+            raise RuntimeError(
+                "Published operator access lacks verified terminal evidence"
+            )
+        surfaces.append(result)
+    if not surfaces:
+        raise ValueError("Release cannot complete without operator access targets")
+    return {"status": "verified", "surfaces": surfaces}
+
+
+async def prepare_operator_access(runner, image, directory, owner):
+    from moonmind.workflows.skills.deployment_surface import operator_urls
+
+    path = directory / "operator-access-targets.json"
+    if path.exists():
+        recorded = json.loads(path.read_text())
+        if recorded.get("owner") != owner:
+            raise ValueError("Operator access target owner differs")
+        urls = recorded["urls"]
+    else:
+        rendered = await runner._run_compose_command(
+            ("docker", "compose", "config", "--format", "json"),
+            requested_image=image,
+            max_stdout_chars=None,
+        )
+        _ensure_command_succeeded("read operator access", rendered)
+        urls = operator_urls(json.loads(rendered["stdout"]))
+        recorded = reserve_record(path, {"owner": owner, "urls": urls})
+        if recorded != {"owner": owner, "urls": urls}:
+            raise ValueError("Operator access targets differ from the saved release")
+    # Missing host-network capability or an unreachable origin stops before API
+    # replacement. A retry keeps the original targets instead of changing scope.
+    await verify_operator_access(image, urls, owner)
+    return urls
+
+
 async def _run_job_body(request_file):
     from api_service.db.base import get_async_session_context
     from moonmind.workflows.skills.deployment_execution import (
@@ -666,6 +761,9 @@ async def _run_job_body(request_file):
                 for fleet in _FLEET_SERVICE_NAMES
             ] + [f"mm-candidate-{request_file.parent.name[:16]}-api"]
         else:
+            operator_targets = await prepare_operator_access(
+                runner, record["image"], request_file.parent, owner
+            )
             async with get_async_session_context() as session:
                 executor = replace(
                     executor,
@@ -698,28 +796,11 @@ async def _run_job_body(request_file):
                     )
                 if result.status == "COMPLETED":
                     readiness = await cohort.verify_installed(record["image"])
-                    from moonmind.workflows.skills.deployment_surface import (
-                        verify_surface,
-                    )
-
-                    rendered = await runner._run_compose_command(
-                        ("docker", "compose", "config", "--format", "json"),
-                        requested_image=record["image"],
-                        max_stdout_chars=None,
-                    )
-                    _ensure_command_succeeded("read operator access", rendered)
-                    operator_url = (
-                        json.loads(rendered["stdout"])["services"]["api"]
-                        .get("environment", {})
-                        .get("MOONMIND_PUBLIC_BASE_URL")
-                    )
-                    readiness["operatorAccess"] = (
-                        (await asyncio.to_thread(verify_surface, operator_url))
-                        if operator_url
-                        else {
-                            "status": "unknown",
-                            "reason": "operator URL is not declared in deployment configuration",
-                        }
+                    readiness["operatorAccess"] = await verify_operator_access(
+                        record["image"],
+                        operator_targets,
+                        owner,
+                        expected_release=release["digest"],
                     )
                     readiness_ref = await executor.evidence_writer.write(
                         "installed-release-readiness", readiness

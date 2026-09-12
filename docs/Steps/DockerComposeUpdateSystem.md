@@ -842,6 +842,37 @@ The system verifies Compose state using:
 
 ## 12.2 Application-level verification
 
+The updater preserves and verifies the operator origins before replacing the API,
+and verifies those same origins again before recording release success. An explicit
+`MOONMIND_PUBLIC_BASE_URL` supplies the operator origin. Otherwise, fixed published
+API bindings supply the origins; omitted and explicitly empty public URL values
+use this same path. Wildcard bindings require a declared operator origin because
+an unspecified address cannot identify the client's route. Missing targets or an
+unreachable route leave the existing release in place before replacement; a
+post-replacement failure retains the durable updater and recovery evidence.
+
+Protected dashboards require an existing authorized HTTP credential. The deployment
+owner may supply `operator-http-headers.json` beside the desired-state JSON file
+(default host path `deploy/state/operator-http-headers.json`), mapping each exact
+operator origin to its issued `Cookie` and/or `Authorization` header. The file is
+credential material and must remain outside Git with deployment-owned access
+controls. The updater does not mint sessions or infer another user. Trusted-proxy
+authentication continues through that proxy; asserted identity and forwarding
+headers are rejected. Missing, expired or revoked credentials stop verification
+before replacement and require credential renewal through the existing authority.
+Only same-origin requests receive the supplied credentials, via bounded stdin;
+credentials never enter command arguments or release artifacts.
+
+The verification probe is an ephemeral, bounded container using the pinned release
+image. Linux daemon hosts use their host network. Docker Desktop crosses its VM
+boundary through the declared host gateway for loopback connections while retaining
+the original HTTP Host header, TLS certificate validation, and server name. The
+receipt records the original operator URL, transport and verified release digest.
+Post-install checks require the API startup and current digests exposed through
+that origin to match the selected image; a healthy proxy still serving the old
+release cannot pass. A container-internal
+health check or an unknown access result cannot satisfy release completion.
+
 The system must verify the actual operator dashboard/API URL after Compose-level
 health succeeds. The hostname, published port, and ingress path are the ones the
 operator uses; substituting localhost or a container-internal address does not

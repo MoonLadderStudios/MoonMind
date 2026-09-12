@@ -3092,10 +3092,14 @@ class TemporalSandboxActivities:
                     )
                 ).stdout.strip()
             pre_status = None
+            index_payload = b""
+            index_paths = []
             if (workspace / ".git").exists():
                 pre_status = (await _run_command(_sandbox_workspace_git_command(
                     workspace, "status", "--porcelain=v1", "-z", "--untracked-files=all",
                 ))).stdout
+                from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_index_patch
+                index_payload, index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, head)
             archive_payload, entries = await asyncio.to_thread(
                 self._build_worktree_archive, workspace, members=members
             )
@@ -3113,7 +3117,9 @@ class TemporalSandboxActivities:
                 post_status = (await _run_command(_sandbox_workspace_git_command(
                     workspace, "status", "--porcelain=v1", "-z", "--untracked-files=all",
                 ))).stdout
+                post_index, post_index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, head)
                 if (head != post_head or pre_status != post_status
+                        or (index_payload, index_paths) != (post_index, post_index_paths)
                         or members != await self._workspace_archive_members(model, workspace)):
                     raise TemporalActivityRuntimeError("workspace changed during archive capture")
             workspace_digest = _workspace_content_digest(entries)
@@ -3135,8 +3141,14 @@ class TemporalSandboxActivities:
             }
             if history:
                 manifest_body["gitHistory"] = history
-                from moonmind.workflows.temporal.runtime.workspace_archive import staged_paths_from_status
-                manifest_body["git"] = {"stagedPaths": staged_paths_from_status(pre_status or "")}
+                index_ref = await self._put_checkpoint_bytes(
+                    index_payload, content_type="application/vnd.moonmind.git-index-patch",
+                    metadata={"artifact_kind": "checkpoint_index"},
+                ) if index_payload else None
+                manifest_body["git"] = {"indexPatch": {
+                    "ref": index_ref, "digest": "sha256:" + hashlib.sha256(index_payload).hexdigest(),
+                    "paths": index_paths,
+                }}
             # Full Git-status equality is truthful only for a complete
             # selected worktree. Excluded paths never become deletion claims.
             if (pre_status is not None and model.include_untracked
@@ -6036,6 +6048,8 @@ class TemporalAgentRuntimeActivities:
             return (await _run_command(command)).stdout
 
         pre_head = await _git_text("rev-parse", "HEAD")
+        from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_index_patch
+        index_payload, index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, pre_head)
         pre_status = await _git_raw(
             "status", "--porcelain=v1", "-z", "--untracked-files=all",
         )
@@ -6260,6 +6274,12 @@ class TemporalAgentRuntimeActivities:
         # fully verified capture, so retries re-capture cleanly.
         from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_history
         history_payload, history = await asyncio.to_thread(capture_git_history, workspace, pre_head)
+        post_index, post_index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, pre_head)
+        if (index_payload, index_paths) != (post_index, post_index_paths):
+            raise temporal_exceptions.ApplicationError(
+                "Git index changed during checkpoint capture",
+                type="CHECKPOINT_CAPTURE_CONCURRENT_MUTATION", non_retryable=False,
+            )
         head = await _git_text("rev-parse", "HEAD")
         branch = await _git_text("branch", "--show-current")
         post_status = await _git_raw(
@@ -6309,6 +6329,10 @@ class TemporalAgentRuntimeActivities:
                 link=_saved_work_execution_link(model),
             )
         status = post_status
+        index_ref = await self._put_managed_checkpoint_artifact(
+            index_payload, "application/vnd.moonmind.git-index-patch", "checkpoint_index",
+            link=_saved_work_execution_link(model),
+        ) if index_payload else None
         archive_ref = await self._put_managed_checkpoint_artifact(
             archive_payload,
             "application/vnd.moonmind.worktree-archive",
@@ -6316,25 +6340,14 @@ class TemporalAgentRuntimeActivities:
             link=_saved_work_execution_link(model),
         )
         created_at = (record.finished_at or record.started_at).isoformat()
-        staged_paths = []
-        records = status.split("\0")
-        index = 0
-        while index < len(records):
-            line = records[index]
-            index += 1
-            if len(line) < 4:
-                continue
-            if line[0] not in {" ", "?"}:
-                staged_paths.append(line[3:])
-            if line[0] in {"R", "C"} and index < len(records):
-                index += 1
+        staged_paths = index_paths
         manifest = {
             "schemaVersion": "v1",
             "contentType": "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1",
             "source": {**model.identity.model_dump(by_alias=True, mode="json"), "boundary": model.boundary},
             "runtime": {"runtimeId": "codex_cli", "capabilitySetVersion": model.capability_set_version, "capabilityDigest": model.capability_digest},
             "workspaceLocator": model.workspace_locator.model_dump(by_alias=True, mode="json"),
-            "git": {"baseCommit": head, "headCommit": head, "branch": branch, "isDirty": bool(status), "statusDigest": "sha256:" + hashlib.sha256(status.encode()).hexdigest(), "stagedPaths": staged_paths, "submodules": []},
+            "git": {"baseCommit": head, "headCommit": head, "branch": branch, "isDirty": bool(status), "statusDigest": "sha256:" + hashlib.sha256(status.encode()).hexdigest(), "indexPatch": {"ref": index_ref, "digest": "sha256:" + hashlib.sha256(index_payload).hexdigest(), "paths": index_paths}, "submodules": []},
             "capturePolicy": policy.model_dump(by_alias=True, mode="json"),
             "entries": [entry.model_dump(by_alias=True, mode="json", exclude_none=True) for entry in entries],
             "archive": {"ref": archive_ref, "sha256": archive_digest, "size": len(archive_payload)},

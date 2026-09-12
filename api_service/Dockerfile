@@ -216,6 +216,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 COPY pyproject.toml /app/pyproject.toml
 COPY poetry.lock /app/poetry.lock
+COPY package.json package-lock.json /app/
 COPY README.md /app/README.md
 COPY LICENSE /app/LICENSE
 COPY NOTICE /app/NOTICE

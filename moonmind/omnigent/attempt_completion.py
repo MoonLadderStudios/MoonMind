@@ -50,7 +50,13 @@ def recorded_attempt_result(binding):
 
 
 async def complete_skill_turns(
-    *, request, sink, driver, inspect_terminal, deliver_continuation=None
+    *,
+    request,
+    sink,
+    driver,
+    inspect_terminal,
+    deliver_continuation=None,
+    recorded_turns_only=False,
 ):
     phases = sink.binding.phaseResults or {}
     if "budget" not in phases:
@@ -70,6 +76,13 @@ async def complete_skill_turns(
             if ordinal and deliver_continuation is not None:
                 result = await deliver_continuation(ordinal, instruction, result)
         else:
+            if recorded_turns_only:
+                # Cleanup released the original host/session authority. Inspect
+                # saved receipts, but never recreate a billed turn implicitly.
+                result = recorded_attempt_result(sink.binding)
+                if result is None:
+                    raise ValueError("Finalization has no recorded provider turn")
+                return result
             remaining = seconds - (datetime.now(UTC) - started).total_seconds()
             if remaining <= 0:
                 raise TimeoutError(

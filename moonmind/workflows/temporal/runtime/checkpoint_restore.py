@@ -289,8 +289,13 @@ class ManagedCheckpointRestoreService:
             ]
         return normalized
 
-    def _verify_materialized(self, staging: Path, manifest: Mapping[str, Any]) -> None:
+    def _verify_materialized(self, staging: Path, manifest: Mapping[str, Any], *, selected_only=False) -> None:
         expected = {entry["path"]: entry for entry in manifest.get("entries", [])}
+        selected = None
+        if selected_only:
+            selected = set(self._git_bytes(
+                ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], staging,
+            ).decode().split("\0"))
         # A symlink is a leaf entry even when it points at a directory, so exclude
         # only real directories; ``is_dir()`` alone would follow directory symlinks
         # and drop them from the set, spuriously failing valid restores.
@@ -298,6 +303,7 @@ class ManagedCheckpointRestoreService:
             str(path.relative_to(staging))
             for path in staging.rglob("*")
             if ".git" not in path.relative_to(staging).parts
+            and (selected is None or path.relative_to(staging).as_posix() in selected)
             and not self._excluded_from_capture(path.relative_to(staging).as_posix(), manifest)
             and not (path.is_dir() and not path.is_symlink())
         }
@@ -317,6 +323,46 @@ class ManagedCheckpointRestoreService:
                     raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file digest mismatch")
                 if path.stat().st_mode & 0o777 != self._expected_mode(item):
                     raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file mode mismatch")
+
+    def _verify_git_candidate(self, workspace, manifest, base):
+        from .checkpoint_history import capture_git_index_patch
+        if self._git(["rev-parse", "HEAD"], workspace) != base:
+            raise CheckpointRestoreError("CHECKPOINT_BASE_COMMIT_MISMATCH", "saved destination HEAD changed")
+        index = manifest.get("git", {}).get("indexPatch")
+        actual_patch, actual_paths = capture_git_index_patch(workspace, base)
+        if index is not None:
+            if _digest(actual_patch) != index.get("digest") or actual_paths != index.get("paths"):
+                raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "saved destination Git index changed")
+        elif manifest.get("git", {}).get("stagedPaths") or actual_patch:
+            # Historical manifests only named staged paths. They cannot prove
+            # the original bytes of a partially staged file, so never synthesize
+            # its index from worktree content during recovery.
+            raise CheckpointRestoreError("CHECKPOINT_INDEX_EVIDENCE_UNAVAILABLE", "historical checkpoint lacks immutable index content")
+        status = self._git_bytes(["status", "--porcelain=v1", "-z", "--untracked-files=all"], workspace)
+        expected = manifest.get("gitStatusDigest") or manifest.get("git", {}).get("statusDigest")
+        if expected and _digest(status) != expected:
+            raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "Git status digest mismatch")
+        return _digest(status)
+
+    async def _restore_index(self, workspace, manifest, *, admitted_principal):
+        index = manifest.get("git", {}).get("indexPatch")
+        if index is None:
+            return  # Historical clean-index checkpoints remain restorable.
+        for name in index.get("paths", []):
+            self._safe_name(name)
+        payload = await self._read(
+            index["ref"], content_types={"application/vnd.moonmind.git-index-patch"},
+            admitted_principal=admitted_principal,
+        ) if index.get("ref") else b""
+        if _digest(payload) != index.get("digest"):
+            raise CheckpointRestoreError("CHECKPOINT_ARCHIVE_CORRUPTED", "Git index patch digest mismatch")
+        if payload:
+            patch = workspace / ".git" / "checkpoint-index.patch"
+            patch.write_bytes(payload)
+            try:
+                self._git(["apply", "--cached", "--binary", str(patch)], workspace)
+            finally:
+                patch.unlink(missing_ok=True)
 
     @staticmethod
     def _excluded_from_capture(name, manifest):
@@ -440,16 +486,14 @@ class ManagedCheckpointRestoreService:
                     if _digest(manifest_bytes) != req.checkpoint.manifest_digest:
                         raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "saved manifest bytes changed")
                     manifest = self._normalize_manifest(json.loads(manifest_bytes))
-                    self._verify_materialized(workspace, manifest)
+                    self._verify_materialized(workspace, manifest, selected_only=req.restores_original_owner)
+                    self._verify_git_candidate(workspace, manifest, req.checkpoint.base_commit)
                     if self._git(["rev-parse", "HEAD"], workspace) != req.checkpoint.base_commit:
                         raise CheckpointRestoreError("CHECKPOINT_BASE_COMMIT_MISMATCH", "saved destination HEAD changed")
                     status = self._git_bytes(["status", "--porcelain=v1", "-z", "--untracked-files=all"], workspace)
                     if _digest(status) != record["result"]["gitStatusDigest"]:
                         raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "saved destination Git status changed")
                     return record["result"]
-
-        if req.restores_original_owner and workspace.exists():
-            raise CheckpointRestoreError("CHECKPOINT_DESTINATION_IDENTITY_MISMATCH", "original workspace still exists; cold restore cannot overwrite active or changed work")
 
         workspace_parent = workspace.parent
         if not workspace_parent.resolve().is_relative_to(self.root):
@@ -583,95 +627,102 @@ class ManagedCheckpointRestoreService:
         ):
             raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "manifest entry count mismatch")
 
-        workspace_parent.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=".restore-", dir=workspace_parent))
-        try:
-            if self.repository_source_root is not None:
-                repo_url = str(self.repository_source_root)
-                clone_env: Mapping[str, str] | None = None
-            else:
-                repo_url = f"https://github.com/{req.destination.repository}.git"
-                # A private-repo checkpoint that the original run could clone must
-                # also be cloneable here. Reuse the launcher's authenticated git
-                # environment (in-memory credential helper, no token on disk or in
-                # argv) so the cold restore does not fail before extraction.
-                token = await resolve_github_token_for_launch()
-                clone_env = (
-                    build_github_token_git_environment(
-                        token, base_env=dict(os.environ)
-                    )
-                    if token
-                    else None
-                )
-            history = manifest.get("gitHistory")
-            if history and history.get("requiresSourceObjects") is False:
-                self._git(["init", str(staging)])
-                self._git(["remote", "add", "origin", repo_url], staging)
-            else:
-                self._git(
-                    ["clone", "--no-checkout", repo_url, str(staging)],
-                    code="CHECKPOINT_REPOSITORY_UNAVAILABLE", env=clone_env,
-                )
-            if history and history.get("ref"):
-                bundle = await self._read(history["ref"], content_types={"application/x-git-bundle"}, admitted_principal=admitted_principal)
-                if _digest(bundle) != history.get("digest") or history.get("headCommit") != req.checkpoint.base_commit:
-                    raise CheckpointRestoreError("CHECKPOINT_ARCHIVE_CORRUPTED", "selected history identity mismatch")
-                bundle_path = staging / ".git" / "checkpoint.bundle"
-                bundle_path.write_bytes(bundle)
-                try:
-                    self._git(["bundle", "verify", str(bundle_path)], staging)
-                    self._git(["fetch", "--no-tags", str(bundle_path), "HEAD"], staging)
-                finally:
-                    bundle_path.unlink(missing_ok=True)
-            self._git(
-                ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
-            )
-            self._git(["checkout", "--detach", req.checkpoint.base_commit], staging)
-            count, size = self._extract(
-                archive, staging, manifest,
-                max_entries=req.max_entry_count, max_bytes=req.max_restored_bytes,
-            )
-            # The base checkout materializes files the checkpoint deleted; replay
-            # those deletions so the tree matches the manifest before verifying.
-            self._replay_deletions(staging, manifest)
-            self._verify_materialized(staging, manifest)
-            staged_paths = manifest.get("git", {}).get("stagedPaths", [])
-            if isinstance(staged_paths, list) and staged_paths:
-                self._git(["add", "-A", "--", *map(str, staged_paths)], staging)
-            actual = self._git(
-                ["rev-parse", "HEAD"], staging, "CHECKPOINT_BASE_COMMIT_MISMATCH"
-            )
-            if actual != req.checkpoint.base_commit:
-                raise CheckpointRestoreError(
-                    "CHECKPOINT_BASE_COMMIT_MISMATCH",
-                    "restored repository base mismatch",
-                )
-            status_payload = self._git_bytes(
-                ["status", "--porcelain=v1", "-z", "--untracked-files=all"], staging
-            )
-            status_digest = _digest(status_payload)
-            expected_status = manifest.get("gitStatusDigest") or manifest.get("git", {}).get("statusDigest")
-            if expected_status and status_digest != expected_status:
-                raise CheckpointRestoreError(
-                    "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "Git status digest mismatch"
-                )
-            backup = workspace_parent / ".restore-previous"
-            if backup.exists():
-                shutil.rmtree(backup)
-            if workspace.exists():
-                if req.restores_original_owner:
-                    raise CheckpointRestoreError("CHECKPOINT_DESTINATION_IDENTITY_MISMATCH", "original workspace appeared during cold restore")
-                os.replace(workspace, backup)
+        if req.restores_original_owner and workspace.exists():
+            # A surviving directory is only a candidate. Adopt it after the
+            # same immutable file, HEAD, index and status checks as cold restore.
+            self._verify_materialized(workspace, manifest, selected_only=True)
+            status_digest = self._verify_git_candidate(workspace, manifest, req.checkpoint.base_commit)
+            count = len(entries)
+            size = sum(entry.get("bytes", 0) for entry in entries)
+        else:
+            workspace_parent.mkdir(parents=True, exist_ok=True)
+            staging = Path(tempfile.mkdtemp(prefix=".restore-", dir=workspace_parent))
             try:
-                os.replace(staging, workspace)
+                if self.repository_source_root is not None:
+                    repo_url = str(self.repository_source_root)
+                    clone_env: Mapping[str, str] | None = None
+                else:
+                    repo_url = f"https://github.com/{req.destination.repository}.git"
+                    # A private-repo checkpoint that the original run could clone must
+                    # also be cloneable here. Reuse the launcher's authenticated git
+                    # environment (in-memory credential helper, no token on disk or in
+                    # argv) so the cold restore does not fail before extraction.
+                    token = await resolve_github_token_for_launch()
+                    clone_env = (
+                        build_github_token_git_environment(
+                            token, base_env=dict(os.environ)
+                        )
+                        if token
+                        else None
+                    )
+                history = manifest.get("gitHistory")
+                if history and history.get("requiresSourceObjects") is False:
+                    self._git(["init", str(staging)])
+                    self._git(["remote", "add", "origin", repo_url], staging)
+                else:
+                    self._git(
+                        ["clone", "--no-checkout", repo_url, str(staging)],
+                        code="CHECKPOINT_REPOSITORY_UNAVAILABLE", env=clone_env,
+                    )
+                if history and history.get("ref"):
+                    bundle = await self._read(history["ref"], content_types={"application/x-git-bundle"}, admitted_principal=admitted_principal)
+                    if _digest(bundle) != history.get("digest") or history.get("headCommit") != req.checkpoint.base_commit:
+                        raise CheckpointRestoreError("CHECKPOINT_ARCHIVE_CORRUPTED", "selected history identity mismatch")
+                    bundle_path = staging / ".git" / "checkpoint.bundle"
+                    bundle_path.write_bytes(bundle)
+                    try:
+                        self._git(["bundle", "verify", str(bundle_path)], staging)
+                        self._git(["fetch", "--no-tags", str(bundle_path), "HEAD"], staging)
+                    finally:
+                        bundle_path.unlink(missing_ok=True)
+                self._git(
+                    ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
+                )
+                self._git(["checkout", "--detach", req.checkpoint.base_commit], staging)
+                count, size = self._extract(
+                    archive, staging, manifest,
+                    max_entries=req.max_entry_count, max_bytes=req.max_restored_bytes,
+                )
+                # The base checkout materializes files the checkpoint deleted; replay
+                # those deletions so the tree matches the manifest before verifying.
+                self._replay_deletions(staging, manifest)
+                self._verify_materialized(staging, manifest)
+                await self._restore_index(staging, manifest, admitted_principal=admitted_principal)
+                actual = self._git(
+                    ["rev-parse", "HEAD"], staging, "CHECKPOINT_BASE_COMMIT_MISMATCH"
+                )
+                if actual != req.checkpoint.base_commit:
+                    raise CheckpointRestoreError(
+                        "CHECKPOINT_BASE_COMMIT_MISMATCH",
+                        "restored repository base mismatch",
+                    )
+                status_payload = self._git_bytes(
+                    ["status", "--porcelain=v1", "-z", "--untracked-files=all"], staging
+                )
+                status_digest = _digest(status_payload)
+                self._verify_git_candidate(staging, manifest, req.checkpoint.base_commit)
+                expected_status = manifest.get("gitStatusDigest") or manifest.get("git", {}).get("statusDigest")
+                if expected_status and status_digest != expected_status:
+                    raise CheckpointRestoreError(
+                        "CHECKPOINT_ENTRY_DIGEST_MISMATCH", "Git status digest mismatch"
+                    )
+                backup = workspace_parent / ".restore-previous"
+                if backup.exists():
+                    shutil.rmtree(backup)
+                if workspace.exists():
+                    if req.restores_original_owner:
+                        raise CheckpointRestoreError("CHECKPOINT_DESTINATION_IDENTITY_MISMATCH", "original workspace appeared during cold restore")
+                    os.replace(workspace, backup)
+                try:
+                    os.replace(staging, workspace)
+                except BaseException:
+                    if backup.exists() and not workspace.exists():
+                        os.replace(backup, workspace)
+                    raise
+                shutil.rmtree(backup, ignore_errors=True)
             except BaseException:
-                if backup.exists() and not workspace.exists():
-                    os.replace(backup, workspace)
+                shutil.rmtree(staging, ignore_errors=True)
                 raise
-            shutil.rmtree(backup, ignore_errors=True)
-        except BaseException:
-            shutil.rmtree(staging, ignore_errors=True)
-            raise
 
         evidence = {
             "schemaVersion": "v1",

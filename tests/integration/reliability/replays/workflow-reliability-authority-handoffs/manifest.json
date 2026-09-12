@@ -36,13 +36,30 @@
     },
     {
       "failure": "cold resume loses unpublished Git history or misreads a repeated managed restore",
-      "tests": ["tests/integration/reliability/test_saved_workspace_journey.py", "tests/integration/reliability/test_checkpoint_cold_resume.py"],
+      "tests": [
+        "tests/integration/reliability/test_saved_workspace_journey.py",
+        "tests/integration/reliability/test_checkpoint_cold_resume.py"
+      ],
       "invariant": "remote artifact read-back restores selected history and exact file evidence after source loss; repeated restore revalidates bytes and Git identity"
+    },
+    {
+      "failure": "cleanup saves a turn without compute; surviving candidate or partially staged index differs at finalization",
+      "tests": [
+        "tests/unit/omnigent/test_attempt_completion.py",
+        "tests/integration/reliability/test_saved_workspace_journey.py",
+        "tests/integration/reliability/test_checkpoint_cold_resume.py"
+      ],
+      "invariant": "recorded turns resume verification without provider re-execution; saved candidate adoption verifies files, HEAD and index; archive restoration preserves staged and unstaged content separately"
     },
     {
       "failure": "retained releases or stopped updater images defeat current-service verification",
       "test": "tests/integration/reliability/test_release_compose_configuration.py",
       "invariant": "image identity joins the normal running Compose service inventory; old or unknown current image identity still fails"
+    },
+    {
+      "failure": "release qualification cannot authenticate the existing protected dashboard and API",
+      "test": "tests/integration/reliability/test_deployment_surface_auth.py",
+      "invariant": "startup-classified accounts mode validates an existing registered cookie or bearer session through real HTTP and PostgreSQL; missing, invalid and revoked sessions cannot qualify; probe receipts omit credentials"
     },
     {
       "failure": "a module launched with python -m uses __main__ as the child module name",
@@ -53,6 +70,32 @@
       "failure": "promotion strands independently routed activities or in-flight release owners",
       "test": "tests/integration/reliability/test_release_routing_journey.py",
       "invariant": "all queues qualify before CAS promotion; pinned and upgradeable histories preserve their server-authorized routing"
+    },
+    {
+      "failure": "release completes without proving the operator route, or repeats admission after verified primary success",
+      "tests": [
+        "tests/unit/workflows/skills/test_release_authority_handoffs.py",
+        "tests/integration/reliability/test_release_compose_configuration.py"
+      ],
+      "invariant": "omitted defaults derive preserved fixed bindings; HTTP/TLS authority survives host transport; unknown access cannot complete; primary success owns cleanup-only resumption"
+    },
+    {
+      "failure": "dependency-only changes share a worker release identity",
+      "test": "tests/unit/workflows/skills/test_release_authority_handoffs.py",
+      "invariant": "copied dependency manifests, Dockerfile and verified source revision contribute to release identity"
+    },
+    {
+      "failure": "a failed brief read leaves an unannounced reservation permanently held",
+      "tests": [
+        "tests/unit/workflows/temporal/test_issue_claim_journey.py",
+        "tests/integration/reliability/test_issue_claim_concurrency_journey.py"
+      ],
+      "invariant": "all failed exits release only SQL-verified unannounced self-owned reservations; announced and inherited claims remain pinned"
+    },
+    {
+      "failure": "cleanup precedes terminal validation and a recorded provider turn is lost on retry",
+      "test": "tests/unit/omnigent/test_attempt_completion.py",
+      "invariant": "revalidate durable turn evidence and publish the same saved candidate without a new billed provider turn"
     }
   ]
 }
