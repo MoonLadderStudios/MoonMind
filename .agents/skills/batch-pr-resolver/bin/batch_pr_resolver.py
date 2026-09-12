@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import runpy
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,6 +19,10 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+
+_normalize_runtime_id = runpy.run_path(
+    str(Path(__file__).resolve().parents[2] / "_shared" / "workflow_execution_client.py")
+)["normalize_runtime_id"]
 
 logger = logging.getLogger(__name__)
 
@@ -221,9 +226,9 @@ def _runtime_text(value: Any) -> str | None:
 def _runtime_modes_match(left: str | None, right: str | None) -> bool:
     if not left or not right:
         return False
-    # Compare canonical runtime identities supplied by the host. The portable
-    # helper must not import the API application or invent runtime aliases.
-    return _normalize_runtime_mode(left) == _normalize_runtime_mode(right)
+    # Reuse the portable client's canonicalizer without importing the API or
+    # duplicating runtime aliases in this skill.
+    return _normalize_runtime_id(left) == _normalize_runtime_id(right)
 
 def _session_artifact_spool_path() -> Path | None:
     raw = _runtime_text(os.getenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH"))
