@@ -62,6 +62,7 @@ def test_seed_has_no_new_ordinary_inputs_and_no_second_recovery_preset():
     seed = yaml.safe_load(_seed_text())
     assert sorted(i["name"] for i in seed["inputs"]) == [
         "constraints",
+        "include_all_authors",
         "issue_search",
         "repository",
         "run_verify",
@@ -111,6 +112,7 @@ def _issue(number=4025, **overrides):
         "body": "Acceptance body.",
         "html_url": f"https://github.com/{REPOSITORY}/issues/{number}",
         "labels": [{"name": "bug"}],
+        "user": {"id": 111, "login": "search-user"},
     }
     base.update(overrides)
     return base
@@ -124,6 +126,10 @@ def activity_boundary(monkeypatch):
 
     def handler(request):
         requests.append(request)
+        if request.url.path == "/user":
+            return httpx.Response(
+                200, json={"id": 111, "login": "search-user", "type": "user"}
+            )
         if "/comments" in request.url.path:
             if request.method == "GET":
                 return httpx.Response(200, json=[])
