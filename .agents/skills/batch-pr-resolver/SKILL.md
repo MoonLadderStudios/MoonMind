@@ -40,8 +40,10 @@ on child publishing; do not infer one from the coordinator's local mode.
 
 ## Workflow
 
-The helper requires Python 3 and `httpx`, plus `gh` for discovery; it runs
-without installing MoonMind or its API service. In a managed run, resolve the
+The helper requires Python 3 and `httpx`, plus `gh` for discovery. Keep the
+portable `_shared/workflow_execution_client.py` beside the skill directories;
+resolved snapshots include it automatically. No MoonMind or API-service
+installation is required. In a managed run, resolve the
 helper from `$MOONMIND_ACTIVE_SKILLS_DIR/batch-pr-resolver/bin/batch_pr_resolver.py`.
 Use the repository path below only outside MoonMind when no active path is set.
 

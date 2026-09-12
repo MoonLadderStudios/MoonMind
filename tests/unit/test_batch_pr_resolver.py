@@ -18,9 +18,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
-@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "omnigent"])
+@pytest.mark.parametrize("runtime,profile_runtime", [
+    ("codex_cli", "codex_cli"), ("claude_code", "claude_code"),
+    ("omnigent", "omnigent"), ("codex", "codex_cli"), ("claude", "claude_code"),
+])
 def test_portable_bundle_replays_discovery_submission_and_verification(
-    tmp_path: Path, runtime: str,
+    tmp_path: Path, runtime: str, profile_runtime: str,
 ) -> None:
     """Run the shipped CLI across process/HTTP/artifact boundaries without the API package."""
     repo_root = Path(__file__).resolve().parents[2]
@@ -28,6 +31,9 @@ def test_portable_bundle_replays_discovery_submission_and_verification(
                            / "batch-pr-resolver-portable-startup/manifest.json").read_text())
     bundle = tmp_path / "skills_active" / "batch-pr-resolver"
     shutil.copytree(repo_root / ".agents/skills/batch-pr-resolver", bundle)
+    shared = bundle.parent / "_shared"
+    shared.mkdir()
+    shutil.copy2(repo_root / ".agents/skills/_shared/workflow_execution_client.py", shared)
     helper = bundle / "bin/batch_pr_resolver.py"
     discovery = [
         {**pr, "isCrossRepository": False,
@@ -40,7 +46,7 @@ def test_portable_bundle_replays_discovery_submission_and_verification(
     gh.chmod(0o755)
     context = tmp_path / "task_context.json"
     runtime_config = {"mode": runtime, "model": "test-model-exact",
-                      "effort": "xhigh", "profileId": "test-profile-exact"}
+                      "effort": "xhigh"}
     context.write_text(json.dumps({"repository": incident["repository"],
                                    "runtimeConfig": runtime_config}))
     capability_file = tmp_path / "fanout-capability"
@@ -97,6 +103,8 @@ runpy.run_path(sys.argv[0], run_name='__main__')
         "PATH": str(tmp_path) + os.pathsep + os.defpath,
         "MOONMIND_URL": f"http://127.0.0.1:{server.server_port}",
         "MOONMIND_TASK_WORKFLOW_ID": incident["incidentWorkflowId"],
+        "MOONMIND_EXECUTION_PROFILE_RUNTIME": profile_runtime,
+        "MOONMIND_EXECUTION_PROFILE_REF": "test-profile-exact",
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": str(capability_file),
         "MOONMIND_SESSION_ARTIFACT_SPOOL_PATH": str(spool),
     }
