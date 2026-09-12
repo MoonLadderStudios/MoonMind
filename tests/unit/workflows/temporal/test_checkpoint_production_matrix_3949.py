@@ -392,7 +392,7 @@ def test_workflow_fleet_composition_is_helpers_plus_compat_persistence():
         activity._Definition.must_from_callable(handler).name
         for handler in workflow_fleet_activity_handlers()
     }
-    assert names == set(HELPER_TYPES) | set(PERSISTENCE_TYPES)
+    assert names == set(HELPER_TYPES) | set(PERSISTENCE_TYPES) | {"release.inspect"}
 
 
 def test_deployment_spec_pins_each_fleet_mount_boundary():

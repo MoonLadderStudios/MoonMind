@@ -52,6 +52,23 @@ SUPPORTED_FORMAT_KINDS: tuple[str, ...] = (
     "report_only",
 )
 
+
+def saved_work_path_exclusion(path: str) -> str | None:
+    """One portable exclusion policy for managed and sandbox exports."""
+    from pathlib import PurePosixPath
+    value = PurePosixPath(path.replace("\\", "/"))
+    if value.name in {".env", ".env.local", "credentials", "credentials.json"}:
+        return "sensitive-filename-policy"
+    if any(part in {".git", ".codex", ".ssh", ".gnupg", "node_modules", "__pycache__",
+                    ".cache", ".docker", "credentials", "managed_runs", "managed_sessions"}
+           for part in value.parts):
+        return "sensitive-path-policy"
+    if value.parts[:2] in {(".agents", "skills"), (".gemini", "skills")}:
+        return "runtime-skill-overlay"
+    if path.lower().endswith((".tmp", ".tar.gz", ".tgz", ".zip")):
+        return "temporary-archive"
+    return None
+
 # Explicit supported format-size limits for saved-work exports. A fixed
 # lower-level direct-upload limit must never be silently bypassed or reported
 # as "no output": callers exceeding it receive an explicit incomplete/failed

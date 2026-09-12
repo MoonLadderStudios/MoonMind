@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from tests.support.issue_claims import issue_claim_store  # noqa: F401
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -121,13 +122,18 @@ def activity_boundary(monkeypatch):
     requests: list = []
     pages: list = [[_issue()]]
     detail = _issue()
+    comments = []
 
     def handler(request):
         requests.append(request)
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 123, "login": "fixture-owner"})
         if "/comments" in request.url.path:
             if request.method == "GET":
-                return httpx.Response(200, json=[])
-            return httpx.Response(200, json={"id": 1})
+                return httpx.Response(200, json=comments)
+            comment = {"id": len(comments) + 1, "body": json.loads(request.content)["body"], "user": {"id": 123}}
+            comments.append(comment)
+            return httpx.Response(200, json=comment)
         if request.method == "DELETE" and "/labels/" in request.url.path:
             # Simulate GitHub label removal so recovery-claim re-reads settle.
             from urllib.parse import unquote

@@ -304,6 +304,7 @@ def test_workflow_fleet_handlers_split_current_and_historical():
     current_names = {name for name, _ in current}
     historical_names = {name for name, _ in historical}
     assert current_names == {
+        "release.inspect",
         "integration.resolve_adapter_metadata",
         "integration.get_activity_route",
         "integration.resolve_external_adapter",

@@ -66,6 +66,17 @@ steps:
     from the assess step) before doing anything.
 
 
+    Use the assessment requirements verification map to prepare test prerequisites
+    and reproduce the required production boundaries before editing. If historical
+    assessment rows lack executable checks, derive and persist them from the visible
+    issue requirements using the issue-implement-assessment contract. Preserve
+    prerequisite attempt counts and candidate identity. Setup failures that can be
+    repaired through authorized tools stay in that bounded loop; only an actual
+    missing capability or authority becomes a handoff. Save completed code before
+    retrying verification infrastructure, and do not redo implementation when only
+    evidence collection remains.
+
+
     If the recorded verdict is FULLY_IMPLEMENTED, make no code changes and report
     that implementation is skipped because the issue is already implemented in the
     current repository state.

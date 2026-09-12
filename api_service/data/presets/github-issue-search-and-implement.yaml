@@ -163,6 +163,8 @@ steps:
     Following the GitHub Issue Implement preset (github-issue-implement) assessment stage and the issue-implement-assessment preset logic, assess whether the resolved issue is already implemented against the current repository checkout without editing code or mutating GitHub. Classify into exactly one verdict: FULLY_IMPLEMENTED, PARTIALLY_IMPLEMENTED, NOT_IMPLEMENTED, or BLOCKED.
 
     Record the verdict and met/partially-met/unmet requirements in the step result AND in artifacts/github-issue-implement-assessment.json with keys issue_provider (github), issue_ref, issue_url, verdict, branch, base_ref, mode, summary, and requirements. This verdict is the controlling input for every later step.
+
+    For every visible requirement, persist the issue-implement-assessment verification map: stable id, owning production boundary, executable checks, required capabilities and expected terminal evidence. Preserve candidate identity and prerequisite readiness, permitted setup and resume commands. Use at most two authorized setup attempts per prerequisite and retain attempts in this assessment across retries. Discover and attempt the actual repository or managed container path before classifying tooling as unavailable. Later implementation and verification consume this exact map.
   skill:
     id: auto
     args:

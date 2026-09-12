@@ -134,6 +134,7 @@ jobs:
             INSTALL_CODEX_CLI=true
             INSTALL_GEMINI_CLI=true
             MOONMIND_BUILD_ID=${{ needs.metadata.outputs.version_tag }}
+            MOONMIND_BUILD_SHA=${{ github.sha }}
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ steps.meta.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=build-${{ steps.meta.outputs.pair }}
@@ -185,6 +186,7 @@ jobs:
           IMAGE_NAME="${{ needs.metadata.outputs.image_name }}"
           docker buildx imagetools create \
             -t "${IMAGE_NAME}:${{ needs.metadata.outputs.version_tag }}" \
+            -t "${IMAGE_NAME}:sha-${{ github.sha }}" \
             -t "${IMAGE_NAME}:latest" \
             $(printf "${IMAGE_NAME}@sha256:%s " *)
 

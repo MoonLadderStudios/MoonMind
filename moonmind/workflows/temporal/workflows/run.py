@@ -14,6 +14,7 @@ from temporalio.exceptions import CancelledError
 from temporalio.workflow import ActivityCancellationType, ChildWorkflowCancellationType
 
 with workflow.unsafe.imports_passed_through():
+    from moonmind.workflows.temporal.run_failure_diagnostics import RunFailureDiagnostics
     from pydantic import ValidationError
     from collections.abc import Mapping as WorkflowMapping
 
@@ -170,6 +171,7 @@ with workflow.unsafe.imports_passed_through():
         RemediationLoopSpec,
         RemediationLoopState,
         materialize_attempt_nodes,
+        materialize_evidence_retry_node,
         project_remediation_loop,
         record_semantic_progress,
         record_verification_evidence,
@@ -223,6 +225,7 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     advance_remediation_loop_state,
     build_remediation_progress_vector,
     compile_bounded_story_loop,
+    bounded_story_loop_scope_guard,
     evaluate_attempt_continuation,
     evaluate_publication_decision,
 )
@@ -298,83 +301,10 @@ RUN_EXPLICIT_RECOVERY_CONTRACT_PATCH = "run-explicit-recovery-contract-v1"
 RUN_TYPED_RECOVERY_TARGET_ENTRY_PATCH = "run-typed-recovery-target-entry-v1"
 
 
-def bounded_story_loop_step_effects(
-    attempt: LoopAttempt,
-    gate: TypedGateResult,
-) -> dict[str, Any]:
-    """Return compact side-effect eligibility for a bounded story loop attempt."""
-
-    publication = evaluate_publication_decision(
-        action=PublicationAction.PR,
-        latest_attempt=attempt,
-        gate=gate,
-    )
-    refs = [
-        ref
-        for ref in (attempt.checkpoint_before_ref, attempt.checkpoint_after_ref)
-        if ref
-    ]
-    return {
-        "stepExecutionId": attempt.step_execution_id,
-        "checkpointRefs": refs,
-        "candidateDiffRef": attempt.candidate_diff_ref,
-        "acceptedOutputRef": attempt.accepted_output_ref,
-        "commitAllowed": attempt.commit_allowed,
-        "publicationAllowed": publication.allowed,
-        "publicationReason": publication.reason,
-        "gateResultRef": gate.gate_result_ref,
-        "remainingWorkRef": gate.remaining_work_ref,
-    }
 
 
-def bounded_story_loop_resume_decision(
-    resume: Mapping[str, Any],
-    *,
-    current_selected_item_digest: str,
-) -> dict[str, Any]:
-    checkpoint_ref = str(resume.get("recoveryCheckpointRef") or "").strip()
-    selected_digest = str(resume.get("selectedItemDigest") or "").strip()
-    if not checkpoint_ref.startswith("artifact://"):
-        return {
-            "allowed": False,
-            "reason": "recovery_checkpoint_ref_missing",
-            "fallback": "none",
-        }
-    if selected_digest != str(current_selected_item_digest or "").strip():
-        return {
-            "allowed": False,
-            "reason": "selected_item_digest_mismatch",
-            "fallback": "none",
-        }
-    return {
-        "allowed": True,
-        "mode": "checkpoint_backed_resume",
-        "loopId": resume.get("loopId"),
-        "recoveryCheckpointRef": checkpoint_ref,
-        "resumeFromAttemptOrdinal": resume.get("resumeFromAttemptOrdinal"),
-        "fallback": "none",
-    }
 
 
-def bounded_story_loop_scope_guard(
-    *,
-    selected_item_digest: str,
-    candidate_item_digests: Sequence[str],
-    full_supervisor_enabled: bool,
-) -> dict[str, Any]:
-    if full_supervisor_enabled:
-        return {
-            "allowed": False,
-            "reason": "full_autonomous_supervisor_gated",
-        }
-    selected = str(selected_item_digest or "").strip()
-    candidates = [str(item or "").strip() for item in candidate_item_digests]
-    if candidates != [selected]:
-        return {
-            "allowed": False,
-            "reason": "unrelated_work_selection_rejected",
-        }
-    return {"allowed": True, "reason": "selected_item_only"}
 
 
 _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
@@ -1140,7 +1070,7 @@ def _legacy_manager_workflow_id(runtime_id: str) -> str:
     return f"auth-profile-manager:{runtime_id}"
 
 
-class MoonMindRunWorkflow:
+class MoonMindRunWorkflow(RunFailureDiagnostics):
     def _expected_workflow_name(self) -> str:
         return WORKFLOW_NAME
 
@@ -1191,399 +1121,11 @@ class MoonMindRunWorkflow:
         return logging.LoggerAdapter(logger_to_use, extra=extra)
 
     @staticmethod
-    def _operator_failure_summary(exc: BaseException) -> str:
-        """Return the most actionable bounded message from a nested failure chain."""
-
-        generic_messages = {
-            "Activity task failed",
-            "Activity error",
-            "Child Workflow execution failed",
-            "Child workflow execution failed",
-            "Workflow execution failed",
-            "activity failed",
-        }
-        generic_types = (
-            exceptions.ActivityError,
-            exceptions.ChildWorkflowError,
-        )
-        chain: list[tuple[BaseException, str]] = []
-        current: BaseException | None = exc
-        for _ in range(20):
-            if current is None:
-                break
-            message = str(current).strip()
-            if message:
-                chain.append((current, message))
-            next_exc = getattr(current, "cause", None)
-            if not isinstance(next_exc, BaseException):
-                next_exc = current.__cause__
-            current = next_exc
-
-        for exc_obj, message in reversed(chain):
-            if message not in generic_messages and not isinstance(
-                exc_obj, generic_types
-            ):
-                return message[:1000]
-        if chain:
-            return chain[-1][1][:1000]
-        return exc.__class__.__name__
-
-    def _bounded_operator_failure(
-        self, exc: BaseException, *, max_chars: int = 500
-    ) -> str:
-        """Return redacted nested failure evidence suitable for durable summaries."""
-
-        raw_message = self._operator_failure_summary(exc)
-        sanitized = self._sanitize_operator_summary(redact_sensitive_text(raw_message))
-        return self._coerce_text(sanitized, max_chars=max_chars) or (
-            exc.__class__.__name__
-        )
-
-    @staticmethod
-    def _failure_root_cause(exc: BaseException) -> BaseException:
-        """Walk the exception chain to the deepest non-generic cause."""
-
-        generic_types = (
-            exceptions.ActivityError,
-            exceptions.ChildWorkflowError,
-        )
-        chain: list[BaseException] = []
-        current: BaseException | None = exc
-        for _ in range(20):
-            if current is None:
-                break
-            chain.append(current)
-            next_exc = getattr(current, "cause", None)
-            if not isinstance(next_exc, BaseException):
-                next_exc = current.__cause__
-            current = next_exc
-        for candidate in reversed(chain):
-            if not isinstance(candidate, generic_types):
-                return candidate
-        return chain[-1] if chain else exc
-
-    @classmethod
-    def _classify_failure_category(cls, exc: BaseException) -> str:
-        """Map an exception chain to one of the canonical errorCategory values.
-
-        Categories align with `ExecutionTerminalStateInput.error_category`:
-        ``user_error`` | ``integration_error`` | ``execution_error`` | ``system_error``.
-        """
-
-        # CancelledError is not a normal failure; callers must handle it before
-        # invoking this helper, but classify defensively.
-        if isinstance(exc, (CancelledError, asyncio.CancelledError)):
-            return "execution_error"
-
-        root = cls._failure_root_cause(exc)
-
-        # Inspect ApplicationError.type when present (set by activities raising
-        # typed errors per docs/Temporal/ErrorTaxonomy.md).
-        application_types: list[str] = []
-        current: BaseException | None = exc
-        for _ in range(20):
-            if current is None:
-                break
-            if isinstance(current, exceptions.ApplicationError):
-                raw_type = getattr(current, "type", None)
-                if isinstance(raw_type, str) and raw_type.strip():
-                    application_types.append(raw_type.strip())
-            next_exc = getattr(current, "cause", None)
-            if not isinstance(next_exc, BaseException):
-                next_exc = current.__cause__
-            current = next_exc
-
-        user_error_types = {"INVALID_INPUT"}
-        integration_error_types = {
-            "UnsupportedStatus",
-            "ProfileResolutionError",
-            "SlotAcquisitionTimeout",
-            "RATE_LIMITED",
-        }
-        system_error_types = {"WORKER_CAPABILITY_UNAVAILABLE"}
-        for app_type in reversed(application_types):
-            if app_type in user_error_types:
-                return "user_error"
-            if app_type in integration_error_types:
-                return "integration_error"
-            if app_type in system_error_types:
-                return "system_error"
-
-        # Heuristic fallback based on the deepest root-cause type.
-        root_type_name = root.__class__.__name__
-        if root_type_name in {"ValueError", "TypeError", "KeyError"}:
-            # These typically indicate malformed/invalid input.
-            return "user_error"
-        if "Timeout" in root_type_name or "Connection" in root_type_name:
-            return "integration_error"
-        return "execution_error"
-
-    @staticmethod
     def _should_propagate_agent_child_cancellation(exc: BaseException) -> bool:
         return isinstance(
             exc,
             (CancelledError, asyncio.CancelledError),
         ) and workflow.patched(RUN_PROPAGATE_AGENT_CHILD_CANCELLATION_PATCH)
-
-    # Canonical errorCategory tokens. These are machine classifications, not
-    # operator-readable messages, so they must never be surfaced verbatim as a
-    # step/plan summary.
-    _ERROR_CATEGORY_TOKENS = frozenset(
-        {"user_error", "integration_error", "execution_error", "system_error"}
-    )
-
-    @classmethod
-    def _humanize_step_failure_summary(
-        cls,
-        *,
-        summary: str | None,
-        tool_name: str,
-        failure_message: str | None,
-    ) -> str:
-        """Return an operator-actionable step-failure summary.
-
-        When the only text a failed step result carries is a bare error-category
-        token (e.g. a runtime that timed out and emitted ``execution_error`` with
-        no provider detail), surface a descriptive line instead of propagating
-        the token. Otherwise the token would become the terminal summary, the
-        finish-outcome reason, and the workflow's ApplicationError message —
-        leaving operators with nothing actionable. The raw category is preserved
-        separately via ``errorCategory``.
-        """
-        text = (summary or "").strip()
-        if text and text not in cls._ERROR_CATEGORY_TOKENS:
-            return text
-        category = (failure_message or "").strip()
-        if category in cls._ERROR_CATEGORY_TOKENS:
-            return (
-                f"{tool_name} failed ({category}); the runtime reported no "
-                "diagnostic detail — inspect step diagnostics/artifacts."
-            )
-        return f"{tool_name} failed"
-
-    def _format_step_failure_exception_message(
-        self,
-        *,
-        node_id: str,
-        tool_name: str,
-        result_status: str,
-        step_failure_summary: str,
-        failure_message: str | None,
-        child_workflow_id: str | None,
-        diagnostics_ref: str | None,
-    ) -> str:
-        """Build the fail-fast ApplicationError text for a failed plan step."""
-
-        summary = (
-            self._sanitize_operator_summary(step_failure_summary)
-            or step_failure_summary
-            or f"{tool_name} failed"
-        )
-        bounded_summary = self._coerce_text(summary, max_chars=900) or (
-            f"{tool_name} failed"
-        )
-        message = (
-            f"Plan step '{node_id}' ({tool_name}) returned status "
-            f"{result_status}: {bounded_summary}"
-        )
-        details: list[str] = []
-        raw_last_error = self._coerce_text(failure_message, max_chars=240)
-        last_error = self._sanitize_operator_summary(raw_last_error) or raw_last_error
-        if last_error and last_error not in bounded_summary:
-            details.append(f"lastError={last_error}")
-        child_id = self._coerce_text(child_workflow_id, max_chars=400)
-        if child_id:
-            details.append(f"childWorkflowId={child_id}")
-        diag_ref = self._coerce_text(diagnostics_ref, max_chars=400)
-        if diag_ref:
-            details.append(f"diagnosticsRef={diag_ref}")
-        if details:
-            message = f"{message} ({'; '.join(details)})"
-        return self._coerce_text(message, max_chars=1200) or message
-
-    def _failure_diagnostic_from_exception(
-        self,
-        exc: BaseException,
-        *,
-        stage: str | None = None,
-        step_id: str | None = None,
-        step_title: str | None = None,
-        source: str | None = None,
-        child_workflow_id: str | None = None,
-        diagnostics_ref: str | None = None,
-    ) -> dict[str, Any]:
-        """Build a bounded, redacted failure diagnostic from a failure chain.
-
-        The returned dict is intentionally small and free of secrets so it
-        can flow through the workflow's finish-summary contract and the
-        terminal-state activity without leaking credential-bearing payloads.
-        """
-
-        raw_message = self._operator_failure_summary(exc)
-        sanitized = self._sanitize_operator_summary(raw_message) or raw_message
-        bounded_message = self._coerce_text(sanitized, max_chars=1000) or (
-            exc.__class__.__name__
-        )
-        category = self._classify_failure_category(exc)
-        root = self._failure_root_cause(exc)
-
-        diagnostic: dict[str, Any] = {
-            "stage": self._coerce_text(stage or self._state, max_chars=80),
-            "category": category,
-            "source": self._coerce_text(source, max_chars=40) or "workflow",
-            "stepId": self._coerce_text(step_id, max_chars=120),
-            "stepTitle": self._coerce_text(step_title, max_chars=200),
-            "childWorkflowId": self._coerce_text(child_workflow_id, max_chars=400),
-            "message": bounded_message,
-            "rootCauseType": self._coerce_text(root.__class__.__name__, max_chars=80),
-            "diagnosticsRef": self._coerce_text(diagnostics_ref, max_chars=400),
-        }
-        current: BaseException | None = exc
-        for _ in range(20):
-            if current is None:
-                break
-            if (
-                isinstance(current, exceptions.ApplicationError)
-                and getattr(current, "type", None) == "WORKER_CAPABILITY_UNAVAILABLE"
-            ):
-                diagnostic.update(
-                    {
-                        "reasonCode": "worker_capability_unavailable",
-                        "agentExecutionLaunched": False,
-                    }
-                )
-                details = getattr(current, "details", ()) or ()
-                detail = (
-                    details[0] if details and isinstance(details[0], Mapping) else {}
-                )
-                for source_key, target_key in (
-                    ("workflowType", "workflowType"),
-                    ("taskQueue", "taskQueue"),
-                    ("registryFingerprint", "registryFingerprint"),
-                    ("observedWorkerBuilds", "observedWorkerBuilds"),
-                ):
-                    if detail.get(source_key) is not None:
-                        diagnostic[target_key] = detail[source_key]
-                break
-            next_exc = getattr(current, "cause", None)
-            if not isinstance(next_exc, BaseException):
-                next_exc = current.__cause__
-            current = next_exc
-        # Drop empty optional keys to keep the structure compact.
-        return {key: value for key, value in diagnostic.items() if value is not None}
-
-    def _record_failure_diagnostic(
-        self,
-        exc: BaseException,
-        *,
-        stage: str | None = None,
-        step_id: str | None = None,
-        step_title: str | None = None,
-        source: str | None = None,
-        child_workflow_id: str | None = None,
-        diagnostics_ref: str | None = None,
-    ) -> dict[str, Any]:
-        """Capture a failure diagnostic on the workflow if none is set yet."""
-
-        diagnostic = self._failure_diagnostic_from_exception(
-            exc,
-            stage=stage,
-            step_id=step_id,
-            step_title=step_title,
-            source=source,
-            child_workflow_id=child_workflow_id,
-            diagnostics_ref=diagnostics_ref,
-        )
-        # First failure wins: keep the deepest available root cause and avoid
-        # later generic wrapping handlers from overwriting it.
-        if self._failure_diagnostic is None:
-            self._failure_diagnostic = diagnostic
-        return diagnostic
-
-    def _record_step_execution_exception(
-        self,
-        exc: BaseException,
-        *,
-        logical_step_id: str,
-        tool_name: str,
-        source: str,
-        updated_at: datetime,
-        child_workflow_id: str | None = None,
-        diagnostics_ref: str | None = None,
-    ) -> dict[str, Any]:
-        """Record step-scoped terminal failure evidence for raised executions."""
-
-        diagnostic = self._record_failure_diagnostic(
-            exc,
-            stage=self._state,
-            step_id=logical_step_id,
-            step_title=tool_name,
-            source=source,
-            child_workflow_id=child_workflow_id,
-            diagnostics_ref=diagnostics_ref,
-        )
-        self._mark_step_terminal(
-            logical_step_id,
-            status="failed",
-            updated_at=updated_at,
-            summary=diagnostic["message"],
-            last_error=diagnostic["category"],
-        )
-        return diagnostic
-
-    def _record_result_failure_diagnostic(
-        self,
-        *,
-        stage: str | None,
-        category: str | None,
-        source: str,
-        step_id: str,
-        step_title: str,
-        message: str,
-        child_workflow_id: str | None = None,
-        diagnostics_ref: str | None = None,
-        terminal_evidence: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Capture a failure diagnostic from a completed-but-failed step result."""
-
-        normalized_category = self._coerce_text(category, max_chars=80)
-        if normalized_category not in {
-            "user_error",
-            "integration_error",
-            "execution_error",
-            "system_error",
-        }:
-            normalized_category = "execution_error"
-        sanitized = self._sanitize_operator_summary(message) or message
-        diagnostic: dict[str, Any] = {
-            "stage": self._coerce_text(stage or self._state, max_chars=80),
-            "category": normalized_category,
-            "source": self._coerce_text(source, max_chars=40) or "workflow",
-            "stepId": self._coerce_text(step_id, max_chars=120),
-            "stepTitle": self._coerce_text(step_title, max_chars=200),
-            "childWorkflowId": self._coerce_text(child_workflow_id, max_chars=400),
-            "message": self._coerce_text(sanitized, max_chars=1000)
-            or "plan step failed",
-            "rootCauseType": (
-                "AgentRunResult" if source == "child_workflow" else "ActivityResult"
-            ),
-            "diagnosticsRef": self._coerce_text(diagnostics_ref, max_chars=400),
-        }
-        compact = {key: value for key, value in diagnostic.items() if value is not None}
-        if isinstance(terminal_evidence, Mapping):
-            for key in (
-                "failureCode",
-                "terminalContractId",
-                "terminalContractMissingEvidence",
-                "queuedChildCount",
-                "queuedChildren",
-            ):
-                value = terminal_evidence.get(key)
-                if value is not None:
-                    compact[key] = value
-        if self._failure_diagnostic is None:
-            self._failure_diagnostic = compact
-        return compact
 
     def __init__(self) -> None:
         self._state = STATE_INITIALIZING
@@ -4663,15 +4205,19 @@ class MoonMindRunWorkflow:
             state,
             verification_ref=gate_result_ref,
         )
-        state = record_semantic_progress(
-            state,
-            progress_ref=remaining_work_ref,
-            progress_signature=(
-                progress_signature
-                if workflow.patched(RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH)
-                else None
-            ),
-        )
+        if (
+            not workflow.patched("run-materialize-evidence-retry-v1")
+            or verdict.strip().upper() in {"FULLY_IMPLEMENTED", "ADDITIONAL_WORK_NEEDED"}
+        ):
+            state = record_semantic_progress(
+                state,
+                progress_ref=remaining_work_ref,
+                progress_signature=(
+                    progress_signature
+                    if workflow.patched(RUN_REMEDIATION_STABLE_PROGRESS_IDENTITY_PATCH)
+                    else None
+                ),
+            )
         decision = decide_remediation_continuation(
             spec=spec,
             state=state,
@@ -4680,6 +4226,7 @@ class MoonMindRunWorkflow:
             remaining_work_ref=remaining_work_ref,
             progress_ref=remaining_work_ref,
             recoverable_evidence=recoverable_evidence,
+            evidence_recovery_enabled=workflow.patched("run-materialize-evidence-retry-v1"),
             recommended_next_action=(
                 recommended_next_action
                 if workflow.patched(RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH)
@@ -4709,6 +4256,12 @@ class MoonMindRunWorkflow:
             decision_ref=decision_ref,
         )
         if (
+            workflow.patched("run-materialize-evidence-retry-v1")
+            and state.phase == RemediationLoopPhase.BLOCKED
+            and state.continuation_reason == "evidence_unavailable"
+        ):
+            self._publish_context["objectiveOutcome"] = "verification_blocked"
+        if (
             workflow_owned_head_enabled
             and state.phase == RemediationLoopPhase.REMEDIATION_PENDING
             and self._remediation_workspace_head is None
@@ -4734,6 +4287,7 @@ class MoonMindRunWorkflow:
             RUN_REMEDIATION_LOOP_CONTINUE_AS_NEW_PATCH
         ) and should_continue_as_new(spec=spec, state=state)
         admitted = False
+        pair = []
         if state.phase == RemediationLoopPhase.REMEDIATION_PENDING:
             state = start_remediation_attempt(state)
             remediation, verification = materialize_attempt_nodes(
@@ -4786,6 +4340,18 @@ class MoonMindRunWorkflow:
                     )
                     remediation["annotations"] = remediation_annotations
             pair = [remediation, verification]
+        elif (
+            workflow.patched("run-materialize-evidence-retry-v1")
+            and decision.retry_kind == "evidence"
+            and state.phase == RemediationLoopPhase.VERIFICATION_PENDING
+        ):
+            source_node = next((node for node in ordered_nodes if node.get("id") == logical_step_id), None)
+            if source_node is None:
+                raise ValueError("Evidence retry has no declared verifier node")
+            pair = [materialize_evidence_retry_node(
+                source_node=source_node, state=state, gate_result_ref=gate_result_ref,
+            )]
+        if pair:
             insertion_index = (
                 len(ordered_nodes)
                 if current_index is None
@@ -7369,6 +6935,14 @@ class MoonMindRunWorkflow:
         attempt = self._coerce_positive_int(
             annotations.get("moonSpecRemediationAttempt")
         )
+        if (
+            self._patched_or_false_outside_workflow("run-materialize-evidence-retry-v1")
+            and type(annotations.get("moonSpecRemediationAttempt")) is int
+            and annotations["moonSpecRemediationAttempt"] == 0
+            and self._coerce_positive_int(annotations.get("verificationEvidenceRetry"))
+            and annotations.get("issueImplementRole") == "moonspec-verification-gate"
+        ):
+            attempt = 0
         max_attempts = self._coerce_positive_int(
             annotations.get("moonSpecRemediationMaxAttempts")
         )
@@ -14026,6 +13600,25 @@ class MoonMindRunWorkflow:
                     self._refresh_step_readiness(updated_at=workflow.now())
                     self._update_memo()
                     break
+            if (
+                workflow.patched("tool-idle-objective-outcome-v1")
+                and self._get_from_result(execution_result, "completion_disposition") == "idle"
+            ):
+                # A completed queue scan is an idle objective, with no issue or
+                # publication to complete. Preserve its evidence and stop here.
+                self._summary = str((outputs or {}).get("summary") or "No eligible work")
+                self._publish_status = "not_required"
+                self._publish_reason = self._summary
+                self._publish_context["objectiveOutcome"] = "idle"
+                require_pull_request_url = False
+                pull_request_url = None
+                self._mark_remaining_plan_steps_skipped(
+                    ordered_nodes=ordered_nodes, completed_index=index - 1,
+                    summary=self._summary,
+                )
+                self._refresh_step_readiness(updated_at=workflow.now())
+                self._update_memo()
+                break
             blocked_message = (
                 None
                 if blocked_outcome_wait_skipped
@@ -20445,7 +20038,7 @@ class MoonMindRunWorkflow:
         ``assessment_artifact_path`` in its workspace. Surfacing that path in the
         agent parameters lets ``agent_runtime.publish_artifacts`` publish the JSON
         as a durable MoonMind artifact and hand downstream steps an
-        ``assessmentArtifactRef`` — a bridge-compatible verdict channel that does
+        ``assessmentArtifactRef`` â€” a bridge-compatible verdict channel that does
         not depend on a shared filesystem (the assessment may run on an Omnigent
         host whose workspace the deterministic Jira tools cannot mount).
 
@@ -24267,7 +23860,7 @@ class MoonMindRunWorkflow:
         """Stamp ``mm_started_at`` once, when the workflow first does real work.
 
         This is the MoonMind semantic "started" timestamp; do not use Temporal's
-        workflow ``start_time`` / ``execution_time`` for this — they fire when
+        workflow ``start_time`` / ``execution_time`` for this â€” they fire when
         the workflow is scheduled, even while it is still awaiting a provider
         slot. Idempotent across replay and across cooldown/requeue cycles: once
         set, it is never overwritten.
@@ -24429,6 +24022,35 @@ class MoonMindRunWorkflow:
         }
         if self._title_target:
             memo_dict["titleTarget"] = dict(self._title_target)
+        if workflow.patched("run-objective-outcome-projection-v1"):
+            info = workflow.info()
+            if hasattr(info, "parent"):
+                parent = info.parent
+                memo_dict["objectiveParentId"] = parent.workflow_id if parent else None
+            memo_dict["objectiveScheduled"] = bool(self._scheduled_for)
+            memo_dict["objectiveOutcome"] = (
+                self._publish_context.get("objectiveOutcome")
+                or {STATE_COMPLETED: "succeeded", STATE_FAILED: "failed", STATE_CANCELED: "cancelled"}.get(self._state, "active")
+            )
+        if workflow.patched("run-objective-progress-v1"):
+            if self._remediation_loop_state is not None:
+                budgets = self._remediation_loop_state.consumed_budgets
+                memo_dict["objectiveProgress"] = {
+                    "remediationAttempts": budgets.attempts,
+                    "evidenceRetries": budgets.evidence_retries,
+                    "contractRepairs": budgets.contract_repairs,
+                    "activityRetries": budgets.activity_retries,
+                    "consecutiveNoProgress": budgets.consecutive_semantic_no_progress,
+                    "repeatedFailureSignature": budgets.repeated_failure_signature,
+                    "candidateCheckpointRecorded": bool(self._remediation_loop_state.workspace_head_ref),
+                    "savedWorkAvailable": True if self._recovery_workspace_restored_ref else None,
+                }
+            if (self._checkpoint_recovery_state or {}).get("status") == "recovery_workspace_restored":
+                memo_dict["objectiveRecoverySource"] = {
+                    "workflowId": self._recovery_source_text(self._recovery_source or {}, "sourceWorkflowId", "source_workflow_id"),
+                    "runId": self._recovery_source_text(self._recovery_source or {}, "sourceRunId", "source_run_id"),
+                    "verified": True,
+                }
         if isinstance(self._step_count, int) and self._step_count > 0:
             memo_dict["mm_current_step_order"] = self._step_count
         if workflow.patched("run-memo-runtime-skill-visibility"):

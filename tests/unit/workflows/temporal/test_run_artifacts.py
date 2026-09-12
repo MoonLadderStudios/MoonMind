@@ -3,6 +3,7 @@ import inspect
 import json
 from datetime import datetime, timezone
 from itertools import count
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import pytest
@@ -242,6 +243,7 @@ def test_initialize_from_payload_does_not_project_lore_target_to_github_repo(
 def test_initialize_from_payload_tracks_declared_dependencies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: SimpleNamespace(parent=None))
     workflow = MoonMindRunWorkflow()
     monkeypatch.setattr(run_workflow_module.workflow, "memo", lambda: {})
     monkeypatch.setattr(
@@ -3717,6 +3719,7 @@ def test_activity_result_provider_failure_summary_ignores_generic_activity_failu
 async def test_skipped_jira_blocker_wait_restores_executing_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: SimpleNamespace(parent=None))
     workflow = MoonMindRunWorkflow()
 
     async def fake_wait_condition(
@@ -6808,6 +6811,7 @@ async def test_run_execution_stage_stops_after_publish_lease_conflict(
 def test_update_memo_persists_pull_request_url_under_canonical_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: SimpleNamespace(parent=None))
     workflow = MoonMindRunWorkflow()
     workflow._title = "Temporal task"
     workflow._summary = "Waiting on review."

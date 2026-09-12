@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import subprocess
+import shutil
 import tarfile
 from pathlib import Path
 
@@ -21,6 +22,77 @@ from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActiviti
 from moonmind.workflows.temporal.runtime.checkpoint_restore import (
     ManagedCheckpointRestoreService,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sandbox_destination", [False, True])
+async def test_unpublished_head_restores_after_source_loss_with_owned_destination(tmp_path, sandbox_destination):
+    from moonmind.workflows.temporal.runtime.workspace_locators import SandboxWorkspaceRecordStore, SandboxWorkspaceRecord
+    remote, _ = _repo(tmp_path / "remote")
+    def git(path, *args):
+        return subprocess.check_output(["git", "-C", str(path), *args]).decode().strip()
+    (remote / "deleted.txt").write_text("remove me")
+    excluded = remote / ".agents" / "skills" / "owned" / "SKILL.md"
+    excluded.parent.mkdir(parents=True)
+    excluded.write_text("repository-owned skill")
+    git(remote, "add", ".")
+    git(remote, "commit", "-m", "baseline")
+    baseline = git(remote, "rev-parse", "HEAD")
+    source = tmp_path / "temporal_sandbox" / "source"
+    source.parent.mkdir()
+    subprocess.run(["git", "clone", str(remote), str(source)], check=True, capture_output=True)
+    git(source, "config", "user.email", "test@example.com")
+    git(source, "config", "user.name", "Test")
+    (source / "candidate.txt").write_text("unpublished commit")
+    git(source, "add", "candidate.txt")
+    git(source, "commit", "-m", "unpublished candidate")
+    head = git(source, "rev-parse", "HEAD")
+    (source / "deleted.txt").unlink()
+    (source / "tracked.txt").write_text("staged candidate")
+    git(source, "add", "-A")
+    (source / "untracked.bin").write_bytes(b"\x00\xff\x01")
+    store = InMemoryArtifactStore()
+    capture = await TemporalSandboxActivities(workspace_root=tmp_path, artifact_store=store).workspace_capture_checkpoint({
+        "identity": {"workflowId": "source", "runId": "source-run", "logicalStepId": "implement", "executionOrdinal": 1},
+        "boundary": "before_execution", "kind": "worktree_archive", "workspacePath": str(source),
+        "artifactNamespace": "checkpoint", "idempotencyKey": "capture", "includeUntracked": True,
+    })
+    assert capture["workspace"]["baseCommit"] == head != baseline
+    manifest = json.loads(store.get_bytes(capture["workspace"]["manifestRef"]))
+    assert manifest["gitHistory"]["baselineCommit"] == baseline
+    checkpoint_ref = store.put_bytes(json.dumps({
+        "contentType": "application/vnd.moonmind.step-execution-checkpoint+json;version=1",
+        "source": {"workflowId": "source", "runId": "source-run", "logicalStepId": "implement", "executionOrdinal": 1},
+        "boundary": "before_execution", "workspace": capture["workspace"],
+    }).encode(), content_type="application/vnd.moonmind.step-execution-checkpoint+json;version=1").artifact_ref
+    request = _request(checkpoint_ref=checkpoint_ref, capture=capture, base=head)
+    authority = tmp_path / "authority"
+    restored = authority / "new-run" / "repo"
+    if sandbox_destination:
+        workspace_id = hashlib.sha256(b"recovery:implement-2").hexdigest()[:24]
+        SandboxWorkspaceRecordStore(authority).ensure(SandboxWorkspaceRecord(workspace_id, "recovery", "implement-2", "repo"))
+        request["destination"] = {"kind": "sandbox", "workspaceId": workspace_id, "stepExecutionId": "implement-2", "repository": "MoonLadderStudios/MoonMind"}
+        restored = authority / "temporal_sandbox" / workspace_id / "repo"
+    shutil.rmtree(source)
+    assert git(remote, "rev-parse", "HEAD") == baseline
+    service = ManagedCheckpointRestoreService(authority_root=authority, artifact_store=store, repository_source_root=remote)
+    result = await service.restore(request)
+    assert git(restored, "rev-parse", "HEAD") == head
+    assert (restored / "candidate.txt").read_text() == "unpublished commit"
+    assert not (restored / "deleted.txt").exists()
+    assert (restored / ".agents/skills/owned/SKILL.md").read_text() == "repository-owned skill"
+    assert (restored / "untracked.bin").read_bytes() == b"\x00\xff\x01"
+    assert git(restored, "diff", "--cached", "--name-only").splitlines() == ["deleted.txt", "tracked.txt"]
+    assert result["destinationWorkspaceLocator"]["kind"] == ("sandbox" if sandbox_destination else "managed_runtime")
+    assert await service.restore(request) == result
+    shutil.rmtree(restored)
+    await service.restore(request)
+    assert git(restored, "rev-parse", "HEAD") == head
+    # Equal file bytes do not authorize adoption of a different Git candidate.
+    git(restored, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+        "commit", "--allow-empty", "-m", "new candidate")
+    with pytest.raises(CheckpointRestoreError, match="HEAD changed"):
+        await service.restore(request)
 
 
 def _sha(payload: bytes) -> str:
@@ -121,6 +193,8 @@ async def test_sandbox_capture_trusts_only_the_resolved_workspace_for_git(
             return activity_runtime_module.CmdRes(f"{base}\n".encode())
         if operation[0] == "status":
             return activity_runtime_module.CmdRes(b"")
+        if operation[0] == "ls-files":
+            return activity_runtime_module.CmdRes(b"tracked.txt\0")
         raise AssertionError(f"unexpected git command: {operation}")
 
     monkeypatch.setattr(activity_runtime_module, "_run_command", enforce_safe_directory)
@@ -147,7 +221,7 @@ async def test_sandbox_capture_trusts_only_the_resolved_workspace_for_git(
     )
 
     assert capture["status"] == "captured"
-    assert len(commands) == 2
+    assert {command[len(expected_prefix)] for command in commands} == {"rev-parse", "status", "ls-files"}
     assert all(command[: len(expected_prefix)] == expected_prefix for command in commands)
 
 
@@ -176,6 +250,7 @@ async def test_cold_restore_survives_source_deletion_and_is_idempotent(
             "workspacePath": str(source),
             "artifactNamespace": "checkpoint",
             "idempotencyKey": "capture",
+            "includeUntracked": True,
             "baseCommit": base,
         }
     )

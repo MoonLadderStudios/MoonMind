@@ -14573,6 +14573,7 @@ async def get_execution_metrics(
             canonical_rows = (await session.execute(stmt)).scalars().all()
             canonical_map = {row.workflow_id: row for row in canonical_rows}
 
+        objective_rows: list[dict[str, Any]] = []
         durations: list[float] = []
         costs: list[float] = []
         from api_service.core.sync import (
@@ -14587,6 +14588,7 @@ async def get_execution_metrics(
                 continue
             canonical = canonical_map.get(wf.id)
             payload["parameters"] = merged_parameters_for_projection(payload, canonical)
+            objective_rows.append(payload)
             duration = _duration_seconds_from_payload(payload)
             if duration is not None:
                 durations.append(duration)
@@ -14600,6 +14602,7 @@ async def get_execution_metrics(
 
         terminal = completed + failed + canceled
         success_rate = completed / terminal if terminal else None
+        from moonmind.workflows.executions.objective_metrics import objective_sample_metrics
         return ExecutionMetricsResponse(
             totalRuns=total,
             completedRuns=completed,
@@ -14607,6 +14610,7 @@ async def get_execution_metrics(
             canceledRuns=canceled,
             terminalRuns=terminal,
             successRate=success_rate,
+            objectiveMetrics=objective_sample_metrics(objective_rows),
             duration=_duration_metrics(durations),
             cost=_cost_metrics(costs),
             sampleSize=len(page),

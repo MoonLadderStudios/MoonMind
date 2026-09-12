@@ -138,6 +138,21 @@ steps:
     never hidden truncated content.
 
 
+    Before implementation starts, extend each visible requirements row with a
+    stable id and a verification object containing the owning production boundary,
+    executable check commands, required capabilities, and expected terminal
+    evidence. Record prerequisites with their owning service, observed readiness,
+    permitted setup action, and the exact check that resumes. Prepare authorized
+    test dependencies with at most two setup attempts per prerequisite in this
+    assessment; preserve those attempts and diagnostics in the artifact so a
+    retry cannot reset the budget. Missing local tooling alone is not a blocker:
+    discover and attempt the repository or managed container verification path.
+    Preserve the candidate commit or workspace checkpoint in the assessment.
+    Unclear checks require bounded investigation before implementation, not an
+    invented manual-testing requirement. The implementation and verifier consume
+    this same map and update its evidence for the exact resulting candidate.
+
+
     The verdict written here is the controlling input for every later step in this
     preset: the blocker preflight, the In Progress transition, the implementation
     step, the verification step, the pull request step, and the final Jira transition

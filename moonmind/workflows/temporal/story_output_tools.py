@@ -68,6 +68,16 @@ from moonmind.workflows.temporal.github_issue_search import (
     is_lifecycle_selectable_candidate,
     resolve_issue,
 )
+from moonmind.workflows.temporal.issue_claim_store import (
+    ActiveIssueClaimConflict,
+    ClaimReceipt,
+    IssueClaimStore,
+    claim_owner,
+    inspect_claim_comments,
+    publish_claim_comment,
+    verify_claim,
+)
+from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment
 
 JIRA_CREATE_ISSUES_TOOL_NAME = "story.create_jira_issues"
 JIRA_ORCHESTRATE_TASKS_TOOL_NAME = "story.create_jira_orchestrate_tasks"
@@ -4643,6 +4653,51 @@ async def load_github_issue_preset_brief(
     *,
     github_service_factory: Callable[[], GitHubService] = GitHubService,
 ) -> ToolResult:
+    """Pin side effects; reselect only a provably unannounced reservation."""
+    authored_inputs = dict(inputs)
+    rejected = set()
+    for selection_attempt in range(3):
+        receipt = None
+        try:
+            owner = claim_owner(_context)
+            receipt = await IssueClaimStore().for_execution(owner)
+            context = {**dict(_context or {}), "issue_claim_receipt": receipt,
+                       "rejected_claim_candidates": rejected}
+            inputs = dict(authored_inputs)
+            if receipt:
+                if "issueSearch" not in inputs:
+                    explicit_repo, explicit_number = _github_issue_inputs(inputs)
+                    if (explicit_repo.casefold(), explicit_number) != (receipt.repository, receipt.issue_number):
+                        raise ValueError("substitution_denied: execution already selected a different issue")
+                service = github_service_factory()
+                context["verified_issue_claim"] = await verify_claim(receipt, service)
+                inputs = {key: value for key, value in inputs.items() if key != "issueSearch"}
+                inputs = {**inputs, "repository": receipt.repository, "issueNumber": receipt.issue_number, **receipt.handoff()}
+            else:
+                context["verified_issue_claim"] = False
+            result = await _load_github_issue_preset_brief(inputs, context, github_service_factory=github_service_factory)
+        except ActiveIssueClaimConflict as exc:
+            result = ToolResult(status="FAILED", outputs={"candidateDisposition": "ineligible",
+                "reasonCode": str(exc).split(":")[0], "error": str(exc)})
+        except ValueError as exc:
+            return ToolResult(status="FAILED", outputs={"reasonCode": str(exc).split(":")[0], "error": str(exc)})
+        if ("issueSearch" not in authored_inputs or result.status != "FAILED"
+                or result.outputs.get("candidateDisposition") != "ineligible"):
+            return result
+        receipt = receipt or await IssueClaimStore().get(owner)
+        if receipt is None or receipt.owner != owner or not await IssueClaimStore().abandon_unannounced(owner, receipt.attempt_id):
+            return result
+        rejected.add(receipt.issue_number)
+    return ToolResult(status="FAILED", outputs={"reasonCode": "candidate_selection_exhausted",
+        "error": "Three candidates changed before announcement; selection retry budget exhausted."})
+
+
+async def _load_github_issue_preset_brief(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> ToolResult:
     """Load a compact GitHub issue preset brief through trusted GitHub data."""
 
     search_evidence: dict[str, Any] = {}
@@ -4656,6 +4711,18 @@ async def load_github_issue_preset_brief(
             github_service=github_service_factory(),
             prerequisite_lookup=prerequisite_lookup,
         )
+
+    async def reserve_candidate(issue_number: int) -> bool:
+        if issue_number in (_context or {}).get("rejected_claim_candidates", ()):
+            return False
+        try:
+            await _prepare_github_issue_claim(
+                inputs=inputs, context=_context, repository=repository,
+                issue_number=issue_number, service=github_service_factory(),
+            )
+            return True
+        except ActiveIssueClaimConflict:
+            return False
 
     if "issueSearch" in inputs:
         repository = _string(inputs.get("repository"))
@@ -4677,6 +4744,7 @@ async def load_github_issue_preset_brief(
                 query=_string(inputs.get("issueSearch")),
                 github_service=github_service_factory(),
                 blockers_from_issue=blockers_for_issue,
+                reserve_candidate=reserve_candidate,
                 recovery_handoff=recovery_handoff or None,
                 # Same shared exact-issue admission boundary as explicit /
                 # orchestration / continuation paths (issue #4178): the
@@ -4698,16 +4766,20 @@ async def load_github_issue_preset_brief(
             return ToolResult(status="FAILED", outputs={"error": str(exc)})
         if issue_number is None:
             return ToolResult(
-                status="FAILED",
+                status="COMPLETED" if search_evidence.get("disposition") == "idle" else "FAILED",
                 outputs={"repository": repository, **search_evidence},
+                completion_disposition="idle" if search_evidence.get("disposition") == "idle" else None,
             )
     else:
         repository, issue_number = _github_issue_inputs(inputs)
-    issue_data, error = await _fetch_github_issue(
-        repository=repository,
-        issue_number=issue_number,
-        github_service_factory=github_service_factory,
-    )
+    issue_data = search_evidence.pop("selectedIssue", None)
+    error = None
+    if issue_data is None:
+        issue_data, error = await _fetch_github_issue(
+            repository=repository,
+            issue_number=issue_number,
+            github_service_factory=github_service_factory,
+        )
     if issue_data is None:
         return ToolResult(
             status="FAILED",
@@ -4765,9 +4837,11 @@ async def load_github_issue_preset_brief(
             outputs={
                 **search_evidence,
                 "error": "Selected GitHub issue changed or could not be confirmed before brief loading.",
+                "candidateDisposition": "ineligible",
             },
         )
-    if not search_evidence and (
+    own_claim = bool((_context or {}).get("verified_issue_claim"))
+    if not search_evidence and not own_claim and (
         not is_complete_open_issue(issue_data, repository)
         or issue_data["number"] != issue_number
         or has_in_progress_status(issue_data)
@@ -4796,9 +4870,22 @@ async def load_github_issue_preset_brief(
                 ),
                 "repository": repository,
                 "issueNumber": issue_number,
+                "candidateDisposition": "ineligible",
             },
         )
     issue = _github_issue_payload(issue_data, repository)
+    receipt = (_context or {}).get("issue_claim_receipt")
+    if own_claim:
+        settled = interpret_issue(issue).settled
+        if settled == "in_progress" and isinstance(receipt, ClaimReceipt) and not receipt.confirmed:
+            # Label write completed before the worker acknowledged it. The
+            # persisted announcement and current read prove the same claim.
+            async with IssueClaimStore().locked(receipt.owner) as row:
+                row.confirmed = True
+            receipt = await IssueClaimStore().get(receipt.owner)
+            _context = {**dict(_context or {}), "issue_claim_receipt": receipt}
+        elif settled != "in_progress" and (receipt.confirmed or settled not in {"available", "recovery_needed"}):
+            return ToolResult(status="FAILED", outputs={"reasonCode": "claim_state_changed", "error": "Claimed issue changed lifecycle state; re-admission is required."})
     issue_ref = f"{repository}#{issue['number'] or issue_number}"
     # Route usable recovery handoff evidence with the brief so the later
     # start transition can satisfy its predecessor_stopped/handoff_usable
@@ -4843,8 +4930,15 @@ async def load_github_issue_preset_brief(
     brief_settled = interpret_issue(
         {"state": issue.get("state", "open"), "labels": issue.get("labels") or []}
     ).settled
-    admission_handoff: dict[str, Any] = {}
+    receipt = (_context or {}).get("issue_claim_receipt")
+    admission_handoff: dict[str, Any] = receipt.handoff() if isinstance(receipt, ClaimReceipt) else {}
     if brief_settled in {"available", "recovery_needed"}:
+        receipt = await _prepare_github_issue_claim(
+            inputs=inputs, context=_context, repository=repository,
+            issue_number=issue_number, service=github_service_factory(),
+        )
+        inputs = {**inputs, **receipt.handoff()}
+        _context = {**dict(_context or {}), "issue_claim_receipt": receipt}
         admission_handoff = _github_admission_claim_and_identity(
             inputs=inputs,
             context=_context,
@@ -4853,6 +4947,7 @@ async def load_github_issue_preset_brief(
             settled=brief_settled,
             current_labels=[str(label) for label in labels],
         )
+        admission_handoff.update(receipt.handoff())
         persisted_check = _mapping(admission_handoff.get("admissionPersisted"))
         if _string(persisted_check.get("reasonCode")) == "substitution_denied":
             return ToolResult(
@@ -4882,6 +4977,9 @@ async def load_github_issue_preset_brief(
                 github_service_factory=github_service_factory,
             )
             admission_handoff["admissionClaimExecuted"] = claim_execution
+            if not claim_execution.get("blocked"):
+                receipt = await IssueClaimStore().get(receipt.owner)
+                admission_handoff.update(receipt.handoff())
             if bool(claim_execution.get("blocked")):
                 return ToolResult(
                     status="FAILED",
@@ -6065,12 +6163,14 @@ def _github_admission_claim_and_identity(
         ) or _string(
             _mapping(inputs.get("previousOutputs")).get("attemptId")
         )
+    if not own_attempt_id:
+        raise ValueError("claim_receipt_required: admission needs the persisted attempt identity")
     handoff = _github_brief_recovery_handoff(inputs, context)
     claim = announce_before_assessment(
         settled=settled,
         repository=repository,
         issue_number=issue_number,
-        attempt_id=own_attempt_id or f"pending-{repository}#{issue_number}",
+        attempt_id=own_attempt_id,
         current_labels=list(current_labels or []),
         predecessor_stopped=handoff.get("predecessor_stopped"),
         handoff_usable=handoff.get("handoff_usable"),
@@ -6092,28 +6192,7 @@ def _github_admission_claim_and_identity(
             "admissionPersisted": persisted}
 
 
-async def _execute_brief_admission_claim(
-    *,
-    repository: str,
-    issue_number: int,
-    settled: str,
-    current_labels: Sequence[str] | None = None,
-    claim: Mapping[str, Any],
-    inputs: Mapping[str, Any],
-    context: Mapping[str, Any] | None,
-    github_service_factory: Callable[[], GitHubService] = GitHubService,
-) -> dict[str, Any]:
-    """Execute the Req-2 advisory claim write and re-read (issue #4178).
-
-    The brief path announces a stable attempt and applies in-progress BEFORE
-    expensive assessment/implementation, then re-reads after the announcement.
-    Prerequisite/authority/readiness checks stay intact: contender and resume
-    observations block the write, readiness gates the label mutation, and a
-    failed re-read blocks launching work on unknown evidence. The mutation is
-    the planned add-before-remove ops from ``announce_before_assessment``;
-    read-back mismatch is recorded honestly (unfenced race) without claiming
-    exclusivity.
-    """
+def _brief_claim_stop(*, repository, issue_number, inputs, context):
     issue_ref = f"{repository}#{issue_number}"
     bundle = _github_admission_bundle(inputs, context)
     own_attempt_id = _string(bundle.get("own_attempt_id")) or _string(
@@ -6152,6 +6231,103 @@ async def _execute_brief_admission_claim(
                 "summary": str(gate.get("summary") or "Contender observed; claim not executed."),
                 "issueRef": issue_ref,
             }
+    return None
+
+
+async def _execute_brief_admission_claim(
+    *,
+    repository: str,
+    issue_number: int,
+    settled: str,
+    current_labels: Sequence[str] | None = None,
+    claim: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> dict[str, Any]:
+    """Serialize this attempt and reconcile its announcement before label writes."""
+    receipt = (context or {}).get("issue_claim_receipt")
+    if not isinstance(receipt, ClaimReceipt):
+        return {"executed": False, "blocked": True, "reasonCode": "claim_receipt_required"}
+    stopped = _brief_claim_stop(repository=repository, issue_number=issue_number, inputs=inputs, context=context)
+    if stopped is not None:
+        return stopped
+    service = github_service_factory()
+    await IssueClaimStore().start_announcement(receipt.owner, receipt.attempt_id)
+    async with IssueClaimStore().locked(receipt.owner) as row:
+        receipt = ClaimReceipt.from_row(row)
+        if (receipt.repository, receipt.issue_number) != (repository.casefold(), issue_number):
+            raise ValueError("claim_changed: stale reservation cannot mutate a different candidate")
+        listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
+        if not listed.get("ok") or not isinstance(listed.get("comments"), list):
+            return {"executed": False, "blocked": True, "reasonCode": "read_failure"}
+        comment_id = inspect_claim_comments(receipt, listed["comments"])
+        if not comment_id:
+            created = await service.create_issue_comment(repo=repository, issue_number=issue_number, body=receipt.comment_body)
+            # Always reread, including a lost create acknowledgment. Never infer
+            # absence from a transport error and issue a second create here.
+            if not created.get("ok") and created.get("reasonCode") != "outcome_unknown":
+                return {"executed": False, "blocked": True, "reasonCode": created.get("reasonCode", "claim_write_failed")}
+            listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
+            if not listed.get("ok") or not isinstance(listed.get("comments"), list):
+                return {"executed": False, "blocked": True, "reasonCode": "read_failure"}
+            comment_id = inspect_claim_comments(receipt, listed["comments"])
+            if not comment_id:
+                return {"executed": False, "blocked": True, "reasonCode": "claim_not_confirmed"}
+        row.comment_id = comment_id
+        result = await _apply_brief_claim_labels(
+            repository=repository, issue_number=issue_number, settled=settled,
+            current_labels=current_labels, claim=claim, inputs=inputs, context=context,
+            github_service_factory=github_service_factory,
+        )
+        if not result.get("blocked"):
+            # Recheck contenders after mutation, not just before it.
+            if not await verify_claim(ClaimReceipt.from_row(row), service):
+                raise ValueError("claim_not_confirmed: announcement disappeared")
+            row.confirmed = True
+        return result
+
+
+async def _prepare_github_issue_claim(*, inputs, context, repository, issue_number, service):
+    owner = claim_owner(context)
+    existing = (context or {}).get("issue_claim_receipt") or await IssueClaimStore().for_execution(owner)
+    if existing:
+        if (existing.repository, existing.issue_number) != (repository.casefold(), issue_number):
+            raise ValueError("substitution_denied: execution already selected a different issue")
+        return existing
+    actor = await service.issue_claim_actor(repo=repository)
+    if not actor.get("ok"):
+        raise ValueError("claim_actor_unavailable: authenticated GitHub poster could not be verified")
+    # A random ID is persisted before any side effect and never taken from inputs.
+    attempt_id = new_attempt_id(repository=repository, issue_number=issue_number)
+    handoff = _github_attempt_handoff_for_transition(
+        mode="start", repository=repository, issue_number=issue_number,
+        inputs={**inputs, "attemptId": attempt_id, "workflowId": owner},
+        context=context, pull_request_url="",
+    )
+    return await IssueClaimStore().prepare(owner=owner, repository=repository,
+        issue_number=issue_number, attempt_id=attempt_id, actor_id=actor["actorId"],
+        comment_body=render_attempt_comment(handoff))
+
+
+async def _apply_brief_claim_labels(
+    *, repository: str, issue_number: int, settled: str,
+    current_labels: Sequence[str] | None = None, claim: Mapping[str, Any],
+    inputs: Mapping[str, Any], context: Mapping[str, Any] | None,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> dict[str, Any]:
+    """Execute the Req-2 advisory claim write and re-read (issue #4178).
+
+    The brief path announces a stable attempt and applies in-progress BEFORE
+    expensive assessment/implementation, then re-reads after the announcement.
+    Prerequisite/authority/readiness checks stay intact: contender and resume
+    observations block the write, readiness gates the label mutation, and a
+    failed re-read blocks launching work on unknown evidence. The mutation is
+    the planned add-before-remove ops from ``announce_before_assessment``;
+    read-back mismatch is recorded honestly (unfenced race) without claiming
+    exclusivity.
+    """
+    issue_ref = f"{repository}#{issue_number}"
     mutation = _mapping(claim.get("mutation"))
     labels_to_add = [str(item) for item in _list(mutation.get("labelsToAdd")) if _string(item)]
     labels_to_remove = [
@@ -6214,6 +6390,7 @@ async def _execute_brief_admission_claim(
                 "readiness": dict(readiness),
             }
     applied: list[str] = []
+    warnings: list[str] = []
     for label in labels_to_add:
         try:
             result = await service.add_issue_labels(
@@ -6231,6 +6408,13 @@ async def _execute_brief_admission_claim(
         if not (isinstance(result, Mapping) and result.get("ok")):
             code = _string(result.get("reasonCode") if isinstance(result, Mapping) else "")
             summary = _string(result.get("summary") if isinstance(result, Mapping) else "")
+            if code == "outcome_unknown" and await _github_issue_label_present(
+                repository=repository, issue_number=issue_number, label=label,
+                github_service_factory=github_service_factory,
+            ) is True:
+                applied.append(f"add_label:{label}")
+                warnings.append(f"Label add for {label} confirmed on read-back after an ambiguous response.")
+                continue
             return {
                 "executed": False,
                 "blocked": True,
@@ -6259,6 +6443,13 @@ async def _execute_brief_admission_claim(
             # applied; report honestly without rolling back shared state.
             code = _string(result.get("reasonCode") if isinstance(result, Mapping) else "")
             summary = _string(result.get("summary") if isinstance(result, Mapping) else "")
+            if code == "outcome_unknown" and await _github_issue_label_present(
+                repository=repository, issue_number=issue_number, label=label,
+                github_service_factory=github_service_factory,
+            ) is False:
+                applied.append(f"remove_label:{label}")
+                warnings.append(f"Label remove for {label} confirmed on read-back after an ambiguous response.")
+                continue
             reread_data, _ = await _fetch_github_issue(
                 repository=repository,
                 issue_number=issue_number,
@@ -6331,6 +6522,7 @@ async def _execute_brief_admission_claim(
         "executed": True,
         "blocked": False,
         "reasonCode": "claim_executed",
+        "warnings": warnings,
         "summary": (
             f"Announced attempt for {issue_ref} and applied in-progress before "
             "assessment; re-read after the announcement. GitHub offers no "
@@ -6917,6 +7109,11 @@ async def _finalize_blocked_to_needs_attention(
     if pull_request_url and pull_request_url not in comment_body:
         comment_body = f"{comment_body.rstrip()}\n\nImplementation pull request: {pull_request_url}"
     attempt_comment_id: Any = None
+    receipt = (context or {}).get("issue_claim_receipt")
+    if isinstance(receipt, ClaimReceipt):
+        attempt_comment_id = await publish_claim_comment(IssueClaimStore(), receipt, service, comment_body)
+        applied.append("comment")
+        comment_body = ""
     if comment_body and hasattr(service, "list_issue_comments"):
         try:
             listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
@@ -7071,6 +7268,25 @@ async def update_github_issue_status(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
     *,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> ToolResult:
+    try:
+        receipt = await IssueClaimStore().for_execution(claim_owner(_context))
+        context = {**dict(_context or {}), "verified_issue_claim": False}
+        if receipt:
+            repository, number = _github_issue_inputs(inputs)
+            if (repository.casefold(), number) != (receipt.repository, receipt.issue_number):
+                raise ValueError("substitution_denied: lifecycle transition targets another issue")
+            context["verified_issue_claim"] = receipt.confirmed and await verify_claim(receipt, github_service_factory())
+            context["issue_claim_receipt"] = receipt
+            inputs = {**inputs, **receipt.handoff()}
+        return await _update_github_issue_status(inputs, context, github_service_factory=github_service_factory)
+    except ValueError as exc:
+        return ToolResult(status="FAILED", outputs={"reasonCode": str(exc).split(":")[0], "summary": str(exc)})
+
+
+async def _update_github_issue_status(
+    inputs: Mapping[str, Any], _context: Mapping[str, Any] | None = None, *,
     github_service_factory: Callable[[], GitHubService] = GitHubService,
 ) -> ToolResult:
     repository, issue_number = _github_issue_inputs(inputs)
@@ -7381,7 +7597,7 @@ async def update_github_issue_status(
                 "summary": f"Abandoned obsolete GitHub issue update for {issue_ref}: {abandon_reason}.",
             },
         )
-    if target == "to_in_progress" and not caller_expected_settled:
+    if target == "to_in_progress":
         # Shared exact-issue admission with the full Req-1 evidence bundle.
         # Narrowed to denies with no retained downstream equivalent: the
         # caller's expected-state path above owns abandon/idempotent
@@ -7412,6 +7628,7 @@ async def update_github_issue_status(
                 shared_admission.reason_code == "manual_in_progress_without_trusted_owner"
                 and interpretation.settled == "in_progress"
                 and own_attempt_id
+                and (_context or {}).get("verified_issue_claim") is True
             ):
                 # The pre-assessment brief already applied in-progress for this
                 # same workflow attempt; the redundant start transition is
@@ -7423,6 +7640,10 @@ async def update_github_issue_status(
                         "decision": "already_applied",
                         "lifecycleSettled": interpretation.settled,
                         "reasonCode": "already_applied",
+                        "mutationOutcome": "already_applied",
+                        **({"childAttempt": child_gate["decision"], "childKind": child_gate["childKind"]} if child_gate else {}),
+                        "attemptId": own_attempt_id,
+                        "existingAttemptCommentId": inputs.get("existingAttemptCommentId"),
                         "summary": (
                             f"GitHub issue update for {issue_ref} already applied: "
                             "in-progress claim from this attempt is present."
@@ -7587,6 +7808,45 @@ async def update_github_issue_status(
                     ),
                 },
             )
+    if target == "to_in_progress":
+        if child_gate is not None and not isinstance((_context or {}).get("issue_claim_receipt"), ClaimReceipt):
+            return ToolResult(status="FAILED", outputs={"reasonCode": "controlling_claim_unavailable",
+                "summary": "Child work requires its controlling workflow's durable claim; an authored attempt ID is insufficient."})
+        receipt = await _prepare_github_issue_claim(
+            inputs=inputs, context=_context, repository=repository,
+            issue_number=issue_number, service=service,
+        )
+        claim_result = await _execute_brief_admission_claim(
+            repository=repository, issue_number=issue_number, settled=interpretation.settled,
+            current_labels=current_labels, claim={"mutation": mutation_plan.to_dict()},
+            inputs={**inputs, **receipt.handoff()},
+            context={**dict(_context or {}), "issue_claim_receipt": receipt},
+            github_service_factory=github_service_factory,
+        )
+        receipt = await IssueClaimStore().get(receipt.owner)
+        blocked = bool(claim_result.get("blocked"))
+        handoff = parse_attempt_comment(receipt.comment_body).handoff
+        claim_outputs = {
+            "issueRef": issue_ref, "decision": "blocked" if blocked else "applied",
+            "transition": decision.to_dict(), "lifecycleSettled": claim_result.get("rereadSettled"),
+            "appliedActions": (["comment"] if receipt.comment_id else []) + claim_result.get("appliedActions", []),
+            "confirmedLabels": claim_result.get("rereadLabels"), "confirmedState": issue.get("state"),
+            "issueUrl": issue.get("url"), "attemptCommentId": receipt.comment_id,
+            "deploymentId": handoff.deployment_id if handoff else None,
+            "attemptActivity": handoff.activity if handoff else None,
+            "attemptHandoff": handoff.to_dict() if handoff else None,
+            "mutationOutcome": (
+                "denied" if claim_result.get("reasonCode") == "denied" else "outcome_unknown"
+            ) if blocked else ("already_applied" if not mutation_plan.ordered_operations() else "applied"),
+            "reasonCode": claim_result.get("reasonCode"),
+            "summary": claim_result.get("summary"), **receipt.handoff(),
+            "warnings": claim_result.get("warnings", []),
+        }
+        if child_gate is not None:
+            claim_outputs.update(childAttempt=child_gate["decision"], childKind=child_gate["childKind"])
+        if inputs.get("mutationIssuedBeforeCheck") is True or inputs.get("mutation_issued_before_check") is True:
+            claim_outputs["mutationFenced"] = check_delayed_mutation_fenced(mutation_issued_before_check=True)
+        return ToolResult(status="FAILED" if blocked else "COMPLETED", outputs=claim_outputs)
     # Targeted additions/removals only: never replace the complete label list.
     # The destination status is added before any old blocking status is
     # removed. This is eventual reconciliation, not an atomic compare-and-swap
@@ -7846,6 +8106,11 @@ async def update_github_issue_status(
         )
         comment_body = render_attempt_comment(handoff)
     attempt_comment_id: Any = None
+    receipt = (_context or {}).get("issue_claim_receipt")
+    if comment_body and isinstance(receipt, ClaimReceipt):
+        attempt_comment_id = await publish_claim_comment(IssueClaimStore(), receipt, service, comment_body)
+        applied.append("comment")
+        comment_body = ""
     if comment_body:
         # Serialize writes to this attempt's own comment. When the adapter
         # supports listing, reconcile an uncertain creation by stable
@@ -8025,6 +8290,21 @@ async def finalize_github_issue_failed_attempt(
     *,
     github_service_factory: Callable[[], GitHubService] = GitHubService,
 ) -> ToolResult:
+    try:
+        return await _finalize_github_issue_failed_attempt(inputs, _context, github_service_factory=github_service_factory)
+    except ValueError as exc:
+        return ToolResult(status="FAILED", outputs={
+            "released": False, "workspaceRetained": True,
+            "reasonCode": str(exc).split(":", 1)[0], "summary": str(exc),
+        })
+
+
+async def _finalize_github_issue_failed_attempt(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> ToolResult:
     """Finalize a failed/canceled controlling attempt with a safe release handoff.
 
     Durable failed-path counterpart to the success-path
@@ -8065,6 +8345,13 @@ async def finalize_github_issue_failed_attempt(
         _first_string(inputs.get("fromSettled"), inputs.get("from_settled")) or "in_progress"
     )
     current_labels = _list(inputs.get("currentLabels", inputs.get("current_labels"))) or None
+    from temporalio import activity
+    store = IssueClaimStore()
+    receipt = None
+    if activity.in_activity() or (_context or {}).get("execution_owner"):
+        receipt = await store.for_execution(claim_owner(_context))
+        if receipt is None and await store.active_for_issue(repository, issue_number) is not None:
+            raise ValueError("active_attempt_conflict: finalizer does not own this issue's durable claim")
     result = await _finalize_failed_attempt(
         repository=repository,
         issue_number=issue_number,
@@ -8086,6 +8373,8 @@ async def finalize_github_issue_failed_attempt(
         review_owner_ended=_truthy(inputs.get("reviewOwnerEnded", inputs.get("review_owner_ended"))),
         cancellation_hold=_truthy(inputs.get("cancellationHold", inputs.get("cancellation_hold"))),
         service=github_service_factory(),
+        claim_store=store,
+        claim_receipt=receipt,
     )
     outputs: dict[str, Any] = {
         "issueRef": issue_ref,

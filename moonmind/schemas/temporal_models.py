@@ -4389,6 +4389,7 @@ class ExecutionMetricsResponse(BaseModel):
     canceled_runs: int = Field(0, alias="canceledRuns", ge=0)
     terminal_runs: int = Field(0, alias="terminalRuns", ge=0)
     success_rate: float | None = Field(None, alias="successRate", ge=0, le=1)
+    objective_metrics: dict[str, Any] | None = Field(None, alias="objectiveMetrics")
     duration: ExecutionMetricsDurationModel = Field(
         default_factory=ExecutionMetricsDurationModel, alias="duration"
     )

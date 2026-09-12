@@ -464,7 +464,8 @@ async def test_capture_commits_saved_work_with_truthful_outputs(tmp_path) -> Non
     assert outputs["exact_baseline_delta"]["dependencies"] == [
         f"git-baseline:{result['workspace']['baseCommit']}"
     ]
-    assert outputs["selected_history"]["status"] == "inapplicable"
+    assert outputs["selected_history"]["status"] == "self_contained"
+    assert outputs["selected_history"]["ref"].startswith("artifact://")
     assert saved_work["scan"]["exportScan"]["exportDigest"] == (
         result["workspace"]["archiveDigest"]
     )
@@ -590,7 +591,7 @@ async def test_capture_links_saved_work_artifacts_to_owning_execution(
     assert result["status"] == "captured"
     # Archive, manifest, delta, and saved-work uploads each carry the
     # capture identity/namespace so the workflow owner keeps read access.
-    assert len(activities.captured_put_links) == 4
+    assert len(activities.captured_put_links) == 5
     for link in activities.captured_put_links:
         assert link.namespace == "step-checkpoints/implement"
         assert link.workflow_id == "wf-1"

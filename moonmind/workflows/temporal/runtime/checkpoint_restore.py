@@ -20,9 +20,10 @@ from moonmind.schemas.checkpoint_restore_models import (
     CheckpointRestoreError,
     ManagedWorkspaceRestoreRequest,
     ManagedWorkspaceRestoreResult,
+    SandboxRestoreDestination,
     RESTORATION_EVIDENCE_CONTENT_TYPE,
 )
-from moonmind.schemas.workspace_locator_models import ManagedWorkspaceLocator
+from moonmind.schemas.workspace_locator_models import ManagedWorkspaceLocator, SandboxWorkspaceLocator
 
 from .git_auth import build_github_token_git_environment
 from .managed_api_key_resolve import resolve_github_token_for_launch
@@ -63,6 +64,26 @@ class ManagedCheckpointRestoreService:
         self.run_store = run_store
         self._locks: dict[str, asyncio.Lock] = {}
 
+    def _destination(self, req):
+        if isinstance(req.destination, SandboxRestoreDestination):
+            from .workspace_locators import SandboxWorkspaceRecordStore, resolve_sandbox_workspace_locator
+            destination = req.destination
+            expected = hashlib.sha256(f"{req.recovery_identity.workflow_id}:{destination.step_execution_id}".encode()).hexdigest()[:24]
+            locator = SandboxWorkspaceLocator(workspaceId=destination.workspace_id, relativePath=destination.relative_path)
+            owner = SandboxWorkspaceRecordStore(self.root).load(expected)
+            if owner is None:
+                raise CheckpointRestoreError("CHECKPOINT_DESTINATION_IDENTITY_MISMATCH", "sandbox destination has no durable owner")
+            return resolve_sandbox_workspace_locator(
+                locator, workspace_root=self.root, expected_workspace_id=expected, owner_record=owner,
+                expected_workflow_id=req.recovery_identity.workflow_id,
+                expected_step_execution_id=destination.step_execution_id, must_exist=False,
+            ), locator
+        locator = ManagedWorkspaceLocator(runtimeId="codex_cli", agentRunId=req.destination.agent_run_id, relativePath="repo")
+        workspace = self.root / req.destination.agent_run_id / "repo"
+        if not workspace.resolve().is_relative_to(self.root):
+            raise CheckpointRestoreError("CHECKPOINT_DESTINATION_IDENTITY_MISMATCH", "destination escaped managed authority")
+        return workspace, locator
+
     async def _read(
         self,
         ref: str,
@@ -73,7 +94,7 @@ class ManagedCheckpointRestoreService:
         try:
             if self.artifact_service is not None:
                 artifact, payload = await self.artifact_service.read(
-                    artifact_id=ref,
+                    artifact_id=ref.removeprefix("artifact:").removeprefix("//"),
                     principal=_CHECKPOINT_RESTORE_PRINCIPAL,
                     admitted_principal=admitted_principal,
                     allow_restricted_raw=True,
@@ -245,6 +266,29 @@ class ManagedCheckpointRestoreService:
             )
         return len(seen), total
 
+    @staticmethod
+    def _normalize_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
+        """Project both durable capture formats identically on restore and retry."""
+        normalized = dict(manifest)
+        if manifest.get("contentType") == (
+            "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1"
+        ):
+            normalized["entries"] = [
+                {
+                    **entry,
+                    "digest": (
+                        "sha256:" + str(entry.get("sha256"))
+                        if entry.get("sha256")
+                        and not str(entry.get("sha256")).startswith("sha256:")
+                        else entry.get("sha256")
+                    ),
+                    "target": entry.get("linkTarget"),
+                }
+                for entry in manifest.get("entries", [])
+                if isinstance(entry, Mapping)
+            ]
+        return normalized
+
     def _verify_materialized(self, staging: Path, manifest: Mapping[str, Any]) -> None:
         expected = {entry["path"]: entry for entry in manifest.get("entries", [])}
         # A symlink is a leaf entry even when it points at a directory, so exclude
@@ -254,6 +298,7 @@ class ManagedCheckpointRestoreService:
             str(path.relative_to(staging))
             for path in staging.rglob("*")
             if ".git" not in path.relative_to(staging).parts
+            and not self._excluded_from_capture(path.relative_to(staging).as_posix(), manifest)
             and not (path.is_dir() and not path.is_symlink())
         }
         if actual != set(expected):
@@ -273,6 +318,11 @@ class ManagedCheckpointRestoreService:
                 if path.stat().st_mode & 0o777 != self._expected_mode(item):
                     raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "file mode mismatch")
 
+    @staticmethod
+    def _excluded_from_capture(name, manifest):
+        excluded = manifest.get("excludedPaths", [])
+        return any(name == path or name.startswith(path + "/") for path in excluded)
+
     def _replay_deletions(self, staging: Path, manifest: Mapping[str, Any]) -> None:
         """Drop worktree entries the checkpoint deleted relative to ``baseCommit``.
 
@@ -290,7 +340,7 @@ class ManagedCheckpointRestoreService:
                 continue
             if path.is_dir() and not path.is_symlink():
                 continue
-            if str(relative) not in expected:
+            if str(relative) not in expected and not self._excluded_from_capture(relative.as_posix(), manifest):
                 self._clear_existing(path)
 
     def _git(
@@ -364,6 +414,7 @@ class ManagedCheckpointRestoreService:
         key_hash = hashlib.sha256(req.idempotency_key.encode()).hexdigest()
         record_path = record_dir / f"{key_hash}.json"
         immutable = _digest(_canonical(req.model_dump(by_alias=True, mode="json")))
+        workspace, locator = self._destination(req)
         if record_path.exists():
             try:
                 record = json.loads(record_path.read_text(encoding="utf-8"))
@@ -377,17 +428,36 @@ class ManagedCheckpointRestoreService:
                         "CHECKPOINT_RESTORE_IDEMPOTENCY_CONFLICT",
                         "idempotency key input drift",
                     )
-                if record.get("status") == "ready":
+                if record.get("status") == "ready" and workspace.is_dir():
+                    if (self._git(["rev-parse", "HEAD"], workspace) != record["result"]["baseCommit"]
+                            or _digest(self._git_bytes(["status", "--porcelain=v1", "-z", "--untracked-files=all"], workspace)) != record["result"]["gitStatusDigest"]):
+                        raise CheckpointRestoreError("CHECKPOINT_RESTORE_IDEMPOTENCY_CONFLICT", "restored candidate was subsequently changed")
+                    manifest_bytes = await self._read(
+                        req.checkpoint.manifest_ref,
+                        content_types={"application/json", "application/vnd.moonmind.managed-workspace-checkpoint-manifest+json;version=1"},
+                        admitted_principal=admitted_principal,
+                    )
+                    if _digest(manifest_bytes) != req.checkpoint.manifest_digest:
+                        raise CheckpointRestoreError("CHECKPOINT_MANIFEST_CORRUPTED", "saved manifest bytes changed")
+                    manifest = self._normalize_manifest(json.loads(manifest_bytes))
+                    self._verify_materialized(workspace, manifest)
+                    if self._git(["rev-parse", "HEAD"], workspace) != req.checkpoint.base_commit:
+                        raise CheckpointRestoreError("CHECKPOINT_BASE_COMMIT_MISMATCH", "saved destination HEAD changed")
+                    status = self._git_bytes(["status", "--porcelain=v1", "-z", "--untracked-files=all"], workspace)
+                    if _digest(status) != record["result"]["gitStatusDigest"]:
+                        raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "saved destination Git status changed")
                     return record["result"]
 
-        workspace_parent = self.root / req.destination.agent_run_id
-        workspace = workspace_parent / "repo"
+        if req.restores_original_owner and workspace.exists():
+            raise CheckpointRestoreError("CHECKPOINT_DESTINATION_IDENTITY_MISMATCH", "original workspace still exists; cold restore cannot overwrite active or changed work")
+
+        workspace_parent = workspace.parent
         if not workspace_parent.resolve().is_relative_to(self.root):
             raise CheckpointRestoreError(
                 "CHECKPOINT_DESTINATION_IDENTITY_MISMATCH",
                 "destination escaped managed authority",
             )
-        if self.run_store is not None:
+        if self.run_store is not None and isinstance(locator, ManagedWorkspaceLocator):
             managed_run = self.run_store.load(req.destination.agent_run_id)
             # A cold restore is expected to run *before* ``agent_runtime.launch``
             # creates the managed run record, so a missing record is normal and
@@ -407,7 +477,8 @@ class ManagedCheckpointRestoreService:
         record = {
             "status": "preparing_restore",
             "immutableDigest": immutable,
-            "agentRunId": req.destination.agent_run_id,
+            "workspaceLocator": locator.model_dump(by_alias=True, mode="json"),
+            **({"agentRunId": locator.agent_run_id} if isinstance(locator, ManagedWorkspaceLocator) else {}),
             "capabilityDigest": req.capability_digest,
         }
         tmp = record_path.with_suffix(".tmp")
@@ -491,22 +562,7 @@ class ManagedCheckpointRestoreService:
         )
         git_manifest = manifest.get("git", {}) if managed_manifest else manifest
         archive_manifest = manifest.get("archive", {}) if managed_manifest else manifest
-        if managed_manifest:
-            manifest = dict(manifest)
-            manifest["entries"] = [
-                {
-                    **entry,
-                    "digest": (
-                        "sha256:" + str(entry.get("sha256"))
-                        if entry.get("sha256")
-                        and not str(entry.get("sha256")).startswith("sha256:")
-                        else entry.get("sha256")
-                    ),
-                    "target": entry.get("linkTarget"),
-                }
-                for entry in manifest.get("entries", [])
-                if isinstance(entry, Mapping)
-            ]
+        manifest = self._normalize_manifest(manifest)
         if git_manifest.get("baseCommit") != req.checkpoint.base_commit:
             raise CheckpointRestoreError(
                 "CHECKPOINT_BASE_COMMIT_MISMATCH", "manifest base commit mismatch"
@@ -547,11 +603,26 @@ class ManagedCheckpointRestoreService:
                     if token
                     else None
                 )
-            self._git(
-                ["clone", "--no-checkout", repo_url, str(staging)],
-                code="CHECKPOINT_REPOSITORY_UNAVAILABLE",
-                env=clone_env,
-            )
+            history = manifest.get("gitHistory")
+            if history and history.get("requiresSourceObjects") is False:
+                self._git(["init", str(staging)])
+                self._git(["remote", "add", "origin", repo_url], staging)
+            else:
+                self._git(
+                    ["clone", "--no-checkout", repo_url, str(staging)],
+                    code="CHECKPOINT_REPOSITORY_UNAVAILABLE", env=clone_env,
+                )
+            if history and history.get("ref"):
+                bundle = await self._read(history["ref"], content_types={"application/x-git-bundle"}, admitted_principal=admitted_principal)
+                if _digest(bundle) != history.get("digest") or history.get("headCommit") != req.checkpoint.base_commit:
+                    raise CheckpointRestoreError("CHECKPOINT_ARCHIVE_CORRUPTED", "selected history identity mismatch")
+                bundle_path = staging / ".git" / "checkpoint.bundle"
+                bundle_path.write_bytes(bundle)
+                try:
+                    self._git(["bundle", "verify", str(bundle_path)], staging)
+                    self._git(["fetch", "--no-tags", str(bundle_path), "HEAD"], staging)
+                finally:
+                    bundle_path.unlink(missing_ok=True)
             self._git(
                 ["cat-file", "-e", f"{req.checkpoint.base_commit}^{{commit}}"], staging
             )
@@ -588,6 +659,8 @@ class ManagedCheckpointRestoreService:
             if backup.exists():
                 shutil.rmtree(backup)
             if workspace.exists():
+                if req.restores_original_owner:
+                    raise CheckpointRestoreError("CHECKPOINT_DESTINATION_IDENTITY_MISMATCH", "original workspace appeared during cold restore")
                 os.replace(workspace, backup)
             try:
                 os.replace(staging, workspace)
@@ -600,11 +673,6 @@ class ManagedCheckpointRestoreService:
             shutil.rmtree(staging, ignore_errors=True)
             raise
 
-        locator = ManagedWorkspaceLocator(
-            runtimeId="codex_cli",
-            agentRunId=req.destination.agent_run_id,
-            relativePath="repo",
-        )
         evidence = {
             "schemaVersion": "v1",
             "contentType": RESTORATION_EVIDENCE_CONTENT_TYPE,

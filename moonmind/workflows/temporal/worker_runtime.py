@@ -537,6 +537,13 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
     compose_file = (
         str(os.environ.get("MOONMIND_DEPLOYMENT_COMPOSE_FILE") or "").strip() or None
     )
+    overrides = ()
+    if compose_file is None:
+        for name in ("docker-compose.override.yaml", "docker-compose.override.yml"):
+            candidate = Path(local_project_dir) / name
+            if candidate.exists():
+                overrides = (str(candidate),)
+                break
     desired_state_env_file = (
         str(os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE") or "").strip()
         or None
@@ -607,6 +614,7 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
             command_timeout_seconds=timeout_seconds,
             local_project_dir=runner_local,
             env_file=desired_state_env_file,
+            override_files=overrides,
             excluded_services=excluded_services,
         ),
         excluded_services=excluded_services,
@@ -3269,6 +3277,8 @@ async def main_async() -> None:
         )
     else:
         runtime_resources, activities = await _build_runtime_activities(topology)
+        from moonmind.workflows.temporal.workflows.release_canary import inspect_release_activity
+        activities = (*activities, inspect_release_activity)
 
     try:
         spec = build_worker_spec(
@@ -3282,6 +3292,8 @@ async def main_async() -> None:
             "workflow_runner": UnsandboxedWorkflowRunner(),
             **_worker_concurrency_kwargs(topology),
         }
+        from moonmind.workflows.temporal.worker_lifecycle import WORKER_DRAIN_TIMEOUT, serve_workers
+        worker_kwargs["graceful_shutdown_timeout"] = WORKER_DRAIN_TIMEOUT
         if spec.versioning_enabled:
             worker_kwargs["deployment_config"] = WorkerDeploymentConfig(
                 version=WorkerDeploymentVersion(
@@ -3334,15 +3346,16 @@ async def main_async() -> None:
             "Temporal executable worker specification: %s",
             json.dumps(spec.readiness_payload(), sort_keys=True),
         )
-        async with asyncio.TaskGroup() as tg:
-            for worker in workers:
-                tg.create_task(worker.run())
-            await asyncio.sleep(0)
+        async def mark_ready():
+            from moonmind.workflows.temporal.release_routing import bootstrap_version_routing
+            health_state.readiness_metadata["releaseRouting"] = await bootstrap_version_routing(client, spec)
             health_state.pollers_started = True
             logger.info(
                 "Worker ready, polling task queues: %s",
                 ", ".join(topology.task_queues),
             )
+        await serve_workers(workers, ready=mark_ready,
+                            stopping=lambda: setattr(health_state, "pollers_started", False))
     except Exception as exc:
         health_state.startup_error = exc.__class__.__name__
         raise

@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .workspace_locator_models import ManagedWorkspaceLocator
+from .workspace_locator_models import ManagedWorkspaceLocator, SandboxWorkspaceLocator
 
 
 RESTORATION_EVIDENCE_CONTENT_TYPE = (
@@ -19,13 +19,13 @@ class RestoreIdentity(BaseModel):
     workflow_id: str = Field(alias="workflowId", min_length=1)
     run_id: str = Field(alias="runId", min_length=1)
     logical_step_id: str = Field(alias="logicalStepId", min_length=1)
-    execution_ordinal: int = Field(alias="executionOrdinal", ge=1)
+    execution_ordinal: int = Field(alias="executionOrdinal", ge=0)
 
 
 class RestoreSource(RestoreIdentity):
     checkpoint_ref: str = Field(alias="checkpointRef", min_length=1)
     checkpoint_boundary: str = Field(alias="checkpointBoundary", min_length=1)
-    source_workspace_locator: ManagedWorkspaceLocator | None = Field(
+    source_workspace_locator: ManagedWorkspaceLocator | SandboxWorkspaceLocator | None = Field(
         None, alias="sourceWorkspaceLocator"
     )
 
@@ -50,13 +50,19 @@ class RestoreDestination(BaseModel):
     relative_path: Literal["repo"] = Field("repo", alias="relativePath")
 
 
+class SandboxRestoreDestination(SandboxWorkspaceLocator):
+    relative_path: Literal["repo"] = Field("repo", alias="relativePath")
+    repository: str = Field(pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    step_execution_id: str = Field(alias="stepExecutionId", min_length=1)
+
+
 class ManagedWorkspaceRestoreRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
     schema_version: Literal["v1"] = Field(alias="schemaVersion")
     recovery_identity: RestoreIdentity = Field(alias="recoveryIdentity")
     source: RestoreSource
     checkpoint: WorktreeArchiveCheckpoint
-    destination: RestoreDestination
+    destination: RestoreDestination | SandboxRestoreDestination
     workspace_policy: Literal[
         "restore_pre_execution", "restore_publication_candidate"
     ] = Field(alias="workspacePolicy")
@@ -73,8 +79,23 @@ class ManagedWorkspaceRestoreRequest(BaseModel):
         2 * 1024 * 1024 * 1024, alias="maxRestoredBytes", ge=1
     )
 
+    @property
+    def restores_original_owner(self) -> bool:
+        return (
+            self.workspace_policy == "restore_publication_candidate"
+            and self.resume_phase == "resume_publication"
+            and self.source.checkpoint_boundary == "after_execution"
+            and isinstance(self.source.source_workspace_locator, SandboxWorkspaceLocator)
+            and isinstance(self.destination, SandboxRestoreDestination)
+            and self.source.source_workspace_locator.workspace_id == self.destination.workspace_id
+            and self.source.model_dump(include={"workflow_id", "run_id", "logical_step_id", "execution_ordinal"})
+                == self.recovery_identity.model_dump()
+        )
+
     @model_validator(mode="after")
     def validate_distinct_identities(self) -> "ManagedWorkspaceRestoreRequest":
+        if self.restores_original_owner:
+            return self
         if (self.source.workflow_id, self.source.run_id) == (
             self.recovery_identity.workflow_id,
             self.recovery_identity.run_id,
@@ -84,9 +105,12 @@ class ManagedWorkspaceRestoreRequest(BaseModel):
             )
         locator = self.source.source_workspace_locator
         if (
-            locator is not None
+            isinstance(locator, ManagedWorkspaceLocator)
+            and isinstance(self.destination, RestoreDestination)
             and locator.agent_run_id == self.destination.agent_run_id
         ):
+            raise ValueError("source workspace locator cannot be reused as destination")
+        if isinstance(locator, SandboxWorkspaceLocator) and isinstance(self.destination, SandboxRestoreDestination) and locator.workspace_id == self.destination.workspace_id:
             raise ValueError("source workspace locator cannot be reused as destination")
         return self
 
@@ -96,7 +120,7 @@ class ManagedWorkspaceRestoreResult(BaseModel):
     schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
     status: Literal["succeeded"] = "succeeded"
     checkpoint_ref: str = Field(alias="checkpointRef")
-    destination_workspace_locator: ManagedWorkspaceLocator = Field(
+    destination_workspace_locator: ManagedWorkspaceLocator | SandboxWorkspaceLocator = Field(
         alias="destinationWorkspaceLocator"
     )
     restoration_evidence_ref: str = Field(alias="restorationEvidenceRef")

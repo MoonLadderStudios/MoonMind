@@ -328,6 +328,31 @@ def evaluate_terminal_evidence(
                 else None
             ),
         )
+    if payload.get("phase") == "intermediate":
+        continuation = payload.get("skillContinuation")
+        expected_execution = str(contract.get("executionRef") or contract.get("execution_ref") or "")
+        if (
+            not isinstance(continuation, dict)
+            or continuation.get("schemaVersion") != "skill-continuation/v1"
+            or continuation.get("action") != "resume_skill"
+            or not expected_execution
+            or continuation.get("executionRef") != expected_execution
+            or payload.get("executionRef") != expected_execution
+            or any(not isinstance(continuation.get(key), str) or not continuation[key].strip()
+                   for key in ("instructions", "progressKey"))
+            or len(continuation["instructions"]) > 4096
+            or len(continuation["progressKey"]) > 512
+        ):
+            return _failure("MALFORMED_TERMINAL_EVIDENCE")
+        # The intermediate envelope has its own version above. A portable
+        # Skill may retain a numeric diagnostic schema while the declared
+        # terminal contract names a semantic version; neither is completion.
+        return _failure(
+            "SKILL_CONTINUATION_REQUIRED",
+            (continuation["instructions"],),
+            {"terminalContractRetryable": True, "skillContinuation": continuation,
+             "terminalContractEvidencePath": normalized_relative},
+        )
     if contract_id == "auto_publish_terminal.v1":
         return _evaluate_auto_publish_evidence(
             payload,
