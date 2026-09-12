@@ -6054,6 +6054,10 @@ class TemporalAgentRuntimeActivities:
         record: Any,
     ) -> dict[str, Any]:
         policy = model.capture_policy
+        # Capture shares the deployment's outbound policy with other artifact
+        # and publish boundaries. Do not unconditionally enable heuristic
+        # scanning of source code, documentation, and security-test fixtures.
+        high_security_mode = resolve_high_security_mode()
         # One stable capture generation starts here: record HEAD and the
         # worktree status before enumeration so a writer mutating files or
         # HEAD mid-capture is detected and retried/blocked instead of
@@ -6227,8 +6231,8 @@ class TemporalAgentRuntimeActivities:
                         linkTarget=target,
                     )
                 )
-        # Scan the actual exported tar bytes (not only manifest text) as a
-        # bounded chunk stream with overlap, so credential-shaped content
+        # When enabled, scan the actual exported tar bytes (not only manifest
+        # text) as a bounded chunk stream with overlap, so credential-shaped content
         # spanning a chunk boundary is still detected without holding the
         # whole export in memory. Binary/uninspectable regions stay explicit
         # instead of a fabricated clean scan.
@@ -6248,6 +6252,7 @@ class TemporalAgentRuntimeActivities:
             _tar_spool_chunks(),
             export_digest="pending-tar-stream",
             location="checkpoint.archive.tar",
+            high_security_mode=high_security_mode,
         )
         if tar_scan["disposition"] == "blocked":
             # Quarantine before any upload: a credential-shaped export must
@@ -6389,7 +6394,7 @@ class TemporalAgentRuntimeActivities:
             [
                 OutboundBundleItem(location="checkpoint.manifest", content=manifest_payload.decode("utf-8")),
             ],
-            high_security_mode=True,
+            high_security_mode=high_security_mode,
         )
         if not scan.allowed:
             raise temporal_exceptions.ApplicationError(
@@ -6574,7 +6579,7 @@ class TemporalAgentRuntimeActivities:
                     if export_scan["disposition"] != "clean"
                     else "clean"
                 ),
-                "manifestScan": "allow",
+                "manifestScan": "allow" if high_security_mode else "not_scanned",
                 "exportScan": export_scan,
                 "redactedPreviewRestorable": False,
             },
@@ -6633,7 +6638,7 @@ class TemporalAgentRuntimeActivities:
                     content=saved_work_payload.decode("utf-8"),
                 ),
             ],
-            high_security_mode=True,
+            high_security_mode=high_security_mode,
         )
         if not derivative_scan.allowed:
             raise temporal_exceptions.ApplicationError(
