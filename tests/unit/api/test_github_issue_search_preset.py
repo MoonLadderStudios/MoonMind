@@ -56,6 +56,8 @@ def activity_boundary(monkeypatch):
     detail = issue()
     dependency_details = {}
 
+    comments = []
+
     def handler(request):
         requests.append(request)
         if request.url.path == "/user":
@@ -66,8 +68,11 @@ def activity_boundary(monkeypatch):
             # Live comment readability gate expects a GitHub comment list.
             # GET returns the list; POST creates one comment.
             if request.method == "GET":
-                return httpx.Response(200, json=[])
-            return httpx.Response(200, json={"id": 1})
+                return httpx.Response(200, json=comments)
+            comment = {"id": len(comments) + 1, "body": json.loads(request.content)["body"],
+                       "user": {"id": 111, "login": "search-user"}}
+            comments.append(comment)
+            return httpx.Response(201, json=comment)
         if request.method == "POST" and request.url.path.endswith("/labels"):
             for label in json.loads(request.content)["labels"]:
                 if {"name": label} not in detail["labels"]:
@@ -122,6 +127,12 @@ def activity_boundary(monkeypatch):
             )
         ),
     )
+    async def read_artifact(*, artifact_id, **kwargs):
+        if artifact_id == "art_brief" and artifact_service.write_complete.await_args:
+            return None, artifact_service.write_complete.await_args.kwargs["payload"]
+        return None, {"verdict": "NOT_IMPLEMENTED"}
+
+    artifact_service.read.side_effect = read_artifact
     activities = TemporalSkillActivities(
         dispatcher=dispatcher, artifact_service=artifact_service
     )
@@ -147,6 +158,7 @@ def activity_boundary(monkeypatch):
     return SimpleNamespace(
         execute=execute,
         pages=pages,
+        comments=comments,
         requests=requests,
         detail=detail,
         dependency_details=dependency_details,
@@ -388,6 +400,7 @@ async def test_rendered_child_lists_control_selection_and_preflight(
         expected = leaf if case["children"] else parent
         activity_boundary.detail.update(expected)
         activity_boundary.requests.clear()
+        activity_boundary.comments.clear()
         for number in case["children"]:
             activity_boundary.dependency_details[
                 f"/repos/{REPOSITORY}/issues/{number}"
@@ -631,9 +644,9 @@ async def test_scan_reuses_prerequisite_evidence_across_all_500_candidates(
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 500
-    # +1 for the credential-bound identity lookup, +5 for live comment
-    # readability (1 GET) + advisory claim (2 POSTs + 2 re-reads).
-    assert len(activity_boundary.requests) == 1 + 5 + 11 + 1 + 5
+    # Shared prerequisites stay cached; the fixed claim overhead includes
+    # the status writer, comment publication, and authenticated owner re-read.
+    assert len(activity_boundary.requests) == 1 + 5 + 11 + 1 + 11
 
 
 @pytest.mark.asyncio
@@ -694,9 +707,8 @@ async def test_maximum_prerequisite_list_has_fresh_confirmation_budget(
         "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
-    # +1 for the credential-bound identity lookup +5 for live comment
-    # readability + advisory claim.
-    assert len(activity_boundary.requests) == 1 + 1 + 100 + 1 + 100 + 5
+    # Fixed claim overhead includes publication and authenticated owner reads.
+    assert len(activity_boundary.requests) == 1 + 1 + 100 + 1 + 100 + 11
 
 
 @pytest.mark.asyncio
@@ -727,9 +739,8 @@ async def test_prerequisite_cache_preserves_cross_repository_identity(
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 3
-    # +1 for the credential-bound identity lookup +5 for live comment
-    # readability + advisory claim.
-    assert len(activity_boundary.requests) == 1 + 5 + 5
+    # Fixed claim overhead includes publication and authenticated owner reads.
+    assert len(activity_boundary.requests) == 1 + 5 + 11
 
 
 @pytest.mark.asyncio
@@ -844,6 +855,7 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
     assert result.outputs["searchEvidence"]["authorMismatchesSkipped"] == 0
     workflow = MoonMindRunWorkflow()
     workflow._record_trusted_issue_context(result.outputs)
+    workflow._record_assessment_context(result.outputs, source_tool_name=tool["id"])
     previous = workflow._merge_trusted_issue_context(
         {
             "summary": "Omnigent session completed",
@@ -851,9 +863,8 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
         }
     )
     assert previous["searchEvidence"] == result.outputs["searchEvidence"]
-    # Req-2 claim already applied in-progress during load; reset to Available
-    # so the explicit In Progress step exercises its own mutation path.
-    activity_boundary.detail["labels"] = [{"name": "bug"}]
+    # Preserve the loader's real label and comment across agent and blocker
+    # steps: resetting the label here hid the production self-claim failure.
     # No local workspace, issue-number injection, or assistant-text parsing.
     for step in steps[2:4]:
         tool = step["tool"]
@@ -872,16 +883,14 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
     mutations = [
         request for request in activity_boundary.requests if request.method != "GET"
     ]
-    # 1 claim POST from load (advisory in-progress labels) + 2 from the
-    # explicit In Progress step (labels + handoff comment).
+    # The loader owns both claim writes; the later start is idempotent.
     assert [(request.method, request.url.path) for request in mutations] == [
-        ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
         ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
         ("POST", f"/repos/{REPOSITORY}/issues/4025/comments"),
     ]
     assert json.loads(mutations[0].content) == {"labels": ["status: in-progress"]}
-    assert result.outputs["mutationOutcome"] == "applied"
-    assert set(result.outputs["confirmedLabels"]) == {"bug", "status: in-progress"}
+    assert result.outputs["decision"] == "already_applied"
+    assert {label["name"] for label in activity_boundary.detail["labels"]} == {"bug", "status: in-progress"}
     # Finalization still requires its verification / PR evidence before mutation.
     final_tool = steps[-1]["tool"]
     final = await activity_boundary.execute(
@@ -969,6 +978,7 @@ async def test_query_search_and_previous_explicit_issue_payload(activity_boundar
     # Req-2 claim mutates the mocked issue labels; reset to Available for the
     # explicit lookup so it exercises direct fetch + readability + claim.
     activity_boundary.detail.clear()
+    activity_boundary.comments.clear()
     activity_boundary.detail.update(issue())
     # Existing persisted explicit issue inputs keep their original direct lookup.
     result = await activity_boundary.execute(
@@ -976,8 +986,8 @@ async def test_query_search_and_previous_explicit_issue_payload(activity_boundar
         {"repository": REPOSITORY, "issueNumber": 4025},
     )
     assert result.status == "COMPLETED"
-    # 1 detail fetch + 1 comment readability + 4 claim/re-read requests.
-    assert len(activity_boundary.requests) == 1 + 5
+    # Direct detail plus bounded claim publication/ownership verification.
+    assert len(activity_boundary.requests) == 1 + 11
     assert "searchEvidence" not in result.outputs
     workflow = MoonMindRunWorkflow()
     workflow._record_trusted_issue_context(result.outputs)

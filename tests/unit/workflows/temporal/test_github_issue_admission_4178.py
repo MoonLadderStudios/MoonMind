@@ -354,6 +354,18 @@ class _AdmissionFakeService:
     def __init__(self, labels: list[str] | None = None) -> None:
         self.labels = list(labels) if labels is not None else []
         self.operations: list[tuple[str, str]] = []
+        self.comments: list[dict[str, Any]] = []
+
+    async def get_authenticated_user(self, *, token):
+        return {"id": 1, "login": "test-owner"}, None
+
+    async def list_issue_comments(self, **kwargs):
+        return {"ok": True, "comments": list(self.comments)}
+
+    async def create_issue_comment(self, *, body, **kwargs):
+        comment = {"id": len(self.comments) + 1, "body": body, "user": {"login": "test-owner"}}
+        self.comments.append(comment)
+        return {"ok": True, "commentId": comment["id"]}
 
     async def resolve_github_token(self, *, repo: str):
         return "ghs-test", None
@@ -720,6 +732,7 @@ async def test_brief_entrypoint_inference_continuation_retry_orchestration(
     # issue rather than observing the prior call's claim.
     service.labels = []
     service.operations = []
+    service.comments = []
     retried = await story_tools.load_github_issue_preset_brief(
         {"repository": "o/r", "issueNumber": 4178, "retryOf": "att_" + "c" * 24},
         github_service_factory=lambda: service,
@@ -729,6 +742,7 @@ async def test_brief_entrypoint_inference_continuation_retry_orchestration(
 
     service.labels = []
     service.operations = []
+    service.comments = []
     orchestrated = await story_tools.load_github_issue_preset_brief(
         {"repository": "o/r", "issueNumber": 4178, "orchestrationRunId": "orch-1"},
         github_service_factory=lambda: service,

@@ -128,6 +128,8 @@ def activity_boundary(monkeypatch):
     pages: list = [[_issue()]]
     detail = _issue()
 
+    comments = []
+
     def handler(request):
         requests.append(request)
         if request.url.path == "/user":
@@ -136,8 +138,11 @@ def activity_boundary(monkeypatch):
             )
         if "/comments" in request.url.path:
             if request.method == "GET":
-                return httpx.Response(200, json=[])
-            return httpx.Response(200, json={"id": 1})
+                return httpx.Response(200, json=comments)
+            comment = {"id": len(comments) + 1, "body": json.loads(request.content)["body"],
+                       "user": {"id": 111, "login": "search-user"}}
+            comments.append(comment)
+            return httpx.Response(201, json=comment)
         if request.method == "DELETE" and "/labels/" in request.url.path:
             # Simulate GitHub label removal so recovery-claim re-reads settle.
             from urllib.parse import unquote

@@ -1,0 +1,39 @@
+{
+  "sourceWorkflowId": "mm:7adff7fd-4125-4aa7-b199-789b3e9998ff-2026-09-12T08:20:25Z",
+  "issueAtSelection": {
+    "repository": "MoonLadderStudios/MoonMind",
+    "number": 4271,
+    "state": "open",
+    "labels": [],
+    "user": {
+      "id": 16808547,
+      "login": "nsticco"
+    },
+    "title": "[Skills/presets] Documentation semantics",
+    "body": "Bounded documentation task.",
+    "html_url": "https://github.com/MoonLadderStudios/MoonMind/issues/4271"
+  },
+  "legacyBrief": {
+    "trustedSource": "moonmind.github.get_issue",
+    "admittedIdentity": {
+      "repository": "MoonLadderStudios/MoonMind",
+      "issueNumber": 4271
+    },
+    "admissionClaimExecuted": {
+      "executed": true,
+      "blocked": false,
+      "reasonCode": "claim_executed",
+      "summary": "Announced attempt for MoonLadderStudios/MoonMind#4271 and applied in-progress before assessment; re-read after the announcement. GitHub offers no conditional ownership acquisition, so the remaining check-to-write race stays unfenced.",
+      "issueRef": "MoonLadderStudios/MoonMind#4271",
+      "appliedActions": [
+        "add_label:status: in-progress"
+      ],
+      "rereadLabels": [
+        "status: in-progress"
+      ],
+      "rereadSettled": "in_progress",
+      "rereadOk": true
+    }
+  },
+  "observedFailure": "manual_in_progress_without_trusted_owner"
+}
