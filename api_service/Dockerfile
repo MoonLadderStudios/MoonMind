@@ -262,6 +262,11 @@ COPY api_service /app/api_service/
 COPY config /app/config/
 COPY docs/ReleaseNotes /app/docs/ReleaseNotes/
 COPY .agents /app/.agents/
+COPY services /app/services/
+COPY docs /app/docs/
+COPY tools/verify_deployed_ui_assets.py /app/tools/verify_deployed_ui_assets.py
+COPY init_db /app/init_db/
+COPY docker-compose.yaml /app/release/docker-compose.yaml
 
 # Copy pre-built frontend assets from the frontend-builder stage
 COPY --from=frontend-builder /build/api_service/static/workflow_console/ /app/api_service/static/workflow_console/
@@ -271,6 +276,9 @@ RUN chmod +x /app/api_service/entrypoint.sh && \
     sed -i 's/\r$//' /app/api_service/entrypoint.sh
 
 FROM runtime-base AS worker-runtime
+ARG MOONMIND_BUILD_SHA
+LABEL org.opencontainers.image.revision="${MOONMIND_BUILD_SHA}"
+RUN python /app/moonmind/release_identity.py --root /app --revision "${MOONMIND_BUILD_SHA:-}"
 EXPOSE 8000
 CMD ["/app/api_service/entrypoint.sh"]
 

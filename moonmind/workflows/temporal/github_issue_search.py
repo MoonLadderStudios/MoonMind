@@ -303,6 +303,7 @@ async def resolve_issue(
     active_attempt_comments: Sequence[Mapping[str, Any]] | None = None,
     own_announcement_abandoned: bool | None = None,
     writers_settled: bool | None = None,
+    reserve_candidate: Callable[[int], Awaitable[bool]] | None = None,
 ) -> tuple[int | None, dict[str, Any]]:
     """Select the best search match, or first unblocked open issue, within 500 rows.
 
@@ -467,14 +468,41 @@ async def resolve_issue(
                     active_attempt_comments=active_attempt_comments,
                 )
                 if not shared.allowed:
+                    if shared.reason_code == "read_failure":
+                        return None, {**evidence, "error": shared.summary, "reasonCode": "read_failure"}
                     continue
                 if candidate_blockers:
                     continue
+                # Confirm current identity/lifecycle inside the bounded scan so
+                # a stale first candidate does not fail the whole scheduled tick.
+                try:
+                    current_response = await client.get(
+                        f"https://api.github.com/repos/{repository}/issues/{candidate['number']}",
+                        headers=github_service._github_headers(token),
+                    )
+                    current_response.raise_for_status()
+                    current = current_response.json()
+                except (httpx.HTTPError, ValueError) as exc:
+                    return None, {**evidence, "error": f"Candidate confirmation failed: {type(exc).__name__}."}
+                if not isinstance(current, Mapping) or current.get("number") != candidate["number"]:
+                    return None, {**evidence, "error": "Candidate confirmation returned a different or malformed issue."}
+                if current.get("state") == "closed":
+                    continue
+                if not is_complete_open_issue(current, repository):
+                    return None, {**evidence, "error": "Candidate confirmation evidence is incomplete."}
+                if not is_lifecycle_selectable_candidate(current) or await blockers_from_issue(current):
+                    continue
+                if interpret_issue(current).settled == SETTLED_RECOVERY_NEEDED and not _recovery_handoff_usable(recovery_handoff):
+                    continue
+                if reserve_candidate is not None and not await reserve_candidate(int(candidate["number"])):
+                    continue
+                evidence["selectedIssue"] = dict(current)
                 return candidate["number"], evidence
             if len(candidates) < 100:
                 return None, {
                     **evidence,
-                    "error": "No eligible open GitHub issue found; candidate pages exhausted.",
+                    "disposition": "idle",
+                    "summary": "No eligible open GitHub issue found; candidate pages exhausted.",
                 }
     return None, {
         **evidence,

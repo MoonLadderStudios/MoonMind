@@ -249,13 +249,14 @@ def build_generic_omnigent_execution_services(
         cleanup_service=DockerOmnigentHostCleanupService(docker),
     )
 
-    async def session_driver(request, *, session_authority_sink):
+    async def session_driver(request, *, session_authority_sink, **continuation):
         return await run_omnigent_execution(
             request,
             artifact_gateway=artifacts,
             run_store=bridge_store,
             session_authority_sink=session_authority_sink,
             transport_pool=transport_pool,
+            **continuation,
         )
 
     temporal_adapter = TemporalClientAdapter()
@@ -304,7 +305,9 @@ def build_generic_omnigent_execution_services(
         capacity_admission=host_capacity_admission,
         machine_budget_provider=machine_budget,
     )
+    from moonmind.omnigent.activity_ownership import current_delivery_owner
     realizer = GenericOmnigentHostRealizer(
+        execution_owner=current_delivery_owner,
         runtime_binding_store=runtime_bindings,
         provider_lease_coordinator=OmnigentProviderLeaseCoordinator(
             session_factory=session_factory,
@@ -320,7 +323,7 @@ def build_generic_omnigent_execution_services(
         ),
         session_driver=session_driver,
         session_cleanup_service=OmnigentSessionCleanupService(client),
-        workspace_publisher=OmnigentWorkspacePublicationService(workspace_root),
+        workspace_publisher=OmnigentWorkspacePublicationService(workspace_root, artifact_gateway=artifacts),
         artifact_gateway=artifacts,
         turn_command_service=CanonicalTurnCommandService(
             OmnigentControlPlaneStore(session_factory)

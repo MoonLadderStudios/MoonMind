@@ -18,6 +18,7 @@ import json
 from typing import Any
 
 import pytest
+from tests.support.issue_claims import issue_claim_store, ClaimCommentFixture  # noqa: F401
 
 from moonmind.workflows.temporal import story_output_tools as story_tools
 from moonmind.workflows.temporal.github_issue_attempts import (
@@ -366,7 +367,7 @@ def test_reconstruction_reports_attention_instead_of_fresh_start() -> None:
 # -- acceptance: Activity/adapter path ---------------------------------------
 
 
-class _AttemptFakeService:
+class _AttemptFakeService(ClaimCommentFixture):
     def __init__(self, initial_labels: list[str] | None = None) -> None:
         self.labels = list(initial_labels) if initial_labels is not None else []
         self.operations: list[tuple[str, str]] = []
@@ -405,7 +406,7 @@ class _AttemptFakeService:
 
         redacted = redact_sensitive_text(body)
         self.created_bodies.append(redacted)
-        comment = {"id": 900 + len(self.created_bodies), "body": redacted}
+        comment = {"id": 900 + len(self.created_bodies), "body": redacted, "user": {"id": 123}}
         self.listed.append(comment)
         return {"ok": True, "reasonCode": "created", "summary": "created", "commentId": comment["id"], "comment": comment}
 
@@ -474,13 +475,13 @@ async def test_activity_path_creates_bounded_handoff_comment(monkeypatch: pytest
         github_service_factory=lambda: service,
     )
     assert result.status == "COMPLETED"
-    assert result.outputs["attemptId"] == "att-activity-1"
+    assert result.outputs["attemptId"] != "att-activity-1"
     assert result.outputs["deploymentId"] == "inst-device-a"
     assert result.outputs["attemptActivity"] == "preparing"
     assert result.outputs["attemptHandoff"]["repository"] == "MoonLadderStudios/MoonMind"
     assert len(service.created_bodies) == 1
     body = service.created_bodies[0]
-    assert stable_attempt_marker("att-activity-1") in body
+    assert stable_attempt_marker(result.outputs["attemptId"]) in body
     assert "```attempt-handoff-json" in body
     assert "inst-device-a" in body
 
@@ -502,7 +503,7 @@ async def test_activity_path_reconciles_uncertain_creation(monkeypatch: pytest.M
         },
         github_service_factory=lambda: service,
     )
-    assert result.status == "COMPLETED"
-    # Adopted the existing marker instead of creating a duplicate.
+    assert result.status == "FAILED"
+    # A public marker without the durable receipt is not authority to adopt it.
     assert len(service.created_bodies) == 0
-    assert result.outputs["attemptCommentId"] == "700"
+    assert result.outputs["reasonCode"] == "active_attempt_conflict"

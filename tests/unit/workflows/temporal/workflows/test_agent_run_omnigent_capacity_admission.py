@@ -846,6 +846,38 @@ async def _run_execution(run: _ExecutingRun) -> tuple[Any, Any]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("resume_enabled", [False, True])
+async def test_lost_activity_ack_resumes_exact_admission_before_release(monkeypatch, resume_enabled):
+    """Replay the incident's heartbeat loss at the actual admission handoff."""
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(agent_run_module.workflow, "patched", lambda marker:
+        resume_enabled if marker == "omnigent-resume-owned-admission-v1" else True)
+
+    class InterruptedRun(_ExecutingRun):
+        async def _execute_routed_activity(self, name, payload=None, **kwargs):
+            if name.startswith("integration.omnigent.") and not self.executions:
+                self.executions.append(payload)
+                raise TimeoutError("captured heartbeat acknowledgment loss")
+            return await super()._execute_routed_activity(name, payload, **kwargs)
+
+    run = InterruptedRun([{"summary": "reconciled terminal result"}])
+    _capture_release_signals(monkeypatch, run)
+    with pytest.raises(TimeoutError):
+        await _run_execution(run)
+    releases = [name for name, _ in run.signals if name == "release_slot"]
+    assert len(releases) == (0 if resume_enabled else 1)
+    result, _ = await _run_execution(run)
+    assert result["summary"] == "reconciled terminal result"
+    first, second = run.executions
+    if resume_enabled:
+        assert first.model_dump(by_alias=True) == second.model_dump(by_alias=True)
+        assert len([name for name, _ in run.signals if name == "request_slot"]) == 1
+    else:
+        assert second.admitted_provider_capacity.admission_epoch == first.admitted_provider_capacity.admission_epoch + 1
+    assert run._omnigent_pending_request is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("key", ["x" * 40_000, "é" * 20_000], ids=["ascii", "multibyte"])
 @pytest.mark.parametrize("preflight_enabled", [True, False])
 @pytest.mark.parametrize("activity_name", [

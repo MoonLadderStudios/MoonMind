@@ -279,6 +279,23 @@ For each row, track:
 
 ## Inspect Evidence
 
+Persist the inventory in the verification artifact instead of leaving it only in
+agent context. Each row carries a stable requirement ID, the production boundary,
+executable check commands, required capability, expected terminal evidence and
+the exact candidate commit or checkpoint. In issue-brief mode, reuse the
+assessment requirements verification map; fill missing historical entries from
+visible source requirements before executing checks. Never change acceptance
+scope to fit the available environment.
+
+Prerequisite preparation has at most two authorized setup attempts per owning
+service and candidate. Persist readiness, setup actions, failures and resume
+commands with the inventory; continuation preserves this budget. Use available
+repository and managed container capabilities before declaring a dependency
+unavailable. A verification infrastructure failure preserves the same saved
+candidate and requests evidence retry. A demonstrated code defect requests
+remediation. Missing authority names the actual granting owner. These outcomes
+must not be conflated or consume each other's budgets.
+
 Inspect production code before tests so behavior is verified directly.
 
 Use repository search to find:

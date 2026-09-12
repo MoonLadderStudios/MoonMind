@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
-from sqlalchemy import select, update
+from sqlalchemy import select, update, text
 from sqlalchemy.exc import IntegrityError
 
 from moonmind.omnigent.harness_platform.failures import (
@@ -113,6 +114,7 @@ class StableRuntimeBinding(BaseModel):
     )
     failureCode: str | None = Field(None, alias="failureCode")
     terminalResult: dict[str, Any] | None = Field(None, alias="terminalResult")
+    phaseResults: dict[str, Any] | None = Field(None, alias="phaseResults")
     heartbeatAt: datetime | None = Field(None, alias="heartbeatAt")
 
     @model_validator(mode="after")
@@ -124,6 +126,10 @@ class StableRuntimeBinding(BaseModel):
         payload = self.model_dump(
             by_alias=True, mode="json", exclude={"latestSnapshotRef"}
         )
+        # Existing v2 snapshots predate independent phase receipts. An absent
+        # receipt must not change their digest during restart or replay.
+        if payload.get("phaseResults") is None:
+            payload.pop("phaseResults", None)
         if not (info.context or {}).get("skip_snapshot_validation"):
             expected = _snapshot_ref(payload)
             if self.latestSnapshotRef != expected:
@@ -246,6 +252,8 @@ def _binding(data: dict[str, Any]) -> StableRuntimeBinding:
         payload, context={"skip_snapshot_validation": True}
     ).model_dump(by_alias=True, mode="json")
     normalized.pop("latestSnapshotRef", None)
+    if normalized.get("phaseResults") is None:
+        normalized.pop("phaseResults", None)
     normalized["latestSnapshotRef"] = _snapshot_ref(normalized)
     return StableRuntimeBinding.model_validate(normalized)
 
@@ -256,6 +264,7 @@ def create_stable_runtime_binding(
     idempotency_key: str,
     provider_leases: dict[str, dict[str, Any]],
     admission_epoch: int | None = None,
+    initial_phase_results: dict[str, Any] | None = None,
 ) -> StableRuntimeBinding:
     return _binding(
         {
@@ -272,6 +281,7 @@ def create_stable_runtime_binding(
             "credentialRuntimeHandles": {},
             "attestationRefs": {},
             "cleanupAuthorityRefs": [],
+            "phaseResults": initial_phase_results,
             "heartbeatAt": datetime.now(UTC),
         }
     )
@@ -309,6 +319,12 @@ def evolve_binding(
     if existing.terminalResult is not None:
         immutable["terminalResult"] = data["terminalResult"]
     data.update(dict(updates or {}))
+    for phase, receipt in (existing.phaseResults or {}).items():
+        if (data.get("phaseResults") or {}).get(phase) != receipt:
+            raise HarnessPlatformError(
+                f"runtime binding attempted to replace the {phase} receipt",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
     for key, value in immutable.items():
         if data.get(key) != value:
             raise HarnessPlatformError(
@@ -336,6 +352,10 @@ class StableRuntimeBindingStore(Protocol):
 
     async def get(self, binding_id: str) -> "StableRuntimeBinding | None": ...
 
+    def finalization(self, binding_id: str):
+        """Serialize save/restore/publish deliveries; yield freshly read authority."""
+        ...
+
     async def create_initial(
         self,
         *,
@@ -343,6 +363,7 @@ class StableRuntimeBindingStore(Protocol):
         idempotency_key: str,
         provider_leases: dict[str, dict[str, Any]],
         admission_epoch: int | None = None,
+        initial_phase_results: dict[str, Any] | None = None,
     ) -> "StableRuntimeBinding": ...
 
     async def update(
@@ -361,9 +382,25 @@ class StableRuntimeBindingStore(Protocol):
     ) -> tuple["StableRuntimeBinding", ...]: ...
 
 
+def _validate_initial_binding(existing: StableRuntimeBinding, proposed: StableRuntimeBinding) -> None:
+    old_owner = (existing.phaseResults or {}).get("owner")
+    new_owner = (proposed.phaseResults or {}).get("owner")
+    if (existing.executionPlanRef != proposed.executionPlanRef
+            or existing.providerLeases != proposed.providerLeases
+            or (old_owner and new_owner and old_owner != new_owner)):
+        raise HarnessPlatformError("runtime binding create conflict",
+            code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT)
+
+
 class InMemoryStableRuntimeBindingStore:
     def __init__(self) -> None:
         self._bindings: dict[str, StableRuntimeBinding] = {}
+        self._finalization_locks: dict[str, asyncio.Lock] = {}
+
+    @asynccontextmanager
+    async def finalization(self, binding_id: str):
+        async with self._finalization_locks.setdefault(binding_id, asyncio.Lock()):
+            yield await self.get(binding_id)
 
     async def get(self, binding_id: str) -> StableRuntimeBinding | None:
         return self._bindings.get(binding_id)
@@ -375,23 +412,18 @@ class InMemoryStableRuntimeBindingStore:
         idempotency_key: str,
         provider_leases: dict[str, dict[str, Any]],
         admission_epoch: int | None = None,
+        initial_phase_results: dict[str, Any] | None = None,
     ) -> StableRuntimeBinding:
         binding = create_stable_runtime_binding(
             execution_plan_ref=execution_plan_ref,
             idempotency_key=idempotency_key,
             provider_leases=provider_leases,
             admission_epoch=admission_epoch,
+            initial_phase_results=initial_phase_results,
         )
         existing = self._bindings.get(binding.bindingId)
         if existing is not None:
-            if (
-                existing.executionPlanRef != execution_plan_ref
-                or existing.providerLeases != provider_leases
-            ):
-                raise HarnessPlatformError(
-                    "runtime binding create conflict",
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-                )
+            _validate_initial_binding(existing, binding)
             return existing
         self._bindings[binding.bindingId] = binding
         return binding
@@ -441,6 +473,24 @@ class DbRuntimeBindingStore:
     def __init__(self, session_factory: Any) -> None:
         self._session_factory = session_factory
 
+    @asynccontextmanager
+    async def finalization(self, binding_id: str):
+        # A transaction-scoped PostgreSQL lock serializes all worker processes.
+        # It has no clock/PID-based takeover and releases when its owner dies.
+        # Phase writes keep their existing independent revision/fence CAS.
+        key = int.from_bytes(hashlib.sha256(("finalization:" + binding_id).encode()).digest()[:8], "big", signed=True)
+        for attempt in range(120):
+            async with self._session_factory() as session, session.begin():
+                acquired = (await session.execute(text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": key})).scalar_one()
+                if acquired:
+                    yield await self.get(binding_id)
+                    return
+            # Waiters release their pool connections, so the current owner can
+            # commit receipts even when many deliveries arrive concurrently.
+            await asyncio.sleep(0.25)
+        raise HarnessPlatformError("finalization is still owned by another delivery",
+            code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT)
+
     @staticmethod
     def _from_row(row: Any) -> StableRuntimeBinding:
         binding = _binding(
@@ -461,7 +511,12 @@ class DbRuntimeBindingStore:
                 "cleanupAuthorityRefs": row.cleanup_authority_refs_json,
                 "failureCode": row.failure_code,
                 "terminalResult": row.terminal_result_json,
-                "heartbeatAt": row.heartbeat_at,
+                "phaseResults": row.phase_results_json,
+                "heartbeatAt": (
+                    row.heartbeat_at.replace(tzinfo=UTC)
+                    if row.heartbeat_at is not None and row.heartbeat_at.tzinfo is None
+                    else row.heartbeat_at
+                ),
             }
         )
         if binding.latestSnapshotRef != row.latest_snapshot_ref:
@@ -491,6 +546,7 @@ class DbRuntimeBindingStore:
         idempotency_key: str,
         provider_leases: dict[str, dict[str, Any]],
         admission_epoch: int | None = None,
+        initial_phase_results: dict[str, Any] | None = None,
     ) -> StableRuntimeBinding:
         from api_service.db.models import OmnigentRuntimeBindingRecord
 
@@ -499,17 +555,11 @@ class DbRuntimeBindingStore:
             idempotency_key=idempotency_key,
             provider_leases=provider_leases,
             admission_epoch=admission_epoch,
+            initial_phase_results=initial_phase_results,
         )
         existing = await self.get(binding.bindingId)
         if existing is not None:
-            if (
-                existing.executionPlanRef != binding.executionPlanRef
-                or existing.providerLeases != binding.providerLeases
-            ):
-                raise HarnessPlatformError(
-                    "runtime binding create conflict",
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-                )
+            _validate_initial_binding(existing, binding)
             return existing
         async with self._session_factory() as session:
             session.add(
@@ -527,6 +577,7 @@ class DbRuntimeBindingStore:
                     attestation_refs_json={},
                     cleanup_authority_refs_json=[],
                     terminal_result_json=binding.terminalResult,
+                    phase_results_json=binding.phaseResults,
                 )
             )
             try:
@@ -535,6 +586,7 @@ class DbRuntimeBindingStore:
                 await session.rollback()
                 raced = await self.get(binding.bindingId)
                 if raced is not None:
+                    _validate_initial_binding(raced, binding)
                     return raced
                 raise HarnessPlatformError(
                     "runtime binding create conflict",
@@ -575,6 +627,7 @@ class DbRuntimeBindingStore:
             "state": evolved.state.value,
             "failure_code": evolved.failureCode,
             "terminal_result_json": evolved.terminalResult,
+            "phase_results_json": evolved.phaseResults,
             "heartbeat_at": evolved.heartbeatAt,
             "credential_runtime_handles_json": evolved.credentialRuntimeHandles,
             "host_binding_ref": evolved.hostBindingRef,
@@ -641,6 +694,30 @@ class RuntimeBindingSessionAuthoritySink:
         self._store = store
         self.binding = binding
         self._lock = asyncio.Lock()
+
+    async def refresh(self):
+        async with self._lock:
+            self.binding = await self._store.get(self.binding.bindingId)
+            return self.binding
+
+    async def record_phase(self, phase: str, receipt: dict[str, Any]) -> None:
+        """Commit one immutable phase under the same lock as lease heartbeats."""
+        async with self._lock:
+            phases = dict(self.binding.phaseResults or {})
+            if phase in phases:
+                if phases[phase] != receipt:
+                    raise HarnessPlatformError(
+                        "phase receipt conflicts with completed work",
+                        code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                    )
+                return
+            phases[phase] = receipt
+            self.binding = await self._store.update(
+                self.binding.bindingId,
+                expected_revision=self.binding.revision,
+                expected_fencing_generation=self.binding.fencingGeneration,
+                updates={"phaseResults": phases},
+            )
 
     async def session_created(self, session_id: str) -> None:
         async with self._lock:

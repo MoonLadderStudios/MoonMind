@@ -573,6 +573,7 @@ def decide_remediation_continuation(
     progress_ref: str | None = None,
     recoverable_evidence: bool = False,
     recommended_next_action: str | None = None,
+    evidence_recovery_enabled: bool = True,
 ) -> RemediationContinuationDecision:
     """Return the one deterministic routing decision for verifier evidence."""
 
@@ -593,7 +594,12 @@ def decide_remediation_continuation(
         return RemediationContinuationDecision.model_validate(
             {**common, "continueLoop": False, "reason": "verification_accepted", "nextPhase": "accepted"}
         )
-    if normalized == "BLOCKED":
+    retryable_block = (
+        evidence_recovery_enabled and normalized == "BLOCKED"
+        and recoverable_evidence
+        and recommended_next_action == "reattempt_current_step"
+    )
+    if normalized == "BLOCKED" and not retryable_block:
         return RemediationContinuationDecision.model_validate(
             {**common, "continueLoop": False, "reason": "verification_blocked", "nextPhase": "blocked"}
         )
@@ -621,7 +627,7 @@ def decide_remediation_continuation(
                 "nextPhase": recommended_next_action,
             }
         )
-    if normalized == "NO_DETERMINATION":
+    if normalized == "NO_DETERMINATION" or retryable_block:
         can_retry = (
             recoverable_evidence
             and spec.terminal_policy.no_determination == "retry_evidence_or_stop"
@@ -632,7 +638,7 @@ def decide_remediation_continuation(
                 **common,
                 "continueLoop": can_retry,
                 "reason": "recoverable_evidence_retry" if can_retry else "evidence_unavailable",
-                "nextPhase": "verification_pending" if can_retry else "needs_human",
+                "nextPhase": "verification_pending" if can_retry else ("blocked" if evidence_recovery_enabled else "needs_human"),
                 "retryKind": "evidence" if can_retry else None,
             }
         )
@@ -658,3 +664,33 @@ def decide_remediation_continuation(
             "nextPhase": "remediation_pending" if allowed else "stopped_remaining_work",
         }
     )
+
+
+def materialize_evidence_retry_node(*, source_node, state, gate_result_ref):
+    """Repeat the declared verifier against the same candidate, with no writer."""
+    from copy import deepcopy
+
+    if not state.workspace_head_ref:
+        raise ValueError("Evidence retry requires the authoritative candidate checkpoint")
+    if state.phase is not RemediationLoopPhase.VERIFICATION_PENDING:
+        raise ValueError("Evidence retry requires an admitted verification decision")
+    node = deepcopy(source_node)
+    identity = f"{state.loop_id}:verification-evidence:{state.consumed_budgets.evidence_retries}"
+    node.update(id=identity, title="Retry verification evidence", dependsOn=[])
+    node["inputs"] = {
+        **dict(node.get("inputs") or {}),
+        "remediationLoopId": state.loop_id,
+        "remediationAttempt": state.attempt_ordinal,
+        "remediationWorkspaceHeadRef": state.workspace_head_ref,
+        "readOnlyWorkspaceHead": True,
+        "repositoryOperation": "read",
+        "gateResultRef": gate_result_ref,
+    }
+    node["annotations"] = {
+        **dict(node.get("annotations") or {}),
+        "issueImplementRole": "moonspec-verification-gate",
+        "remediationLoopId": state.loop_id,
+        "moonSpecRemediationAttempt": state.attempt_ordinal,
+        "verificationEvidenceRetry": state.consumed_budgets.evidence_retries,
+    }
+    return node

@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from tests.support.issue_claims import issue_claim_store, ClaimCommentFixture  # noqa: F401
 
 from moonmind.workflows.temporal import story_output_tools as story_tools
 from moonmind.workflows.temporal.github_issue_lifecycle import (
@@ -310,7 +311,7 @@ def test_linked_retry_history_blocks_admission_when_budget_is_spent() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _LifecycleFakeService:
+class _LifecycleFakeService(ClaimCommentFixture):
     """Fake trusted GitHub boundary with targeted label operations."""
 
     def __init__(self, initial_labels: list[str] | None = None) -> None:
@@ -464,7 +465,7 @@ async def test_start_preserves_unrelated_labels_with_add_before_remove(monkeypat
         github_service_factory=lambda: service,
     )
     assert result.status == "COMPLETED"
-    assert result.outputs["appliedActions"] == ["add_label:status: in-progress", "comment"]
+    assert result.outputs["appliedActions"] == ["comment", "add_label:status: in-progress"]
     assert service.operations == [("add", "status: in-progress")]
     assert result.outputs["confirmedLabels"] == ["bug", "moonspec", "status: in-progress"]
     assert result.outputs["mutationOutcome"] == "applied"
@@ -581,7 +582,7 @@ async def test_finalize_mixed_with_pr_steers_to_needs_attention(
     assert "status: code-review" in confirmed
     # PR handoff comment posted with the PR URL visible.
     assert "comment" in result.outputs["appliedActions"]
-    posted_bodies = [str(kwargs.get("json") or "") for _url, kwargs in _LifecycleHttpClient.posts]
+    posted_bodies = [item["body"] for item in service.claim_comments]
     assert any(
         "https://github.com/MoonLadderStudios/MoonMind/pull/4210" in body
         for body in posted_bodies
@@ -905,7 +906,7 @@ async def test_response_loss_on_read_back_fails_without_terminal_evidence(monkey
     )
     assert result.status == "FAILED"
     assert result.outputs["mutationOutcome"] == "outcome_unknown"
-    assert result.outputs["reasonCode"] == "mutation_unknown"
+    assert result.outputs["reasonCode"] == "read_failure"
 
 
 @pytest.mark.asyncio
@@ -1170,7 +1171,7 @@ async def test_stale_expected_state_abandons_obsolete_update(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
-async def test_matching_expected_state_does_not_abandon(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_matching_expected_state_cannot_claim_manual_work(monkeypatch: pytest.MonkeyPatch) -> None:
     service = _LifecycleFakeService(initial_labels=["status: in-progress"])
     _install(monkeypatch, service)
     result = await update_github_issue_status(
@@ -1179,8 +1180,9 @@ async def test_matching_expected_state_does_not_abandon(monkeypatch: pytest.Monk
          "assessmentArtifactPath": ""},
         github_service_factory=lambda: service,
     )
-    assert result.status == "COMPLETED"
-    assert result.outputs["mutationOutcome"] == "already_applied"
+    assert result.status == "FAILED"
+    assert result.outputs["reasonCode"] == "manual_in_progress_without_trusted_owner"
+    assert service.operations == []
 
 
 @pytest.mark.asyncio
@@ -1194,7 +1196,7 @@ async def test_terminal_modes_leave_mode_specific_evidence(monkeypatch: pytest.M
         github_service_factory=lambda: service,
     )
     assert result.status == "COMPLETED"
-    bodies = [kwargs.get("json", {}).get("body", "") for _, kwargs in _LifecycleHttpClient.posts]
+    bodies = [item["body"] for item in service.claim_comments]
     assert any("continuation handoff" in body for body in bodies)
     assert not any("started implementation" in body for body in bodies)
 
@@ -1211,7 +1213,7 @@ async def test_attention_escalation_preserves_active_ownership(monkeypatch: pyte
     assert result.status == "COMPLETED"
     assert "status: in-progress" in result.outputs["confirmedLabels"]
     assert "status: needs-attention" in result.outputs["confirmedLabels"]
-    bodies = [kwargs.get("json", {}).get("body", "") for _, kwargs in _LifecycleHttpClient.posts]
+    bodies = [item["body"] for item in service.claim_comments]
     assert any("needing attention" in body for body in bodies)
 
 
@@ -1226,7 +1228,7 @@ async def test_available_release_leaves_release_evidence(monkeypatch: pytest.Mon
         github_service_factory=lambda: service,
     )
     assert result.status == "COMPLETED"
-    bodies = [kwargs.get("json", {}).get("body", "") for _, kwargs in _LifecycleHttpClient.posts]
+    bodies = [item["body"] for item in service.claim_comments]
     assert any("released" in body and "available" in body for body in bodies)
     assert not any("started implementation" in body for body in bodies)
 
@@ -1298,6 +1300,12 @@ class _SearchFakeHttpClient:
         return None
 
     async def get(self, url: str, **kwargs: Any):
+        if "search/issues" not in url:
+            number = int(url.rsplit("/", 1)[-1])
+            return _SearchFakeResponse(next(
+                dict(item) for item in type(self).payload["items"]
+                if item["number"] == number
+            ))
         return _SearchFakeResponse(dict(type(self).payload))
 
 

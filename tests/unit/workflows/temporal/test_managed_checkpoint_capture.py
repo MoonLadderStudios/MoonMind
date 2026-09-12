@@ -95,6 +95,10 @@ async def test_managed_capture_trusts_the_resolved_workspace_for_every_git_comma
     repo = tmp_path / "agent-run-1" / "repo"
     repo.mkdir(parents=True)
     (repo / "tracked.txt").write_text("checkpoint evidence\n")
+    for args in (["init", "-q"], ["config", "user.name", "Fixture"],
+                 ["config", "user.email", "fixture@example.invalid"], ["add", "tracked.txt"],
+                 ["commit", "-qm", "candidate"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True)
     resolved_repo = str(repo.resolve())
     expected_prefix = [
         "git",
@@ -104,6 +108,7 @@ async def test_managed_capture_trusts_the_resolved_workspace_for_every_git_comma
         resolved_repo,
     ]
     commands: list[list[str]] = []
+    original_run = activity_runtime_module._run_command
 
     async def run_git(command, **_kwargs):
         normalized = [str(part) for part in command]
@@ -112,20 +117,7 @@ async def test_managed_capture_trusts_the_resolved_workspace_for_every_git_comma
             raise RuntimeError(
                 f"fatal: detected dubious ownership in repository at '{resolved_repo}'"
             )
-        operation = normalized[len(expected_prefix) :]
-        if operation[0] == "ls-files":
-            return SimpleNamespace(stdout="tracked.txt\0")
-        if operation[:2] == ["rev-parse", "HEAD"]:
-            return SimpleNamespace(stdout="abc123\n")
-        if operation[:2] == ["branch", "--show-current"]:
-            return SimpleNamespace(stdout="main\n")
-        if operation[0] == "status":
-            return SimpleNamespace(stdout="")
-        if operation[:3] == ["ls-tree", "-r", "--name-only"]:
-            return SimpleNamespace(stdout="")
-        if operation[0] == "diff":
-            return SimpleNamespace(stdout="")
-        raise AssertionError(f"unexpected git command: {operation}")
+        return await original_run(command, **_kwargs)
 
     monkeypatch.setattr(activity_runtime_module, "_run_command", run_git)
     activities = TemporalAgentRuntimeActivities(

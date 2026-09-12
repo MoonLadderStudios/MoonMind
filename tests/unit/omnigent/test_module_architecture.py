@@ -956,7 +956,7 @@ SHARED_IMAGE_AUTHORITY_MODULES = (
 SHARED_IMAGE_ENV = "OMNIGENT_SHARED_HOST_IMAGE_REF"
 
 # Compose topology is one file plus the test-only project file.
-ALLOWED_COMPOSE_FILES = ("docker-compose.yaml", "docker-compose.test.yaml")
+ALLOWED_COMPOSE_FILES = ("docker-compose.yaml", "docker-compose.test.yaml", "docker-compose.development.yaml")
 
 _PROVIDER_LIFECYCLE_SUFFIXES = ("Coordinator", "Runtime", "Lifecycle", "Launcher")
 _PROVIDER_NAMES = ("Codex", "Claude", "OpenCode")

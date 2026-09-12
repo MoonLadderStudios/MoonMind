@@ -157,11 +157,14 @@ class ManagedServiceRemediationRestorer:
         destination_request = dict(request.get("destination") or {})
         destination_request.update(
             {
-                "runtimeId": "codex_cli",
-                "agentRunId": destination.parent.name,
+                "kind": "sandbox",
+                "workspaceId": binding.destination_workspace_locator.workspace_id,
+                "stepExecutionId": binding.step_execution_id,
                 "relativePath": "repo",
             }
         )
+        destination_request.pop("runtimeId", None)
+        destination_request.pop("agentRunId", None)
         request.update(
             {
                 "destination": destination_request,

@@ -206,7 +206,7 @@ def test_workflow_fleet_retention_is_marked_compatibility_only():
 
 def test_workflow_fleet_composition_is_four_helpers_plus_three_persistence():
     names = _handler_names(workflow_fleet_activity_handlers())
-    assert names == set(HELPER_TYPES) | set(PERSISTENCE_TYPES)
+    assert names == set(HELPER_TYPES) | set(PERSISTENCE_TYPES) | {"release.inspect"}
 
 
 def test_capability_inventory_separates_db_handlers_from_metadata_helpers():

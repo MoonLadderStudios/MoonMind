@@ -77,6 +77,12 @@ You are the master orchestrator for finishing Pull Requests. Use bounded retries
 
 The task is not complete until the target PR is merged or is proven already merged. A local fix, local commit, passing local test run, unresolved review reply, or unpushed branch is not a successful PR resolution.
 
+The finalize helper's `phase: intermediate` receipt requests continuation of
+this Skill. It is never a terminal `manual_review` result. Resume the specified
+remediation using the same PR, saved snapshot, and cumulative budgets. Every
+host consumes this portable decision; native runtimes may validate the receipt
+and continue the agent, but must not reclassify CI or choose fixes themselves.
+
 `inputs.finishMode = fix_only` is the one exception, and it narrows only the
 final side effect: every remediation, push, verification, and gate check still
 applies, but when the merge gate opens with nothing left to address the resolver

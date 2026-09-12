@@ -1508,6 +1508,15 @@ def build_default_activity_catalog(
             heartbeat_required=True,
         ),
         TemporalActivityDefinition(
+            activity_type="release.reconcile",
+            family="release",
+            capability_class="deployment_control",
+            task_queue=cfg.activity_deployment_task_queue,
+            fleet=DEPLOYMENT_FLEET,
+            timeouts=TemporalActivityTimeouts(900, 1200),
+            retries=_activity_retries(max_attempts=1, max_interval_seconds=60),
+        ),
+        TemporalActivityDefinition(
             activity_type="agent_runtime.cleanup_managed_runtime_files",
             family="agent_runtime",
             capability_class="agent_runtime",
@@ -1857,7 +1866,7 @@ def build_default_activity_catalog(
                 "Singleton deployment-control runner for audited Docker Compose "
                 "stack updates."
             ),
-            activity_types=("mm.tool.execute",),
+            activity_types=("mm.tool.execute", "release.reconcile"),
         ),
     )
 

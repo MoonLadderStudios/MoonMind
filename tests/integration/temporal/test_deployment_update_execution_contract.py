@@ -51,6 +51,7 @@ class HermeticRunner:
         payload: dict[str, Any] = {
             "Id": "sha256:" + "a" * 64,
             "RepoTags": [requested_image],
+            "RepoDigests": ["ghcr.io/moonladderstudios/moonmind@sha256:" + "a" * 64],
         }
         if self.target_build_id is not None:
             payload["Config"] = {

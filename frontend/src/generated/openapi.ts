@@ -8158,6 +8158,10 @@ export interface components {
             terminalRuns: number;
             /** Successrate */
             successRate?: number | null;
+            /** Objectivemetrics */
+            objectiveMetrics?: {
+                [key: string]: unknown;
+            } | null;
             duration?: components["schemas"]["ExecutionMetricsDurationModel"];
             cost?: components["schemas"]["ExecutionMetricsCostModel"];
             /**

@@ -125,6 +125,7 @@ async def deliver_canonical_turn(
     plan: Any,
     command_type: str,
     operation: Callable[[], Awaitable[AgentRunResult]],
+    recorded_result: AgentRunResult | None = None,
 ) -> AgentRunResult:
     """Run ``operation`` inside one claimed, fenced canonical turn command.
 
@@ -147,7 +148,7 @@ async def deliver_canonical_turn(
     """
 
     if turn_commands is None:
-        return await operation()
+        return recorded_result if recorded_result is not None else await operation()
 
     turn_source = canonical_turn_source(request)
     workflow_id, step_execution_id = execution_identity(request)
@@ -189,6 +190,9 @@ async def deliver_canonical_turn(
         )
         raise
     if not command_claim.owns_delivery:
+        from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
+        if command_claim.outcome is ControlPlaneOutcome.ALREADY_APPLIED and recorded_result is not None:
+            return recorded_result
         _record_followup_availability(
             plan=plan, turn_source=turn_source, available=False
         )
@@ -204,7 +208,7 @@ async def deliver_canonical_turn(
     from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
 
     try:
-        result = await operation()
+        result = recorded_result if recorded_result is not None else await operation()
     except BaseException:
         try:
             await turn_commands.settle(

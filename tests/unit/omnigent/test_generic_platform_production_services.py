@@ -2123,6 +2123,10 @@ async def _generic_publication_harness(
             return {"sessionId": session_id, "stopped": True}
 
     class WorkspacePublisher:
+        async def save_request_workspace(self, request):
+            events.append("workspace-saved")
+            return {"kind": "worktree_archive", "archiveRef": "artifact://saved", "archiveDigest": "sha256:" + "a" * 64}
+
         async def publish_request_workspace(self, **_kwargs):
             events.append("workspace-published")
             return dict(publication)
@@ -3185,7 +3189,8 @@ async def test_secret_resolution_is_role_scoped_and_generation_fenced() -> None:
 
 
 @pytest.mark.asyncio
-async def test_janitor_recovers_binding_that_crashed_before_host_lease() -> None:
+@pytest.mark.parametrize("owner_closed", [True, False, None])
+async def test_janitor_recovers_binding_that_crashed_before_host_lease(owner_closed) -> None:
     bindings = InMemoryStableRuntimeBindingStore()
     binding = await bindings.create_initial(
         execution_plan_ref="omnigent-execution-plan:sha256:" + "1" * 64,
@@ -3210,14 +3215,16 @@ async def test_janitor_recovers_binding_that_crashed_before_host_lease() -> None
         host_leases=InMemoryOmnigentHostLeaseRepository(),
         runtime_bindings=bindings,
         realizer=Realizer(),
+        owner_has_closed=AsyncMock(return_value=owner_closed),
         stale_after_seconds=-1,
     )
 
     result = await janitor.run()
 
-    assert calls == [(binding.executionPlanRef, binding.bindingId)]
+    assert calls == ([(binding.executionPlanRef, binding.bindingId)] if owner_closed is True else [])
     assert result["runtimeBindingsExamined"] == 1
-    assert result["reconciled"] == 1
+    assert result["reconciled"] == int(owner_closed is True)
+    assert result["conflicts"] == int(owner_closed is not True)
 
 
 @pytest.mark.asyncio

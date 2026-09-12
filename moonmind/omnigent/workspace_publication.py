@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
+from datetime import UTC, datetime
 import logging
 import os
 import re
@@ -54,10 +56,134 @@ _PRE_CONNECTION_FAILURE = re.compile(
 class OmnigentWorkspacePublicationService:
     """Publish and remotely verify one typed Omnigent sandbox workspace."""
 
-    def __init__(self, workspace_root: str | Path | None = None) -> None:
+    def __init__(self, workspace_root: str | Path | None = None, *, artifact_gateway=None) -> None:
+        self._artifacts = artifact_gateway
         self._workspace_root = Path(
             workspace_root or os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
         ).resolve()
+
+    def resolve_request_workspace(self, request: AgentExecutionRequest, *, must_exist=True) -> Path:
+        """Resolve only the workspace attested for this exact workflow step."""
+        from moonmind.omnigent.realizers.turn_delivery import execution_identity
+        workflow_id, step_id = execution_identity(request)
+        locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(
+            (request.workspace_spec or {}).get("workspaceLocator")
+        )
+        if not isinstance(locator, SandboxWorkspaceLocator):
+            raise HarnessPlatformError("local workspace authority is required", code=WORKSPACE_LOCATOR_UNSUPPORTED)
+        expected_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
+        return resolve_sandbox_workspace_locator(
+            locator, workspace_root=self._workspace_root,
+            expected_workspace_id=expected_id,
+            owner_record=SandboxWorkspaceRecordStore(self._workspace_root).load(expected_id),
+            expected_workflow_id=workflow_id, expected_step_execution_id=step_id,
+            must_exist=must_exist,
+        )
+
+    async def restore_saved_request_workspace(self, request, saved):
+        """Resume the same finalization owner after its local volume was lost."""
+        from moonmind.omnigent.realizers.turn_delivery import execution_identity
+        from moonmind.workflows.temporal.runtime.workspace_locators import SandboxWorkspaceRecord
+        identity = request.step_execution
+        if identity is None or not saved.get("checkpointRef") or self._artifacts is None:
+            raise HarnessPlatformError("Saved work lacks an immutable resume checkpoint", code="WORKSPACE_RESTORE_UNAVAILABLE")
+        workflow_id, step_id = execution_identity(request)
+        locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(request.workspace_spec["workspaceLocator"])
+        expected_id = hashlib.sha256(f"{workflow_id}:{step_id}".encode()).hexdigest()[:24]
+        if not isinstance(locator, SandboxWorkspaceLocator) or locator.workspace_id != expected_id or locator.relative_path != "repo":
+            raise HarnessPlatformError("Saved workspace owner differs from the admitted execution", code=WORKSPACE_LOCATOR_UNSUPPORTED)
+        # The admitted binding and artifact source are authoritative even if the
+        # disposable volume (including its local owner record) was lost.
+        SandboxWorkspaceRecordStore(self._workspace_root).ensure(
+            SandboxWorkspaceRecord(expected_id, workflow_id, step_id, "repo"))
+        workspace = self.resolve_request_workspace(request, must_exist=False)
+        if workspace.exists():
+            return None
+        source = {"workflowId": identity.workflow_id, "runId": identity.run_id,
+                  "logicalStepId": identity.logical_step_id, "executionOrdinal": identity.execution_ordinal}
+        plan = identity.omnigent_execution_plan
+        if plan is None:
+            raise HarnessPlatformError("Finalization restore requires its original execution plan", code="WORKSPACE_RESTORE_UNAVAILABLE")
+        return await self._artifacts.restore_checkpoint(authority_root=self._workspace_root, restore_request={
+            "schemaVersion": "v1", "recoveryIdentity": source,
+            "source": {**source, "checkpointRef": saved["checkpointRef"], "checkpointBoundary": "after_execution",
+                       "sourceWorkspaceLocator": locator.model_dump(by_alias=True)},
+            "checkpoint": {key: saved[key] for key in ("kind", "baseCommit", "archiveRef", "archiveDigest", "manifestRef", "manifestDigest")},
+            "destination": {**locator.model_dump(by_alias=True), "stepExecutionId": step_id,
+                            "repository": authored_repository_source(request)},
+            "workspacePolicy": "restore_publication_candidate", "resumePhase": "resume_publication",
+            "capabilitySetVersion": "omnigent-plan/v1", "capabilityDigest": plan.plan_digest,
+            "idempotencyKey": request.idempotency_key + ":restore-finalization",
+        })
+
+    async def inspect_request_terminal(self, request: AgentExecutionRequest):
+        from moonmind.workflows.terminal_evidence import evaluate_terminal_evidence
+        workspace = self.resolve_request_workspace(request)
+        return await asyncio.to_thread(
+            evaluate_terminal_evidence,
+            request.terminal_contract.model_dump(by_alias=True),
+            workspace_path=str(workspace),
+        )
+
+    async def save_request_workspace(self, request: AgentExecutionRequest):
+        """Use the canonical archive contract and verify its remote bytes."""
+        from moonmind.workflows.temporal.activity_runtime import TemporalSandboxActivities
+        from moonmind.schemas.temporal_models import WorkspaceCheckpointCaptureInput
+        from moonmind.omnigent.realizers.turn_delivery import execution_identity
+        if self._artifacts is None:
+            raise HarnessPlatformError("durable workspace storage is unavailable", code="WORKSPACE_SAVE_UNAVAILABLE")
+        gateway = self._artifacts
+        self.resolve_request_workspace(request)
+        workflow_id, step_id = execution_identity(request)
+
+        class Capture(TemporalSandboxActivities):
+            async def _put_checkpoint_bytes(self, payload, *, content_type, metadata=None):
+                ref = await gateway.write_bytes(
+                    request=request, name=str((metadata or {}).get("artifact_kind") or "checkpoint"),
+                    payload=payload, content_type=content_type, link_type="evidence.recovery",
+                )
+                restored = await gateway.read_bytes(ref)
+                if hashlib.sha256(restored).digest() != hashlib.sha256(payload).digest():
+                    raise ValueError("Remote checkpoint bytes differ from the saved candidate")
+                return "artifact://" + ref.removeprefix("artifact:").removeprefix("//")
+
+        identity = request.step_execution
+        if identity is None:
+            raise HarnessPlatformError("Saving work requires the admitted Step Execution identity", code="WORKSPACE_SAVE_UNAVAILABLE")
+        capture = await Capture(workspace_root=self._workspace_root).workspace_capture_checkpoint(
+            WorkspaceCheckpointCaptureInput(
+                identity={"workflowId": identity.workflow_id, "runId": identity.run_id,
+                          "logicalStepId": identity.logical_step_id, "executionOrdinal": identity.execution_ordinal},
+                boundary="after_execution", kind="worktree_archive",
+                workspaceLocator=request.workspace_spec["workspaceLocator"],
+                artifactNamespace=workflow_id, idempotencyKey=f"{request.idempotency_key}:saved-work",
+                includeUntracked=True,
+            )
+        )
+        if capture.get("status") != "captured":
+            raise HarnessPlatformError("Workspace checkpoint was not captured", code="WORKSPACE_SAVE_UNAVAILABLE")
+        workspace_evidence = capture["workspace"]
+        # The generic plan already owns immutable task inputs. Retain a complete
+        # canonical checkpoint instead of leaving an archive with no resume input.
+        plan = identity.omnigent_execution_plan
+        if plan is not None:
+            from moonmind.workflows.temporal.step_checkpoints import build_step_checkpoint_payload
+            from moonmind.schemas.temporal_models import StepExecutionIdentityModel, STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE
+            payload = build_step_checkpoint_payload(
+                identity=StepExecutionIdentityModel(workflowId=identity.workflow_id, runId=identity.run_id,
+                    logicalStepId=identity.logical_step_id, executionOrdinal=identity.execution_ordinal),
+                boundary="after_execution", task_input_snapshot_ref=plan.task_input_snapshot_ref,
+                workspace=workspace_evidence, created_at=datetime.now(UTC),
+                plan_ref=plan.plan_artifact_ref, plan_digest=plan.plan_digest,
+                prepared_input_refs=identity.prepared_input_refs,
+            )
+            ref = await Capture(workspace_root=self._workspace_root)._put_checkpoint_bytes(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(),
+                content_type=STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+                metadata={"artifact_kind": "step_execution_checkpoint"},
+            )
+            return {**workspace_evidence, "checkpointRef": ref}
+        return workspace_evidence
 
     @staticmethod
     async def _run(

@@ -11,9 +11,24 @@ logs.
 Run the corpus with:
 
 ```bash
+docker compose -p moonmind-reliability-qualification -f tests/integration/reliability/compose.yaml up -d --wait
+# Use the isolated services' addresses from `docker compose ps` / `docker inspect`.
+# A test container on moonmind-reliability-qualification_default can use the
+# service names postgres:5432, temporal:7233, and http://minio:9000 directly.
+export MOONMIND_TEST_POSTGRES_URL=postgresql+asyncpg://postgres:reliability-test-only@POSTGRES_ADDRESS:5432/postgres
+export MOONMIND_TEST_TEMPORAL_ADDRESS=TEMPORAL_ADDRESS:7233
+export MOONMIND_TEST_MINIO_ENDPOINT=http://MINIO_ADDRESS:9000
 MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability \
   -m reliability_journey -q --durations=25
+docker compose -p moonmind-reliability-qualification -f tests/integration/reliability/compose.yaml down -v
 ```
+
+The explicit test addresses are required; tests never fall back to the installed
+deployment. PostgreSQL cases use disposable schemas, and the Compose services
+publish no host ports. Required CI owns startup, diagnostics and teardown. The
+corpus includes real Temporal progress under a blocked source scan, PostgreSQL
+claim races and parent/child ownership, MinIO candidate read-back after source
+loss, and pinned release qualification with compare-and-set promotion.
 
 Run only the source-destroying archive replay with:
 

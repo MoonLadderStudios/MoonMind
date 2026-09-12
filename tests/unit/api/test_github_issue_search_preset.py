@@ -29,6 +29,7 @@ from moonmind.workflows.temporal.story_output_tools import (
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.temporal.github_issue_search import declared_prerequisites
+from tests.support.issue_claims import issue_claim_store  # noqa: F401
 
 REPOSITORY = "MoonLadderStudios/MoonMind"
 PRESET = "github-issue-search-and-implement"
@@ -54,15 +55,24 @@ def activity_boundary(monkeypatch):
     pages = [[issue()]]
     detail = issue()
     dependency_details = {}
+    comments = []
 
     def handler(request):
         requests.append(request)
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"id": 123, "login": "fixture-owner"})
         if "/comments" in request.url.path:
             # Live comment readability gate expects a GitHub comment list.
             # GET returns the list; POST creates one comment.
             if request.method == "GET":
-                return httpx.Response(200, json=[])
-            return httpx.Response(200, json={"id": 1})
+                return httpx.Response(200, json=comments)
+            if request.method == "PATCH":
+                comment = next(item for item in comments if item["id"] == int(request.url.path.rsplit("/", 1)[1]))
+                comment["body"] = json.loads(request.content)["body"]
+            else:
+                comment = {"id": len(comments) + 1, "body": json.loads(request.content)["body"], "user": {"id": 123}}
+                comments.append(comment)
+            return httpx.Response(200, json=comment)
         if request.method == "POST" and request.url.path.endswith("/labels"):
             for label in json.loads(request.content)["labels"]:
                 if {"name": label} not in detail["labels"]:
@@ -342,14 +352,18 @@ def test_prerequisite_ranges_are_bounded(body):
         declared_prerequisites(body, REPOSITORY)
 
 
-@pytest.fixture
-def child_issue_replay():
+def child_issue_replay_data():
     return json.loads(
         (
             Path(__file__).resolve().parents[2]
             / "integration/reliability/replays/issue-child-prerequisites/manifest.json"
         ).read_text()
     )
+
+
+@pytest.fixture
+def child_issue_replay():
+    return child_issue_replay_data()
 
 
 @pytest.mark.parametrize("heading", ["## Child issues", "### Sub-issues ###"])
@@ -373,10 +387,11 @@ def test_child_issue_lists_preserve_identity_and_ignore_context(heading, marker)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("case_name", [item["name"] for item in child_issue_replay_data()["markdownCases"]])
 async def test_rendered_child_lists_control_selection_and_preflight(
-    activity_boundary, child_issue_replay
+    activity_boundary, child_issue_replay, case_name
 ):
-    for case in child_issue_replay["markdownCases"]:
+    for case in [item for item in child_issue_replay["markdownCases"] if item["name"] == case_name]:
         parent = issue(body=case["body"])
         leaf = issue(4004)
         activity_boundary.pages[:] = [[parent, leaf]]
@@ -536,13 +551,13 @@ async def test_child_reopening_at_confirmation_cannot_admit_parent(activity_boun
     activity_boundary.detail.update(parent)
     states = iter(["closed", "open"])
     activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/10"] = (
-        lambda: issue(10, state=next(states))
+        lambda: issue(10, state=next(states, "open"))
     )
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
     )
-    assert result.status == "FAILED"
-    assert "changed or could not be confirmed" in result.outputs["error"]
+    assert result.status == "COMPLETED"
+    assert result.completion_disposition == "idle"
     activity_boundary.artifact_service.create.assert_not_awaited()
 
 
@@ -626,8 +641,9 @@ async def test_scan_reuses_prerequisite_evidence_across_all_500_candidates(
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 500
-    # +5 for live comment readability (1 GET) + advisory claim (2 POSTs + 2 re-reads).
-    assert len(activity_boundary.requests) == 5 + 11 + 1 + 5
+    dependency_reads = [request for request in activity_boundary.requests
+        if request.method == "GET" and request.url.path.rsplit("/", 1)[-1] in {str(n) for n in range(10, 21)}]
+    assert len(dependency_reads) == 11
 
 
 @pytest.mark.asyncio
@@ -661,15 +677,14 @@ async def test_selected_issue_confirmation_refreshes_cached_prerequisite_state(
     activity_boundary.detail.update(candidate)
     states = iter(["closed", "open"])
     activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/10"] = (
-        lambda: issue(10, state=next(states))
+        lambda: issue(10, state=next(states, "open"))
     )
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
     )
-    assert result.status == "FAILED"
-    assert "changed or could not be confirmed" in result.outputs["error"]
-    # +1 for live comment readability GET before confirmation re-read.
-    assert len(activity_boundary.requests) == 4 + 1
+    assert result.status == "COMPLETED"
+    assert result.completion_disposition == "idle"
+    assert not any(request.method != "GET" for request in activity_boundary.requests)
 
 
 @pytest.mark.asyncio
@@ -687,8 +702,9 @@ async def test_maximum_prerequisite_list_has_fresh_confirmation_budget(
         "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
     )
     assert result.status == "COMPLETED"
-    # +5 for live comment readability + advisory claim.
-    assert len(activity_boundary.requests) == 1 + 100 + 1 + 100 + 5
+    dependency_reads = [request for request in activity_boundary.requests
+        if request.method == "GET" and request.url.path.rsplit("/", 1)[-1] in {str(n) for n in range(10, 110)}]
+    assert len(dependency_reads) == 200
 
 
 @pytest.mark.asyncio
@@ -719,8 +735,9 @@ async def test_prerequisite_cache_preserves_cross_repository_identity(
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 3
-    # +5 for live comment readability + advisory claim.
-    assert len(activity_boundary.requests) == 5 + 5
+    dependency_reads = [request for request in activity_boundary.requests
+        if request.method == "GET" and any(f"/repos/{repository}/issues/" in request.url.path for repository in ("one/project", "two/project"))]
+    assert len(dependency_reads) == 3
 
 
 @pytest.mark.asyncio
@@ -858,11 +875,11 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
     # 1 claim POST from load (advisory in-progress labels) + 2 from the
     # explicit In Progress step (labels + handoff comment).
     assert [(request.method, request.url.path) for request in mutations] == [
-        ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
-        ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
         ("POST", f"/repos/{REPOSITORY}/issues/4025/comments"),
+        ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
+        ("POST", f"/repos/{REPOSITORY}/issues/4025/labels"),
     ]
-    assert json.loads(mutations[0].content) == {"labels": ["status: in-progress"]}
+    assert json.loads(mutations[1].content) == {"labels": ["status: in-progress"]}
     assert result.outputs["mutationOutcome"] == "applied"
     assert set(result.outputs["confirmedLabels"]) == {"bug", "status: in-progress"}
     # Finalization still requires its verification / PR evidence before mutation.
@@ -917,8 +934,12 @@ async def test_search_stops_on_empty_bounded_or_degraded_evidence(
         "github.load_issue_preset_brief",
         {"repository": REPOSITORY, "issueSearch": query},
     )
-    assert result.status == "FAILED"
-    assert expected in result.outputs["error"]
+    if pages == [[]]:
+        assert result.status == "COMPLETED"
+        assert result.completion_disposition == "idle"
+    else:
+        assert result.status == "FAILED"
+        assert expected in result.outputs["error"]
     assert not any(request.method != "GET" for request in activity_boundary.requests)
 
 
@@ -944,18 +965,13 @@ async def test_query_search_and_previous_explicit_issue_payload(activity_boundar
         == f"dashboard repo:{REPOSITORY} is:issue is:open"
     )
     activity_boundary.requests.clear()
-    # Req-2 claim mutates the mocked issue labels; reset to Available for the
-    # explicit lookup so it exercises direct fetch + readability + claim.
-    activity_boundary.detail.clear()
-    activity_boundary.detail.update(issue())
     # Existing persisted explicit issue inputs keep their original direct lookup.
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
         {"repository": REPOSITORY, "issueNumber": 4025},
     )
-    assert result.status == "COMPLETED"
-    # 1 detail fetch + 1 comment readability + 4 claim/re-read requests.
-    assert len(activity_boundary.requests) == 1 + 5
+    assert result.status == "COMPLETED", result.outputs
+    assert all(request.method == "GET" for request in activity_boundary.requests)
     assert "searchEvidence" not in result.outputs
     workflow = MoonMindRunWorkflow()
     workflow._record_trusted_issue_context(result.outputs)
@@ -975,8 +991,12 @@ async def test_selected_issue_is_revalidated_before_loading_brief(
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
     )
-    assert result.status == "FAILED"
-    assert "could not be confirmed" in result.outputs["error"]
+    if "number" in changed:
+        assert result.status == "FAILED"
+        assert "different or malformed" in result.outputs["error"]
+    else:
+        assert result.status == "COMPLETED"
+        assert result.completion_disposition == "idle"
     assert "trustedSource" not in result.outputs
 
 
@@ -1014,15 +1034,14 @@ async def test_search_skips_in_progress_issues_and_revalidates_fresh_detail(
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == 4025
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 2
-    # A label added between search and brief loading must fail confirmation.
+    # This is the same durable owner re-reading its own label, not a competitor.
     activity_boundary.detail.update({"labels": [{"name": "status: in-progress"}]})
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
         {"repository": REPOSITORY, "issueSearch": query},
     )
-    assert result.status == "FAILED"
-    assert "could not be confirmed" in result.outputs["error"]
-    assert "trustedSource" not in result.outputs
+    assert result.status == "COMPLETED", result.outputs
+    assert result.outputs["issue"]["number"] == 4025
 
 
 def test_compact_issue_context_preserves_search_evidence():
@@ -1057,11 +1076,11 @@ def test_compact_issue_context_preserves_search_evidence():
 async def test_identity_handoff_rejects_untrusted_or_conflicting_issue(
     activity_boundary, previous, repository
 ):
-    with pytest.raises(Exception, match="required|conflict"):
-        await activity_boundary.execute(
-            "github.update_issue_status",
-            {"repository": repository, "previousOutputs": previous, "mode": "start"},
-        )
+    result = await activity_boundary.execute(
+        "github.update_issue_status",
+        {"repository": repository, "previousOutputs": previous, "mode": "start"},
+    )
+    assert result.status == "FAILED"
     assert activity_boundary.requests == []
 
 

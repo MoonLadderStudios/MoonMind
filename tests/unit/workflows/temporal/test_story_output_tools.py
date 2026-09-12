@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 import pytest
+from tests.support.issue_claims import ClaimCommentFixture, issue_claim_store  # noqa: F401
 
 from moonmind.workflows.temporal import story_output_tools as story_tools
 from moonmind.workflows.temporal.story_output_tools import (
@@ -172,7 +173,7 @@ def _fake_repo_number_from_url(url: str) -> tuple[str, int]:
     return match.group(1), int(match.group(2))
 
 
-class _FakeGitHubService:
+class _FakeGitHubService(ClaimCommentFixture):
     def __init__(self) -> None:
         self.token_requests: list[str] = []
         self.create_issue_requests: list[dict[str, Any]] = []
@@ -187,7 +188,7 @@ class _FakeGitHubService:
         # isolated between tests.
         _FAKE_ISSUE_STATE.clear()
 
-    async def resolve_github_token(self, *, repo: str):
+    async def resolve_github_token(self, _token=None, *, repo: str):
         self.token_requests.append(repo)
         return "ghs-test", None
 
@@ -614,7 +615,7 @@ async def test_update_github_issue_status_declares_completed_close_side_effect(
 
 
 @pytest.mark.asyncio
-async def test_update_github_issue_status_preserves_patch_when_comment_times_out(
+async def test_start_waits_for_claim_receipt_when_comment_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _CommentReadTimeoutHttpClient.timeouts = []
@@ -624,6 +625,8 @@ async def test_update_github_issue_status_preserves_patch_when_comment_times_out
         _CommentReadTimeoutHttpClient,
     )
     service = _FakeGitHubService()
+    service._timeout = 15.0
+    service.create_issue_comment = story_tools.GitHubService.create_issue_comment.__get__(service)
 
     result = await update_github_issue_status(
         {
@@ -634,22 +637,11 @@ async def test_update_github_issue_status_preserves_patch_when_comment_times_out
         github_service_factory=lambda: service,
     )
 
-    assert result.status == "COMPLETED"
-    assert result.outputs["appliedActions"] == ["add_label:status: in-progress"]
-    assert result.outputs["commentStatus"] == "unconfirmed"
-    assert "status: in-progress" in result.outputs["confirmedLabels"]
-    assert "moonspec" in result.outputs["confirmedLabels"]
-    assert result.outputs["warnings"] == [
-        "GitHub issue status was updated, but the automation comment result "
-        "could not be confirmed after ReadTimeout; the comment was not retried "
-        "to avoid a duplicate."
-    ]
-    assert _CommentReadTimeoutHttpClient.timeouts == [10.0, 10.0, 15.0]
-    assert (
-        _CommentReadTimeoutHttpClient.timeouts[0]
-        + (2 * _CommentReadTimeoutHttpClient.timeouts[1])
-        < 60.0
-    )
+    assert result.status == "FAILED"
+    assert result.outputs["appliedActions"] == []
+    assert result.outputs["reasonCode"] == "claim_not_confirmed"
+    assert service.added_labels == []
+    assert _CommentReadTimeoutHttpClient.timeouts == [10.0, 15.0]
 
 
 @pytest.mark.asyncio
@@ -662,6 +654,8 @@ async def test_update_github_issue_status_retries_confirmed_comment_rejection(
         _CommentHttpRejectedClient,
     )
     service = _FakeGitHubService()
+    service._timeout = 15.0
+    service.create_issue_comment = story_tools.GitHubService.create_issue_comment.__get__(service)
 
     result = await update_github_issue_status(
         {
@@ -673,14 +667,8 @@ async def test_update_github_issue_status_retries_confirmed_comment_rejection(
     )
 
     assert result.status == "FAILED"
-    assert result.outputs["appliedActions"] == ["add_label:status: in-progress"]
-    assert result.outputs["commentStatus"] == "rejected"
-    assert "status: in-progress" in result.outputs["confirmedLabels"]
-    assert "moonspec" in result.outputs["confirmedLabels"]
-    assert result.outputs["summary"] == (
-        "GitHub issue status was updated, but the automation comment failed "
-        "with HTTP 403. github status 403"
-    )
+    assert result.outputs["appliedActions"] == []
+    assert result.outputs["reasonCode"] == "denied"
 
 
 @pytest.mark.asyncio

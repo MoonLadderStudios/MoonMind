@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import json
 import urllib.error
 import urllib.request
@@ -240,6 +241,7 @@ def test_worker_health_state_reports_stale_with_both_revisions(
         code_revision="startup-rev",
         code_identity_source="git",
     )
+    state.record_checkout_identity(WorkerCodeIdentity(revision="checkout-rev"), started_at=time.monotonic())
     payload = state.code_identity()
     assert payload["codeIdentityStatus"] == "stale"
     assert payload["reasonCode"] == "stale_code"
@@ -259,6 +261,7 @@ def test_readiness_body_reports_stale_code(monkeypatch: pytest.MonkeyPatch) -> N
         code_revision="startup-rev",
         code_identity_source="git",
     )
+    state.record_checkout_identity(WorkerCodeIdentity(revision="checkout-rev"), started_at=time.monotonic())
     body = json.loads(_build_response_body(state, readiness=True))
     assert body["codeRevision"] == "startup-rev"
     assert body["codeIdentityStatus"] == "stale"
@@ -287,6 +290,8 @@ async def test_readyz_serves_503_while_stale_and_200_after_restart(
     module.write_text("v = 1\n", encoding="utf-8")
     monkeypatch.setenv("MOONMIND_CODE_PACKAGE_ROOT", str(tmp_path))
     monkeypatch.setenv("TEMPORAL_WORKER_FLEET", "workflow")
+    monkeypatch.setenv("WORKER_HEALTHCHECK_PORT", "0")
+    monkeypatch.setattr("moonmind.workflows.temporal.worker_healthcheck._IDENTITY_REFRESH_SECONDS", 0.01)
 
     startup = resolve_worker_code_identity(package_root=tmp_path)
     state = WorkerHealthState(
@@ -310,10 +315,13 @@ async def test_readyz_serves_503_while_stale_and_200_after_restart(
         assert code is None, body
         assert body["codeIdentityStatus"] == "healthy"
 
-        # Modify the bind-mounted module: the next readiness probe must report
-        # stale_code with both identities.
+        # A changed source becomes non-ready within the background refresh bound.
         module.write_text("v = 2\n", encoding="utf-8")
-        code, body = await loop.run_in_executor(None, _get)
+        for _ in range(100):
+            code, body = await loop.run_in_executor(None, _get)
+            if code == 503:
+                break
+            await asyncio.sleep(0.01)
         assert code == 503, body
         assert body["codeIdentityStatus"] == "stale"
         assert body["reasonCode"] == "stale_code"
@@ -411,7 +419,8 @@ class _FakeRunner:
         return {"exitCode": 0}
 
     async def inspect_image(self, requested_image: str) -> Mapping[str, Any]:
-        return {"Id": "sha256:" + "b" * 64, "RepoTags": [requested_image]}
+        return {"Id": "sha256:" + "b" * 64, "RepoTags": [requested_image],
+                "RepoDigests": ["ghcr.io/moonladderstudios/moonmind@sha256:" + "c" * 64]}
 
     async def verify(
         self, *, stack: str, requested_image: str, resolved_digest: str | None

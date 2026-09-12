@@ -19,10 +19,13 @@ workspace/evidence (``workspaceRetained=True``).
 
 from __future__ import annotations
 
+from dataclasses import asdict, replace
 from typing import Any, Mapping, Sequence
 
 from moonmind.workflows.temporal import github_issue_finalization as finalization
 from moonmind.workflows.temporal import github_issue_lifecycle as lifecycle
+from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment, render_attempt_comment
+from moonmind.workflows.temporal.issue_claim_store import ClaimReceipt, IssueClaimStore, publish_claim_comment, reconcile_claim_comment
 
 
 def _string(value: Any) -> str:
@@ -185,6 +188,8 @@ async def finalize_failed_attempt(
     review_owner_ended: bool = False,
     cancellation_hold: bool = False,
     service: Any | None = None,
+    claim_store: IssueClaimStore | None = None,
+    claim_receipt: ClaimReceipt | None = None,
 ) -> dict[str, Any]:
     """Finalize one failed/canceled controlling attempt at the durable boundary.
 
@@ -206,13 +211,24 @@ async def finalize_failed_attempt(
         from moonmind.workflows.adapters.github_service import GitHubService
 
         service = GitHubService()
+    saved_plan = None
+    if claim_receipt is not None:
+        if claim_store is None or (claim_receipt.repository, claim_receipt.issue_number) != (repository.casefold(), issue_number):
+            raise ValueError("substitution_denied: finalization must use the controlling claim")
+        attempt_id = claim_receipt.attempt_id
+        receipts = claim_receipt.finalization_json or {}
+        if "result" in receipts:
+            return dict(receipts["result"])
+        claim_receipt = await reconcile_claim_comment(claim_store, claim_receipt, service)
+        if "plan" in receipts:
+            saved_plan = finalization.FinalizationPlan(**receipts["plan"])
     # Step 0: read current issue state before planning any label mutation.
     # Caller-supplied labels win when present; otherwise the pre-mutation
     # read supplies them. A delayed finalizer that observes a successor
     # (closed issue, operator hold, or a newer settled state) abandons new
     # mutations before any GitHub write. An unreadable issue never proves a
     # successor: the post-mutation read-back remains the release gate.
-    prefetched = await _fetch_issue(service=service, repository=repository, issue_number=issue_number)
+    prefetched = {} if claim_receipt is not None and claim_receipt.released else await _fetch_issue(service=service, repository=repository, issue_number=issue_number)
     observed_labels: list[str] | None = None
     if prefetched.get("ok"):
         read_state, observed_labels = _issue_label_names(prefetched.get("issue"))
@@ -225,7 +241,19 @@ async def finalize_failed_attempt(
             )
         except Exception:  # noqa: BLE001 - uninterpretable reads never authorize abandonment
             abandon, abandon_reason = False, ""
-        if abandon:
+        # A crash after the label writes must resume the recorded comment phase.
+        # Only the exact destination of our immutable plan can explain a changed
+        # settled state; a different successor still revokes mutation authority.
+        own_destination = False
+        if saved_plan is not None and saved_plan.mutation:
+            mutation = saved_plan.mutation
+            observed_outcome = lifecycle.classify_mutation_outcome(
+                plan=lifecycle.LabelMutationPlan(tuple(mutation.get("labelsToAdd") or []),
+                    tuple(mutation.get("labelsToRemove") or []), bool(mutation.get("closeIssue"))),
+                read_back={"state": read_state, "labels": observed_labels},
+            )
+            own_destination = observed_outcome.outcome in {lifecycle.OUTCOME_APPLIED, lifecycle.OUTCOME_ALREADY_APPLIED}
+        if abandon and not own_destination:
             return {
                 "released": False,
                 "reasonCode": "successor_observed",
@@ -243,7 +271,7 @@ async def finalize_failed_attempt(
     effective_labels: Sequence[Any] | None = current_labels
     if effective_labels is None and observed_labels is not None:
         effective_labels = observed_labels
-    plan = finalization.plan_failed_attempt_finalization(
+    plan = saved_plan or finalization.plan_failed_attempt_finalization(
         repository=repository,
         issue_number=issue_number,
         from_settled=from_settled,
@@ -279,6 +307,14 @@ async def finalize_failed_attempt(
     }
     if not plan.releasable or plan.mutation is None or plan.transition is None:
         return base
+    if claim_receipt is not None:
+        await claim_store.record_finalization(claim_receipt.owner, "plan", asdict(plan))
+        if claim_receipt.released:
+            base.update(released=True, reasonCode="released", summary=plan.summary,
+                        workspaceRetained=bool(plan.workspace_retained), pendingSync=None,
+                        commentId=claim_receipt.comment_id)
+            await claim_store.record_finalization(claim_receipt.owner, "result", base)
+            return base
     # Step 1: scan the proposed terminal comment through the repository
     # outbound scanner before any GitHub write; secret-like handoff text
     # blocks posting instead of being published.
@@ -295,7 +331,20 @@ async def finalize_failed_attempt(
     # metadata block intact) instead of multiplying unmarked copies on retry.
     comment_body = proposed_body
     comment_id = None
-    if _string(attempt_id):
+    if claim_receipt is not None:
+        parsed = parse_attempt_comment(claim_receipt.comment_body)
+        if parsed.handoff is None:
+            raise ValueError("claim_evidence_conflict: canonical handoff is unreadable")
+        releasing = replace(parsed.handoff, activity="releasing", writers_stopped=True,
+                            pending_disposition=plan.disposition, outcome="failed")
+        comment_body = render_attempt_comment(releasing) + "\n\n" + proposed_body
+        # Do not overwrite a pending released-comment update on restart. Its
+        # remote effect is reconciled after rechecking the exact label outcome.
+        if not claim_receipt.pending_comment_body:
+            comment_id = await publish_claim_comment(claim_store, claim_receipt, service, comment_body)
+        else:
+            comment_id = claim_receipt.comment_id
+    elif _string(attempt_id):
         reuse = await _reuse_attempt_comment(
             service=service,
             repository=repository,
@@ -436,7 +485,15 @@ async def finalize_failed_attempt(
     # never authorize cleanup while the attempt comment may still report
     # only the proposed disposition.
     released_body = comment_body.rstrip() + "\n\nReleased: label outcome observed on read-back.\n"
-    if comment_id is not None:
+    if claim_receipt is not None:
+        released_body = render_attempt_comment(replace(releasing, activity="released")) + "\n\n" + proposed_body
+        claim_receipt = await claim_store.get(claim_receipt.owner)
+        # Reconcile an interrupted proposed-comment write before advancing it.
+        if claim_receipt.pending_comment_body and claim_receipt.pending_comment_body != released_body:
+            await publish_claim_comment(claim_store, claim_receipt, service, claim_receipt.pending_comment_body)
+            claim_receipt = await claim_store.get(claim_receipt.owner)
+        await publish_claim_comment(claim_store, claim_receipt, service, released_body)
+    elif comment_id is not None:
         try:
             updated = await service.update_issue_comment(repo=repository, comment_id=int(comment_id), body=released_body)
         except Exception as exc:  # noqa: BLE001 - update result unknown; never false release
@@ -465,6 +522,8 @@ async def finalize_failed_attempt(
     base["summary"] = f"Failed-attempt finalization released to {plan.disposition}; label outcome observed and terminal comment published."
     base["workspaceRetained"] = bool(plan.workspace_retained)
     base["pendingSync"] = None
+    if claim_receipt is not None:
+        await claim_store.record_finalization(claim_receipt.owner, "result", base)
     return base
 
 
