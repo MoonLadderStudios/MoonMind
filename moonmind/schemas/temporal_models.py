@@ -1450,7 +1450,11 @@ class WorkspaceCheckpointCaptureInput(BaseModel):
     artifact_namespace: str = Field(..., alias="artifactNamespace", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     base_commit: str | None = Field(None, alias="baseCommit")
-    include_untracked: bool = Field(False, alias="includeUntracked")
+    include_untracked: bool = Field(
+        default_factory=lambda data: data.get("kind") == "worktree_archive",
+        alias="includeUntracked",
+        description="Archives include untracked work by default; Git patches do not.",
+    )
     include_ignored_files: bool = Field(False, alias="includeIgnoredFiles")
     pull_auth_context_ref: str | None = Field(None, alias="pullAuthContextRef")
     provider_lease_context_ref: str | None = Field(None, alias="providerLeaseContextRef")

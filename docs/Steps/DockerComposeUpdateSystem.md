@@ -2,7 +2,7 @@
 
 Status: Desired State  
 Owners: MoonMind Engineering  
-Last Updated: 2026-04-25  
+Last Updated: 2026-09-12
 Related: `docs/UI/SettingsTab.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Temporal/TemporalArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`
 
 ---
@@ -73,9 +73,9 @@ ghcr.io/moonladderstudios/moonmind@sha256:...
 
 ### Updater runner image
 
-The internal image used to execute Docker client commands, such as `docker:29-cli` or a MoonMind-maintained updater image.
+The same allowlisted, digest-pinned MoonMind image selected for the release. It supplies the portable release controller, Docker client, and image-owned Compose definition.
 
-The updater runner image is not normally user-selectable. It is controlled by deployment configuration because it has access to privileged host Docker capabilities.
+The updater has no independent image override. Deployment policy controls its repository and privileged Docker access.
 
 ### Deployment update run
 
@@ -126,7 +126,7 @@ The following rules are fixed.
 
 1. Deployment updates are executable MoonMind tool invocations.
 2. The UI selects the **target deployment image**, not the privileged updater runner image.
-3. The updater runner image is deployment configuration and must be allowlisted.
+3. The updater uses the target image digest, subject to the deployment repository allowlist.
 4. Compose stack targets are allowlisted by name and path.
 5. The update tool must not accept arbitrary shell snippets.
 6. The target image repository must be allowlisted.
@@ -558,7 +558,7 @@ environment variables.
 
 ## 9.3 Mutable tag rule
 
-When the requested reference is a mutable tag, the system should resolve and record the digest before or during the update when the registry makes that possible.
+Before mutation, the system resolves every requested tag to an immutable digest and verifies its release identity. Missing or ambiguous digest or source identity fails admission with actionable diagnostics.
 
 The UI may allow mutable tags, but audit records must distinguish:
 
@@ -799,7 +799,7 @@ when another storage maintenance Activity fails.
 
 ## 11.3 Runner image policy
 
-The updater runner image must be controlled by deployment configuration.
+The updater must use the verified target image digest and deployment-owned Docker policy.
 
 The Operations UI must not normally ask the operator to choose the runner image because the runner has privileged Docker access.
 
@@ -1086,7 +1086,7 @@ Update the MoonMind Docker Compose deployment by selecting the target image tag 
 ## 18.3 Mutable tag warning
 
 ```text
-This tag is mutable. MoonMind will record the resolved digest when available, but future uses of the same tag may deploy a different image.
+This tag is mutable. MoonMind pins and verifies its resolved digest before updating; future uses of the same tag may select a different image.
 ```
 
 ## 18.4 Force recreate warning

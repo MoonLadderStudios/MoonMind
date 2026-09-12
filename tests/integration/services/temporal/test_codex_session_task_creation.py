@@ -22,6 +22,18 @@ from moonmind.workflows.temporal.runtime.managed_session_controller import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
+
+@pytest.fixture(autouse=True)
+def isolated_registry_identity(monkeypatch):
+    # The controller and child-task HTTP boundary use a controlled Docker
+    # runner. Declare an empty credential store instead of probing production.
+    async def empty_registry_store():
+        return None, None
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve._resolve_managed_ghcr_pull_pair",
+        empty_registry_store,
+    )
+
 class _CreateTaskHandler(BaseHTTPRequestHandler):
     requests: list[dict[str, Any]] = []
 

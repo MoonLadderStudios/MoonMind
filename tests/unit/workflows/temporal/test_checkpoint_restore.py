@@ -91,7 +91,7 @@ async def test_unpublished_head_restores_after_source_loss_with_owned_destinatio
     # Equal file bytes do not authorize adoption of a different Git candidate.
     git(restored, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
         "commit", "--allow-empty", "-m", "new candidate")
-    with pytest.raises(CheckpointRestoreError, match="HEAD changed"):
+    with pytest.raises(CheckpointRestoreError, match="CHECKPOINT_RESTORE_IDEMPOTENCY_CONFLICT"):
         await service.restore(request)
 
 
