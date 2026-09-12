@@ -281,6 +281,110 @@ class GitHubService:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
+    async def get_authenticated_user(
+        self,
+        *,
+        token: str,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Resolve the account behind *token* via ``GET /user``.
+
+        Returns ``(identity, failure)`` where identity is ``{"id": int,
+        "login": str}`` and failure is a structured diagnostic dict. The
+        lookup uses the exact search credential; callers must not substitute
+        another credential or cache across credentials. Only public identity
+        fields are required. App/installation tokens that cannot identify a
+        user return an ``unsupported_identity`` failure.
+        """
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.get(
+                    "https://api.github.com/user",
+                    headers=self._github_headers(token),
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if status in {401, 403}:
+                    return None, {
+                        "reasonCode": "identity_auth_failure",
+                        "httpStatus": status,
+                        "summary": (
+                            "MoonMind could not determine the GitHub account used "
+                            'for this search. Use a user-associated GitHub credential, '
+                            'or explicitly enable "Include issues created by other users".'
+                        ),
+                    }
+                if status == 429:
+                    return None, {
+                        "reasonCode": "provider_rate_limited",
+                        "httpStatus": status,
+                        "summary": "GitHub rate limit reached while resolving the search account.",
+                    }
+                if status >= 500:
+                    return None, {
+                        "reasonCode": "provider_unavailable",
+                        "httpStatus": status,
+                        "summary": "GitHub is unavailable while resolving the search account.",
+                    }
+                return None, {
+                    "reasonCode": "identity_unavailable",
+                    "httpStatus": status,
+                    "summary": (
+                        "MoonMind could not determine the GitHub account used "
+                        'for this search. Use a user-associated GitHub credential, '
+                        'or explicitly enable "Include issues created by other users".'
+                    ),
+                }
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return None, {
+                    "reasonCode": "provider_unavailable",
+                    "summary": f"GitHub identity lookup failed: {exc.__class__.__name__}.",
+                }
+            except ValueError as exc:
+                return None, {
+                    "reasonCode": "identity_unavailable",
+                    "summary": f"GitHub identity response was invalid: {exc.__class__.__name__}.",
+                }
+        if not isinstance(payload, Mapping):
+            return None, {
+                "reasonCode": "identity_unavailable",
+                "summary": (
+                    "MoonMind could not determine the GitHub account used "
+                    'for this search. Use a user-associated GitHub credential, '
+                    'or explicitly enable "Include issues created by other users".'
+                ),
+            }
+        user_id = payload.get("id")
+        login = payload.get("login")
+        if (
+            type(user_id) is not int
+            or user_id <= 0
+            or not isinstance(login, str)
+            or not login.strip()
+        ):
+            return None, {
+                "reasonCode": "identity_unavailable",
+                "summary": (
+                    "MoonMind could not determine the GitHub account used "
+                    'for this search. Use a user-associated GitHub credential, '
+                    'or explicitly enable "Include issues created by other users".'
+                ),
+            }
+        # GitHub Apps / installations expose a slug login without a user id
+        # usable for author comparison; do not infer a human author.
+        account_type = str(payload.get("type") or "").strip().lower()
+        if account_type and account_type not in {"user", "bot"}:
+            return None, {
+                "reasonCode": "unsupported_identity",
+                "summary": (
+                    "MoonMind could not determine the GitHub account used "
+                    'for this search. Use a user-associated GitHub credential, '
+                    'or explicitly enable "Include issues created by other users".'
+                ),
+            }
+        return {"id": user_id, "login": login.strip()}, None
+
     @staticmethod
     def _github_permission_summary(response: httpx.Response | None) -> str:
         if response is None:
