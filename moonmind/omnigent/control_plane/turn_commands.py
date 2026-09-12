@@ -78,6 +78,7 @@ class CanonicalSessionBootstrap:
     source_idempotency_key: str
     execution_plan_ref: str | None = None
     owner_principal: str | None = None
+    admission_epoch: int = 0
 
 
 def _bootstrap_metadata(
@@ -142,6 +143,43 @@ class CanonicalTurnCommandService:
         # Persistence is an injected capability; this application service does
         # not import or construct a SQL-backed repository implementation.
         self._store = store
+
+    async def resolve_admission_session_id(
+        self,
+        *,
+        workflow_id: str,
+        step_execution_id: str,
+        agent_run_id: str,
+        admission_epoch: int,
+    ) -> str:
+        """Retain persisted in-flight authority across admission identity cutover.
+
+        A legacy command can exist before either a runtime binding or provider
+        attachment. Until its cleanup completes, a later-epoch redelivery must
+        use that session and its original command, including delivery-unknown
+        fencing. An existing scoped session always retains its own identity.
+        Claim still validates and fences the selected session transactionally.
+        """
+
+        identity = dict(
+            workflow_id=workflow_id,
+            step_execution_id=step_execution_id,
+            agent_run_id=agent_run_id,
+        )
+        scoped_id = canonical_omnigent_session_id(
+            **identity, admission_epoch=admission_epoch
+        )
+        if admission_epoch <= 1:
+            return scoped_id
+        async with self._store.transaction() as repos:
+            if await repos.sessions.get(scoped_id) is not None:
+                return scoped_id
+            legacy_id = canonical_omnigent_session_id(**identity)
+            if await repos.sessions.get(legacy_id) is not None:
+                cleanup = await repos.cleanup.get(legacy_id)
+                if cleanup is None or cleanup.state != CLEANUP_STATE_COMPLETE:
+                    return legacy_id
+        return scoped_id
 
     async def claim(
         self,
@@ -237,6 +275,7 @@ class CanonicalTurnCommandService:
                 workflow_id=workflow_id,
                 step_execution_id=bootstrap.step_execution_id,
                 agent_run_id=bootstrap.agent_run_id,
+                admission_epoch=bootstrap.admission_epoch,
             )
             existing_session = await repos.sessions.get(bootstrap_session_id)
             if existing_session is not None:
