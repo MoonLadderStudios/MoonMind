@@ -128,6 +128,7 @@ async def test_github_issue_orchestrate_seed_exposes_issue_picker_and_tools(tmp_
         "issue_url": "{{ inputs.github_issue.url | default('') }}",
         "brief_artifact_path": "artifacts/github-issue-orchestrate-brief.json",
         "assessment_artifact_path": "artifacts/github-issue-orchestrate-assessment.json",
+        "completion_target_ref": "{{ inputs.completion_target_ref }}",
         "constraints": "{{ inputs.constraints }}",
     }
     assert template.steps[4]["tool"]["inputs"]["assessmentArtifactPath"] == (
@@ -172,7 +173,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
         "issueNumber": "1063",
         "artifactPath": "artifacts/github-issue-orchestrate-brief.json",
     }
-    assert steps[1]["skill"]["id"] == "auto"
+    assert steps[1]["skill"]["id"] == "moonspec-assess"
     assert "artifacts/github-issue-orchestrate-assessment.json" in steps[1][
         "instructions"
     ]
@@ -180,7 +181,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
         "instructions"
     ]
     assert "Preserve MM-1063 traceability." in steps[1]["instructions"]
-    assert "FULLY_IMPLEMENTED" in steps[1]["instructions"]
+    assert steps[1]["skill"]["args"]["issue_provider"] == "github"
     assert steps[2]["tool"]["id"] == "github.check_issue_blockers"
     assert "deterministic trusted GitHub blocker preflight" in steps[2][
         "instructions"
@@ -234,9 +235,7 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
 
     assert steps[25]["title"] == "Create pull request"
     assert steps[25]["annotations"] == {"jiraOrchestrateRole": "pull-request-handoff"}
-    assert "skip pull request creation entirely" in steps[25]["instructions"]
     assert "post-remediation moonspec-verify" in steps[25]["instructions"]
-    assert "terminal verifier outcomes" not in steps[25]["instructions"].lower()
     assert "ADDITIONAL_WORK_NEEDED" in steps[25]["instructions"]
     assert "artifacts/github-issue-orchestrate-pr.json" in steps[25]["instructions"]
 
@@ -249,11 +248,10 @@ async def test_github_issue_orchestrate_expands_required_order_and_gates(tmp_pat
             "repository": "MoonLadderStudios/MoonMind",
             "issueNumber": "1063",
             "mode": "finalize_after_pr_or_done",
+        "completionTargetRef": "",
             "pullRequestArtifactPath": "artifacts/github-issue-orchestrate-pr.json",
             "verificationArtifactPath": "var/artifacts/moonspec-verify/github-issue-orchestrate.json",
             "requireVerification": True,
         },
     }
-    assert "apply the configured Done strategy" in steps[26]["instructions"]
-    assert "terminal verifier outcomes" in steps[26]["instructions"]
-    assert "Code Review strategy" in steps[26]["instructions"]
+    assert steps[26]["tool"]["inputs"]["mode"] == "finalize_after_pr_or_done"

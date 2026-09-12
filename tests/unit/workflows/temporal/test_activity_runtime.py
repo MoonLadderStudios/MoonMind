@@ -563,8 +563,9 @@ async def test_post_merge_github_completion_applies_done_status(
 
     captured: dict[str, Any] = {}
 
-    async def fake_update_github_issue_status(inputs, _context=None):
+    async def fake_update_github_issue_status(inputs, _context=None, *, merged_pull_request):
         captured.update(inputs)
+        captured["merged_pull_request"] = merged_pull_request
         return SimpleNamespace(
             status="COMPLETED",
             outputs={
@@ -583,6 +584,7 @@ async def test_post_merge_github_completion_applies_done_status(
     result = await TemporalIntegrationActivities.merge_automation_complete_post_merge_github(
         object(),
         {
+            "pullRequest": {"repo": "MoonLadderStudios/MoonMind", "number": 3225, "headSha": "abc123"},
             "postMergeGithub": {
                 "enabled": True,
                 "required": True,
@@ -596,6 +598,7 @@ async def test_post_merge_github_completion_applies_done_status(
         "repository": "MoonLadderStudios/MoonMind",
         "issueNumber": 3143,
         "mode": "done",
+        "merged_pull_request": {"repo": "MoonLadderStudios/MoonMind", "number": 3225, "headSha": "abc123"},
     }
     assert result["status"] == "succeeded"
     assert result["confirmedLabels"] == ["status: done"]

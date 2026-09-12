@@ -139,7 +139,10 @@ async def test_replay_with_pr_through_tool_activity_boundary(
     monkeypatch.setattr(
         story_tools.update_github_issue_status,
         "__kwdefaults__",
-        {"github_service_factory": lambda: service},
+        {
+            **story_tools.update_github_issue_status.__kwdefaults__,
+            "github_service_factory": lambda: service,
+        },
     )
 
     dispatcher = ToolActivityDispatcher()

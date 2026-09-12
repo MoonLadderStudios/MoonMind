@@ -66,7 +66,8 @@ def test_moonspec_verify_skill_supports_issue_brief_mode() -> None:
     assert "issue brief artifact path" in text
     assert "assessment artifact path" in text
     assert "PARTIALLY_IMPLEMENTED" in text
-    assert "unmet and partially-met requirements" in text
+    assert "verify the complete selected scope" in text
+    assert "previously met requirements as regression constraints" in text
     assert "Do not require `spec.md`, `plan.md`, `tasks.md`" in text
     assert "Gap Type: implementation | verification | documentation | environment" in text
     assert "Recoverable In Current Runtime: true | false" in text
@@ -131,7 +132,8 @@ def test_moonspec_verify_skill_rebuilds_post_remediation_classifications() -> No
     )
     assert "are hypotheses and process context only" in normalized
     assert "replace the old status, evidence, line numbers, and notes" in normalized
-    assert "Never copy or incrementally edit a previous verifier JSON report" in normalized
+    assert "Do not carry stale classifications into a new report" in normalized
+    assert "Reuse matching objective evidence under the acceptance policy" in normalized
     assert "no gap may remain solely because the old artifact said it existed" in normalized
 
 
@@ -163,7 +165,7 @@ def test_moonspec_verify_skill_defines_target_modes() -> None:
     assert "issue brief artifact path" in text
     assert "assessment artifact path" in text
     assert "without requiring a MoonSpec feature directory" in text
-    assert "Use the issue summary, description, acceptance criteria" in text
+    assert "Use the original issue summary, description, acceptance criteria" in text
 
 
 def test_moonspec_verify_command_does_not_require_feature_artifacts() -> None:
@@ -179,7 +181,10 @@ def test_moonspec_verify_command_does_not_require_feature_artifacts() -> None:
 
     assert "scripts:" not in text
     assert "original instructions or authoritative declarative source" in text
-    assert ".specify/scripts/bash/check-prerequisites.sh --json --paths-only" in text
+    assert "Use the resolved `moonspec-verify` Skill" in text
+    assert "references/acceptance-policy.md" in text
+    assert "Pass `$ARGUMENTS` unchanged" in text
+    assert "do not run a second command-level hook lifecycle" in text
     assert "Do not require `spec.md`, `plan.md`, or `tasks.md`" in text
     assert "--require-tasks" not in text
 

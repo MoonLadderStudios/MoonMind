@@ -1,7 +1,20 @@
 ---
 name: remediate-issue
 description: Implement bounded remaining work for an issue-driven repository change after an authoritative verifier reports concrete gaps. Use when a workflow supplies an issue brief or assessment plus materialized gate-result and remaining-work evidence, and the existing candidate must be corrected without creating a MoonSpec feature packet.
+metadata:
+  required-skills: "moonspec-verify"
 ---
+
+Read the portable acceptance policy from the resolved `moonspec-verify` bundle
+before assessing, verifying, or completing work. Resolve it at
+`$MOONMIND_ACTIVE_SKILLS_DIR/moonspec-verify/references/acceptance-policy.md`;
+outside MoonMind use `.agents/skills/moonspec-verify/references/acceptance-policy.md`.
+It owns scope, mandatory versus optional evidence, reuse, and completion rules.
+Preserve the original scope and previously met requirements as regression constraints;
+prior reports are context, not current proof. Candidate success alone cannot close
+or transition an issue as already landed. Completion requires objective evidence
+on the intended completion target under that policy.
+
 
 # Remediate Issue
 

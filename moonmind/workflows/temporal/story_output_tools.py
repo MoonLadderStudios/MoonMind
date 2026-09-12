@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlparse
@@ -26,6 +27,10 @@ from moonmind.integrations.jira.models import (
 )
 from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
+from moonmind.workflows.skills.acceptance_contract import (
+    acceptance_evidence,
+    validate_completion_target,
+)
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 from moonmind.workflows.temporal.github_issue_attempts import (
     activity_for_lifecycle_mode,
@@ -4236,6 +4241,7 @@ async def update_jira_issue_status(
     _context: Mapping[str, Any] | None = None,
     *,
     jira_service_factory: JiraServiceFactory = JiraToolService,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
 ) -> ToolResult:
     issue_key = _jira_update_issue_key(inputs)
     target_status = _jira_target_status(inputs)
@@ -4244,6 +4250,68 @@ async def update_jira_issue_status(
         raise ValueError("issueKey is required for Jira issue status updates.")
     if not target_status:
         raise ValueError("targetStatus is required for Jira issue status updates.")
+
+    if mode == "finalize_after_pr_or_done":
+        pr_url = _github_status_pull_request_url(inputs, _context)
+        gate = await _objective_verification_payload(inputs, _context)
+        reason = None
+        if pr_url:
+            repository = _github_repository_from_inputs(inputs)
+            previous = _github_status_previous_outputs(inputs, _context)
+            published = _mapping(previous.get("publishContext"))
+            head_sha = _first_string(
+                published.get("headSha"), previous.get("headSha"), inputs.get("headSha")
+            )
+            branch = _first_string(
+                published.get("branch"), previous.get("branch"), inputs.get("branch")
+            )
+            binding = acceptance_evidence(gate or {})
+            if not head_sha and binding:
+                head_sha = binding.subject.revision
+            service = github_service_factory()
+            pr, reason = await _read_bound_issue_pull_request(
+                service, repository=repository, url=pr_url, issue_ref=issue_key,
+                head_sha=head_sha, branch=branch,
+            )
+            if not reason and (pr.get("state") != "open" or pr.get("merged") or pr.get("draft")):
+                reason = "The confirmed pull request must be open and ready for review"
+            if _github_status_requires_verification(inputs) and (
+                not gate or gate.get("verdict") != "FULLY_IMPLEMENTED"
+                or gate.get("invalid") or gate.get("degraded")
+                or not binding or binding.scope.source_ref != issue_key
+                or binding.subject.repository != repository
+            ):
+                reason = "Run the required objective verification before moving the issue to Review"
+            if not reason and _github_status_requires_verification(inputs):
+                # A dirty candidate can have a pre-commit revision. Compare the
+                # actual published tree, not that earlier HEAD alone.
+                try:
+                    published_target = await service.read_repository_target(
+                        repository, f"refs/heads/{_mapping(pr.get('head')).get('ref', '')}"
+                    )
+                except Exception:
+                    published_target = {}
+                if (
+                    not binding.is_current(datetime.now(timezone.utc))
+                    or published_target.get("revision") != head_sha
+                    or published_target.get("contentDigest") != binding.subject.content_digest
+                ):
+                    reason = "Verify the current published candidate; its content or freshness does not match acceptance evidence"
+            target_status = "Review"
+        else:
+            repository = _github_repository_from_inputs(inputs)
+            reason = await validate_completion_target(
+                gate or {}, repository=repository, source_ref=issue_key,
+                expected_ref=_string(inputs.get("completionTargetRef")),
+                read_target=lambda repo, ref: github_service_factory().read_repository_target(repo, ref),
+            )
+            target_status = "Done"
+        if reason:
+            return ToolResult(status="FAILED", outputs={
+                "issueKey": issue_key, "targetStatus": target_status,
+                "decision": "blocked", "summary": reason,
+                "remainingEvidence": reason,
+            })
 
     if mode in {"start", "in_progress"} or (
         _jira_status_match_token(target_status) == "inprogress"
@@ -5771,6 +5839,91 @@ def _github_status_verification_verdict(
     return "", False
 
 
+async def _objective_verification_payload(
+    inputs: Mapping[str, Any], context: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    """Resolve the existing verifier handoff without falling back from a bad ref.
+
+    Initial assessment and assistant prose are never objective proof. A durable
+    reference is authoritative over a stale local file or compact projection.
+    """
+    ref = _github_status_verification_ref_from_previous_outputs(inputs, context)
+    if ref:
+        return await _read_json_artifact_by_ref(ref, context)
+    payload = _github_status_verification_payload_from_previous_outputs(inputs, context)
+    if payload:
+        return payload
+    path = _string(inputs.get("verificationArtifactPath") or inputs.get("verification_artifact_path"))
+    if path:
+        return _local_json_artifact_from_path(artifact_path=path, inputs=inputs, context=context)
+    return None
+
+
+async def _read_bound_issue_pull_request(
+    service: GitHubService, *, repository: str, url: str, issue_ref: str,
+    head_sha: str, branch: str = "",
+) -> tuple[Mapping[str, Any], str | None]:
+    """Validate the existing publication owner's handoff against GitHub facts."""
+    if not repository or not head_sha:
+        return {}, "Resolve the published candidate repository and exact head before finalizing its issue"
+    try:
+        pr = await service.read_pull_request(repository, url)
+    except Exception:
+        return {}, "Read the matching GitHub pull request through the authorized repository reader"
+    head = _mapping(pr.get("head"))
+    if head.get("sha") != head_sha or (branch and head.get("ref") != branch):
+        return {}, "The pull request does not match the current published candidate"
+    text = f"{pr.get('title') or ''}\n{pr.get('body') or ''}"
+    references = [issue_ref]
+    if issue_ref.startswith(repository + "#"):
+        number = issue_ref.rsplit("#", 1)[1]
+        references.extend([f"#{number}", f"https://github.com/{repository}/issues/{number}"])
+    if not any(
+        re.search(r"(?<![\w/#-])" + re.escape(ref) + r"(?![\w-])", text, re.IGNORECASE)
+        for ref in references
+    ):
+        return {}, "The confirmed pull request does not reference the current issue"
+    return pr, None
+
+
+async def _validate_post_merge_issue_handoff(
+    service: GitHubService, *, repository: str, issue_ref: str,
+    pull_request: Mapping[str, Any],
+    expected_ref: str = "",
+) -> str | None:
+    """Validate an actual merge, independently of assessment/verification prose.
+
+    Only the existing merge-automation Activity supplies this handoff. The
+    remote merge must be for its exact tracked head and current target revision.
+    """
+    if pull_request.get("repo") != repository:
+        return "The merged pull request repository does not match the issue"
+    pr, reason = await _read_bound_issue_pull_request(
+        service, repository=repository, url=_string(pull_request.get("url")),
+        issue_ref=issue_ref, head_sha=_string(pull_request.get("headSha")),
+        branch=_string(pull_request.get("headBranch")),
+    )
+    if reason:
+        return reason
+    if pr.get("number") != pull_request.get("number"):
+        return "The merged pull request does not match the tracked pull request number"
+    if pr.get("merged") is not True or pr.get("state") != "closed" or not pr.get("merge_commit_sha"):
+        return "GitHub has not confirmed the exact candidate was merged"
+    base_branch = _string(pull_request.get("baseBranch"))
+    try:
+        target = await service.read_repository_target(
+            repository, expected_ref or (f"refs/heads/{base_branch}" if base_branch else "")
+        )
+    except Exception:
+        return "Re-read the merged completion target through the authorized repository reader"
+    if (
+        target.get("ref") != f"refs/heads/{_mapping(pr.get('base')).get('ref', '')}"
+        or target.get("revision") != pr.get("merge_commit_sha")
+    ):
+        return "The completion target changed after merge; verify its current content before finalizing the issue"
+    return None
+
+
 def _github_status_pull_request_url(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
@@ -5802,39 +5955,6 @@ def _github_status_pull_request_url(
     )
 
 
-def _github_status_publish_change_evidence(
-    inputs: Mapping[str, Any],
-    context: Mapping[str, Any] | None,
-) -> tuple[str, int]:
-    previous_outputs = _github_status_previous_outputs(inputs, context)
-    sources = (
-        inputs,
-        previous_outputs,
-        _mapping(previous_outputs.get("metadata")),
-        _mapping(previous_outputs.get("publishContext")),
-        _mapping(previous_outputs.get("publish_context")),
-    )
-    push_status = ""
-    commit_count = 0
-    for source in sources:
-        candidate_status = _first_string(
-            source.get("push_status"),
-            source.get("pushStatus"),
-        ).lower()
-        if candidate_status:
-            push_status = candidate_status
-        raw_count = source.get("push_commit_count")
-        if raw_count is None:
-            raw_count = source.get("pushCommitCount")
-        if raw_count is None:
-            raw_count = source.get("commitCount")
-        if isinstance(raw_count, bool):
-            continue
-        if isinstance(raw_count, (int, float)):
-            commit_count = max(commit_count, int(raw_count))
-        elif isinstance(raw_count, str) and raw_count.strip().isdigit():
-            commit_count = max(commit_count, int(raw_count.strip()))
-    return push_status, commit_count
 
 
 def _github_status_requires_verification(inputs: Mapping[str, Any]) -> bool:
@@ -6698,11 +6818,8 @@ def _github_status_transition_evidence(
     mode: str,
     inputs: Mapping[str, Any],
     pull_request_url: str,
-    assessment_verdict: str,
-    assessment_available: bool,
     verification_verdict: str = "",
     verification_available: bool = False,
-    require_verification: bool = True,
 ) -> dict[str, Any]:
     """Derive GitHub-visible transition evidence for the shared policy entrypoint."""
     evidence: dict[str, Any] = {
@@ -6714,12 +6831,7 @@ def _github_status_transition_evidence(
         evidence["pr_url_verified"] = pull_request_url
         evidence["gates_satisfied"] = True
     if verification_available and verification_verdict == "FULLY_IMPLEMENTED":
-        evidence["completion_verified"] = True
         evidence["gates_satisfied"] = True
-    if not require_verification:
-        evidence["completion_verified"] = True
-    if assessment_available and assessment_verdict == "FULLY_IMPLEMENTED":
-        evidence["completion_verified"] = True
     for key in (
         "writersStopped", "writers_stopped",
         "terminalProof", "terminal_proof",
@@ -6765,10 +6877,6 @@ def _github_status_transition_evidence(
         # A trustworthy stopped/no-preserved-work handoff asserts its writers
         # are stopped; the proof carries both guards together.
         canonical["writers_stopped"] = True
-    # The finalize gates above already qualified no-change completion: an
-    # admitted finalize reaching close without a PR carries completion.
-    if mode == "done" and not pull_request_url:
-        canonical["completion_verified"] = True
     return canonical
 
 
@@ -7149,6 +7257,7 @@ async def update_github_issue_status(
     _context: Mapping[str, Any] | None = None,
     *,
     github_service_factory: Callable[[], GitHubService] = GitHubService,
+    merged_pull_request: Mapping[str, Any] | None = None,
 ) -> ToolResult:
     repository, issue_number = _github_issue_inputs(inputs)
     mode = _github_status_mode(inputs)
@@ -7215,47 +7324,29 @@ async def update_github_issue_status(
                 },
             )
     pull_request_url = _github_status_pull_request_url(inputs, _context)
-    if mode == "finalize_after_pr_or_done":
-        if (
-            not pull_request_url
-            and assessment_available
-            and assessment_verdict
-            and assessment_verdict != "FULLY_IMPLEMENTED"
-        ):
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "decision": "blocked",
-                    "assessmentVerdict": assessment_verdict,
-                    "summary": (
-                        "Skipped GitHub issue finalization because the initial "
-                        f"assessment was {assessment_verdict} and no authoritative "
-                        "pull request URL was available."
-                    ),
-                },
-            )
-        push_status, commit_count = _github_status_publish_change_evidence(
-            inputs,
-            _context,
-        )
-        if not pull_request_url and (
-            push_status in {"pushed", "published"} or commit_count > 0
-        ):
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "decision": "blocked",
-                    "pushStatus": push_status,
-                    "commitCount": commit_count,
-                    "summary": (
-                        "Skipped GitHub issue finalization because repository changes "
-                        "were published without an authoritative pull request URL."
-                    ),
-                },
-            )
-        if pull_request_url and require_verification:
+    completion_verified = False
+    if mode in {"done", "finalize_after_pr_or_done"}:
+        if mode == "done" or not pull_request_url:
+            if merged_pull_request is not None:
+                reason = await _validate_post_merge_issue_handoff(
+                    github_service_factory(), repository=repository,
+                    issue_ref=issue_ref, pull_request=merged_pull_request,
+                    expected_ref=_string(inputs.get("completionTargetRef")),
+                )
+            else:
+                gate = await _objective_verification_payload(inputs, _context)
+                reason = await validate_completion_target(
+                    gate or {}, repository=repository, source_ref=issue_ref,
+                    expected_ref=_string(inputs.get("completionTargetRef")),
+                    read_target=lambda repo, ref: github_service_factory().read_repository_target(repo, ref),
+                )
+            if reason:
+                return ToolResult(status="FAILED", outputs={
+                    "issueRef": issue_ref, "decision": "blocked", "summary": reason,
+                    "remainingEvidence": reason,
+                })
+            completion_verified = True
+        if pull_request_url and require_verification and not completion_verified:
             if not (
                 inputs.get("verificationArtifactPath")
                 or inputs.get("verification_artifact_path")
@@ -7293,7 +7384,7 @@ async def update_github_issue_status(
                         "summary": f"Skipped GitHub issue Code Review update for {issue_ref} because verification verdict is not FULLY_IMPLEMENTED.",
                     },
                 )
-        mode = "code_review" if pull_request_url else "done"
+        mode = "done" if completion_verified else "code_review"
     actions = _GITHUB_STATUS_ACTIONS.get(mode, {})
     if not actions:
         return ToolResult(
@@ -7573,12 +7664,11 @@ async def update_github_issue_status(
         mode=mode,
         inputs=inputs,
         pull_request_url=pull_request_url,
-        assessment_verdict=assessment_verdict,
-        assessment_available=assessment_available,
         verification_verdict=verification_verdict,
         verification_available=verification_available,
-        require_verification=require_verification,
     )
+    if completion_verified:
+        evidence["completion_verified"] = True
     reason = _github_status_transition_reason(mode, inputs, issue_ref)
     decision = plan_transition(
         from_settled=interpretation.settled,
