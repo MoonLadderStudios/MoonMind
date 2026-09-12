@@ -194,6 +194,23 @@ evidence remain readable after provider, host, credential, and workspace cleanup
 
 ## Continuation versus cleanup
 
+An admission epoch owns its runtime binding, canonical session, turn command,
+and cleanup authority together. Activity redelivery within that epoch preserves
+those identities. When the workflow re-admits after lost capacity, its existing
+`admittedProviderCapacity.admissionEpoch` selects a new session and command; the
+completed cleanup of the previous attempt stays terminal. The request, Step
+Execution, execution plan, selected profile, and workspace retain their original
+authority. No runtime- or error-specific recovery bypass may reopen cleanup.
+
+Absent/zero epochs and the first admission preserve the historical session and
+command identities. Later epochs derive distinct deterministic identities from
+the same workflow-owned ticket already used for runtime bindings. Delivery
+uses an existing binding's provider attachment when present, preserving the
+session and command of an in-flight execution created before epoch scoping.
+Turn rejection diagnostics retain the bounded reason codes, including
+`cleanup_complete`, so
+operators can distinguish lost runtime authority from changed execution policy.
+
 An accepted turn advances the cleanup generation before any provider mutation.
 The race is therefore resolved in one direction:
 
