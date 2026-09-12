@@ -76,13 +76,22 @@ annotations:
         title: Run verification
         description: Run the MoonSpec verification and remediation gate before pull request creation and GitHub issue handoff.
         default: true
+      completion_target_ref:
+        type: string
+        title: Completion target ref
+        description: Optional refs/heads/ branch ref; blank uses the remote default branch.
+        default: ''
   uiSchema:
+    completion_target_ref:
+      widget: text
+      advanced: true
     github_issue:
       widget: github.issue-picker
       dataSource: github.issues
       searchPlaceholder: Search GitHub issues
       allowManualIssueEntry: true
   defaults:
+    completion_target_ref: ''
     run_verify: true
 inputs:
 - name: github_issue_ref
@@ -100,6 +109,12 @@ inputs:
   type: boolean
   required: false
   default: true
+- name: completion_target_ref
+  description: Optional refs/heads/ branch ref; blank uses the remote default branch.
+  label: Completion Target Ref
+  type: text
+  required: false
+  default: ''
 steps:
 - title: Load GitHub issue brief
   type: tool
@@ -131,6 +146,7 @@ steps:
     issue_url: "{{ inputs.github_issue.url | default('') }}"
     brief_artifact_path: artifacts/github-issue-implement-brief.json
     assessment_artifact_path: artifacts/github-issue-implement-assessment.json
+    completion_target_ref: '{{ inputs.completion_target_ref }}'
     constraints: '{{ inputs.constraints }}'
 - title: Check GitHub issue blockers before implementation
   type: tool
@@ -185,6 +201,7 @@ steps:
       }}'
     brief_artifact_path: artifacts/github-issue-implement-brief.json
     assessment_artifact_path: artifacts/github-issue-implement-assessment.json
+    completion_target_ref: '{{ inputs.completion_target_ref }}'
     pr_artifact_path: artifacts/github-issue-implement-pr.json
     verify_artifact_path: artifacts/github-issue-implement-verify.json
     verification_target: issue_brief
@@ -195,27 +212,10 @@ steps:
   type: tool
   annotations:
     issueImplementRole: code-review-handoff
-  instructions: 'Read artifacts/github-issue-implement-assessment.json (or the recorded
-    verdict from the assess step) before changing GitHub.
+  instructions: |-
+    Use the trusted issue status tool with the original issue identity, verification artifact, PR handoff, and intended completion target. The tool validates objective evidence and re-reads the completion target before applying the already-completed path. Candidate-only work follows the configured Code Review/Review path with its confirmed PR. Missing evidence returns bounded verification work; never infer completion from assessment prose, clean worktrees, or pushed commits.
 
-
-    If the recorded verdict is BLOCKED, stop without changing GitHub and report the
-    blocking evidence. If the recorded verdict is FULLY_IMPLEMENTED, apply the configured
-    Done strategy. Otherwise {% if inputs.run_verify %}read artifacts/github-issue-implement-verify.json
-    and require the latest controlling verifier result to report FULLY_IMPLEMENTED
-    before any Code Review update.{% else %}confirm implementation is complete and
-    the focused tests required by the issue have passed. Verification was disabled
-    for this workflow execution, so do not require artifacts/github-issue-implement-verify.json
-    or a moonspec-verify verdict before any Code Review update.{% endif %} Then
-    read artifacts/github-issue-implement-pr.json, verify it contains a pull_request_url
-    for {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number }}, and
-    apply the configured Code Review strategy with the pull request URL. {% if inputs.run_verify
-    %}If the verifier artifact is missing, terminal, or still reports ADDITIONAL_WORK_NEEDED
-    after remediation is exhausted, stop without changing GitHub.{% else %}If the
-    pull request artifact is missing or lacks a confirmed pull_request_url, stop
-    without changing GitHub.{% endif %} Do not assume a single organization''s workflow;
-    use the configured label/comment/close strategy exposed by the trusted GitHub
-    update tool.'
+    Follow the resolved moonspec-verify acceptance policy for scope, mandatory versus optional evidence, reuse, and completion. Original source and constraints define acceptance; assessment backlogs prioritize work and preserve previously met requirements as regression constraints.
   tool:
     id: github.update_issue_status
     requiredCapabilities:
@@ -224,6 +224,7 @@ steps:
       repository: '{{ inputs.github_issue.repository }}'
       issueNumber: '{{ inputs.github_issue.number }}'
       mode: finalize_after_pr_or_done
+      completionTargetRef: '{{ inputs.completion_target_ref }}'
       pullRequestArtifactPath: artifacts/github-issue-implement-pr.json
       verificationArtifactPath: artifacts/github-issue-implement-verify.json
       requireVerification: '{{ inputs.run_verify }}'

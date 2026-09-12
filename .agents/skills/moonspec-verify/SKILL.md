@@ -10,6 +10,10 @@ metadata:
 
 Use this skill to perform the final MoonSpec verification workflow.
 
+Read [the acceptance policy](references/acceptance-policy.md) before selecting
+scope, evidence, verdict, reuse, or completion. This bundle owns that policy;
+caller instructions supply scope and evidence, not alternative acceptance rules.
+
 ## Scope
 
 Verify only. Do not modify source code, tests, specs, plans, tasks, docs, migrations, or configuration. Normal disposable test artifacts are acceptable only when already ignored by the project.
@@ -104,10 +108,10 @@ If the user provides issue-brief verification inputs, use issue-brief verificati
 
 In issue-brief verification mode:
 
-1. Read the issue brief artifact and assessment artifact.
-2. Use the issue summary, description, acceptance criteria, loaded preset brief, and the assessment's unmet and partially-met requirements as the verification baseline.
-3. Treat a `PARTIALLY_IMPLEMENTED` assessment as a bounded backlog: verify only the previously unmet or partially met requirements unless the issue brief explicitly requires broader validation.
-4. Treat `FULLY_IMPLEMENTED` as already verified only when no implementation step made code changes after that assessment.
+1. Read the original issue brief artifact and any supplied assessment artifact. An absent optional assessment does not replace or invalidate a usable original baseline.
+2. Use the original issue summary, description, acceptance criteria, and constraints as the verification baseline. The assessment is process context.
+3. Use a `PARTIALLY_IMPLEMENTED` assessment to prioritize gaps; verify the complete selected scope, retaining previously met requirements as regression constraints.
+4. An initial `FULLY_IMPLEMENTED` assessment only says implementation appears present. Reuse objective evidence only under the acceptance policy; otherwise execute the missing verification.
 5. Inspect production code and tests directly; do not treat the assessment itself as proof that new work is complete.
 6. Do not require `spec.md`, `plan.md`, `tasks.md`, or a standalone constitution file.
 
@@ -117,8 +121,8 @@ its `remainingWork`, and the original assessment are hypotheses and process
 context only; they are not current implementation evidence. For every prior
 `PARTIAL`, `MISSING`, or remaining-work item, inspect the current production
 code and tests and replace the old status, evidence, line numbers, and notes
-with current findings. Never copy or incrementally edit a previous verifier
-JSON report as the new report. If the current head differs from the head named
+with current findings. Do not carry stale classifications into a new report. Reuse matching objective
+evidence under the acceptance policy and explicitly record that reuse. If the current head differs from the head named
 by the assessment or previous report, no gap may remain solely because the old
 artifact said it existed or because the candidate is not on the base branch.
 
@@ -135,28 +139,13 @@ the source requires before a repository change, such as proving legacy tasks
 have drained before removing their handlers. Verify that prerequisite or return
 the bounded evidence handoff; do not perform an unauthorized deployment.
 
-## Controlling vs Advisory Verification
+## Evidence policy
 
-Separate verification evidence into controlling and advisory classes before choosing the verdict.
-
-Controlling evidence can block `FULLY_IMPLEMENTED`:
-
-- direct production-code inspection for every in-scope requirement.
-- unit, compile, typecheck, lint, and other repo-local hermetic checks that exercise in-scope behavior and can run with the checked-out repository plus documented local dependencies.
-- hermetic integration tests when their required fixtures, services, and assets are present in the current runtime and the failure identifies a concrete in-scope implementation defect.
-- explicit original-instruction, declarative-document, AGENTS.md, issue-brief, or spec `MUST` requirements that are repo-verifiable in the current runtime.
-
-Unless the selected source explicitly makes them an acceptance or safety
-prerequisite, the following are advisory evidence and must not fail verification
-by themselves:
-
-- integration, e2e, smoke, quickstart, map-entry, UI/browser, deployment, or external-service tests that require credentials, host services, deployed environments, proprietary or binary assets, large fixtures, game/editor map assets, simulators, or other runtime inputs not available in the checkout.
-- failures whose root cause is the unavailable advisory environment, such as missing `.umap` files, absent `/Game/Maps/...` assets, unavailable services, or unsupported local tools.
-- manual-only checks, production deployment checks, or provider-specific validation unavailable to the verifier.
-
-When an advisory command is unavailable or fails for an advisory-environment reason, classify the command as `NOT RUN` when detected before execution, or as `FAIL` with a clearly marked non-blocking advisory note when discovered by running it. Record the missing asset, service, fixture, or environment condition in Test Results, Gaps, Diagnostics, or residual risk, but do not put it in Remaining Work and do not choose `ADDITIONAL_WORK_NEEDED`, `NO_DETERMINATION`, or `BLOCKED` solely for that reason.
-
-If an integration or e2e command failure reveals a concrete in-scope implementation defect that can be fixed in the repository, classify and gate on that underlying defect, not on the suite label. If the implementation, controlling tests, source claims, AGENTS.md principles, and original request alignment all verify, `FULLY_IMPLEMENTED` is allowed even when advisory integration/e2e/map smoke evidence is missing or non-blocking.
+Apply [the acceptance policy](references/acceptance-policy.md) to every source
+requirement and check. Mandatory acceptance remains controlling regardless of
+tool availability; optional enrichment and diagnostics remain advisory. Record
+actual command results and exact missing evidence. Isolated implementation tests
+must proceed independently of any separately authorized production operation.
 
 If the user provides a specific `spec.md` or feature directory, use it and discover sibling artifacts from that directory when present.
 
@@ -386,8 +375,8 @@ or the concrete pre-submission blocker in Test Results and Diagnostics. Complete
 this discovery before using `NOT RUN`, `recoverableInCurrentRuntime: false`,
 `needs_human`, or `blocked` on the grounds that build or test tooling is unavailable.
 
-Use `NOT RUN` with an exact reason when a command requires unavailable credentials, missing services, unsafe side effects, unsupported local tools, or excessive environment setup.
-Use the controlling/advisory split above when interpreting unavailable assets,
+Use `NOT RUN` with exact owning-boundary failure evidence after attempting supported, authorized setup and execution paths.
+Use the acceptance policy when interpreting unavailable assets,
 services, credentials, or tooling. Preserve explicitly mandatory prerequisites;
 report optional diagnostics as advisory limitations.
 
@@ -405,7 +394,7 @@ Rules:
 
 - Do not mark the feature `FULLY_IMPLEMENTED` unless every in-scope source requirement, relevant AGENTS.md principle, source design requirement, and acceptance-critical behavior is `VERIFIED`.
 - Missing required unit tests or repo-local hermetic checks is a verification failure unless the selected verification baseline clearly makes that test class irrelevant.
-- Missing repo-local hermetic integration coverage for acceptance-critical behavior is a verification gap. Unavailable external evidence follows the controlling/advisory policy above: mandatory prerequisites require a handoff, while optional diagnostics remain non-blocking.
+- Missing repo-local hermetic integration coverage for acceptance-critical behavior is a verification gap. Unavailable external evidence follows the acceptance policy: mandatory prerequisites require a handoff, while optional diagnostics remain non-blocking.
 - Separate missing implementation from missing validation when both matter.
 - Treat violated AGENTS.md `MUST` rules as blocking failures.
 - Treat original request misalignment as blocking even if later tasks are complete.
@@ -423,10 +412,11 @@ Choose exactly one verdict:
 
 Prefer `ADDITIONAL_WORK_NEEDED` over `NO_DETERMINATION` when a concrete missing code or test gap is visible. Use `BLOCKED` only for environment failures; it says nothing about implementation completeness.
 Do not choose a blocking verdict solely because advisory validation cannot run.
-Use `FULLY_IMPLEMENTED` when all controlling evidence verifies. When only
-mandatory external evidence or an authority decision remains unavailable, use
-`NO_DETERMINATION` with `needs_human`. When missing or broken runtime capabilities
-prevent required hermetic checks, use `BLOCKED` with `blocked`. These stopping
+Use `FULLY_IMPLEMENTED` when the acceptance policy is satisfied. Missing required
+external evidence uses `NO_DETERMINATION` with an evidence retry when obtainable,
+or `blocked` when unavailable after supported attempts. Use `needs_human` only
+for an actual human-owned authority or information decision. Missing runtime
+capabilities preventing required checks use `BLOCKED` with `blocked`. These stopping
 verdicts preserve uncertainty about completeness; they are not assertion failures.
 
 When the verdict is `ADDITIONAL_WORK_NEEDED`, include a structured Remaining Work section that remediation steps can consume. Each item must identify:
@@ -462,8 +452,7 @@ JSON is requested, use `recommendedNextAction` and
   The verifier remains read-only; it must not rerun itself to implement the fix.
 - For `NO_DETERMINATION`, use `reattempt_current_step` only when another
   verification attempt can obtain different controlling evidence.
-- Use `needs_human` when progress requires a scope or authority decision, or an
-  external dependency that an authorized remediation step cannot supply. Use
+- Use `needs_human` when progress requires a scope or authority decision, that only a human can supply. Use
   `blocked` when no authorized execution path can currently proceed. Explain
   what must change and preserve the evidence and concrete remaining work.
 
@@ -472,7 +461,7 @@ check that an authorized remediation step can actually execute. Distinguish
 repository work from prerequisites such as a missing container-test capability,
 live deployment access, or a required operator decision. Complete feasible
 repository work while preserving those prerequisites; once only unavailable
-prerequisites remain, use `needs_human` or `blocked` and name the required owner,
+prerequisites remain, use the appropriate stop action from the acceptance policy and name the required owner,
 the evidence they must supply, and the check that resumes verification. A newer
 commit, more unexecuted tests, or a rewritten report does not resolve an unchanged
 prerequisite. Do not spend another attempt repeating that same blocked check
@@ -496,6 +485,16 @@ node, or pull request destination in `recommendedNextAction`.
 `false` alone is not a stop decision. A read-only verifier can identify work that
 a separate authorized remediation step can complete. If the action is omitted,
 the caller retains its verdict-based default; omission is not an explicit stop.
+
+## Evidence binding
+
+For objective success, include `validatedRefs.acceptance` using the complete
+`acceptance/v1` contract in [the acceptance policy](references/acceptance-policy.md).
+Capture subject and scope before checks and confirm content is unchanged afterward.
+Preserve source/base identity separately. Bind each mandatory requirement to actual
+command/artifact evidence. A dirty workspace needs its content digest or durable
+checkpoint; never use HEAD alone. Report candidate success separately from target
+completion. Do not overwrite the initial assessment with this later result.
 
 ## Report
 
@@ -629,6 +628,6 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Do not require unrelated claims from a larger canonical design to verify for this story, but do not let the temporary spec silently override an in-scope canonical conflict.
 - Relevant AGENTS.md guidance defines repo principles, constraints, and test discipline for the story.
 - `plan.md` and `tasks.md` are useful context but never proof of implementation.
-- Apply the Controlling vs Advisory Verification policy consistently. Missing optional diagnostics cannot block acceptance; missing explicitly mandatory prerequisites cannot be waived because the environment lacks access.
+- Apply the shared acceptance policy consistently. Missing optional diagnostics cannot block acceptance; missing explicitly mandatory prerequisites cannot be waived because the environment lacks access.
 - Prefer direct, citeable repository evidence from production code, wiring, configuration, and tests.
 - Do not mark the feature complete when required behavior is only inferred and not verified.

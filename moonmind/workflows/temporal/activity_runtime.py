@@ -1687,6 +1687,12 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
                         "statusName": {"type": "string"},
                         "status_name": {"type": "string"},
                         "mode": {"type": "string"},
+                        "repository": {"type": "string"},
+                        "completionTargetRef": {"type": "string"},
+                        "verificationArtifactPath": {"type": "string"},
+                        "verificationPayload": {"type": "object"},
+                        "pullRequestUrl": {"type": "string"},
+                        "requireVerification": {"type": "boolean"},
                         "assessmentArtifactPath": {"type": "string"},
                         "assessment_artifact_path": {"type": "string"},
                         "assessmentVerdict": {"type": "string"},
@@ -3081,6 +3087,7 @@ class TemporalSandboxActivities:
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
+            high_security_mode = resolve_high_security_mode()
             head = model.base_commit
             history = None
             if (workspace / ".git").exists():
@@ -3099,13 +3106,13 @@ class TemporalSandboxActivities:
                     workspace, "status", "--porcelain=v1", "-z", "--untracked-files=all",
                 ))).stdout
                 from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_index_patch
-                index_payload, index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, head)
+                index_payload, index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, head, high_security_mode=high_security_mode)
             archive_payload, entries = await asyncio.to_thread(
-                self._build_worktree_archive, workspace, members=members
+                self._build_worktree_archive, workspace, members=members, high_security_mode=high_security_mode
             )
             if pre_status is not None:
                 from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_history
-                history_payload, history = await asyncio.to_thread(capture_git_history, workspace, head)
+                history_payload, history = await asyncio.to_thread(capture_git_history, workspace, head, high_security_mode=high_security_mode)
                 if history_payload is not None:
                     history["ref"] = await self._put_checkpoint_bytes(
                         history_payload, content_type="application/x-git-bundle",
@@ -3117,7 +3124,7 @@ class TemporalSandboxActivities:
                 post_status = (await _run_command(_sandbox_workspace_git_command(
                     workspace, "status", "--porcelain=v1", "-z", "--untracked-files=all",
                 ))).stdout
-                post_index, post_index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, head)
+                post_index, post_index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, head, high_security_mode=high_security_mode)
                 if (head != post_head or pre_status != post_status
                         or (index_payload, index_paths) != (post_index, post_index_paths)
                         or members != await self._workspace_archive_members(model, workspace)):
@@ -3157,6 +3164,12 @@ class TemporalSandboxActivities:
                     "sha256:" + hashlib.sha256(pre_status.encode("utf-8")).hexdigest()
                 )
             manifest_payload = _json_bytes(manifest_body)
+            manifest_scan = scan_outbound_bundle(
+                [OutboundBundleItem(location="checkpoint.manifest", content=manifest_payload.decode("utf-8"))],
+                high_security_mode=high_security_mode,
+            )
+            if not manifest_scan.allowed:
+                raise TemporalActivityRuntimeError("checkpoint metadata failed outbound secret scanning")
             manifest_ref = await self._put_checkpoint_bytes(
                 manifest_payload,
                 content_type="application/json",
@@ -3176,10 +3189,10 @@ class TemporalSandboxActivities:
             )
         raise TemporalActivityRuntimeError(f"unsupported checkpoint kind: {model.kind}")
 
-    def _build_worktree_archive(self, workspace: Path, *, members: set[str] | None = None) -> tuple[bytes, list[dict[str, Any]]]:
+    def _build_worktree_archive(self, workspace: Path, *, members: set[str] | None = None, high_security_mode: bool = True) -> tuple[bytes, list[dict[str, Any]]]:
         from moonmind.workflows.temporal.runtime.workspace_archive import build_workspace_archive
         try:
-            return build_workspace_archive(workspace, members=members)
+            return build_workspace_archive(workspace, members=members, high_security_mode=high_security_mode)
         except ValueError as exc:
             raise TemporalActivityRuntimeError(str(exc)) from exc
 
@@ -5067,6 +5080,28 @@ class TemporalIntegrationActivities:
             complete_post_merge_jira,
         )
 
+        candidate_context = payload.get("candidateContext")
+        if isinstance(candidate_context, Mapping) and "acceptanceGate" in candidate_context:
+            from moonmind.workflows.skills.acceptance_contract import (
+                acceptance_evidence,
+                validate_completion_target,
+            )
+            from moonmind.workflows.adapters.github_service import GitHubService
+
+            gate = candidate_context["acceptanceGate"]
+            gate = gate if isinstance(gate, Mapping) else {}
+            binding = acceptance_evidence(gate)
+            reason = await validate_completion_target(
+                gate,
+                repository=binding.subject.repository if binding else "",
+                source_ref=str(payload.get("jiraIssueKey") or ""),
+                expected_ref=str(candidate_context.get("completionTargetRef") or ""),
+                read_target=GitHubService().read_repository_target,
+            )
+            if reason:
+                return {"status": "blocked", "required": True, "reason": reason,
+                        "issueResolution": {"status": "invalid", "candidates": []}}
+
         service = JiraToolService()
 
         async def get_issue(issue_key: str) -> dict[str, Any]:
@@ -5123,7 +5158,9 @@ class TemporalIntegrationActivities:
                 "repository": repository,
                 "issueNumber": issue_number,
                 "mode": "done",
-            }
+                **({"completionTargetRef": config["completionTargetRef"]} if config.get("completionTargetRef") else {}),
+            },
+            merged_pull_request=payload.get("pullRequest") or {},
         )
         outputs = dict(result.outputs)
         succeeded = (
@@ -6033,6 +6070,10 @@ class TemporalAgentRuntimeActivities:
         record: Any,
     ) -> dict[str, Any]:
         policy = model.capture_policy
+        # Capture shares the deployment's outbound policy with other artifact
+        # and publish boundaries. Do not unconditionally enable heuristic
+        # scanning of source code, documentation, and security-test fixtures.
+        high_security_mode = resolve_high_security_mode()
         # One stable capture generation starts here: record HEAD and the
         # worktree status before enumeration so a writer mutating files or
         # HEAD mid-capture is detected and retried/blocked instead of
@@ -6049,7 +6090,7 @@ class TemporalAgentRuntimeActivities:
 
         pre_head = await _git_text("rev-parse", "HEAD")
         from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_index_patch
-        index_payload, index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, pre_head)
+        index_payload, index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, pre_head, high_security_mode=high_security_mode)
         pre_status = await _git_raw(
             "status", "--porcelain=v1", "-z", "--untracked-files=all",
         )
@@ -6192,8 +6233,8 @@ class TemporalAgentRuntimeActivities:
                         linkTarget=target,
                     )
                 )
-        # Scan the actual exported tar bytes (not only manifest text) as a
-        # bounded chunk stream with overlap, so credential-shaped content
+        # When enabled, scan the actual exported tar bytes (not only manifest
+        # text) as a bounded chunk stream with overlap, so credential-shaped content
         # spanning a chunk boundary is still detected without holding the
         # whole export in memory. Binary/uninspectable regions stay explicit
         # instead of a fabricated clean scan.
@@ -6213,6 +6254,7 @@ class TemporalAgentRuntimeActivities:
             _tar_spool_chunks(),
             export_digest="pending-tar-stream",
             location="checkpoint.archive.tar",
+            high_security_mode=high_security_mode,
         )
         if tar_scan["disposition"] == "blocked":
             # Quarantine before any upload: a credential-shaped export must
@@ -6273,8 +6315,8 @@ class TemporalAgentRuntimeActivities:
         # retryable error; the idempotency record is only written after a
         # fully verified capture, so retries re-capture cleanly.
         from moonmind.workflows.temporal.runtime.checkpoint_history import capture_git_history
-        history_payload, history = await asyncio.to_thread(capture_git_history, workspace, pre_head)
-        post_index, post_index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, pre_head)
+        history_payload, history = await asyncio.to_thread(capture_git_history, workspace, pre_head, high_security_mode=high_security_mode)
+        post_index, post_index_paths = await asyncio.to_thread(capture_git_index_patch, workspace, pre_head, high_security_mode=high_security_mode)
         if (index_payload, index_paths) != (post_index, post_index_paths):
             raise temporal_exceptions.ApplicationError(
                 "Git index changed during checkpoint capture",
@@ -6362,7 +6404,7 @@ class TemporalAgentRuntimeActivities:
             [
                 OutboundBundleItem(location="checkpoint.manifest", content=manifest_payload.decode("utf-8")),
             ],
-            high_security_mode=True,
+            high_security_mode=high_security_mode,
         )
         if not scan.allowed:
             raise temporal_exceptions.ApplicationError(
@@ -6546,7 +6588,7 @@ class TemporalAgentRuntimeActivities:
                     if export_scan["disposition"] != "clean"
                     else "clean"
                 ),
-                "manifestScan": "allow",
+                "manifestScan": "allow" if high_security_mode else "not_scanned",
                 "exportScan": export_scan,
                 "redactedPreviewRestorable": False,
             },
@@ -6605,7 +6647,7 @@ class TemporalAgentRuntimeActivities:
                     content=saved_work_payload.decode("utf-8"),
                 ),
             ],
-            high_security_mode=True,
+            high_security_mode=high_security_mode,
         )
         if not derivative_scan.allowed:
             raise temporal_exceptions.ApplicationError(
@@ -8659,7 +8701,10 @@ class TemporalAgentRuntimeActivities:
                 )
                 gate_payload["validatedRefs"] = validated_refs
                 gate_payload.pop("validated_refs", None)
-            contract_violations = step_gate_contract_violations(gate_payload)
+            contract_violations = step_gate_contract_violations(
+                gate_payload,
+                require_acceptance=_metadata_text("acceptanceContract") == "acceptance/v1",
+            )
             if contract_violations:
                 # Surface violations at the boundary where the verifier JSON
                 # enters MoonMind so the workflow gate can request a bounded
@@ -10443,6 +10488,11 @@ class TemporalAgentRuntimeActivities:
         block = (
             "MoonSpec verification output contract:\n"
             f"{path_hint}"
+            "- Apply the resolved moonspec-verify acceptance policy. Objective success "
+            "carries `validatedRefs.acceptance` (acceptance/v1), binding actual "
+            "candidate content/checkpoint, original scope, requirement evidence, "
+            "freshness, and the intended completion target. Initial assessment "
+            "is not objective verification or proof of landing.\n"
             "- The JSON must include the canonical `verdict`, `recommendedNextAction`, "
             "`recoverableInCurrentRuntime`, and `remainingWork` fields.\n"
             f"- `verdict` must be exactly one of: {verdict_values}.\n"

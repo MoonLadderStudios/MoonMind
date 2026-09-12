@@ -141,6 +141,80 @@ def test_index_capture_scans_binary_index_bytes_before_export(tmp_path):
         capture_git_index_patch(workspace, head)
 
 
+@pytest.mark.asyncio
+async def test_restore_preserves_authorized_index_after_export_policy_changes(
+    tmp_path, monkeypatch
+):
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.security, "high_security_mode", False)
+    source, _ = _repo(tmp_path / "temporal_sandbox" / "source")
+    fixture_content = "api_key = synthetic-checkpoint-fixture\n"
+    (source / "history.txt").write_text(fixture_content)
+    subprocess.run(["git", "-C", str(source), "add", "history.txt"], check=True)
+    subprocess.run(
+        ["git", "-C", str(source), "commit", "-qm", "unpublished fixture"], check=True
+    )
+    base = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+    ).strip()
+    (source / "tracked.txt").write_text(fixture_content)
+    subprocess.run(["git", "-C", str(source), "add", "tracked.txt"], check=True)
+    (source / "tracked.txt").write_text("safe worktree\n")
+    store = InMemoryArtifactStore()
+    capture = await TemporalSandboxActivities(
+        workspace_root=tmp_path, artifact_store=store
+    ).workspace_capture_checkpoint(
+        {
+            "identity": {
+                "workflowId": "source",
+                "runId": "source-run",
+                "logicalStepId": "implement",
+                "executionOrdinal": 1,
+            },
+            "boundary": "before_execution",
+            "kind": "worktree_archive",
+            "workspacePath": str(source),
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "capture",
+            "includeUntracked": True,
+        }
+    )
+    assert capture["status"] == "captured"
+    checkpoint_ref = store.put_bytes(
+        json.dumps(
+            {
+                "contentType": "application/vnd.moonmind.step-execution-checkpoint+json;version=1",
+                "source": {
+                    "workflowId": "source",
+                    "runId": "source-run",
+                    "logicalStepId": "implement",
+                    "executionOrdinal": 1,
+                },
+                "boundary": "before_execution",
+                "workspace": capture["workspace"],
+            }
+        ).encode(),
+        content_type="application/vnd.moonmind.step-execution-checkpoint+json;version=1",
+    ).artifact_ref
+    request = _request(checkpoint_ref=checkpoint_ref, capture=capture, base=base)
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
+    shutil.rmtree(source)
+    authority = tmp_path / "authority"
+    service = ManagedCheckpointRestoreService(
+        authority_root=authority, artifact_store=store, repository_source_root=source
+    )
+    result = await service.restore(request)
+    assert await service.restore(request) == result
+    restored = authority / "new-run" / "repo"
+    index_content = subprocess.check_output(
+        ["git", "-C", str(restored), "show", ":tracked.txt"], text=True
+    )
+    assert index_content == fixture_content
+    assert (restored / "tracked.txt").read_text() == "safe worktree\n"
+    assert (restored / "history.txt").read_text() == fixture_content
+
+
 def _request(
     *, checkpoint_ref: str, capture: dict, base: str, key: str = "restore-key"
 ) -> dict:

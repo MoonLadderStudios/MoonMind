@@ -109,6 +109,23 @@ def test_merge_gate_start_payload_carries_post_merge_github_completion() -> None
         "issueNumber": 3143,
     }
 
+
+@pytest.mark.parametrize("acceptance_patch", [True, False])
+def test_completion_target_override_preserves_historical_merge_handoff(monkeypatch, acceptance_patch):
+    from moonmind.workflows.temporal.workflows import run as run_module
+
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _: acceptance_patch)
+    request = MoonMindRunWorkflow()._merge_automation_request({
+        "mergeAutomation": {"enabled": True},
+        "workflow": {"inputs": {
+            "github_issue": {"repository": "example/repo", "number": 1},
+            "completion_target_ref": "refs/heads/release",
+        }},
+    })
+    assert request["postMergeGithub"].get("completionTargetRef") == (
+        "refs/heads/release" if acceptance_patch else None
+    )
+
 def test_merge_automation_request_infers_jira_orchestrate_issue_key() -> None:
     workflow = MoonMindRunWorkflow()
 

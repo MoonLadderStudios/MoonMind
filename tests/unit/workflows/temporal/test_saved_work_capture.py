@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from moonmind.config.settings import SecuritySettings, settings
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.schemas.managed_checkpoint_models import (
     ManagedWorkspaceCheckpointCaptureInput,
@@ -444,7 +445,11 @@ def test_retry_identity_rejects_conflicting_reused_complete() -> None:
 
 
 @pytest.mark.asyncio
-async def test_capture_commits_saved_work_with_truthful_outputs(tmp_path) -> None:
+@pytest.mark.parametrize("high_security_mode", [False, True])
+async def test_capture_commits_saved_work_with_truthful_outputs(
+    tmp_path, monkeypatch, high_security_mode
+) -> None:
+    monkeypatch.setattr(settings.security, "high_security_mode", high_security_mode)
     repo, activities, stored, digest = _capture_harness(
         tmp_path, {"tracked.txt": "checkpoint evidence\n"}
     )
@@ -456,6 +461,9 @@ async def test_capture_commits_saved_work_with_truthful_outputs(tmp_path) -> Non
     assert result["savedWorkDigest"].startswith("sha256:")
     saved_payload, _, _ = stored["saved_work_manifest"]
     saved_work = json.loads(saved_payload.decode("utf-8"))
+    assert saved_work["scan"]["disposition"] == (
+        "clean" if high_security_mode else "not_scanned"
+    )
     assert saved_work["captureId"] == "saved-work-1:capture"
     assert saved_work["contentDigest"] == result["workspace"]["archiveDigest"]
     outputs = {output["format"]: output for output in saved_work["outputs"]}
@@ -568,7 +576,8 @@ async def test_capture_fails_explicitly_on_unreadable_files(
 
 
 @pytest.mark.asyncio
-async def test_capture_blocks_secret_bearing_exports(tmp_path) -> None:
+async def test_capture_blocks_secret_bearing_exports(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings.security, "high_security_mode", True)
     _repo, activities, _stored, digest = _capture_harness(
         tmp_path, {"notes.txt": "api_key = supersecretvalue123\n"}
     )
@@ -576,6 +585,50 @@ async def test_capture_blocks_secret_bearing_exports(tmp_path) -> None:
         await activities.agent_runtime_capture_workspace_checkpoint(
             _request(digest=digest)
         )
+    assert not _stored
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured_mode", [None, "false", "true"])
+async def test_capture_uses_configured_outbound_policy(
+    tmp_path, monkeypatch, configured_mode
+) -> None:
+    if configured_mode is None:
+        monkeypatch.delenv("MOONMIND_HIGH_SECURITY_MODE", raising=False)
+    else:
+        monkeypatch.setenv("MOONMIND_HIGH_SECURITY_MODE", configured_mode)
+    monkeypatch.setattr(settings, "security", SecuritySettings(_env_file=None))
+    repo, activities, stored, digest = _capture_harness(
+        tmp_path,
+        {"auth.py": "token: str | None = None\n"},
+    )
+    # Runtime-issued credential paths stay excluded independently of strict mode.
+    (repo / ".codex").mkdir()
+    (repo / ".codex/auth.json").write_text('{"access_token": "test-only-value"}')
+    _git(repo, "add", ".codex/auth.json")
+    if configured_mode == "true":
+        with pytest.raises(Exception, match="secret scanning"):
+            await activities.agent_runtime_capture_workspace_checkpoint(
+                _request(digest=digest)
+            )
+        assert not stored
+        return
+
+    result = await activities.agent_runtime_capture_workspace_checkpoint(
+        _request(digest=digest)
+    )
+    assert result["status"] == "captured"
+    saved_work = json.loads(stored["saved_work_manifest"][0])
+    assert saved_work["scan"]["disposition"] == "not_scanned"
+    assert saved_work["scan"]["manifestScan"] == "not_scanned"
+    assert saved_work["scan"]["exportScan"]["coverage"] == "none"
+    assert saved_work["scan"]["exportScan"]["limitations"]
+    assert saved_work["scan"]["exportScan"]["exportDigest"] == (
+        result["workspace"]["archiveDigest"]
+    )
+    assert {"path": ".codex/auth.json", "reason": "sensitive-path-policy"} in (
+        saved_work["exclusions"]
+    )
 
 
 @pytest.mark.asyncio

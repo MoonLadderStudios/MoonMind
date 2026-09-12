@@ -1027,3 +1027,29 @@ Reserve fields without enabling them:
 Minimum components: tool registry format + loader + validator; tool registry snapshot digest artifact; `plan.validate`; Plan Executor in `MoonMind.UserWorkflow`; `mm.tool.execute` / tool dispatch activity; progress query and optional progress artifact. Status is tracked under `docs/tmp/` or in local handoffs under `artifacts/` when needed.
 
 Deployment-backed agent instruction skill work is tracked separately in `docs/Steps/SkillSystem.md` and related tracking files under `docs/tmp/`.
+
+## Objective acceptance evidence
+
+The portable `moonspec-verify` bundle owns the [acceptance policy](../../.agents/skills/moonspec-verify/references/acceptance-policy.md). Native hosts validate its declared terminal evidence and perform authorized reads/effects; they do not independently classify requirements.
+
+The existing `StepGateResult.validatedRefs` carries `acceptance` with schema
+`acceptance/v1`. The typed supplying adapter is
+`moonmind/workflows/skills/acceptance_contract.py`. It binds the candidate repository,
+revision and content/checkpoint digest; complete original scope and source digest;
+mandatory requirement IDs and objective evidence refs; required freshness policy;
+and intended completion target ref, revision and content digest. A dirty workspace
+cannot be identified by HEAD alone. Missing or malformed bindings withhold new
+issue-flow objective success and return the existing gate contract-repair handoff.
+
+The immutable initial assessment remains distinct from later objective verification.
+A later success never rewrites its verdict or implies that the candidate was landed
+at assessment time. Status finalization validates current target identity through
+the owning repository reader. The default is the remote default branch; an explicit
+`completion_target_ref` such as `refs/heads/release` selects an alternative without changing the comparison base
+or publication branch.
+
+Temporal histories before `run-acceptance-evidence-v1` replay their recorded gate
+routing and initial-assessment projections. Legacy gate artifacts remain readable
+with their serialized meaning; absence of objective evidence grants no new
+completion authority at a current issue-finalization boundary. Existing remediation,
+checkpoint, publication, and post-action verification owners retain their roles.

@@ -2009,6 +2009,16 @@ class MergeAutomationPostMergeGithubModel(BaseModel):
     repository: str | None = Field(None, alias="repository")
     issue_number: int | None = Field(None, alias="issueNumber")
     required: bool = Field(True, alias="required")
+    completion_target_ref: str | None = Field(None, alias="completionTargetRef")
+
+    @field_validator("completion_target_ref", mode="before")
+    @classmethod
+    def _normalize_completion_target(cls, value: Any) -> str | None:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str) or not value.startswith("refs/heads/") or not value.removeprefix("refs/heads/"):
+            raise ValueError("completionTargetRef must be a refs/heads/ branch ref")
+        return value
 
     @field_validator("repository", mode="before")
     @classmethod

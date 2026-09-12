@@ -680,6 +680,13 @@ bytes pass the same bounded secret scan as other exported evidence. Historical
 clean-index manifests remain restorable; a historical staged-path list without
 index content cannot authorize reconstruction from worktree bytes.
 
+Selected Git history preserves exact commits. A selected commit that introduces
+or changes a credential-sensitive path under the shared exclusion policy cannot
+be exported, even when heuristic secret scanning is disabled. Capture rejects the
+bundle before upload instead of rewriting history. Runtime-skill overlays and
+temporary-archive exclusions apply to worktree capture; they do not authorize
+rewriting otherwise valid repository history.
+
 Resuming finalization validates a surviving directory against saved file digests,
 HEAD, index content, and the captured Git status before accepting it. A directory's
 existence does not prove candidate identity. Once cleanup has released provider

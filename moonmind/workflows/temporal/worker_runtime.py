@@ -2483,7 +2483,15 @@ def _publish_mode_agent_instructions(publish_mode: object) -> str:
             "(`git add -A && git commit -m '<summary>'`). "
             "Do NOT push or create a pull request - that is handled automatically."
         )
-    return "Do NOT commit or push. Publishing is disabled for this task."
+    return (
+        "Do NOT commit or push from this execution's repository workspace. "
+        "Publishing is disabled for this execution. This execution-local "
+        "publish mode does not disable other side effects declared by the "
+        "selected skill, including queueing child workflows. Children use "
+        "their own admitted publishing settings; do not replace them with "
+        "a coordinator's local 'none'. Preserve explicit user restrictions "
+        "on publishing across the workflow or batch."
+    )
 
 
 def _csv_env_tuple(value: str | None) -> tuple[str, ...]:

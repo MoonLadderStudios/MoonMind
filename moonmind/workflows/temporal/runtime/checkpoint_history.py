@@ -17,7 +17,9 @@ from moonmind.schemas.saved_work_models import (
 )
 
 
-def capture_git_index_patch(workspace: Path, head: str):
+def capture_git_index_patch(
+    workspace: Path, head: str, *, high_security_mode: bool = True
+):
     """Export the selected index independently of subsequent worktree edits.
 
     The patch is relative to the saved HEAD and contains binary data and modes.
@@ -54,6 +56,10 @@ def capture_git_index_patch(workspace: Path, head: str):
             *paths,
         ]
     )
+    if not high_security_mode:
+        # Also used for immutable restore comparison: this is not a new export
+        # authorization, and changing deployment policy must not rewrite it.
+        return payload, paths
     entries = git(["ls-files", "--stage", "-z", "--", *paths])
     objects = b"\n".join(
         entry.split(b"\t", 1)[0].split()[1] for entry in entries.split(b"\0") if entry
@@ -67,6 +73,7 @@ def capture_git_index_patch(workspace: Path, head: str):
             ),
             export_digest="pending",
             location="checkpoint.index." + location,
+            high_security_mode=high_security_mode,
         )
         if scan["disposition"] == "blocked":
             raise ValueError("checkpoint Git index failed export secret scanning")
@@ -129,7 +136,7 @@ def _git(
             process.stdout.close()
 
 
-def capture_git_history(workspace: Path, head: str):
+def capture_git_history(workspace: Path, head: str, *, high_security_mode: bool = True):
     """Export only HEAD's ancestry beyond a declared origin baseline.
 
     Existing origin objects remain an explicit restore dependency. No unrelated
@@ -177,6 +184,35 @@ def capture_git_history(workspace: Path, head: str):
     )
     if len(objects.splitlines()) > SAVED_WORK_FORMAT_SIZE_LIMITS["max_file_count"]:
         raise ValueError("checkpoint Git history exceeds object-count bounds")
+    # A bundle preserves exact commits, so excluded credential paths cannot be
+    # removed from it. Check every selected commit's introduced/modified paths
+    # (including merges and duplicate blob aliases), independent of heuristics.
+    # Deleting a baseline-owned path does not export its credential contents.
+    commits = git(["rev-list", *revisions], limit=4 * 1024 * 1024)
+    changed_paths = git(
+        [
+            "diff-tree",
+            "--stdin",
+            "--root",
+            "-r",
+            "-m",
+            "--no-commit-id",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=ACMRT",
+            "-z",
+        ],
+        input_bytes=commits,
+        limit=4 * 1024 * 1024,
+    )
+    for path in changed_paths.split(b"\0"):
+        if not path:
+            continue
+        reason = saved_work_path_exclusion(path.decode("utf-8"))
+        if reason and reason.startswith("sensitive-"):
+            raise ValueError(
+                "checkpoint Git history contains a credential-sensitive path"
+            )
     unpacked = git(["cat-file", "--batch"], input_bytes=objects)
     scan = scan_saved_work_export_stream(
         iter(
@@ -185,6 +221,7 @@ def capture_git_history(workspace: Path, head: str):
         ),
         export_digest="pending",
         location="checkpoint.selected-history",
+        high_security_mode=high_security_mode,
     )
     if scan["disposition"] == "blocked":
         raise ValueError("checkpoint Git history failed export secret scanning")

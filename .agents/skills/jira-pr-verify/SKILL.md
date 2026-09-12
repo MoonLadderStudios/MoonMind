@@ -2,11 +2,23 @@
 name: jira-pr-verify
 description: Verify a GitHub pull request against a Jira issue's goals, requirements, and acceptance criteria, then post a PR comment with the findings. Use when a user asks Codex or MoonMind to compare a PR to a Jira story/task/bug, confirm whether a PR satisfies Jira requirements, audit implementation coverage from Jira, or publish a Jira-vs-PR verification summary.
 metadata:
+  required-skills: "moonspec-verify"
   required-capabilities:
     - jira
     - git
     - gh
 ---
+
+Read the portable acceptance policy from the resolved `moonspec-verify` bundle
+before assessing, verifying, or completing work. Resolve it at
+`$MOONMIND_ACTIVE_SKILLS_DIR/moonspec-verify/references/acceptance-policy.md`;
+outside MoonMind use `.agents/skills/moonspec-verify/references/acceptance-policy.md`.
+It owns scope, mandatory versus optional evidence, reuse, and completion rules.
+Preserve the original scope and previously met requirements as regression constraints;
+prior reports are context, not current proof. Candidate success alone cannot close
+or transition an issue as already landed. Completion requires objective evidence
+on the intended completion target under that policy.
+
 
 # Jira PR Verify
 
@@ -91,7 +103,7 @@ When both `gh` and the connector are available, prefer `gh` for:
 1. Resolve targets.
 - Normalize the Jira key from the issue URL/key.
 - Resolve the PR number, repository, base branch, and head branch.
-- If the local checkout is not the PR head, inspect it carefully and check out/fetch the PR only when needed.
+- Pin the PR head SHA from the owning reader. Inspect that exact revision in an isolated worktree when it differs from the current checkout; preserve dirty work and detached HEAD. Bind source scope and checks with `validatedRefs.acceptance`; PR-head acceptance does not imply landing.
 
 2. Load Jira requirements.
 - Prefer `issue.normalized.json` and `issue.md` from the trusted Jira artifact directory.
@@ -118,7 +130,7 @@ When both `gh` and the connector are available, prefer `gh` for:
 - Keep repo-bound and non-repo-bound requirements separate when the user scopes verification to one repository.
 
 5. Decide the overall result.
-- `PASS`: all in-scope Jira requirements are `met`; only explicit non-repo/out-of-scope items are excluded.
+- `PASS`: objective candidate acceptance satisfies the shared policy. Missing mandatory evidence remains a gap regardless of runtime availability.
 - `PARTIAL`: at least one in-scope item is `partially_met` or `unverifiable`, but no clear in-scope miss exists.
 - `FAIL`: at least one in-scope item is `not_met`.
 - `BLOCKED`: trusted Jira content, PR access, or GitHub comment access is unavailable.
