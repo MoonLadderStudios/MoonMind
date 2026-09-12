@@ -1,0 +1,72 @@
+# Explicit live-source development overlay. Do not use for releases.
+services:
+  api:
+    volumes:
+      - ./api_service:/app/api_service
+      - ./moonmind:/app/moonmind:ro
+      - ./services:/app/services:ro
+      - ./docs:/app/docs:ro
+      - ./.agents:/app/.agents:ro
+  temporal-worker-workflow:
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./docs:/app/docs:ro
+      - ./services:/app/services:ro
+    environment: &development-worker-environment
+      - TEMPORAL_WORKER_VERSIONING_ENABLED=false
+      - MOONMIND_DEPLOYMENT_MODE=development
+  temporal-worker-artifacts:
+    environment: *development-worker-environment
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./docs:/app/docs:ro
+      - ./services:/app/services:ro
+  temporal-worker-llm:
+    environment: *development-worker-environment
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./docs:/app/docs:ro
+      - ./services:/app/services:ro
+  temporal-worker-sandbox:
+    environment: *development-worker-environment
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./docs:/app/docs:ro
+      - ./services:/app/services:ro
+      - ./.agents:/app/.agents:ro
+  temporal-worker-agent-runtime:
+    environment: *development-worker-environment
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./docs:/app/docs:ro
+      - ./services:/app/services:ro
+      - ./.agents:/app/.agents:ro
+  temporal-worker-deployment-control:
+    environment: *development-worker-environment
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./docs:/app/docs:ro
+      - ./services:/app/services:ro
+      - ./.agents:/app/.agents:ro
+  temporal-worker-integrations:
+    environment: *development-worker-environment
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./api_service:/app/api_service:ro
+      - ./docs:/app/docs:ro
+      - ./services:/app/services:ro
+  omnigent-runtime-bootstrap:
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+  init-db:
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./tools:/app/tools:ro
+      - ./api_service:/app/api_service:ro
+      - ./docs:/app/docs:ro

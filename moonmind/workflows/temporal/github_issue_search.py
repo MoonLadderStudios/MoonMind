@@ -407,6 +407,7 @@ async def resolve_issue(
     active_attempt_comments: Sequence[Mapping[str, Any]] | None = None,
     own_announcement_abandoned: bool | None = None,
     writers_settled: bool | None = None,
+    reserve_candidate: Callable[[int], Awaitable[bool]] | None = None,
     include_all_authors: bool = False,
 ) -> tuple[int | None, dict[str, Any]]:
     """Select the best search match, or first unblocked open issue, within 500 rows.
@@ -682,27 +683,53 @@ async def resolve_issue(
                     active_attempt_comments=active_attempt_comments,
                 )
                 if not shared.allowed:
+                    if shared.reason_code == "read_failure":
+                        return None, {**evidence, "error": shared.summary, "reasonCode": "read_failure"}
                     continue
                 if candidate_blockers:
                     continue
+                # Confirm current identity/lifecycle inside the bounded scan so
+                # a stale first candidate does not fail the whole scheduled tick.
+                try:
+                    current_response = await client.get(
+                        f"https://api.github.com/repos/{repository}/issues/{candidate['number']}",
+                        headers=github_service._github_headers(token),
+                    )
+                    current_response.raise_for_status()
+                    current = current_response.json()
+                except (httpx.HTTPError, ValueError) as exc:
+                    return None, {**evidence, "error": f"Candidate confirmation failed: {type(exc).__name__}."}
+                if not isinstance(current, Mapping) or current.get("number") != candidate["number"]:
+                    return None, {**evidence, "error": "Candidate confirmation returned a different or malformed issue."}
+                if current.get("state") == "closed":
+                    continue
+                if not is_complete_open_issue(current, repository):
+                    return None, {**evidence, "error": "Candidate confirmation evidence is incomplete."}
+                if not is_lifecycle_selectable_candidate(current) or await blockers_from_issue(current):
+                    continue
+                if interpret_issue(current).settled == SETTLED_RECOVERY_NEEDED and not _recovery_handoff_usable(recovery_handoff):
+                    continue
+                # Recheck author scope on the authoritative issue read before
+                # granting a durable claim; a search hit alone is not authority.
+                selected_author = _selected_author_identity(current)
                 if authenticated_user is not None:
-                    selected_author = _selected_author_identity(candidate)
-                    if selected_author is None or selected_author["id"] != authenticated_user["id"]:
-                        counts["authorMismatchesSkipped"] = (
-                            int(counts.get("authorMismatchesSkipped") or 0) + 1
-                        )
+                    if selected_author is None:
+                        return None, {**evidence, "error": "Candidate confirmation author evidence is incomplete.", "reasonCode": "invalid_author_evidence"}
+                    if selected_author["id"] != authenticated_user["id"]:
+                        counts["authorMismatchesSkipped"] += 1
                         continue
+                if selected_author is not None:
                     counts["selectedIssueAuthor"] = dict(selected_author)
-                else:
-                    selected_author = _selected_author_identity(candidate)
-                    if selected_author is not None:
-                        counts["selectedIssueAuthor"] = dict(selected_author)
+                if reserve_candidate is not None and not await reserve_candidate(int(candidate["number"])):
+                    continue
+                evidence["selectedIssue"] = dict(current)
                 return candidate["number"], evidence
             if len(candidates) < 100:
                 if authenticated_user is not None:
                     return None, {
                         **evidence,
-                        "error": (
+                        "disposition": "idle",
+                        "summary": (
                             "No eligible open GitHub issue created by the authenticated "
                             "search account was found; candidate pages exhausted. "
                             "No other author's issue was selected."
@@ -711,8 +738,8 @@ async def resolve_issue(
                     }
                 return None, {
                     **evidence,
-                    "error": "No eligible open GitHub issue found; candidate pages exhausted.",
-                    "reasonCode": "no_eligible_candidate",
+                    "disposition": "idle",
+                    "summary": "No eligible open GitHub issue found; candidate pages exhausted.",
                 }
     if authenticated_user is not None:
         return None, {

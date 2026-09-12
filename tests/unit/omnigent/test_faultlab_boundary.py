@@ -86,7 +86,7 @@ def test_production_image_copy_rules_exclude_test_tooling() -> None:
         # into /build (e.g. the frontend-builder verify script) are not
         # shipped to the runtime and are out of scope here.
         if " /app/" in stripped:
-            assert not stripped.startswith("COPY tools"), (
+            assert not stripped.startswith("COPY tools") or stripped == "COPY tools/verify_deployed_ui_assets.py /app/tools/verify_deployed_ui_assets.py", (
                 f"production image must not COPY tools/ to /app: {stripped}"
             )
 

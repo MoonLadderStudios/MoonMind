@@ -57,6 +57,7 @@ present, are listed with their supported condition below.
 | `MoonMind.PRResolver` <a id="moonmindprresolver"></a> | `moonmind.workflows.temporal.workflows.pr_resolver.MoonMindPRResolverWorkflow` | `operator` | [lifecycle](#moonmindprresolver) |
 | `MoonMind.ProviderProfileManager` <a id="moonmindproviderprofilemanager"></a> | `moonmind.workflows.temporal.workflows.provider_profile_manager.MoonMindProviderProfileManagerWorkflow` | `operator` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#117-moonmindproviderprofilemanager-lifecycle) |
 | `MoonMind.PublicationRecoveryV1` <a id="moonmindpublicationrecoveryv1"></a> | `moonmind.workflows.temporal.workflows.publication_recovery.MoonMindPublicationRecoveryWorkflow` | `operator` | [lifecycle](#moonmindpublicationrecoveryv1) |
+| `MoonMind.ReleaseCanary` <a id="moonmindreleasecanary"></a> | `moonmind.workflows.temporal.workflows.release_canary.ReleaseCanaryWorkflow` | `excluded` | [lifecycle](#moonmindreleasecanary) |
 | `MoonMind.UserWorkflow` <a id="moonminduserworkflow"></a> | `moonmind.workflows.temporal.workflows.run.MoonMindUserWorkflow` | `product` | [lifecycle](WorkflowTypeCatalogAndLifecycle.md#111-moonminduserworkflow-lifecycle) |
 
 ## Workflow task queues
@@ -79,6 +80,7 @@ Current lane (new calls route here):
 - `integration.get_activity_route`
 - `integration.resolve_adapter_metadata`
 - `integration.resolve_external_adapter`
+- `release.inspect`
 
 Historical-only (pre-cutover histories, no new calls):
 
@@ -253,6 +255,7 @@ with deterministic workflow code, not Temporal Local Activities.
 | `publication_recovery.publish_candidate` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `publication_recovery.restore_candidate` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `publication_recovery.verify` | `integrations` | `mm.activity.integrations` |
+| `release.reconcile` | `deployment` | `mm.activity.deployment` |
 | `repo.create_pr` | `integrations` | `mm.activity.integrations` |
 | `repo.merge_pr` | `integrations` | `mm.activity.integrations` |
 | `resilience.compile_policy` | `artifacts` | `mm.activity.artifacts` |

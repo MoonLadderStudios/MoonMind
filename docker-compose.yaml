@@ -238,11 +238,6 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./api_service:/app/api_service
-      - ./moonmind:/app/moonmind:ro
-      - ./services:/app/services:ro
-      - ./docs:/app/docs:ro
-      - ./.agents:/app/.agents:ro
       - ./deploy/state:/workspace/deployment_state:ro
       - ${MOONMIND_CODEX_OMNIGENT_EVIDENCE_DIR:-./var/cutover}:/workspace/cutover:ro
       # Durable release-support evidence for the deployed commit, materialized by
@@ -459,6 +454,7 @@ services:
     restart: unless-stopped
 
   temporal-worker-workflow:
+    stop_grace_period: 6m
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     labels:
@@ -475,11 +471,11 @@ services:
       - TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE=${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_TASK_QUEUE:-mm.workflow.merge_automation}
       - TEMPORAL_WORKFLOW_WORKER_CONCURRENCY=${TEMPORAL_WORKFLOW_WORKER_CONCURRENCY:-8}
       - TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY=${TEMPORAL_MERGE_AUTOMATION_WORKFLOW_WORKER_CONCURRENCY:-2}
-      - TEMPORAL_WORKER_VERSIONING_ENABLED=${TEMPORAL_WORKER_VERSIONING_ENABLED:-false}
+      - TEMPORAL_WORKER_VERSIONING_ENABLED=${TEMPORAL_WORKER_VERSIONING_ENABLED:-auto}
       - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
       - MOONMIND_BUILD_SHA=${MOONMIND_BUILD_SHA:-}
       - MOONMIND_IMAGE_DIGEST=${MOONMIND_IMAGE_DIGEST:-}
-      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-development}
+      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - TEMPORAL_WORKFLOW_READINESS_URL=${TEMPORAL_WORKFLOW_READINESS_URL:-http://temporal-worker-workflow:8080/readyz}
       - TEMPORAL_WORKER_COMMAND=${TEMPORAL_WORKER_COMMAND:-python -m
         moonmind.workflows.temporal.worker_runtime}
@@ -495,10 +491,6 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./docs:/app/docs:ro
-      - ./services:/app/services:ro
       - moonmind_secrets:/app/var/secrets
       - agent_workspaces:/work/agent_jobs
     entrypoint:
@@ -526,11 +518,15 @@ services:
     restart: unless-stopped
 
   temporal-worker-artifacts:
+    stop_grace_period: 6m
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     labels:
       moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
+      - TEMPORAL_WORKER_VERSIONING_ENABLED=${TEMPORAL_WORKER_VERSIONING_ENABLED:-auto}
+      - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
+      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
@@ -552,10 +548,6 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./docs:/app/docs:ro
-      - ./services:/app/services:ro
       - moonmind_secrets:/app/var/secrets
     entrypoint:
       - /bin/sh
@@ -584,11 +576,15 @@ services:
     restart: unless-stopped
 
   temporal-worker-llm:
+    stop_grace_period: 6m
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     labels:
       moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
+      - TEMPORAL_WORKER_VERSIONING_ENABLED=${TEMPORAL_WORKER_VERSIONING_ENABLED:-auto}
+      - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
+      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
@@ -615,10 +611,6 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./docs:/app/docs:ro
-      - ./services:/app/services:ro
       - moonmind_secrets:/app/var/secrets
     entrypoint:
       - /bin/sh
@@ -645,11 +637,15 @@ services:
     restart: unless-stopped
 
   temporal-worker-sandbox:
+    stop_grace_period: 6m
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     labels:
       moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
+      - TEMPORAL_WORKER_VERSIONING_ENABLED=${TEMPORAL_WORKER_VERSIONING_ENABLED:-auto}
+      - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
+      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
@@ -692,11 +688,6 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./docs:/app/docs:ro
-      - ./services:/app/services:ro
-      - ./.agents:/app/.agents:ro
       - moonmind_secrets:/app/var/secrets
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
@@ -734,11 +725,15 @@ services:
     restart: unless-stopped
 
   temporal-worker-agent-runtime:
+    stop_grace_period: 6m
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     labels:
       moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
+      - TEMPORAL_WORKER_VERSIONING_ENABLED=${TEMPORAL_WORKER_VERSIONING_ENABLED:-auto}
+      - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
+      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
@@ -887,11 +882,6 @@ services:
     volumes:
       - .:/workspace/host_project:ro
       - ./deploy/state:/workspace/deployment_state:rw
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./docs:/app/docs:ro
-      - ./services:/app/services:ro
-      - ./.agents:/app/.agents:ro
       - moonmind_secrets:/app/var/secrets
       - ./var/omnigent-evidence:/workspace/omnigent-evidence:rw
       - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
@@ -936,9 +926,13 @@ services:
     restart: unless-stopped
 
   temporal-worker-deployment-control:
+    stop_grace_period: 6m
     image: ${MOONMIND_DEPLOYMENT_WORKER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
     init: true
     environment:
+      - TEMPORAL_WORKER_VERSIONING_ENABLED=${TEMPORAL_WORKER_VERSIONING_ENABLED:-auto}
+      - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
+      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
@@ -970,7 +964,7 @@ services:
       - MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE:-/workspace/deployment_state/desired-state.json}
       - MOONMIND_DEPLOYMENT_LOCK_DIR=${MOONMIND_DEPLOYMENT_LOCK_DIR:-/workspace/deployment_state/locks}
       - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
-      - MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=${MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES:-temporal-worker-deployment-control}
+      - MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=${MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES:-}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
       - path: .env
@@ -978,11 +972,6 @@ services:
     volumes:
       - .:/workspace/host_project:ro
       - ./deploy/state:/workspace/deployment_state:rw
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./docs:/app/docs:ro
-      - ./services:/app/services:ro
-      - ./.agents:/app/.agents:ro
       - moonmind_secrets:/app/var/secrets
       - ./var/omnigent-evidence:/workspace/omnigent-evidence:rw
       - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
@@ -1014,11 +1003,15 @@ services:
     restart: unless-stopped
 
   temporal-worker-integrations:
+    stop_grace_period: 6m
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     labels:
       moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
+      - TEMPORAL_WORKER_VERSIONING_ENABLED=${TEMPORAL_WORKER_VERSIONING_ENABLED:-auto}
+      - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
+      - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
@@ -1050,10 +1043,6 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./api_service:/app/api_service:ro
-      - ./docs:/app/docs:ro
-      - ./services:/app/services:ro
       - moonmind_secrets:/app/var/secrets
     entrypoint:
       - /bin/sh
@@ -1109,7 +1098,6 @@ services:
       - MOONMIND_OMNIGENT_EVIDENCE_POLICY=${MOONMIND_OMNIGENT_EVIDENCE_POLICY:-either}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
     volumes:
-      - ./moonmind:/app/moonmind:ro
       - ./var:/app/var:rw
       - moonmind_secrets:/app/var/secrets
     command: ["python", "-m", "moonmind.omnigent.bootstrap.infrastructure"]
@@ -1413,12 +1401,7 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./moonmind:/app/moonmind:ro
-      - ./tools:/app/tools:ro
-      - ./api_service:/app/api_service:ro
-      - ./docs:/app/docs:ro
       - moonmind_secrets:/app/var/secrets
-      - ./init_db:/app/init_db
     command: sh /app/init_db/init_db_entrypoint.sh
     networks:
       - control-plane-network

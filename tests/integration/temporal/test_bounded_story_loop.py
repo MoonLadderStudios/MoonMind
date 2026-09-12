@@ -14,9 +14,7 @@ from moonmind.workflows.temporal.bounded_story_loop import (
     evaluate_provider_lease,
     evaluate_publication_decision,
 )
-from moonmind.workflows.temporal.workflows.run import (
-    bounded_story_loop_resume_decision,
-)
+from moonmind.workflows.temporal.bounded_story_loop import bounded_story_loop_resume_decision
 from moonmind.workflows.temporal.step_ledger import (
     build_initial_step_rows,
     invalidate_downstream_steps_for_changed_output,

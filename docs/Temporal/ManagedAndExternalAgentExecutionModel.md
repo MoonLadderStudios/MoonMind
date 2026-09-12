@@ -80,6 +80,38 @@ Ownership is deliberate:
 
 A runtime-specific process, container, session, or host id is never the product workflow identity.
 
+### Durable attempt completion
+
+An admitted execution keeps its immutable request, admission epoch, profile
+capacity and session identity across Activity redelivery. A timeout is not proof
+that the remote operation stopped. Revoked delivery ownership preserves the
+session and its resources for the replacement owner; janitors require the
+authoritative Temporal execution to be closed before taking over an active
+binding. Missing ownership evidence preserves resources and reports the gap.
+
+The runtime binding records immutable turn, compute, verification, saved-work
+and publication receipts. The resolved portable Skill owns remediation choices
+and terminal verdicts. The generic host supplies bounded same-session delivery
+and cumulative budgets. Evidence read retries do not launch another provider
+turn. A Skill's explicit continuation remains intermediate until its declared
+terminal evidence is validated; authority-sensitive terminal decisions remain
+terminal.
+
+Save, restore and publication deliveries share a database-owned finalization
+lock and re-read committed receipts after acquiring it. Waiting deliveries do
+not hold database pool connections. The publisher still reconciles remote
+branch state and verifies the exact candidate head, including after a lost
+acknowledgement. Verified primary completion survives auxiliary cleanup and
+issue-synchronization failures, whose owners and pending evidence remain explicit.
+
+Saved repository work uses the canonical bounded archive and checkpoint
+contracts. Selected unpublished Git ancestry travels in a scanned, bounded
+bundle; a branch name or a reference to a deleted workspace is insufficient.
+Cold finalization restores the original admitted sandbox owner from verified
+artifacts without reacquiring a provider host. Restore validates immutable input
+and plan references, manifest digests, repository head and content before
+releasing resume authority. An existing changed workspace is never overwritten.
+
 ---
 
 ## 3. Canonical contract rule

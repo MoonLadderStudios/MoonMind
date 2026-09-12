@@ -477,6 +477,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv pip install --system -e .[tests]
+      - name: Start isolated reliability dependencies
+        run: |
+          set -euo pipefail
+          docker compose -p moonmind-reliability-qualification -f tests/integration/reliability/compose.yaml up -d --wait --wait-timeout 180
+          dependency_ip() {
+            local container
+            container=$(docker compose -p moonmind-reliability-qualification -f tests/integration/reliability/compose.yaml ps -q "$1")
+            docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container"
+          }
+          echo "MOONMIND_TEST_POSTGRES_URL=postgresql+asyncpg://postgres:reliability-test-only@$(dependency_ip postgres):5432/postgres" >> "$GITHUB_ENV"
+          echo "MOONMIND_TEST_TEMPORAL_ADDRESS=$(dependency_ip temporal):7233" >> "$GITHUB_ENV"
+          echo "MOONMIND_TEST_MINIO_ENDPOINT=http://$(dependency_ip minio):9000" >> "$GITHUB_ENV"
       - name: Run hermetic checkpoint-resume reliability journey
         env:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
@@ -491,6 +503,7 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p /tmp/pytest-reliability-journey
+          docker compose -p moonmind-reliability-qualification -f tests/integration/reliability/compose.yaml logs --no-color > /tmp/pytest-reliability-journey/dependencies.log 2>&1
           for path in artifacts tests/integration/reliability/replays var/artifacts var/pr_resolver; do
             if [[ -e "$path" ]]; then
               cp -R --parents "$path" /tmp/pytest-reliability-journey/
@@ -507,6 +520,10 @@ jobs:
           name: pytest-reliability-journey-diagnostics
           path: /tmp/pytest-reliability-journey
           if-no-files-found: error
+
+      - name: Remove isolated reliability dependencies
+        if: always()
+        run: docker compose -p moonmind-reliability-qualification -f tests/integration/reliability/compose.yaml down -v
 
   omnigent-exact-artifact:
     # Tier 1 (MoonLadderStudios/MoonMind#3710): the required, per-PR,
@@ -593,6 +610,8 @@ jobs:
           file: api_service/Dockerfile
           load: true
           tags: moonmind-exact-artifact:candidate
+          build-args: |
+            MOONMIND_BUILD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           # A local single-arch image so its digest is the immutable artifact
           # under test. The layer cache only skips rebuilding unchanged layers;
           # the resulting image digest is still computed from this checkout.

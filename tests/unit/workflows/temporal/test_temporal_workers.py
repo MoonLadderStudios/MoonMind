@@ -105,7 +105,7 @@ def test_build_all_worker_topologies_covers_canonical_fleets():
     assert topologies[DEPLOYMENT_FLEET].service_name == (
         "temporal-worker-deployment-control"
     )
-    assert topologies[DEPLOYMENT_FLEET].activity_types == ("mm.tool.execute",)
+    assert topologies[DEPLOYMENT_FLEET].activity_types == ("mm.tool.execute", "release.reconcile")
 
 
 def test_workflow_worker_startup_rejects_unroutable_activity_handler(
@@ -130,6 +130,7 @@ def test_registered_workflow_types_exclude_retired_manifest_ingest():
     assert "MoonMind.ManifestIngest" not in list_registered_workflow_types()
     assert list_registered_workflow_types() == (
         "MoonMind.UserWorkflow",
+        "MoonMind.ReleaseCanary",
         "MoonMind.ContainerJob",
         "MoonMind.ControlStopContinuation",
         "MoonMind.ProviderProfileManager",

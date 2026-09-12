@@ -17,7 +17,7 @@ from .records import OmnigentControlPlaneError
 
 
 #: Bumped when the closed source vocabulary itself changes.
-TURN_SOURCE_VOCABULARY_VERSION = 1
+TURN_SOURCE_VOCABULARY_VERSION = 2
 
 #: The durable ``omnigent_turn_attempts.lineage_kind`` column width.
 TURN_SOURCE_MAX_LENGTH = 32
@@ -30,6 +30,8 @@ class TurnSource(str, Enum):
     INITIAL = "initial"
     #: Bounded same-session continuation driven by missing repository output.
     REPOSITORY_CONTINUATION = "repository_continuation"
+    #: A bounded continuation requested by the resolved Skill terminal contract.
+    TERMINAL_CONTRACT_CONTINUATION = "terminal_contract_continuation"
     #: Typed remediation of a prior attempt within the same authority.
     REMEDIATION = "remediation"
     #: A native Workflow Chat message (HTTP or WebSocket).

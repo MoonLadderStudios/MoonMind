@@ -947,7 +947,7 @@ async def _omnigent_execute_activity(
             os.environ.get("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
         )
         restore_service = ManagedCheckpointRestoreService(
-            authority_root=workspace_root / "temporal_sandbox",
+            authority_root=workspace_root,
             artifact_service=artifact_service,
         )
 

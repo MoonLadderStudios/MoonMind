@@ -280,7 +280,10 @@ async def test_capture_all_checkpoint_kinds_as_compact_refs(tmp_path: Path) -> N
     assert ".agents/skills" not in names
 
 
-async def test_checkpoint_capture_preserves_internal_symlinks(tmp_path: Path) -> None:
+@pytest.mark.parametrize("include_untracked", [None, True, False])
+async def test_checkpoint_capture_preserves_internal_symlinks(
+    tmp_path: Path, include_untracked: bool | None
+) -> None:
     store = InMemoryArtifactStore()
     root = _workspace_root(tmp_path)
     repo = _repo(root)
@@ -296,11 +299,16 @@ async def test_checkpoint_capture_preserves_internal_symlinks(tmp_path: Path) ->
             "workspacePath": str(repo),
             "artifactNamespace": "checkpoint",
             "idempotencyKey": "idem-archive-symlink",
+            **({} if include_untracked is None else {"includeUntracked": include_untracked}),
         }
     )
 
     archive_bytes = store.get_bytes(capture["workspace"]["archiveRef"])
     with tarfile.open(fileobj=BytesIO(archive_bytes), mode="r:gz") as archive:
+        if include_untracked is False:
+            assert "link.txt" not in archive.getnames()
+            assert "target.txt" not in archive.getnames()
+            return
         link_info = archive.getmember("link.txt")
     assert link_info.issym()
     assert link_info.linkname == "target.txt"

@@ -8,16 +8,18 @@ import pytest
 
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.skills.approval_policy import StepGateResult
-from moonmind.workflows.temporal.bounded_story_loop import LoopAttempt, TypedGateResult
+from moonmind.workflows.temporal.bounded_story_loop import (
+    LoopAttempt, TypedGateResult,
+    bounded_story_loop_resume_decision,
+    bounded_story_loop_scope_guard,
+    bounded_story_loop_step_effects,
+)
 from moonmind.workflows.temporal.workflows.run import (
     RUN_BOUNDED_STORY_LOOP_FEEDBACK_PROGRESS_PATCH,
     RUN_BOUNDED_STORY_LOOP_PROGRESS_BUDGET_PATCH,
     RUN_BOUNDED_STORY_LOOP_REMEDIATION_BUDGET_PATCH,
     RUN_TERMINAL_GATE_PUBLISHED_HEAD_FEASIBILITY_PATCH,
     MoonMindRunWorkflow,
-    bounded_story_loop_resume_decision,
-    bounded_story_loop_scope_guard,
-    bounded_story_loop_step_effects,
 )
 
 

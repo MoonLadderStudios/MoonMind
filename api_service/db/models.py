@@ -57,6 +57,29 @@ class Base(DeclarativeBase):
     pass
 
 
+class GitHubIssueClaim(Base):
+    """Persist-once issue selection and side-effect receipt owned by a workflow."""
+
+    __tablename__ = "github_issue_claims"
+    __table_args__ = (Index(
+        "uq_github_issue_active_claim", "repository", "issue_number", unique=True,
+        postgresql_where=text("released = false"), sqlite_where=text("released = 0"),
+    ),)
+    owner: Mapped[str] = mapped_column(Text, primary_key=True)
+    repository: Mapped[str] = mapped_column(Text, nullable=False)
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempt_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    actor_id: Mapped[str] = mapped_column(Text, nullable=False)
+    comment_body: Mapped[str] = mapped_column(Text, nullable=False)
+    pending_comment_body: Mapped[Optional[str]] = mapped_column(Text)
+    finalization_json: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON)
+    comment_id: Mapped[Optional[str]] = mapped_column(Text)
+    announcement_started: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    released: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
     """Return enum members as stored DB labels, not Python enum names."""
 
@@ -4781,6 +4804,9 @@ class OmnigentRuntimeBindingRecord(Base):
     )
     failure_code: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     terminal_result_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
+    phase_results_json: Mapped[Optional[dict[str, Any]]] = mapped_column(
         JSON, nullable=True
     )
     heartbeat_at: Mapped[Optional[datetime]] = mapped_column(

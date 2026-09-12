@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from tests.support.issue_claims import ClaimCommentFixture, issue_claim_store  # noqa: F401
 
 from moonmind.workflows.temporal import github_issue_attempt as attempt_mod
 from moonmind.workflows.temporal import story_output_tools as story_tools
@@ -348,7 +349,7 @@ def test_internal_retry_and_review_children_retain_controlling_attempt() -> None
 # ---------------------------------------------------------------------------
 
 
-class _AdmissionFakeService:
+class _AdmissionFakeService(ClaimCommentFixture):
     """Minimal trusted GitHub boundary: fetch + token only (no writes)."""
 
     def __init__(self, labels: list[str] | None = None) -> None:
@@ -411,6 +412,10 @@ class _AdmissionHttpClient:
     async def get(self, url: str, **kwargs: Any):
         if "search/issues" in url:
             return _AdmissionFakeHttpResponse(dict(type(self).search_payload))
+        number = url.rsplit("/", 1)[-1]
+        for candidate in type(self).search_payload.get("items", []):
+            if str(candidate.get("number")) == number:
+                return _AdmissionFakeHttpResponse(dict(candidate))
         return _AdmissionFakeHttpResponse(dict(type(self).issue_payload))
 
     async def post(self, url: str, **kwargs: Any):
@@ -715,11 +720,7 @@ async def test_brief_entrypoint_inference_continuation_retry_orchestration(
     assert continued.status == "COMPLETED"
     assert continued.outputs["admissionEntrypoint"] == ENTRYPOINT_CONTINUATION
 
-    # Each brief applies the in-progress claim; reset the fake issue state so
-    # subsequent entrypoint admissions start from Available like an isolated
-    # issue rather than observing the prior call's claim.
-    service.labels = []
-    service.operations = []
+    # Internal retries retain the same durable claim and observed remote label.
     retried = await story_tools.load_github_issue_preset_brief(
         {"repository": "o/r", "issueNumber": 4178, "retryOf": "att_" + "c" * 24},
         github_service_factory=lambda: service,
@@ -727,8 +728,6 @@ async def test_brief_entrypoint_inference_continuation_retry_orchestration(
     assert retried.status == "COMPLETED"
     assert retried.outputs["admissionEntrypoint"] == ENTRYPOINT_RETRY
 
-    service.labels = []
-    service.operations = []
     orchestrated = await story_tools.load_github_issue_preset_brief(
         {"repository": "o/r", "issueNumber": 4178, "orchestrationRunId": "orch-1"},
         github_service_factory=lambda: service,
@@ -774,7 +773,9 @@ async def test_search_query_path_forwards_read_failure_bundle(
         reads_complete={"labels": True, "comments": False},
     )
     assert blocked is None
-    assert evidence["searchEvidence"]["candidatesExamined"] == 2
+    assert evidence["searchEvidence"]["candidatesExamined"] == 1
+    assert "error" in evidence
+    assert "disposition" not in evidence
 
 
 @pytest.mark.asyncio
@@ -827,13 +828,14 @@ async def test_child_repair_requires_exact_pr_target(
     assert service.operations == []
 
     _install_dynamic_issue_fetch(monkeypatch, service, 4178)
+    controlling = await _seed_controlling_claim(service)
     allowed = await story_tools.update_github_issue_status(
         {
             "repository": "o/r",
             "issueNumber": 4178,
             "mode": "start",
             "childKind": "existing_pr_repair",
-            "attemptId": "att_" + "a" * 24,
+            "attemptId": controlling,
             "pullRequestUrl": "https://github.com/o/r/pull/7",
         },
         github_service_factory=lambda: service,
@@ -1004,6 +1006,7 @@ async def test_child_internal_retry_retains_controlling_through_boundary(
     service = _AdmissionFakeService(labels=[])
     _install_admission_http(monkeypatch)
     _install_dynamic_issue_fetch(monkeypatch, service, 4178)
+    controlling = await _seed_controlling_claim(service)
     result = await story_tools.update_github_issue_status(
         {
             "repository": "o/r",
@@ -1030,6 +1033,7 @@ async def test_child_review_wait_retains_controlling_through_boundary(
     service = _AdmissionFakeService(labels=[])
     _install_admission_http(monkeypatch)
     _install_dynamic_issue_fetch(monkeypatch, service, 4178)
+    controlling = await _seed_controlling_claim(service)
     result = await story_tools.update_github_issue_status(
         {
             "repository": "o/r",
@@ -1056,6 +1060,7 @@ async def test_child_controlling_fallback_chain_through_boundary(
     service = _AdmissionFakeService(labels=[])
     _install_admission_http(monkeypatch)
     _install_dynamic_issue_fetch(monkeypatch, service, 4178)
+    controlling = await _seed_controlling_claim(service)
     result = await story_tools.update_github_issue_status(
         {
             "repository": "o/r",
@@ -1200,3 +1205,11 @@ async def test_three_interleaved_attempts_quiesce_through_tool_shape(
         assert result.outputs["reasonCode"] == "contender_observed"
         assert service.operations == []
         assert service.labels == ["status: in-progress"]
+
+async def _seed_controlling_claim(service):
+    result = await story_tools.update_github_issue_status(
+        {"repository": "o/r", "issueNumber": 4178, "mode": "start"},
+        github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED", result.outputs
+    return result.outputs["attemptId"]

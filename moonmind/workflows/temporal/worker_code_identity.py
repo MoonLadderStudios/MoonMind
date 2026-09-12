@@ -216,6 +216,11 @@ def resolve_worker_code_identity(
 ) -> WorkerCodeIdentity:
     """Resolve the code identity a worker records once at startup."""
 
+    from moonmind.release_identity import installed_release
+    release = installed_release() if package_root is None else None
+    if release is not None:
+        return WorkerCodeIdentity(revision=release.get("sourceRevision"), digest=release["digest"], source="immutable-release")
+
     revision, source = resolve_git_revision(environ=environ)
     digest = compute_package_digest(package_root)
     if revision is None and digest is None:
@@ -239,6 +244,10 @@ def resolve_checkout_code_identity(
     as healthy through the cache window after a host pull.
     """
 
+    from moonmind.release_identity import installed_release
+    release = installed_release() if package_root is None else None
+    if release is not None:
+        return WorkerCodeIdentity(revision=release.get("sourceRevision"), digest=release["digest"], source="immutable-release")
     revision, source = resolve_git_revision(environ=environ)
     digest = compute_package_digest(package_root) if live_digest else None
     if revision is None and digest is None:

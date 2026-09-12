@@ -162,10 +162,11 @@ async def _claim(
 
 
 def test_turn_source_vocabulary_is_closed_and_versioned() -> None:
-    assert TURN_SOURCE_VOCABULARY_VERSION == 1
+    assert TURN_SOURCE_VOCABULARY_VERSION == 2
     assert TURN_SOURCES == {
         "initial",
         "repository_continuation",
+        "terminal_contract_continuation",
         "remediation",
         "workflow_chat",
         "steering",

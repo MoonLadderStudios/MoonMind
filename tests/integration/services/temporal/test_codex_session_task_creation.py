@@ -45,7 +45,6 @@ def empty_ghcr_credential_store(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     )
     return lookup
 
-
 class _CreateTaskHandler(BaseHTTPRequestHandler):
     requests: list[dict[str, Any]] = []
 

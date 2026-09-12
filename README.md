@@ -89,17 +89,20 @@ Use the actual operator URL when verifying an update. Preserve these `.env`
 settings across upgrades; changing a fresh-install default must not remove an
 existing installation's access.
 
-The host update scripts require Python 3.10+ and the Docker Compose plugin
-(V2 or newer); they validate both before changing source or services. The update
-scripts and deployment runner compare the installed API's published ports,
-network attachments, and access settings with rendered Compose before replacing
-containers.
-They stop on a change and identify the settings to preserve in `.env` or an
-override. A rejected git update restores the previous checkout before resuming
-a quiesced worker. Maintenance targeting unrelated services does not require
-API reconciliation; dependency or orphan removal that can affect the API still
-runs the access check. Direct `docker compose up` does not run this preflight; use it for
-intentional access migrations and verify the operator URL afterward.
+The host update scripts require Python 3.10+ and Docker Compose V2. Run
+`bash tools/update-moonmind.sh --branch main` to fetch a source snapshot and
+qualify its published `sha-<commit>` image without modifying the checkout.
+The selected image owns application code, migrations, Compose and the release
+controller. Its durable updater qualifies all worker queues and the candidate
+API, promotes Temporal routing, and replaces the normal fleet. Previous workers
+remain available until Temporal confirms their version has drained.
+
+The controller compares installed API bindings, networks and access settings
+with the candidate before replacement, preserving deployment-owned `.env` and
+Compose overrides. It records a resumable submission instead of resetting the
+budget when the caller disappears. See [the release contract](docs/Steps/DockerComposeUpdateSystem.md).
+Direct `docker compose up` does not run this preflight; intentional access
+migrations still require verification through the operator URL afterward.
 
 ### OAuth Workflow
 
