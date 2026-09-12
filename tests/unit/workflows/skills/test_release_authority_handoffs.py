@@ -220,6 +220,7 @@ def test_gateway_preserves_http_host_and_verified_tls_identity(
     ) == (200, b"{}")
     assert connection.request.call_args.args[1] == "/healthz?probe=1"
     create_socket.assert_called_once_with((endpoint, 7443), timeout=30)
+    assert context.minimum_version == surface.ssl.TLSVersion.TLSv1_2
     context.wrap_socket.assert_called_once_with(
         create_socket.return_value, server_hostname=host
     )

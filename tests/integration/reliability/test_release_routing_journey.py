@@ -69,13 +69,12 @@ async def connect():
     assert (
         address
     ), "Set MOONMIND_TEST_TEMPORAL_ADDRESS to the isolated reliability Compose service"
-    for attempt in range(60):
+    for _ in range(59):
         try:
             return await Client.connect(address)
         except RuntimeError:
-            if attempt == 59:
-                raise
             await asyncio.sleep(1)
+    return await Client.connect(address)
 
 
 @pytest.mark.parametrize("pinned", [False, True])

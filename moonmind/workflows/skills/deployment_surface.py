@@ -113,9 +113,9 @@ def fetch_surface(
     try:
         if parsed.scheme == "https":
             # Certificate verification and SNI retain the original operator host.
-            transport = ssl.create_default_context().wrap_socket(
-                transport, server_hostname=host
-            )
+            context = ssl.create_default_context()
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            transport = context.wrap_socket(transport, server_hostname=host)
         connection.sock = transport
         authorized_headers = (
             headers
