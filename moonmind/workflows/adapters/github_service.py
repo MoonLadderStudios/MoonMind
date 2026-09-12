@@ -187,6 +187,32 @@ class GitHubService:
     def __init__(self, *, timeout: float = 30.0) -> None:
         self._timeout = timeout
 
+    async def read_pull_request(self, repository: str, url: str) -> dict[str, Any]:
+        """Read authoritative PR identity through repository-scoped credentials."""
+        match = re.fullmatch(
+            r"https://github\.com/([^/]+)/([^/]+)/pull/([1-9][0-9]*)/?", url
+        )
+        if not match or f"{match[1]}/{match[2]}".lower() != repository.lower():
+            raise ValueError("Pull request URL does not identify the requested repository")
+        token, error = await self.resolve_github_token(repo=repository)
+        if not token:
+            raise ValueError(error or "Pull request read requires authorized GitHub access")
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.get(
+                f"https://api.github.com/repos/{repository}/pulls/{match[3]}",
+                headers=self._github_headers(token),
+            )
+            response.raise_for_status()
+            data = response.json()
+        if (
+            not isinstance(data, dict)
+            or data.get("number") != int(match[3])
+            or str(((data.get("base") or {}).get("repo") or {}).get("full_name") or "").lower()
+            != repository.lower()
+        ):
+            raise ValueError("Repository reader returned mismatched pull request identity")
+        return data
+
     async def read_repository_target(self, repository: str, ref: str = "") -> dict[str, str]:
         """Read a completion branch through the repository's authorized reader.
 

@@ -27,6 +27,14 @@ def git(repo: Path, *args: str, env: dict | None = None) -> str:
     )
 
 
+def nonblank_strings(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(isinstance(item, str) and item.strip() for item in value)
+    )
+
+
 def capture(
     repo: Path, repository: str, target: str, *, target_mode: bool = False
 ) -> dict:
@@ -64,21 +72,32 @@ def capture(
             )
             git(repo, "read-tree", "HEAD", env=env)
             git(repo, "add", "--all", "--", ".", env=env)
+            # Inspect every staged gitlink, including embedded repositories
+            # absent from .gitmodules. A gitlink cannot bind dirty nested
+            # source to the captured tree.
+            for entry in git(repo, "ls-files", "--stage", "-z", env=env).split("\0"):
+                if not entry.startswith("160000 "):
+                    continue
+                nested = repo / entry.split("\t", 1)[1]
+                if (nested / ".git").exists():
+                    dirty = git(
+                        nested,
+                        "--no-optional-locks",
+                        "status",
+                        "--porcelain",
+                        "--untracked-files=all",
+                        "--ignore-submodules=none",
+                    )
+                else:
+                    # An empty uninitialized submodule has no local content.
+                    # Populated paths without their owning Git metadata cannot
+                    # be certified by the recorded revision alone.
+                    dirty = nested.is_dir() and any(nested.iterdir())
+                if dirty:
+                    raise ValueError(
+                        "dirty gitlinks require a content-bound workspace checkpoint"
+                    )
             tree = git(repo, "write-tree", env=env)
-        # A gitlink alone cannot identify dirty nested source. Require its
-        # owning checkpoint mechanism instead of silently certifying HEAD.
-        dirty_submodules = git(
-            repo,
-            "submodule",
-            "foreach",
-            "--quiet",
-            "--recursive",
-            'test -z "$(git status --porcelain --untracked-files=all)" || echo "$displaypath"',
-        )
-        if dirty_submodules:
-            raise ValueError(
-                "dirty submodules require a content-bound workspace checkpoint"
-            )
     return {
         "subject": {
             "repository": repository,
@@ -96,7 +115,9 @@ def capture(
 def scope(
     source: bytes, source_ref: str, requirement_ids: list[str], *, complete: bool
 ) -> dict:
-    if not requirement_ids or len(set(requirement_ids)) != len(requirement_ids):
+    if not nonblank_strings(requirement_ids) or len(set(requirement_ids)) != len(
+        requirement_ids
+    ):
         raise ValueError(
             "supply the unique mandatory requirement IDs from the original scope"
         )
@@ -151,12 +172,10 @@ def _reuse(report: dict, current: dict, *, now: datetime | None = None) -> dict:
     required = current_scope.get("requirementIds", [])
     rows = evidence.get("evidence", [])
     if (
-        not required
+        not nonblank_strings(required)
         or len(set(required)) != len(required)
         or sorted(row.get("requirementId", "") for row in rows) != sorted(required)
-        or any(
-            not row.get("evidenceRefs") or not all(row["evidenceRefs"]) for row in rows
-        )
+        or any(not nonblank_strings(row.get("evidenceRefs")) for row in rows)
     ):
         reasons.append("mandatory requirement evidence missing")
     target = current.get("completionTarget", {})

@@ -73,7 +73,15 @@ annotations:
         title: Run verification
         description: Run the MoonSpec verification and remediation gate before pull request creation and GitHub issue handoff.
         default: true
+      completion_target_ref:
+        type: string
+        title: Completion target ref
+        description: Optional refs/heads/ branch ref; blank uses the remote default branch.
+        default: ''
   uiSchema:
+    completion_target_ref:
+      widget: text
+      advanced: true
     issue_search:
       widget: text
       searchPlaceholder: Search GitHub issues
@@ -81,6 +89,7 @@ annotations:
       widget: text
       advanced: true
   defaults:
+    completion_target_ref: ''
     run_verify: true
 inputs:
 - name: issue_search

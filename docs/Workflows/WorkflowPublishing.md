@@ -347,6 +347,8 @@ For Jira-backed work, preserve canonical `jiraIssueKey` in automation input. Whe
 
 An already-completed issue requires objective evidence on its freshly resolved completion target through the trusted transition boundary. The remote default is used unless an explicit completion target is configured. Initial assessment, clean worktrees, and pushed candidate commits cannot establish landing. The portable [acceptance policy](../../.agents/skills/moonspec-verify/references/acceptance-policy.md) owns these decisions; native publication and status owners validate its evidence contract and target identity.
 
+Post-merge GitHub finalization validates the merge owner's tracked PR against a fresh GitHub read: repository, PR number, candidate head, issue reference, merged state, and the merge commit on the intended target must agree. This uses the existing merge gate's terminal evidence; an assessment or a PR URL alone cannot authorize completion. Explicit completion targets survive the merge handoff. Jira Review likewise requires a live, open, non-draft PR for the current issue and published candidate; required acceptance evidence must match that candidate's content and freshness.
+
 ## 10. MoonSpec Verification Gate
 
 Publication eligibility uses the latest structured verification verdict and the run-owned accepted unified repository-publication artifact.
