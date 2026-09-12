@@ -43,6 +43,7 @@ async def journey(tmp_path, monkeypatch, request):
             return {
                 "number": 3970,
                 "title": "Implement bounded work",
+                "user": {"id": 123, "login": "fixture-owner"},
                 "body": "Acceptance: automated fixture passes.",
                 "html_url": f"https://github.com/{repository}/issues/3970",
                 "state": state.get("state", "open"),

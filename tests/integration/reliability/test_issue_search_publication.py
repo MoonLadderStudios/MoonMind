@@ -72,6 +72,8 @@ async def artifact_service(tmp_path):
         ({"run_verify": True}, 0),
         ({"run_verify": False}, 0),
         ({}, 2),
+        ({"include_all_authors": False}, 0),
+        ({"include_all_authors": True}, 0),
     ],
 )
 @pytest.mark.parametrize("pr_created", [True, False, "unavailable"])
@@ -85,6 +87,7 @@ async def test_search_publication_recovers_missing_pr_before_status(
     pr_url = f"https://github.com/{repository}/pull/9999"
     operations = []
     comments = []
+    search_user = {"id": 111, "login": "search-user"}
     issue = {
         "number": number,
         "state": "open",
@@ -93,17 +96,20 @@ async def test_search_publication_recovers_missing_pr_before_status(
         + "Keep the complete acceptance criteria.",
         "html_url": f"https://github.com/{repository}/issues/{number}",
         "labels": [],
+        # Realistic author identity for the self-authored default (#4257).
+        "user": dict(search_user),
     }
 
     def github_http(request):
         operations.append((request.method, request.url.path))
         if request.url.path == "/user":
-            return httpx.Response(200, json={"id": 123, "login": "fixture-owner"})
+            # Authenticated search account behind the workflow credential.
+            return httpx.Response(200, json={**search_user, "type": "user"})
         if "/comments" in request.url.path:
             if request.method == "GET":
                 return httpx.Response(200, json=comments)
             if request.method == "POST":
-                comment = {"id": len(comments) + 1, "body": json.loads(request.content)["body"], "user": {"id": 123}}
+                comment = {"id": len(comments) + 1, "body": json.loads(request.content)["body"], "user": dict(search_user)}
                 comments.append(comment)
                 return httpx.Response(201, json=comment)
             if request.method == "PATCH":
@@ -205,6 +211,14 @@ async def test_search_publication_recovers_missing_pr_before_status(
         }
     )
     assert selected.status == "COMPLETED", selected.outputs
+    # Author scope survives catalog expansion into the eligibility decision
+    # and durable brief (#4257): omitted and explicit false stay self-only,
+    # explicit true broadens to all authors for the same self-authored issue.
+    expected_scope = "all" if inputs.get("include_all_authors") is True else "authenticated_user"
+    assert selected.outputs["searchEvidence"]["authorScope"] == expected_scope
+    assert selected.outputs["searchEvidence"]["selectedIssueAuthor"] == search_user
+    if expected_scope == "authenticated_user":
+        assert selected.outputs["searchEvidence"]["authenticatedUser"] == search_user
     brief_ref = selected.outputs["briefArtifactRef"]
     _brief, brief_bytes = await artifact_service.read(
         artifact_id=brief_ref, principal="test:search-publication"

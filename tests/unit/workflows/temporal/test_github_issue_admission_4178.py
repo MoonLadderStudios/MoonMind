@@ -601,6 +601,7 @@ async def test_search_admission_runs_without_resolver(monkeypatch: pytest.Monkey
         repository="o/r",
         query="task",
         github_service=service,  # type: ignore[arg-type]
+        include_all_authors=True,
         blockers_from_issue=no_blockers,
     )
     assert number == 21
@@ -611,6 +612,7 @@ async def test_search_admission_runs_without_resolver(monkeypatch: pytest.Monkey
         repository="o/r",
         query="task",
         github_service=service,  # type: ignore[arg-type]
+        include_all_authors=True,
         blockers_from_issue=no_blockers,
         attempt_context={"has_unresolved_active_attempt": True},
     )
@@ -766,6 +768,7 @@ async def test_search_query_path_forwards_read_failure_bundle(
         repository="o/r",
         query="task",
         github_service=service,  # type: ignore[arg-type]
+        include_all_authors=True,
         blockers_from_issue=no_blockers,
         reads_complete={"labels": True, "comments": False},
     )
@@ -793,6 +796,7 @@ async def test_search_recandidate_gate_blocks_unsettled_writers(
         repository="o/r",
         query="",
         github_service=service,  # type: ignore[arg-type]
+        include_all_authors=True,
         blockers_from_issue=no_blockers,
         own_announcement_abandoned=True,
         writers_settled=False,
@@ -1124,6 +1128,7 @@ async def test_query_path_blocked_candidate_skipped_end_to_end(
         repository="o/r",
         query="task",
         github_service=service,  # type: ignore[arg-type]
+        include_all_authors=True,
         blockers_from_issue=blockers,
     )
     assert number == 42
@@ -1161,6 +1166,7 @@ async def test_recandidate_allowed_positive_through_resolve_issue(
         repository="o/r",
         query="task",
         github_service=service,  # type: ignore[arg-type]
+        include_all_authors=True,
         blockers_from_issue=no_blockers,
         own_announcement_abandoned=True,
         writers_settled=True,

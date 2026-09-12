@@ -1339,6 +1339,7 @@ async def test_resolve_issue_scans_past_recovery_without_handoff(monkeypatch: py
         repository="o/r",
         query="task",
         github_service=service,  # type: ignore[arg-type]
+        include_all_authors=True,
         blockers_from_issue=no_blockers,
     )
     assert number == 12
@@ -1347,6 +1348,7 @@ async def test_resolve_issue_scans_past_recovery_without_handoff(monkeypatch: py
         repository="o/r",
         query="task",
         github_service=service,  # type: ignore[arg-type]
+        include_all_authors=True,
         blockers_from_issue=no_blockers,
         recovery_handoff={"predecessor_stopped": True, "handoff_usable": True},
     )
