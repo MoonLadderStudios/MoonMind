@@ -187,6 +187,66 @@ class GitHubService:
     def __init__(self, *, timeout: float = 30.0) -> None:
         self._timeout = timeout
 
+    async def read_pull_request(self, repository: str, url: str) -> dict[str, Any]:
+        """Read authoritative PR identity through repository-scoped credentials."""
+        match = re.fullmatch(
+            r"https://github\.com/([^/]+)/([^/]+)/pull/([1-9][0-9]*)/?", url
+        )
+        if not match or f"{match[1]}/{match[2]}".lower() != repository.lower():
+            raise ValueError("Pull request URL does not identify the requested repository")
+        token, error = await self.resolve_github_token(repo=repository)
+        if not token:
+            raise ValueError(error or "Pull request read requires authorized GitHub access")
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.get(
+                f"https://api.github.com/repos/{repository}/pulls/{match[3]}",
+                headers=self._github_headers(token),
+            )
+            response.raise_for_status()
+            data = response.json()
+        if (
+            not isinstance(data, dict)
+            or data.get("number") != int(match[3])
+            or str(((data.get("base") or {}).get("repo") or {}).get("full_name") or "").lower()
+            != repository.lower()
+        ):
+            raise ValueError("Repository reader returned mismatched pull request identity")
+        return data
+
+    async def read_repository_target(self, repository: str, ref: str = "") -> dict[str, str]:
+        """Read a completion branch through the repository's authorized reader.
+
+        Omission resolves the remote default, never the current feature upstream.
+        This supplies identity only; the portable verifier owns acceptance.
+        """
+        from urllib.parse import quote
+
+        token, error = await self.resolve_github_token(repo=repository)
+        if not token:
+            raise ValueError(error or "Repository target read requires authorized GitHub access")
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            headers = self._github_headers(token)
+            if not ref:
+                response = await client.get(f"https://api.github.com/repos/{repository}", headers=headers)
+                response.raise_for_status()
+                branch = response.json().get("default_branch")
+                if not isinstance(branch, str) or not branch:
+                    raise ValueError("Repository reader did not return a default branch")
+                ref = f"refs/heads/{branch}"
+            if not ref.startswith("refs/heads/") or not ref.removeprefix("refs/heads/"):
+                raise ValueError("Completion target must be a refs/heads/ branch ref")
+            response = await client.get(
+                f"https://api.github.com/repos/{repository}/commits/{quote(ref, safe='')}",
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+            revision = data.get("sha")
+            tree = (data.get("commit") or {}).get("tree", {}).get("sha")
+            if not revision or not tree:
+                raise ValueError("Repository target read returned incomplete commit/tree identity")
+            return {"ref": ref, "revision": revision, "contentDigest": f"git-tree:{tree}"}
+
     # -- helpers ----------------------------------------------------------
 
     @staticmethod

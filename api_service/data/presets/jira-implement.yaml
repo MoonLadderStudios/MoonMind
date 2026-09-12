@@ -1,8 +1,8 @@
 slug: jira-implement
 title: Jira Implement
 description: Move a Jira issue through implementation by first assessing the current
-  state of the branch against the issue. If the issue is already fully implemented,
-  advance it directly to Done. Otherwise, finish any partial work, create a PR, and
+  state of the branch against the issue. Objective evidence on the completion target
+  permits advancing directly to Done. Otherwise, finish partial work, create a PR, and
   advance the issue to Review. When PR merge automation is enabled the issue
   advances to Done automatically after merge.
 scope: global
@@ -56,13 +56,22 @@ annotations:
         title: Run verification
         description: Run the MoonSpec verification and remediation gate before pull request creation and Jira finalization.
         default: true
+      completion_target_ref:
+        type: string
+        title: Completion target ref
+        description: Optional refs/heads/ branch ref; blank uses the remote default branch.
+        default: ''
   uiSchema:
+    completion_target_ref:
+      widget: text
+      advanced: true
     jira_issue:
       widget: jira.issue-picker
       dataSource: jira.issues
       searchPlaceholder: Search Jira issues
       allowManualKeyEntry: true
   defaults:
+    completion_target_ref: ''
     run_verify: true
   issueInput:
     provider: jira
@@ -91,6 +100,12 @@ inputs:
   type: boolean
   required: false
   default: true
+- name: completion_target_ref
+  description: Optional refs/heads/ branch ref; blank uses the remote default branch.
+  label: Completion Target Ref
+  type: text
+  required: false
+  default: ''
 steps:
 - title: Load Jira preset brief
   type: tool
@@ -125,48 +140,26 @@ steps:
     issue_url: "{{ inputs.jira_issue.url | default('') }}"
     brief_artifact_path: artifacts/jira-implement-brief.json
     assessment_artifact_path: artifacts/jira-implement-assessment.json
+    completion_target_ref: '{{ inputs.completion_target_ref }}'
     constraints: '{{ inputs.constraints }}'
 - title: Check Jira blockers before implementation
   type: tool
-  instructions: 'Read artifacts/jira-implement-assessment.json (or the recorded verdict
-    from the assess step) before deciding how to apply blocker results.
+  instructions: |-
+    Read artifacts/jira-implement-assessment.json (or the recorded verdict from the assess step) before deciding how to apply blocker results.
 
+    Check Jira issue {{ inputs.jira_issue_key }} through the deterministic trusted Jira blocker preflight before any new implementation work starts.
 
-    Check Jira issue {{ inputs.jira_issue_key }} through the deterministic trusted
-    Jira blocker preflight before any new implementation work starts.
-
-
-    Jira Blocks direction is strict for Jira GET issue responses: when the target
-    issue response exposes the other issue as outwardIssue and the link type says
-    the outward relationship is "blocks", that other issue blocks {{ inputs.jira_issue_key
-    }}. When the target issue response exposes the other issue as inwardIssue and
-    the link type says the inward relationship is "is blocked by", {{ inputs.jira_issue_key
-    }} blocks a later issue and that link MUST NOT block this implementation.
-
+    Jira Blocks direction is strict for Jira GET issue responses: when the target issue response exposes the other issue as outwardIssue and the link type says the outward relationship is "blocks", that other issue blocks {{ inputs.jira_issue_key }}. When the target issue response exposes the other issue as inwardIssue and the link type says the inward relationship is "is blocked by", {{ inputs.jira_issue_key }} blocks a later issue and that link MUST NOT block this implementation.
 
     Ignore non-blocker issue links for the blocker decision.
 
+    Continue only when no blocker links exist or every detected blocking issue is status Done.
 
-    Continue only when no blocker links exist or every detected blocking issue is
-    status Done.
+    If the initial assessment reports FULLY_IMPLEMENTED, record blocker findings and proceed to objective verification. It does not authorize an issue-completion transition.
 
+    Otherwise (PARTIALLY_IMPLEMENTED or NOT_IMPLEMENTED), if any blocking issue is not Done, or if a blocker relationship exists but blocker status cannot be determined from trusted Jira data, stop the implementation immediately. Report a blocked outcome in the required JSON format (targetIssueKey, decision, blockingIssues, summary) and do not proceed to any subsequent steps, including implementation. Include {{ inputs.jira_issue_key }} as the targetIssueKey.
 
-    If the recorded verdict is FULLY_IMPLEMENTED, the implementation work is already
-    done in the repository, so unresolved blockers must not stop the preset from advancing
-    the issue to Done in the final step. Report the blocker preflight result for the
-    record, but do not short-circuit subsequent steps based on it.
-
-
-    Otherwise (PARTIALLY_IMPLEMENTED or NOT_IMPLEMENTED), if any blocking issue is
-    not Done, or if a blocker relationship exists but blocker status cannot be determined
-    from trusted Jira data, stop the implementation immediately. Report a blocked
-    outcome in the required JSON format (targetIssueKey, decision, blockingIssues,
-    summary) and do not proceed to any subsequent steps, including implementation.
-    Include {{ inputs.jira_issue_key }} as the targetIssueKey.
-
-
-    Do not use raw Jira credentials, web scraping, hardcoded transition IDs, or prompt
-    text alone to decide blocker state.'
+    Do not use raw Jira credentials, web scraping, hardcoded transition IDs, or prompt text alone to decide blocker state.
   targetIssueKey: '{{ inputs.jira_issue_key }}'
   blockerPreflight:
     targetIssueKey: '{{ inputs.jira_issue_key }}'
@@ -183,26 +176,14 @@ steps:
         linkType: Blocks
 - title: Move Jira issue to In Progress
   type: tool
-  instructions: 'Read the previous step''s carried assessmentVerdict first, falling
-    back to artifacts/jira-implement-assessment.json only when the tool can resolve
-    that artifact, before doing anything.
+  instructions: |-
+    Read the previous step's carried assessmentVerdict first, falling back to artifacts/jira-implement-assessment.json only when the tool can resolve that artifact, before doing anything.
 
+    If the recorded verdict is FULLY_IMPLEMENTED, skip the In Progress transition entirely and report it as skipped because the issue is already implemented; do not move a likely-Done issue back into In Progress. The final step requires objective completion-target evidence or a confirmed PR.
 
-    If the recorded verdict is FULLY_IMPLEMENTED, skip the In Progress transition
-    entirely and report it as skipped because the issue is already implemented; do
-    not move a likely-Done issue back into In Progress. The final step in this preset
-    will move {{ inputs.jira_issue_key }} directly to Done.
+    If the recorded verdict is BLOCKED, stop without changing Jira and report that the preset is blocked by the initial assessment.
 
-
-    If the recorded verdict is BLOCKED, stop without changing Jira and report that
-    the preset is blocked by the initial assessment.
-
-
-    Otherwise (PARTIALLY_IMPLEMENTED or NOT_IMPLEMENTED), change Jira issue {{ inputs.jira_issue_key
-    }} to status In Progress before implementation starts. Use the deterministic trusted
-    Jira status tool. It must look up Jira''s available transitions, match In Progress
-    against transition target statuses or transition names, apply the returned transition
-    ID, and re-fetch the issue when possible to report the confirmed status.'
+    Otherwise (PARTIALLY_IMPLEMENTED or NOT_IMPLEMENTED), change Jira issue {{ inputs.jira_issue_key }} to status In Progress before implementation starts. Use the deterministic trusted Jira status tool. It must look up Jira's available transitions, match In Progress against transition target statuses or transition names, apply the returned transition ID, and re-fetch the issue when possible to report the confirmed status.
   tool:
     id: jira.update_issue_status
     requiredCapabilities:
@@ -220,6 +201,7 @@ steps:
     issue_ref: '{{ inputs.jira_issue_key }}'
     brief_artifact_path: artifacts/jira-implement-brief.json
     assessment_artifact_path: artifacts/jira-implement-assessment.json
+    completion_target_ref: '{{ inputs.completion_target_ref }}'
     pr_artifact_path: artifacts/jira-implement-pr.json
     verify_artifact_path: artifacts/jira-implement-verify.json
     verification_target: issue_brief
@@ -229,54 +211,22 @@ steps:
 - title: Finalize Jira status
   annotations:
     jiraImplementRole: final-transition
-  instructions: 'Read artifacts/jira-implement-assessment.json (or the recorded verdict
-    from the assess step) before changing Jira.
+  instructions: |-
+    Use the trusted issue status tool with the original issue identity, verification artifact, PR handoff, and intended completion target. The tool validates objective evidence and re-reads the completion target before applying the already-completed path. Candidate-only work follows the configured Code Review/Review path with its confirmed PR. Missing evidence returns bounded verification work; never infer completion from assessment prose, clean worktrees, or pushed commits.
 
-
-    If the recorded verdict is BLOCKED, stop without changing Jira and report the
-    blocking evidence from the assessment.
-
-
-    Decide the target Jira status based on the recorded initial-assessment verdict:
-
-
-    - If the recorded verdict is FULLY_IMPLEMENTED, transition Jira issue {{ inputs.jira_issue_key
-    }} to status Done. The issue was already implemented at the start of this preset,
-    so no pull request is required. If the issue is already in a Done-category status,
-    treat the transition as already satisfied and report it as such. Do not require
-    artifacts/jira-implement-pr.json in this branch.
-
-
-    - Otherwise (the initial verdict was PARTIALLY_IMPLEMENTED or NOT_IMPLEMENTED),
-    {% if inputs.run_verify %}transition Jira issue {{ inputs.jira_issue_key }} to status Review only after
-    the latest controlling verifier result in artifacts/jira-implement-verify.json
-    reports FULLY_IMPLEMENTED and the pull request exists.{% else %}transition Jira issue {{ inputs.jira_issue_key }} to status Review after
-    implementation is complete, the relevant tests have passed, and the pull request exists.
-    Verification was disabled for this workflow execution, so do not require
-    artifacts/jira-implement-verify.json or a moonspec-verify verdict.{% endif %} Read the previous pull
-    request creation result or artifacts/jira-implement-pr.json and verify it contains
-    a non-empty pull_request_url for {{ inputs.jira_issue_key }}. {% if inputs.run_verify %}If the verifier
-    artifact is missing, terminal, reports ADDITIONAL_WORK_NEEDED after remediation
-    is exhausted, or no confirmed pull request URL is available, stop without changing
-    Jira and report that Review is blocked until verification and PR creation succeed.{% else %}If no confirmed pull request URL is available, stop without changing
-    Jira and report that Review is blocked until PR creation succeeds.{% endif %}
-    Add or preserve a Jira-visible reference to the pull request when supported by
-    the trusted tools.
-
-
-    In both cases, use the trusted Jira issue updater workflow and Jira transition
-    tools. Match the target status against the issue''s available transitions or target
-    statuses; do not guess transition IDs. Re-fetch the issue when possible and report
-    the confirmed status.
-
-
-    Note: when this workflow execution was submitted with PR merge automation enabled
-    and the work followed the Review path, the parent workflow will transition Jira issue
-    {{ inputs.jira_issue_key }} to Done automatically after the pull request merges.
-    This preset step only owns the explicit Done transition for the already-implemented
-    case and the Review transition for the freshly implemented case.'
-  skill:
-    id: jira-issue-updater
+    Follow the resolved moonspec-verify acceptance policy for scope, mandatory versus optional evidence, reuse, and completion. Original source and constraints define acceptance; assessment backlogs prioritize work and preserve previously met requirements as regression constraints.
+  type: tool
+  tool:
+    id: jira.update_issue_status
     requiredCapabilities:
     - jira
-    args: {}
+    - gh
+    inputs:
+      issueKey: '{{ inputs.jira_issue_key }}'
+      repository: '{{ context.get("repository") or context.get("repo", "") }}'
+      mode: finalize_after_pr_or_done
+      completionTargetRef: '{{ inputs.completion_target_ref }}'
+      assessmentArtifactPath: artifacts/jira-implement-assessment.json
+      pullRequestArtifactPath: artifacts/jira-implement-pr.json
+      verificationArtifactPath: artifacts/jira-implement-verify.json
+      requireVerification: '{{ inputs.run_verify }}'

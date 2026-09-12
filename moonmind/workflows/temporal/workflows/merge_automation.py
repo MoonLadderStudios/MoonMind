@@ -1230,6 +1230,10 @@ class MoonMindMergeAutomationWorkflow:
             return True
         if not self._input.config.post_merge_github.enabled:
             return True
+        config = self._input.config.post_merge_github.model_dump(by_alias=True, mode="json")
+        # Preserve the Activity payload for historical inputs without an override.
+        if config.get("completionTargetRef") is None:
+            config.pop("completionTargetRef", None)
         decision = await workflow.execute_activity(
             "merge_automation.complete_post_merge_github",
             {
@@ -1239,9 +1243,7 @@ class MoonMindMergeAutomationWorkflow:
                 "pullRequest": self._input.pull_request.model_dump(
                     by_alias=True, mode="json"
                 ),
-                "postMergeGithub": self._input.config.post_merge_github.model_dump(
-                    by_alias=True, mode="json"
-                ),
+                "postMergeGithub": config,
             },
             start_to_close_timeout=timedelta(minutes=2),
             task_queue=INTEGRATIONS_TASK_QUEUE,
