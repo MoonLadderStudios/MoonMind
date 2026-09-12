@@ -44,6 +44,7 @@ def issue(number=4025, **overrides):
         "body": "Reconcile advertised routes and bounded polling recovery.",
         "html_url": f"https://github.com/{REPOSITORY}/issues/{number}",
         "labels": [{"name": "bug"}],
+        "user": {"id": 111, "login": "search-user"},
         **overrides,
     }
 
@@ -57,6 +58,10 @@ def activity_boundary(monkeypatch):
 
     def handler(request):
         requests.append(request)
+        if request.url.path == "/user":
+            return httpx.Response(
+                200, json={"id": 111, "login": "search-user", "type": "user"}
+            )
         if "/comments" in request.url.path:
             # Live comment readability gate expects a GitHub comment list.
             # GET returns the list; POST creates one comment.
@@ -197,7 +202,7 @@ async def test_full_issue_brief_reaches_fresh_assessment_workspace(
             activity_boundary.activities._artifact_service = service
             result = await activity_boundary.execute(
                 "github.load_issue_preset_brief",
-                {"repository": REPOSITORY, "issueSearch": ""},
+                {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
             )
             assert result.status == "COMPLETED"
             wf = MoonMindRunWorkflow()
@@ -243,7 +248,7 @@ async def test_issue_loader_fails_before_handoff_when_brief_cannot_be_persisted(
     with pytest.raises(RuntimeError, match="storage unavailable"):
         await activity_boundary.execute(
             "github.load_issue_preset_brief",
-            {"repository": REPOSITORY, "issueSearch": ""},
+            {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
         )
 
 
@@ -389,7 +394,7 @@ async def test_rendered_child_lists_control_selection_and_preflight(
             ] = issue(number, state="open")
         selected = await activity_boundary.execute(
             "github.load_issue_preset_brief",
-            {"repository": REPOSITORY, "issueSearch": ""},
+            {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
         )
         assert selected.status == "COMPLETED", case["name"]
         assert selected.outputs["issue"]["number"] == expected["number"], case["name"]
@@ -498,7 +503,7 @@ async def test_child_issue_replay_selection_and_fresh_preflight(
             issue(number, state=child_state)
         )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == expected["number"]
@@ -539,7 +544,7 @@ async def test_child_reopening_at_confirmation_cannot_admit_parent(activity_boun
         lambda: issue(10, state=next(states))
     )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "FAILED"
     assert "changed or could not be confirmed" in result.outputs["error"]
@@ -554,7 +559,7 @@ async def test_unknown_child_state_cannot_admit_parent(activity_boundary, state)
         10, state=state
     )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "FAILED"
     assert "prerequisite identity or state is invalid" in result.outputs["error"]
@@ -590,7 +595,7 @@ async def test_related_open_issue_does_not_block_selection_or_preflight(
     )
     activity_boundary.dependency_details[f"/repos/{REPOSITORY}/issues/20"] = issue(20)
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
     preflight = await activity_boundary.execute(
@@ -622,12 +627,13 @@ async def test_scan_reuses_prerequisite_evidence_across_all_500_candidates(
                 f"/repos/{repository}/issues/{number}"
             ] = issue(number, state="closed" if number < 20 else "open")
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 500
-    # +5 for live comment readability (1 GET) + advisory claim (2 POSTs + 2 re-reads).
-    assert len(activity_boundary.requests) == 5 + 11 + 1 + 5
+    # +1 for the credential-bound identity lookup, +5 for live comment
+    # readability (1 GET) + advisory claim (2 POSTs + 2 re-reads).
+    assert len(activity_boundary.requests) == 1 + 5 + 11 + 1 + 5
 
 
 @pytest.mark.asyncio
@@ -644,11 +650,11 @@ async def test_scan_stops_before_exceeding_aggregate_prerequisite_budget(
             issue(number, state="open" if number % 2 else "closed")
         )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "FAILED"
     assert "100-request prerequisite lookup budget" in result.outputs["error"]
-    assert len(activity_boundary.requests) == 1 + 100
+    assert len(activity_boundary.requests) == 1 + 1 + 100
     assert all(request.method == "GET" for request in activity_boundary.requests)
 
 
@@ -664,12 +670,13 @@ async def test_selected_issue_confirmation_refreshes_cached_prerequisite_state(
         lambda: issue(10, state=next(states))
     )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "FAILED"
     assert "changed or could not be confirmed" in result.outputs["error"]
-    # +1 for live comment readability GET before confirmation re-read.
-    assert len(activity_boundary.requests) == 4 + 1
+    # +1 for the credential-bound identity lookup +1 for live comment
+    # readability GET before confirmation re-read.
+    assert len(activity_boundary.requests) == 1 + 4 + 1
 
 
 @pytest.mark.asyncio
@@ -684,11 +691,12 @@ async def test_maximum_prerequisite_list_has_fresh_confirmation_budget(
             issue(number, state="closed")
         )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
-    # +5 for live comment readability + advisory claim.
-    assert len(activity_boundary.requests) == 1 + 100 + 1 + 100 + 5
+    # +1 for the credential-bound identity lookup +5 for live comment
+    # readability + advisory claim.
+    assert len(activity_boundary.requests) == 1 + 1 + 100 + 1 + 100 + 5
 
 
 @pytest.mark.asyncio
@@ -715,12 +723,13 @@ async def test_prerequisite_cache_preserves_cross_repository_identity(
             )
         )
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
     assert result.outputs["searchEvidence"]["candidatesExamined"] == 3
-    # +5 for live comment readability + advisory claim.
-    assert len(activity_boundary.requests) == 5 + 5
+    # +1 for the credential-bound identity lookup +5 for live comment
+    # readability + advisory claim.
+    assert len(activity_boundary.requests) == 1 + 5 + 5
 
 
 @pytest.mark.asyncio
@@ -739,7 +748,7 @@ async def test_dependency_gate_selection_and_preflight_use_fresh_github_state(
     activity_boundary.dependency_details[dependency_path] = issue(2615, state=state)
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY, "issueSearch": ""},
+        {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
     )
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == candidate["number"]
@@ -775,7 +784,7 @@ async def test_unverifiable_dependency_state_cannot_admit_an_issue(
     )
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY, "issueSearch": ""},
+        {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False},
     )
     assert result.status == "FAILED"
     assert "prerequisite identity or state is invalid" in result.outputs["error"]
@@ -820,11 +829,19 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
     result = await activity_boundary.execute(tool["id"], tool["inputs"])
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == 4025
-    assert result.outputs["searchEvidence"] == {
-        "fallbackScanning": True,
-        "pagesExamined": 1,
-        "candidatesExamined": 1,
+    assert result.outputs["searchEvidence"]["fallbackScanning"] is True
+    assert result.outputs["searchEvidence"]["pagesExamined"] == 1
+    assert result.outputs["searchEvidence"]["candidatesExamined"] == 1
+    assert result.outputs["searchEvidence"]["authorScope"] == "authenticated_user"
+    assert result.outputs["searchEvidence"]["authenticatedUser"] == {
+        "id": 111,
+        "login": "search-user",
     }
+    assert result.outputs["searchEvidence"]["selectedIssueAuthor"] == {
+        "id": 111,
+        "login": "search-user",
+    }
+    assert result.outputs["searchEvidence"]["authorMismatchesSkipped"] == 0
     workflow = MoonMindRunWorkflow()
     workflow._record_trusted_issue_context(result.outputs)
     previous = workflow._merge_trusted_issue_context(
@@ -885,7 +902,7 @@ async def test_search_pagination_skips_blocked_issues_and_pull_requests(
         [issue(200, pull_request={}), issue()],
     ]
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == 4025
@@ -915,7 +932,7 @@ async def test_search_stops_on_empty_bounded_or_degraded_evidence(
     activity_boundary.pages[:] = pages
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY, "issueSearch": query},
+        {"repository": REPOSITORY, "issueSearch": query, "includeAllAuthors": False},
     )
     assert result.status == "FAILED"
     assert expected in result.outputs["error"]
@@ -926,7 +943,7 @@ async def test_search_stops_on_empty_bounded_or_degraded_evidence(
 async def test_repository_scope_is_case_insensitive(activity_boundary):
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY.lower(), "issueSearch": ""},
+        {"repository": REPOSITORY.lower(), "issueSearch": "", "includeAllAuthors": False},
     )
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == 4025
@@ -936,12 +953,17 @@ async def test_repository_scope_is_case_insensitive(activity_boundary):
 async def test_query_search_and_previous_explicit_issue_payload(activity_boundary):
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY, "issueSearch": "dashboard"},
+        {"repository": REPOSITORY, "issueSearch": "dashboard", "includeAllAuthors": False},
     )
     assert result.status == "COMPLETED"
+    search_requests = [
+        request
+        for request in activity_boundary.requests
+        if request.url.path == "/search/issues"
+    ]
     assert (
-        activity_boundary.requests[0].url.params["q"]
-        == f"dashboard repo:{REPOSITORY} is:issue is:open"
+        search_requests[0].url.params["q"]
+        == f"(dashboard) author:search-user repo:{REPOSITORY} is:issue is:open"
     )
     activity_boundary.requests.clear()
     # Req-2 claim mutates the mocked issue labels; reset to Available for the
@@ -973,7 +995,7 @@ async def test_selected_issue_is_revalidated_before_loading_brief(
 ):
     activity_boundary.detail.update(changed)
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "FAILED"
     assert "could not be confirmed" in result.outputs["error"]
@@ -991,7 +1013,7 @@ async def test_incomplete_selected_details_cannot_produce_a_trusted_brief(
     else:
         activity_boundary.detail[field] = {"unexpected": "shape"}
     result = await activity_boundary.execute(
-        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": ""}
+        "github.load_issue_preset_brief", {"repository": REPOSITORY, "issueSearch": "", "includeAllAuthors": False}
     )
     assert result.status == "FAILED"
     assert "trustedSource" not in result.outputs
@@ -1009,7 +1031,7 @@ async def test_search_skips_in_progress_issues_and_revalidates_fresh_detail(
     ]
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY, "issueSearch": query},
+        {"repository": REPOSITORY, "issueSearch": query, "includeAllAuthors": False},
     )
     assert result.status == "COMPLETED"
     assert result.outputs["issue"]["number"] == 4025
@@ -1018,7 +1040,7 @@ async def test_search_skips_in_progress_issues_and_revalidates_fresh_detail(
     activity_boundary.detail.update({"labels": [{"name": "status: in-progress"}]})
     result = await activity_boundary.execute(
         "github.load_issue_preset_brief",
-        {"repository": REPOSITORY, "issueSearch": query},
+        {"repository": REPOSITORY, "issueSearch": query, "includeAllAuthors": False},
     )
     assert result.status == "FAILED"
     assert "could not be confirmed" in result.outputs["error"]
@@ -1117,3 +1139,169 @@ async def test_finalize_with_mixed_labels_and_published_pr_ends_degraded_complet
     ]
     assert comment_posts, "expected the PR handoff comment to be posted"
     assert any(pr_url in request.content.decode() for request in comment_posts)
+
+
+# ---------------------------------------------------------------------------
+# Author-scope catalog contract (MoonLadderStudios/MoonMind#4257, AC1/AC2/R7)
+# ---------------------------------------------------------------------------
+
+
+async def _synced_catalog_session(tmp_path, session_factory_holder=None):
+    seeds = tmp_path / "seeds"
+    seeds.mkdir(exist_ok=True)
+    shutil.copy(
+        Path(__file__).resolve().parents[3]
+        / "api_service/data/presets"
+        / f"{PRESET}.yaml",
+        seeds,
+    )
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/catalog.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session = sessionmaker(engine, class_=AsyncSession)()
+    catalog = PresetCatalogService(session)
+    await catalog.sync_seed_templates(seed_dir=seeds)
+    return engine, session, catalog
+
+
+@pytest.mark.asyncio
+async def test_catalog_definition_exposes_all_authors_checkbox_below_search(tmp_path):
+    """The normalized generated-UI contract: order, widget, help, default."""
+    engine, session, catalog = await _synced_catalog_session(tmp_path)
+    try:
+        current = await catalog.get_template(
+            slug=PRESET, scope="global", scope_ref=None
+        )
+    finally:
+        await session.close()
+        await engine.dispose()
+    properties = current["inputSchema"]["properties"]
+    names = list(properties)
+    assert names.index("include_all_authors") == names.index("issue_search") + 1
+    prop = properties["include_all_authors"]
+    assert prop["type"] == "boolean"
+    assert prop["title"] == "Include issues created by other users"
+    assert (
+        prop["description"]
+        == "By default, only issues created by the GitHub account used for this search are eligible."
+    )
+    assert prop["default"] is False
+    assert current["uiSchema"]["include_all_authors"] == {"widget": "checkbox"}
+    assert current["defaults"]["include_all_authors"] is False
+    assert current["presetDigest"]
+    schema_inputs = {item["name"]: item for item in current["inputs"]}
+    assert schema_inputs["include_all_authors"]["type"] == "boolean"
+    assert schema_inputs["include_all_authors"]["default"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "submitted, expected",
+    [({}, False), ({"include_all_authors": False}, False), ({"include_all_authors": True}, True)],
+)
+async def test_catalog_expansion_carries_scope_choice_to_tool_binding(
+    tmp_path, submitted, expected
+):
+    """Omitted input materializes false; authored true/false survive expansion."""
+    engine, session, catalog = await _synced_catalog_session(tmp_path)
+    try:
+        expanded = await catalog.expand_template(
+            slug=PRESET,
+            scope="global",
+            scope_ref=None,
+            inputs=submitted,
+            context={"repository": REPOSITORY},
+        )
+    finally:
+        await session.close()
+        await engine.dispose()
+    tool_inputs = expanded["steps"][0]["tool"]["inputs"]
+    assert tool_inputs["includeAllAuthors"] is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed", ["false", "true", 1, 0, [], {}])
+async def test_catalog_expansion_rejects_malformed_scope_values(tmp_path, malformed):
+    # Explicit null/"" follow the shared catalog omitted convention for every
+    # input type; the strict typed tool boundary still rejects them
+    # (invalid_author_scope_input) instead of coercing with truthiness.
+    from api_service.services.presets.catalog import PresetValidationError
+
+    engine, session, catalog = await _synced_catalog_session(tmp_path)
+    try:
+        with pytest.raises(PresetValidationError):
+            await catalog.expand_template(
+                slug=PRESET,
+                scope="global",
+                scope_ref=None,
+                inputs={"include_all_authors": malformed},
+                context={"repository": REPOSITORY},
+            )
+    finally:
+        await session.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_seed_sync_refreshes_builtin_without_touching_custom_presets(tmp_path):
+    """Persisted deployments receive the updated built-in definition in place."""
+    from sqlalchemy import select
+
+    from api_service.db.models import Preset, PresetScopeType
+
+    engine, session, catalog = await _synced_catalog_session(tmp_path)
+    try:
+        stale_inputs = [
+            {"name": "issue_search", "label": "GitHub Issue Search", "type": "text"},
+            {"name": "repository", "label": "Repository", "type": "text"},
+        ]
+        template = (
+            await session.execute(
+                select(Preset).where(
+                    Preset.slug == PRESET,
+                    Preset.scope_type == PresetScopeType.GLOBAL,
+                )
+            )
+        ).scalar_one()
+        template.inputs_schema = stale_inputs
+        template.steps = []
+        custom = Preset(
+            slug="team-triage",
+            scope_type=PresetScopeType.PERSONAL,
+            scope_ref="owner-1",
+            title="Team triage",
+            description="Custom preset",
+            required_capabilities=[],
+            inputs_schema=[{"name": "note", "type": "text"}],
+            steps=[],
+            annotations={},
+        )
+        session.add(custom)
+        await session.commit()
+        result = await catalog.sync_seed_templates(
+            seed_dir=tmp_path / "seeds",
+        )
+        assert result.updated >= 1
+        refreshed = (
+            await session.execute(
+                select(Preset).where(
+                    Preset.slug == PRESET,
+                    Preset.scope_type == PresetScopeType.GLOBAL,
+                )
+            )
+        ).scalar_one()
+        names = [item["name"] for item in refreshed.inputs_schema]
+        assert "include_all_authors" in names
+        assert "includeAllAuthors" in json.dumps(refreshed.steps)
+        untouched = (
+            await session.execute(
+                select(Preset).where(
+                    Preset.slug == "team-triage",
+                )
+            )
+        ).scalar_one()
+        assert untouched.inputs_schema == [{"name": "note", "type": "text"}]
+        assert untouched.title == "Team triage"
+    finally:
+        await session.close()
+        await engine.dispose()

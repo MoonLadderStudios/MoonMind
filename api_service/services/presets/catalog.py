@@ -3143,18 +3143,12 @@ class PresetCatalogService:
                 resolved[name] = object_value
                 continue
             if input_type == "boolean":
-                if isinstance(raw_value, bool):
+                if type(raw_value) is bool:
                     resolved[name] = raw_value
                 else:
-                    lowered = str(raw_value).strip().lower()
-                    if lowered in {"1", "true", "yes", "on"}:
-                        resolved[name] = True
-                    elif lowered in {"0", "false", "no", "off"}:
-                        resolved[name] = False
-                    else:
-                        raise PresetValidationError(
-                            f"Input '{name}' must be a boolean value."
-                        )
+                    raise PresetValidationError(
+                        f"Input '{name}' must be a boolean value."
+                    )
                 continue
             if input_type == "enum":
                 options = [str(item).strip() for item in definition.get("options", [])]

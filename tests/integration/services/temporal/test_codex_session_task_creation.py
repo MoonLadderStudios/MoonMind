@@ -22,6 +22,22 @@ from moonmind.workflows.temporal.runtime.managed_session_controller import (
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
+
+@pytest.fixture(autouse=True)
+def _public_ghcr_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Session launch and child-task creation use a fake container runner here.
+    # Model public image acquisition explicitly so this hermetic journey does
+    # not depend on the deployment's managed-secret database.
+    async def _no_ghcr_credentials() -> tuple[str, str] | None:
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_session_controller"
+        ".resolve_ghcr_pull_credentials_for_launch",
+        _no_ghcr_credentials,
+    )
+
+
 class _CreateTaskHandler(BaseHTTPRequestHandler):
     requests: list[dict[str, Any]] = []
 
@@ -224,6 +240,10 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
 ) -> None:
     monkeypatch.setenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", "disabled")
     monkeypatch.setenv("MOONMIND_WORKFLOW_DOCKER_MODE", "disabled")
+    # The child submission targets this test's loopback HTTP server, even when
+    # the container inherits an outbound proxy for external services.
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     _CreateTaskHandler.requests = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _CreateTaskHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
