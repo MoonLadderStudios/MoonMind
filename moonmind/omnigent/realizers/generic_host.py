@@ -32,6 +32,7 @@ from moonmind.omnigent.realizers.turn_delivery import (
     admission_epoch,
     deliver_canonical_turn,
     execution_identity as _execution_identity,
+    resolve_admission_session_id,
 )
 from moonmind.omnigent.runtime_bindings import (
     RuntimeBindingSessionAuthoritySink,
@@ -994,7 +995,7 @@ class GenericOmnigentHostRealizer:
 
         cleanup_claim = await self._claim_canonical_cleanup(
             await self._recovered_session_id(binding)
-            or self._canonical_session_id(request)
+            or await resolve_admission_session_id(self._turn_commands, request)
         )
         if cleanup_claim is _CLEANUP_NOT_OWNED:
             # Another owner holds this session's cleanup, or an admitted turn
@@ -1117,27 +1118,12 @@ class GenericOmnigentHostRealizer:
             )
         return evidence
 
-    def _canonical_session_id(self, request: AgentExecutionRequest) -> str:
-        """Return the canonical session this realizer's turn bootstrapped."""
-
-        from moonmind.omnigent.control_plane.identities import (
-            canonical_omnigent_session_id,
-        )
-
-        workflow_id, step_execution_id = _execution_identity(request)
-        return canonical_omnigent_session_id(
-            workflow_id=workflow_id,
-            step_execution_id=step_execution_id,
-            agent_run_id=request.correlation_id,
-            admission_epoch=admission_epoch(request),
-        )
-
     async def _recovered_session_id(self, binding: StableRuntimeBinding) -> str:
         """Resolve the canonical session a recovery scan is about to clean up.
 
         Recovery has no admitted request, so it resolves the session through the
         provider session the turn boundary attached to it. Before attachment,
-        in-band cleanup uses the request's deterministic admission identity.
+        in-band cleanup resolves persisted canonical admission authority.
         """
 
         if self._cleanup_authority is None or not binding.omnigentSessionId:

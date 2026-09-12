@@ -65,6 +65,23 @@ def execution_identity(request: AgentExecutionRequest) -> tuple[str, str]:
     return request.correlation_id, request.correlation_id
 
 
+async def resolve_admission_session_id(
+    turn_commands: Any, request: AgentExecutionRequest
+) -> str:
+    """Use the same persisted admission authority for delivery and cleanup."""
+
+    workflow_id, step_execution_id = execution_identity(request)
+    identity = dict(
+        workflow_id=workflow_id,
+        step_execution_id=step_execution_id,
+        agent_run_id=request.correlation_id,
+        admission_epoch=admission_epoch(request),
+    )
+    if turn_commands is None or admission_epoch(request) <= 1:
+        return canonical_omnigent_session_id(**identity)
+    return await turn_commands.resolve_admission_session_id(**identity)
+
+
 def _canonical_turn_lineage(request: AgentExecutionRequest) -> Any | None:
     """Return the controller-attested lineage this launch carries, if any."""
 
@@ -157,9 +174,9 @@ async def deliver_canonical_turn(
     claims, owns, fences cleanup, and settles through this same boundary rather
     than submitting outside it.
 
-    ``session_id`` is resolved from an existing runtime binding's provider
-    attachment. It preserves persisted session authority across Activity
-    redelivery, including sessions created before admission epochs were scoped.
+    ``session_id`` can name an existing runtime binding's provider attachment.
+    Otherwise persisted canonical authority is resolved before bootstrap, so
+    redelivery preserves legacy commands even before provider attachment.
 
     ``turn_commands`` may be ``None`` in unit harnesses that do not wire the
     control plane; the operation then runs unwrapped. A rejected admission
@@ -174,15 +191,18 @@ async def deliver_canonical_turn(
 
     turn_source = canonical_turn_source(request)
     workflow_id, step_execution_id = execution_identity(request)
+    admission_session_id = session_id or await resolve_admission_session_id(
+        turn_commands, request
+    )
     idempotency_key = canonical_turn_idempotency_key(request)
-    if session_id == canonical_omnigent_session_id(
+    legacy_session = admission_session_id == canonical_omnigent_session_id(
         workflow_id=workflow_id,
         step_execution_id=step_execution_id,
         agent_run_id=request.correlation_id,
-    ):
-        # An in-flight binding may already own a provider attachment created
-        # before admission-scoped identities. Keep its original command too;
-        # only a new admission without that binding bootstraps new authority.
+    )
+    if legacy_session:
+        # A retained legacy session keeps its original command even when the
+        # worker stopped before recording its binding or provider attachment.
         idempotency_key = request.idempotency_key
     execution_plan_ref = getattr(plan, "planRef", None) if plan is not None else None
     try:
@@ -203,7 +223,9 @@ async def deliver_canonical_turn(
                 agent_run_id=request.correlation_id,
                 source_idempotency_key=idempotency_key,
                 execution_plan_ref=execution_plan_ref,
-                admission_epoch=admission_epoch(request),
+                # Request-derived recovery stays on the bootstrap path so its
+                # immutable plan, workflow, step and run checks still apply.
+                admission_epoch=0 if legacy_session else admission_epoch(request),
             ),
             requested_authority=(
                 canonical_turn_authority(request, plan) if plan is not None else None
@@ -298,4 +320,5 @@ __all__ = [
     "deliver_canonical_turn",
     "execution_identity",
     "instruction_digest",
+    "resolve_admission_session_id",
 ]
