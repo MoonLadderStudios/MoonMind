@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from api_service.db.models import (
     MoonMindWorkflowState,
@@ -4244,6 +4245,10 @@ class TemporalExecutionService:
         except ValueError as exc:
             raise TemporalExecutionValidationError(str(exc)) from exc
         if not transition.changed:
+            # The idempotency receipt still gets persisted below. Include the
+            # semantic timestamp explicitly so that metadata-only write cannot
+            # replace it with the model's automatic database update time.
+            flag_modified(record, "updated_at")
             return {
                 "accepted": True,
                 "applied": "immediate",
