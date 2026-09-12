@@ -134,6 +134,8 @@ A bounded reconciliation scan also examines managed in-progress and attention is
 
 Before expensive assessment or editing, an admitted candidate receives an attempt announcement and `status: in-progress`. Admission rereads the issue and attempt comments before launching work. It preserves the chosen issue identity so recovery cannot rerun the original search and silently switch to a different issue.
 
+The trusted brief durably carries the confirmed attempt handoff. A later start step reloads that handoff and verifies the authenticated live comment and exact issue/execution identity before treating the existing in-progress label as already applied. A bare attempt ID or a historical label-only claim is insufficient ownership evidence; missing, conflicting, stopped, or unreadable attempt evidence blocks continuation.
+
 A detected competing preparing or active attempt blocks shared mutations. Contenders stop or quiesce their own writers, preserve independent output where authorized, and surface the conflict. A deployment never clears the shared in-progress label merely because its own contender stopped. Automatic selection can move on to another candidate once its abandoned attempt is conclusively settled.
 
 There is no `status: claiming` label or per-device status-label family. Extra labels, fixed settling delays, and rereads are not represented as exclusive claim primitives.
