@@ -19281,6 +19281,12 @@ class MoonMindRunWorkflow:
                 post_merge_github.setdefault("required", True)
                 post_merge_github.setdefault("repository", github_issue["repository"])
                 post_merge_github.setdefault("issueNumber", github_issue["issueNumber"])
+                if self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH):
+                    task = self._mapping_value(parameters, "workflow") or self._mapping_value(parameters, "task") or {}
+                    inputs = self._mapping_value(task, "inputs") or {}
+                    target_ref = self._coerce_text(inputs.get("completion_target_ref"), max_chars=500)
+                    if target_ref:
+                        post_merge_github["completionTargetRef"] = target_ref
             return {
                 "enabled": True,
                 "checks": self._coerce_text(candidate.get("checks"), max_chars=20)

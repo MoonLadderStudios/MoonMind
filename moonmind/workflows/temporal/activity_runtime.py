@@ -5139,7 +5139,9 @@ class TemporalIntegrationActivities:
                 "repository": repository,
                 "issueNumber": issue_number,
                 "mode": "done",
-            }
+                **({"completionTargetRef": config["completionTargetRef"]} if config.get("completionTargetRef") else {}),
+            },
+            merged_pull_request=payload.get("pullRequest") or {},
         )
         outputs = dict(result.outputs)
         succeeded = (

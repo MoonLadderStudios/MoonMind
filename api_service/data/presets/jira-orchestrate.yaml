@@ -51,13 +51,22 @@ annotations:
         title: Run verification
         description: Run the MoonSpec verification and remediation gate before pull request creation and Jira handoff.
         default: true
+      completion_target_ref:
+        type: string
+        title: Completion target ref
+        description: Optional refs/heads/ branch ref; blank uses the remote default branch.
+        default: ''
   uiSchema:
+    completion_target_ref:
+      widget: text
+      advanced: true
     jira_issue:
       widget: jira.issue-picker
       dataSource: jira.issues
       searchPlaceholder: Search Jira issues
       allowManualKeyEntry: true
   defaults:
+    completion_target_ref: ''
     run_verify: true
   issueInput:
     provider: jira

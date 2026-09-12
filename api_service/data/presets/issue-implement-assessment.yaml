@@ -44,6 +44,9 @@ inputs:
   required: false
   default: ''
 - name: completion_target_ref
+  uiSchema:
+    widget: text
+    advanced: true
   description: Optional refs/heads/ branch ref; blank uses the remote default branch.
   label: Completion Target Ref
   type: text

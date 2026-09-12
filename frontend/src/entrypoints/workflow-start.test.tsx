@@ -19565,6 +19565,119 @@ describe("Task Create schema-driven capability inputs", () => {
     >;
   }
 
+  it.each([
+    "github-issue-implement",
+    "github-issue-search-and-implement",
+    "github-issue-orchestrate",
+    "jira-implement",
+    "jira-orchestrate",
+  ])("submits the seeded completion target through Advanced mode for %s", async (slug) => {
+    const { readFileSync } = await import("node:fs");
+    const { createRequire } = await import("node:module");
+    const { load } = createRequire(import.meta.url)("js-yaml") as {
+      load: (source: string) => Record<string, unknown>;
+    };
+    const seed = load(readFileSync(`api_service/data/presets/${slug}.yaml`, "utf8"));
+    const detail = {
+      ...seed,
+      ...(seed.annotations as Record<string, unknown>),
+      version: "1",
+      latestVersion: "1",
+    };
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.startsWith("/api/presets?scope=global")) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [detail] }) } as Response);
+      }
+      if (url.startsWith(`/api/presets/${slug}?`)) {
+        return Promise.resolve({ ok: true, json: async () => detail } as Response);
+      }
+      if (url.startsWith(`/api/presets/${slug}:expand`)) {
+        // Keep the authored form in place to prove default and explicit
+        // submissions across collapse/reveal without synthetic replacement steps.
+        return Promise.resolve({
+          ok: false,
+          status: 422,
+          json: async () => ({ detail: "Captured expansion inputs" }),
+          text: async () => "Captured expansion inputs",
+        } as Response);
+      }
+      return mockSchemaCapabilityFetch(input, init);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => expect(presetSelect.options.length).toBeGreaterThan(1));
+    fireEvent.change(presetSelect, { target: { value: `global::::${slug}` } });
+    await within(step).findByLabelText("Run verification");
+    if (slug.startsWith("jira-")) {
+      fireEvent.change(within(step).getByLabelText("Jira issue"), { target: { value: "MM-4265" } });
+    } else if (slug !== "github-issue-search-and-implement") {
+      fireEvent.change(within(step).getByLabelText("GitHub issue"), {
+        target: { value: "https://github.com/MoonLadderStudios/MoonMind/issues/4265" },
+      });
+    }
+
+    const expandInputs = () => fetchSpy.mock.calls
+      .filter(([url]) => String(url).startsWith(`/api/presets/${slug}:expand`))
+      .map(([, request]) => JSON.parse(String(request?.body || "{}")).inputs as Record<string, unknown>);
+    expect(within(step).queryByLabelText("Completion target ref")).toBeNull();
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    await waitFor(() => expect(expandInputs()).toHaveLength(1));
+    expect(expandInputs()[0]?.completion_target_ref).toBe("");
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    const target = await within(step).findByLabelText("Completion target ref");
+    fireEvent.change(target, { target: { value: "refs/heads/release/4265" } });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    expect(within(step).queryByLabelText("Completion target ref")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    expect((await within(step).findByLabelText("Completion target ref") as HTMLInputElement).value)
+      .toBe("refs/heads/release/4265");
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+    await waitFor(() => expect(expandInputs()).toHaveLength(2));
+    expect(expandInputs()[1]?.completion_target_ref).toBe("refs/heads/release/4265");
+  });
+
+  it("keeps an advanced-only preset schema hidden without rendering its legacy fallback", async () => {
+    fetchSpy.mockImplementation(async (input, init) => {
+      const response = await mockSchemaCapabilityFetch(input, init);
+      if (String(input).startsWith("/api/presets?scope=global")) {
+        const body = await response.json();
+        return {
+          ok: true,
+          json: async () => ({
+            items: body.items.map((item: { slug: string }) => item.slug !== "batch-schema-preset" ? item : {
+              ...item,
+              inputs: [{ name: "override", label: "Optional override", type: "text" }],
+              inputSchema: {
+                type: "object",
+                properties: { override: { type: "string", title: "Optional override" } },
+              },
+              uiSchema: { override: { advanced: true } },
+              defaults: {},
+            }),
+          }),
+        } as Response;
+      }
+      return response;
+    });
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => expect(presetSelect.options.length).toBeGreaterThan(1));
+    fireEvent.change(presetSelect, { target: { value: "global::::batch-schema-preset" } });
+    expect(within(step).queryByLabelText("Optional override")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    expect(await within(step).findByLabelText("Optional override")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    expect(within(step).queryByLabelText("Optional override")).toBeNull();
+  });
+
   it("renders jira.issue-picker from preset schema metadata and expands safe value", async () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
@@ -19647,6 +19760,7 @@ describe("Task Create schema-driven capability inputs", () => {
       target: { value: "global::::batch-schema-preset" },
     });
     await within(step).findByLabelText("Run");
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
     return step;
   }
 
