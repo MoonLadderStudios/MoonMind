@@ -1,0 +1,17 @@
+{
+  "incidentWorkflowId": "mm:9e693354-4002-4f81-814b-63fb9c0e718e",
+  "diagnosticsRef": "art_01M2A47QFA657N1HADKG3874PE",
+  "failureShape": "batch-pr-resolver imports server-only api_service before child submission and mistakes coordinator-local publishing instructions for a child publishing prohibition",
+  "exception": "ModuleNotFoundError: No module named 'api_service'",
+  "repository": "MoonLadderStudios/Tactics",
+  "parentPublishMode": "none",
+  "successfulPredecessorWorkflowId": "mm:d9672394-c239-403e-8300-36d16c3b842e",
+  "childPublishMode": "auto",
+  "publishingConstraint": "Coordinator-local none must not override the declared child auto contract. Explicit user restrictions on descendants remain authoritative.",
+  "pullRequests": [
+    {"number": 2679, "headRefName": "moonmind-job-2eb91a18"},
+    {"number": 2680, "headRefName": "moonmind-job-d9a8bc92"},
+    {"number": 2681, "headRefName": "moonmind-job-afdc962c"},
+    {"number": 2683, "headRefName": "dependabot/docker/docker/actions-runner-control/ubuntu-513c074"}
+  ]
+}
