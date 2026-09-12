@@ -103,6 +103,12 @@ inputs:
   type: boolean
   required: false
   default: true
+- name: completion_target_ref
+  description: Optional refs/heads/ branch ref; blank uses the remote default branch.
+  label: Completion Target Ref
+  type: text
+  required: false
+  default: ''
 steps:
 - title: Resolve GitHub issue and load trusted brief
   type: tool
@@ -156,16 +162,17 @@ steps:
   repositoryOperation: read
   type: skill
   instructions: |-
-    Use the resolved issue in MoonMind trusted previous step context and the brief produced by github.load_issue_preset_brief. Read the durable brief attachment when present, and persist it to artifacts/github-issue-implement-brief.json for local implementation steps. Note the binding constraints for this run (empty means none):
+    Run moonspec-assess in issue-brief mode for the resolved GitHub issue from trusted previous step context. Preserve the original loaded brief at artifacts/github-issue-implement-brief.json and the initial assessment at artifacts/github-issue-implement-assessment.json. These workflow constraints are binding:
 
     {{ inputs.constraints }}
 
-    Following the GitHub Issue Implement preset (github-issue-implement) assessment stage and the issue-implement-assessment preset logic, assess whether the resolved issue is already implemented against the current repository checkout without editing code or mutating GitHub. Classify into exactly one verdict: FULLY_IMPLEMENTED, PARTIALLY_IMPLEMENTED, NOT_IMPLEMENTED, or BLOCKED.
-
-    Record the verdict and met/partially-met/unmet requirements in the step result AND in artifacts/github-issue-implement-assessment.json with keys issue_provider (github), issue_ref, issue_url, verdict, branch, base_ref, mode, summary, and requirements. This verdict is the controlling input for every later step.
+    Completion target override: {{ inputs.completion_target_ref }} (empty resolves the remote default). Follow the portable Skill for source recovery, bounded assessment, and evidence. The initial verdict does not certify objective acceptance or landing.
   skill:
-    id: auto
+    id: moonspec-assess
     args:
+      issue_provider: github
+      completion_target_ref: '{{ inputs.completion_target_ref }}'
+      constraints: '{{ inputs.constraints }}'
       brief_artifact_path: artifacts/github-issue-implement-brief.json
       assessment_artifact_path: artifacts/github-issue-implement-assessment.json
     requiredCapabilities:
@@ -223,7 +230,7 @@ steps:
 
     {{ inputs.constraints }}
 
-    Following the GitHub Issue Implement preset (github-issue-implement) work-PR implement stage for the resolved issue: if the verdict is FULLY_IMPLEMENTED, make no code changes and report implementation as skipped. If BLOCKED, stop without changes. If PARTIALLY_IMPLEMENTED, treat the assessment's unmet and partially-met requirements as the authoritative bounded backlog. If NOT_IMPLEMENTED, implement the work described by the brief. Scope strictly to the brief and acceptance criteria. Add or update tests covering the behavior changes.
+    Following the GitHub Issue Implement preset (github-issue-implement) work-PR implement stage for the resolved issue: if the verdict is FULLY_IMPLEMENTED, make no code changes and report implementation as skipped. If BLOCKED, stop without changes. If PARTIALLY_IMPLEMENTED, treat the assessment's unmet and partially-met requirements as a bounded implementation backlog. If NOT_IMPLEMENTED, implement the work described by the brief. Scope strictly to the brief and acceptance criteria. Add or update tests covering the behavior changes.
 
     When the existing-PR resolution step produced an exact existing PR and validated current head, continue that same PR from its validated head: prepare the workspace from the existing head, implement only the remaining requirements, and update that PR. Preserve the resolved issue and predecessor across replay/retry. Never repeat search during recovery of an already selected issue, reset a continuation to the base branch, or create a second PR just because the preset normally produces one. Keep internal remediation within this one issue attempt.
 
@@ -241,14 +248,14 @@ steps:
   repositoryOperation: read
   type: skill
   instructions: |-
-    Read artifacts/github-issue-implement-assessment.json (or the recorded verdict from the assess step) before doing anything.
+    Run moonspec-verify against the original scope and constraints. The initial assessment is context, not objective proof. Reuse valid evidence only when it matches the current candidate content, original scope, requirement identities, completion policy, and required freshness; otherwise execute the missing checks. Bind objective success using validatedRefs.acceptance (acceptance/v1). Preserve incomplete source scope and mandatory evidence gaps; optional enrichment and diagnostics are disclosed limitations.
 
-    If the recorded verdict is FULLY_IMPLEMENTED and the implementation step did no code changes, report verification as already satisfied by the initial assessment and skip rerunning verification. If the recorded verdict is BLOCKED, stop without running verification.
-
-    Otherwise run moonspec-verify against verification target issue_brief for the resolved github issue, using artifacts/github-issue-implement-brief.json as the authoritative brief and artifacts/github-issue-implement-assessment.json as the initial assessment. Write the complete structured verifier result to artifacts/github-issue-implement-verify.json. Do not modify source code or tests in this read-only verification step. Do not create a pull request until the controlling moonspec-verify verdict is FULLY_IMPLEMENTED.
+    Verify the resolved GitHub issue using artifacts/github-issue-implement-brief.json as original scope and artifacts/github-issue-implement-assessment.json as initial context. Completion target override: {{ inputs.completion_target_ref }} (empty resolves the remote default). Write the complete report to artifacts/github-issue-implement-verify.json. Return bounded remaining work to the existing remediation owner; do not modify code or tests.
   skill:
     id: moonspec-verify
     args:
+      completion_target_ref: '{{ inputs.completion_target_ref }}'
+      constraints: '{{ inputs.constraints }}'
       verification_target: issue_brief
       issue_provider: github
       brief_artifact_path: artifacts/github-issue-implement-brief.json
@@ -280,6 +287,8 @@ steps:
         inputs:
           repositoryOperation: read
           selectedSkill: moonspec-verify
+          completion_target_ref: '{{ inputs.completion_target_ref }}'
+          constraints: '{{ inputs.constraints }}'
           instructions: 'Run the selected moonspec-verify Skill against the latest remediation workspace head. Do not modify source code or tests. Write the complete structured verifier result to artifacts/github-issue-implement-verify.json.'
           verification_target: issue_brief
           issue_provider: github
@@ -322,7 +331,7 @@ steps:
 
     {{ inputs.constraints }}
 
-    The initial assessment verdict and the later verification verdict have different roles. Skip PR creation only when the initial assessment in artifacts/github-issue-implement-assessment.json was FULLY_IMPLEMENTED and this run produced no repository changes. If the initial assessment was BLOCKED, stop without changes. If it was NOT_IMPLEMENTED or PARTIALLY_IMPLEMENTED, publish the implementation produced by this run even when the restored work branch is clean and its commits are already pushed. When an exact existing PR and validated current head were resolved for this continuation, update that same PR rather than creating a second PR. A later FULLY_IMPLEMENTED verification approves that implementation for publication; it does not mean the work was already on the base branch and does not authorize a no-change outcome.
+    Skip publication only when objective acceptance evidence satisfies the freshly resolved intended completion target under the shared policy. A FULLY_IMPLEMENTED initial assessment alone cannot skip the PR. A later FULLY_IMPLEMENTED verifier result approves candidate work for review; it does not rewrite the initial assessment or prove landing. Publish candidate-only work through the existing PR path even when the worktree is clean and commits are already pushed. Reuse an exact existing PR for the same candidate when available.
 
     {% if inputs.run_verify %}Only proceed when the latest controlling post-remediation moonspec-verify verdict in artifacts/github-issue-implement-verify.json is FULLY_IMPLEMENTED. If the verifier reported ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, or FAILED_UNRECOVERABLE, or if 6 remediation attempts have been exhausted without FULLY_IMPLEMENTED, stop without creating a pull request.{% else %}Confirm implementation is complete and the focused tests required by the issue have passed; verification was disabled for this run so do not require artifacts/github-issue-implement-verify.json.{% endif %}
 
@@ -342,25 +351,9 @@ steps:
   annotations:
     issueImplementRole: code-review-handoff
   instructions: |-
-    Read the resolved issue from MoonMind trusted previous step context and artifacts/github-issue-implement-assessment.json (or the recorded verdict from the assess step) before changing GitHub.
+    Use the trusted issue status tool with the original issue identity, verification artifact, PR handoff, and intended completion target. The tool validates objective evidence and re-reads the completion target before applying the already-completed path. Candidate-only work follows the configured Code Review/Review path with its confirmed PR. Missing evidence returns bounded verification work; never infer completion from assessment prose, clean worktrees, or pushed commits.
 
-    Terminal finalization ownership: failed, blocked, canceled, and exhausted
-    controlling outcomes that never reach this success-path step are owned by
-    the durable failed-attempt finalization boundary (the github_issue
-    finalize_failed_attempt activity plus the periodic handoff reconciler),
-    not by preset plan sequence: the workflow engine marks remaining plan
-    nodes skipped after a failed or blocked result and returns immediately on
-    cancellation, so a success-ordered preset node cannot serve as the
-    terminal handler. This step finalizes only runs that arrive here through
-    the success path; on any other controlling outcome, stop without changing
-    GitHub and leave the attempt for the durable finalizer and reconciler.
-    Keep internal remediation within this one issue attempt and inherit
-    cross-device retry/cooldown/hold history; internal retries do not release
-    or reset the issue budget.
-
-    Route completed work to missing verification, review/merge follow-up, or status finalization under the admitted policy. Ordinary code-review issues remain excluded from implementation search; a partial PR does not constitute a fully implemented verdict and accepted evidence must match current requirements and code revision.
-
-    If the recorded verdict is BLOCKED, stop without changing GitHub and report the blocking evidence. If the recorded verdict is FULLY_IMPLEMENTED, apply the configured Done strategy via the trusted GitHub update tool. Otherwise {% if inputs.run_verify %}read artifacts/github-issue-implement-verify.json and require the latest controlling verifier result to report FULLY_IMPLEMENTED before any Code Review update{% else %}confirm implementation is complete and the focused tests required by the issue have passed; verification was disabled for this run so do not require artifacts/github-issue-implement-verify.json{% endif %}. Then read artifacts/github-issue-implement-pr.json, verify it contains a pull_request_url for the resolved issue, and dispatch the registered github.update_issue_status tool with mode finalize_after_pr_or_done, the resolved repository and issue number, the PR artifact path, and the verification artifact path. {% if inputs.run_verify %}If the verifier artifact is missing, terminal, or still reports ADDITIONAL_WORK_NEEDED after remediation is exhausted, stop without changing GitHub.{% else %}If the pull request artifact is missing or lacks a confirmed pull_request_url, stop without changing GitHub.{% endif %} Do not assume a single organization's workflow; use the configured label/comment/close strategy exposed by the trusted GitHub update tool.
+    Follow the resolved moonspec-verify acceptance policy for scope, mandatory versus optional evidence, reuse, and completion. Original source and constraints define acceptance; assessment backlogs prioritize work and preserve previously met requirements as regression constraints.
   tool:
     id: github.update_issue_status
     requiredCapabilities:
@@ -368,6 +361,7 @@ steps:
     inputs:
       repository: '{{ inputs.repository or context.get(''repository'', '''') }}'
       mode: finalize_after_pr_or_done
+      completionTargetRef: '{{ inputs.completion_target_ref }}'
       assessmentArtifactPath: artifacts/github-issue-implement-assessment.json
       pullRequestArtifactPath: artifacts/github-issue-implement-pr.json
       verificationArtifactPath: artifacts/github-issue-implement-verify.json

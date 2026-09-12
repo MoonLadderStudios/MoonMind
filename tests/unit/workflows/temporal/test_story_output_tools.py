@@ -586,7 +586,7 @@ async def test_update_github_issue_status_allows_code_review_without_verificatio
 
 
 @pytest.mark.asyncio
-async def test_update_github_issue_status_declares_completed_close_side_effect(
+async def test_update_github_issue_status_withholds_close_without_objective_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
@@ -601,16 +601,11 @@ async def test_update_github_issue_status_declares_completed_close_side_effect(
         github_service_factory=lambda: service,
     )
 
-    assert result.status == "COMPLETED"
-    assert result.outputs["sideEffect"] == {
-        "effectClass": "external_non_idempotent",
-        "kind": "github",
-        "operation": "github.issue.close",
-        "target": "https://github.com/MoonLadderStudios/MoonMind/issues/1067",
-        "summary": (
-            "Updated GitHub issue MoonLadderStudios/MoonMind#1067 with mode done."
-        ),
-    }
+    assert result.status == "FAILED"
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["remainingEvidence"]
+    assert "sideEffect" not in result.outputs
+    assert not service.token_requests
 
 
 @pytest.mark.asyncio
@@ -702,16 +697,9 @@ async def test_update_github_issue_status_blocks_done_when_pushed_changes_have_n
     )
 
     assert result.status == "FAILED"
-    assert result.outputs == {
-        "issueRef": "MoonLadderStudios/Tactics#2231",
-        "decision": "blocked",
-        "pushStatus": "pushed",
-        "commitCount": 6,
-        "summary": (
-            "Skipped GitHub issue finalization because repository changes were "
-            "published without an authoritative pull request URL."
-        ),
-    }
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["remainingEvidence"]
+    assert "sideEffect" not in result.outputs
     assert service.token_requests == []
 
 
@@ -738,16 +726,9 @@ async def test_update_github_issue_status_blocks_partial_no_commit_without_pr() 
     )
 
     assert result.status == "FAILED"
-    assert result.outputs == {
-        "issueRef": "MoonLadderStudios/MoonMind#3815",
-        "decision": "blocked",
-        "assessmentVerdict": "PARTIALLY_IMPLEMENTED",
-        "summary": (
-            "Skipped GitHub issue finalization because the initial assessment "
-            "was PARTIALLY_IMPLEMENTED and no authoritative pull request URL "
-            "was available."
-        ),
-    }
+    assert result.outputs["decision"] == "blocked"
+    assert result.outputs["remainingEvidence"]
+    assert "sideEffect" not in result.outputs
     assert artifact_service.read_calls == ["art_partial_assessment"]
     assert service.token_requests == []
 

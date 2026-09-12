@@ -26,6 +26,7 @@ from moonmind.integrations.jira.models import (
 )
 from moonmind.integrations.jira.tool import JiraToolService
 from moonmind.workflows.adapters.github_service import GitHubService
+from moonmind.workflows.skills.acceptance_contract import validate_completion_target
 from moonmind.workflows.skills.tool_plan_contracts import ToolResult
 from moonmind.workflows.temporal.github_issue_attempts import (
     activity_for_lifecycle_mode,
@@ -4236,6 +4237,7 @@ async def update_jira_issue_status(
     _context: Mapping[str, Any] | None = None,
     *,
     jira_service_factory: JiraServiceFactory = JiraToolService,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
 ) -> ToolResult:
     issue_key = _jira_update_issue_key(inputs)
     target_status = _jira_target_status(inputs)
@@ -4244,6 +4246,31 @@ async def update_jira_issue_status(
         raise ValueError("issueKey is required for Jira issue status updates.")
     if not target_status:
         raise ValueError("targetStatus is required for Jira issue status updates.")
+
+    if mode == "finalize_after_pr_or_done":
+        pr_url = _github_status_pull_request_url(inputs, _context)
+        gate = await _objective_verification_payload(inputs, _context)
+        reason = None
+        if pr_url:
+            if _github_status_requires_verification(inputs) and (
+                not gate or gate.get("verdict") != "FULLY_IMPLEMENTED"
+            ):
+                reason = "Run the required objective verification before moving the issue to Review"
+            target_status = "Review"
+        else:
+            repository = _github_repository_from_inputs(inputs)
+            reason = await validate_completion_target(
+                gate or {}, repository=repository, source_ref=issue_key,
+                expected_ref=_string(inputs.get("completionTargetRef")),
+                read_target=lambda repo, ref: github_service_factory().read_repository_target(repo, ref),
+            )
+            target_status = "Done"
+        if reason:
+            return ToolResult(status="FAILED", outputs={
+                "issueKey": issue_key, "targetStatus": target_status,
+                "decision": "blocked", "summary": reason,
+                "remainingEvidence": reason,
+            })
 
     if mode in {"start", "in_progress"} or (
         _jira_status_match_token(target_status) == "inprogress"
@@ -5694,6 +5721,26 @@ def _github_status_verification_verdict(
     return "", False
 
 
+async def _objective_verification_payload(
+    inputs: Mapping[str, Any], context: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    """Resolve the existing verifier handoff without falling back from a bad ref.
+
+    Initial assessment and assistant prose are never objective proof. A durable
+    reference is authoritative over a stale local file or compact projection.
+    """
+    ref = _github_status_verification_ref_from_previous_outputs(inputs, context)
+    if ref:
+        return await _read_json_artifact_by_ref(ref, context)
+    payload = _github_status_verification_payload_from_previous_outputs(inputs, context)
+    if payload:
+        return payload
+    path = _string(inputs.get("verificationArtifactPath") or inputs.get("verification_artifact_path"))
+    if path:
+        return _local_json_artifact_from_path(artifact_path=path, inputs=inputs, context=context)
+    return None
+
+
 def _github_status_pull_request_url(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
@@ -5725,39 +5772,6 @@ def _github_status_pull_request_url(
     )
 
 
-def _github_status_publish_change_evidence(
-    inputs: Mapping[str, Any],
-    context: Mapping[str, Any] | None,
-) -> tuple[str, int]:
-    previous_outputs = _github_status_previous_outputs(inputs, context)
-    sources = (
-        inputs,
-        previous_outputs,
-        _mapping(previous_outputs.get("metadata")),
-        _mapping(previous_outputs.get("publishContext")),
-        _mapping(previous_outputs.get("publish_context")),
-    )
-    push_status = ""
-    commit_count = 0
-    for source in sources:
-        candidate_status = _first_string(
-            source.get("push_status"),
-            source.get("pushStatus"),
-        ).lower()
-        if candidate_status:
-            push_status = candidate_status
-        raw_count = source.get("push_commit_count")
-        if raw_count is None:
-            raw_count = source.get("pushCommitCount")
-        if raw_count is None:
-            raw_count = source.get("commitCount")
-        if isinstance(raw_count, bool):
-            continue
-        if isinstance(raw_count, (int, float)):
-            commit_count = max(commit_count, int(raw_count))
-        elif isinstance(raw_count, str) and raw_count.strip().isdigit():
-            commit_count = max(commit_count, int(raw_count.strip()))
-    return push_status, commit_count
 
 
 def _github_status_requires_verification(inputs: Mapping[str, Any]) -> bool:
@@ -6621,11 +6635,8 @@ def _github_status_transition_evidence(
     mode: str,
     inputs: Mapping[str, Any],
     pull_request_url: str,
-    assessment_verdict: str,
-    assessment_available: bool,
     verification_verdict: str = "",
     verification_available: bool = False,
-    require_verification: bool = True,
 ) -> dict[str, Any]:
     """Derive GitHub-visible transition evidence for the shared policy entrypoint."""
     evidence: dict[str, Any] = {
@@ -6637,12 +6648,7 @@ def _github_status_transition_evidence(
         evidence["pr_url_verified"] = pull_request_url
         evidence["gates_satisfied"] = True
     if verification_available and verification_verdict == "FULLY_IMPLEMENTED":
-        evidence["completion_verified"] = True
         evidence["gates_satisfied"] = True
-    if not require_verification:
-        evidence["completion_verified"] = True
-    if assessment_available and assessment_verdict == "FULLY_IMPLEMENTED":
-        evidence["completion_verified"] = True
     for key in (
         "writersStopped", "writers_stopped",
         "terminalProof", "terminal_proof",
@@ -6688,10 +6694,6 @@ def _github_status_transition_evidence(
         # A trustworthy stopped/no-preserved-work handoff asserts its writers
         # are stopped; the proof carries both guards together.
         canonical["writers_stopped"] = True
-    # The finalize gates above already qualified no-change completion: an
-    # admitted finalize reaching close without a PR carries completion.
-    if mode == "done" and not pull_request_url:
-        canonical["completion_verified"] = True
     return canonical
 
 
@@ -7138,47 +7140,22 @@ async def update_github_issue_status(
                 },
             )
     pull_request_url = _github_status_pull_request_url(inputs, _context)
-    if mode == "finalize_after_pr_or_done":
-        if (
-            not pull_request_url
-            and assessment_available
-            and assessment_verdict
-            and assessment_verdict != "FULLY_IMPLEMENTED"
-        ):
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "decision": "blocked",
-                    "assessmentVerdict": assessment_verdict,
-                    "summary": (
-                        "Skipped GitHub issue finalization because the initial "
-                        f"assessment was {assessment_verdict} and no authoritative "
-                        "pull request URL was available."
-                    ),
-                },
+    completion_verified = False
+    if mode in {"done", "finalize_after_pr_or_done"}:
+        if mode == "done" or not pull_request_url:
+            gate = await _objective_verification_payload(inputs, _context)
+            reason = await validate_completion_target(
+                gate or {}, repository=repository, source_ref=issue_ref,
+                expected_ref=_string(inputs.get("completionTargetRef")),
+                read_target=lambda repo, ref: github_service_factory().read_repository_target(repo, ref),
             )
-        push_status, commit_count = _github_status_publish_change_evidence(
-            inputs,
-            _context,
-        )
-        if not pull_request_url and (
-            push_status in {"pushed", "published"} or commit_count > 0
-        ):
-            return ToolResult(
-                status="FAILED",
-                outputs={
-                    "issueRef": issue_ref,
-                    "decision": "blocked",
-                    "pushStatus": push_status,
-                    "commitCount": commit_count,
-                    "summary": (
-                        "Skipped GitHub issue finalization because repository changes "
-                        "were published without an authoritative pull request URL."
-                    ),
-                },
-            )
-        if pull_request_url and require_verification:
+            if reason:
+                return ToolResult(status="FAILED", outputs={
+                    "issueRef": issue_ref, "decision": "blocked", "summary": reason,
+                    "remainingEvidence": reason,
+                })
+            completion_verified = True
+        if pull_request_url and require_verification and not completion_verified:
             if not (
                 inputs.get("verificationArtifactPath")
                 or inputs.get("verification_artifact_path")
@@ -7216,7 +7193,7 @@ async def update_github_issue_status(
                         "summary": f"Skipped GitHub issue Code Review update for {issue_ref} because verification verdict is not FULLY_IMPLEMENTED.",
                     },
                 )
-        mode = "code_review" if pull_request_url else "done"
+        mode = "done" if completion_verified else "code_review"
     actions = _GITHUB_STATUS_ACTIONS.get(mode, {})
     if not actions:
         return ToolResult(
@@ -7496,12 +7473,11 @@ async def update_github_issue_status(
         mode=mode,
         inputs=inputs,
         pull_request_url=pull_request_url,
-        assessment_verdict=assessment_verdict,
-        assessment_available=assessment_available,
         verification_verdict=verification_verdict,
         verification_available=verification_available,
-        require_verification=require_verification,
     )
+    if completion_verified:
+        evidence["completion_verified"] = True
     reason = _github_status_transition_reason(mode, inputs, issue_ref)
     decision = plan_transition(
         from_settled=interpretation.settled,

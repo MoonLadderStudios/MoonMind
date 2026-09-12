@@ -9,6 +9,7 @@ description: >-
   a PASS. Use when a user asks whether a branch or merged change completes a
   GitHub issue, or needs an issue-visible verification comment.
 metadata:
+  required-skills: "moonspec-verify"
   required-capabilities:
     - git
     - gh
@@ -88,14 +89,27 @@ defaults:
   mark_completed_if_pass: false
 ---
 
+Read the portable acceptance policy from the resolved `moonspec-verify` bundle
+before assessing, verifying, or completing work. Resolve it at
+`$MOONMIND_ACTIVE_SKILLS_DIR/moonspec-verify/references/acceptance-policy.md`;
+outside MoonMind use `.agents/skills/moonspec-verify/references/acceptance-policy.md`.
+It owns scope, mandatory versus optional evidence, reuse, and completion rules.
+Preserve the original scope and previously met requirements as regression constraints;
+prior reports are context, not current proof. Candidate success alone cannot close
+or transition an issue as already landed. Completion requires objective evidence
+on the intended completion target under that policy.
+
+
 # GitHub Issue Verify
 
 Verify whether the repository satisfies a GitHub issue, then publish a concise GitHub issue comment with the result. This skill supports two equally valid verification modes:
 
-- **Branch mode** — a feature branch is checked out, distinct from the base ref; verification compares the diff `<base>..HEAD` to the GitHub issue requirements.
-- **Main/trunk mode** — the current checkout is the default branch itself (for example, `main` at `origin/main`), or there is no meaningful diff against the base ref. In this mode, verify that the issue is already implemented in the codebase as it stands. This is the expected mode when the work has already merged and the user wants confirmation that the issue landed.
+- **Branch mode** verifies the actual candidate content against the original scope.
+- **Main/trunk mode** verifies the resolved completion target, regardless of the
+  current checkout. Explicit mode always controls which subject is inspected.
 
-Choose the mode automatically based on observed repository state. Do not treat "no feature branch / no diff vs. base" as an immediate `BLOCKED` result. Fall back to main/trunk verification first, and only block if even main/trunk evidence is unavailable or the issue is too ambiguous to assess.
+An empty diff does not prove landing or block verification. Detached HEAD and
+non-main completion branches are supported under the shared acceptance policy.
 
 ## Inputs
 
@@ -103,7 +117,7 @@ Choose the mode automatically based on observed repository state. Do not treat "
 - Required: current repository checkout containing the branch or default-branch state to verify.
 - Required for issue content and commenting: authenticated GitHub access through `gh` or an equivalent trusted GitHub connector.
 - Optional: `mark_completed_if_pass`, boolean, default `false`. When `true`, and only when the final verification verdict is `PASS`, close an open issue with GitHub's `completed` state reason. Never close the issue for `PARTIAL`, `FAIL`, or `BLOCKED`.
-- Optional: base branch or comparison ref. If omitted, infer from upstream, the repository default branch, `origin/main`, `origin/master`, `main`, or `master`. When the checkout is already on the default branch or the diff against the inferred base is empty, switch to main/trunk verification instead of blocking.
+- Optional: base/comparison ref and intended completion target. Resolve the explicit target or the remote default branch; do not infer completion from a feature upstream.
 - Optional: explicit verification mode hint (`branch`, `main`, or `auto`). Default `auto`.
 - Optional: history search window for locating prior merges that implement the issue on the default branch. Default: scan the last approximately 200 commits and commits from the last approximately 90 days.
 - Optional: required test commands, scope limits, explicit non-goals, or extra verification constraints.
@@ -135,29 +149,23 @@ If the issue cannot be fetched, or issue commenting is unavailable or policy-den
    - Treat comments as supplemental context. Prefer the issue body and relevant clarification from maintainers over speculation.
    - If requirements are ambiguous, mark them `unverifiable` instead of inventing criteria.
 
-2. Choose a verification mode and resolve the comparison.
-   - Record `git branch --show-current`, `git rev-parse HEAD`, and `git status --short`. When `git branch --show-current` is empty (a detached-HEAD checkout, common in CI), do not treat the empty value as a branch. Derive a branch label from `git rev-parse --short HEAD` (or an explicitly provided ref name) for reporting and file paths, and decide the mode from the base-ref comparison below rather than from the missing branch name.
-   - Resolve the repository default branch from GitHub metadata when available. Determine the candidate base ref from user input, upstream tracking branch, `origin/<default-branch>`, `<default-branch>`, `origin/main`, `origin/master`, `main`, or `master`. Fetch the base ref only when needed and safe.
-   - Decide the mode:
-     - **Branch mode** when the current checkout is not the default branch and `git rev-list --count <base>..HEAD` is greater than `0`.
-     - **Main/trunk mode** when the current checkout is the default branch, HEAD already equals the base ref, or `git rev-list --count <base>..HEAD` is `0`.
-     - Honor an explicit mode hint unless it is impossible. For example, block with a clear reason when branch mode is explicitly required but no distinct branch exists.
-     - When `main` mode is requested explicitly but `HEAD` is not the default ref (for example, a feature branch is still checked out), do not treat the branch `HEAD` as default-branch evidence — that would credit branch-only, unmerged changes as already implemented on the default branch. First resolve and check out the default ref (or its fetched `origin/<default-branch>`) and verify against that ref. Block with a clear reason when the default ref cannot be resolved, fetched, or checked out.
-   - For branch mode, use `git merge-base <base> HEAD`, then inspect `git diff --stat <merge-base>..HEAD`, `git diff --name-status <merge-base>..HEAD`, and relevant hunks as the primary evidence set.
-   - For main/trunk mode, do not block on an empty diff. The repository state at HEAD is itself evidence. Also locate the merge or merges that implemented the issue when possible:
-     - `git log -i --grep '#<ISSUE-NUMBER>' --oneline -n 200`
-     - `git log -i --grep '<distinctive issue title terms>' --oneline -n 200`
-     - `git log --oneline -n 200 -- <likely paths>` for paths matched by issue keywords when no issue reference is found.
-     - `gh pr list --repo <owner/repo> --search '<issue number or distinctive title terms>' --state merged --limit 20` when authenticated.
-     - Inspect linked pull requests from the issue timeline or comments when available.
-     - For each candidate merge commit, inspect `git show --stat <sha>` and `git diff <sha>^..<sha>` to identify implementation evidence.
-   - If multiple merges plausibly implement parts of the issue, aggregate them and record each in the evidence ledger.
-   - If no meaningful branch diff exists, fall back to main/trunk mode rather than declaring `BLOCKED`; the work may already have merged. Only block after both modes fail to yield usable evidence and the issue is too ambiguous to assess.
+2. Resolve and pin the subject under the shared acceptance policy.
+   - Record the current branch (possibly detached), revision, dirty content identity,
+     comparison base, and separately the intended completion ref and revision.
+   - Honor explicit `main` by reading the actual target using `git show <target>:<path>`
+     and `git grep <pattern> <target>`. Run checks in an isolated detached worktree
+     created at that pinned revision; never use feature HEAD as target evidence.
+   - In `branch` mode inspect all relevant candidate content, including dirty work;
+     use the merge-base diff to focus investigation without narrowing acceptance.
+   - In `auto` mode use candidate verification when candidate content differs from
+     the target; otherwise inspect the actual target. Do not require a named branch.
+   - Merge/PR history is optional enrichment. Current target behavior and required
+     checks suffice, including squash merges and empty diffs.
 
 3. Inspect implementation evidence.
    - In branch mode, read changed source, tests, docs, workflow/configuration, migrations, and generated artifacts within `<merge-base>..HEAD`.
-   - In main/trunk mode, read the current state of files relevant to the issue ledger and, when available, the implementing merge commit or pull request diffs identified above. Current default-branch state is acceptable evidence on its own when it clearly satisfies a requirement; historical diffs are supplementary.
-   - In both modes, search the repository with `rg -i` for issue title terms, domain nouns, error text, API names, UI labels, acceptance-criteria keywords, old behavior, and new behavior. Also search for issue references such as `#123`, `owner/repo#123`, and linked PR or design references where useful.
+   - In main/trunk mode, read files at the pinned completion target relevant to the issue ledger and, when available, the implementing merge commit or pull request diffs identified above. Current default-branch state is acceptable evidence on its own when it clearly satisfies a requirement; historical diffs are supplementary.
+   - In the selected subject workspace, search with `rg -i` for issue title terms, domain nouns, error text, API names, UI labels, acceptance-criteria keywords, old behavior, and new behavior. Also search for issue references such as `#123`, `owner/repo#123`, and linked PR or design references where useful.
    - Identify deleted or superseded paths so the verdict accounts for removals as well as additions.
    - Run local tests when required by repository instructions, the user request, or when the verdict depends on unproven behavior. Record exactly why any expected test could not run.
    - In main/trunk mode, when no implementing commit, linked pull request, issue reference, or code matching concrete requirements can be found, choose `FAIL` for an unimplemented issue. Choose `BLOCKED` only when the requirements are too ambiguous to determine what evidence should exist.
@@ -173,12 +181,13 @@ If the issue cannot be fetched, or issue commenting is unavailable or policy-den
    - Keep non-repository requirements separate from repository-verifiable requirements.
 
 5. Decide the overall result.
-   - `PASS`: all in-scope GitHub issue requirements are `met`, whether evidence comes from the branch diff or from current default-branch state and prior merges.
+   - `PASS`: objective acceptance under the shared policy; include `validatedRefs.acceptance`. A candidate PASS is not a landing verdict.
    - `PARTIAL`: at least one in-scope item is `partially_met` or `unverifiable`, but no clear in-scope miss exists.
    - `FAIL`: at least one in-scope item is `not_met`, including the main/trunk case where no implementing change can be found and the requirements are concrete enough to expect one.
    - `BLOCKED`: authenticated issue content or issue comment access is unavailable, or both verification modes fail to produce usable evidence and the requirements are too ambiguous to assess. A clean checkout on the default branch is not, by itself, a blocked condition.
 
 6. If `mark_completed_if_pass` is true, decide whether the issue should be marked completed, but do not close it yet.
+   - Completion additionally requires objective evidence on the freshly resolved intended completion target. Candidate-only PASS cannot close the issue; retain the review/publication path.
    - Only plan a completion when the overall verdict is `PASS`; if the verdict is not `PASS`, record completion as `skipped` even when the boolean is true.
    - Re-read the issue state immediately before the later mutation when the earlier read may be stale.
    - If the issue is already closed with state reason `completed`, record `already_completed`; do not mutate it.
@@ -270,8 +279,8 @@ gh issue comment <issue> --repo <owner/repo> --body-file <comment_file>
 - Missing or inaccessible GitHub issue: `BLOCKED`; include the repository, issue number, and sanitized access error.
 - Branch comparison unavailable and main/trunk mode also yields no usable evidence: `BLOCKED`; identify the missing base ref, missing history, or unsearchable repository state.
 - Current checkout is the default branch with a clean tree: do not block. Run main/trunk verification and search current repository state plus recent merge history.
-- Default-branch checkout with no diff and no issue-linked merge found: prefer `FAIL` (not implemented on the default branch) over `BLOCKED` when issue requirements are concrete enough to expect a code change. Reserve `BLOCKED` for ambiguous requirements.
-- Tests unavailable: continue only when evidence is otherwise sufficient; otherwise mark affected items `unverifiable`.
+- A default-branch checkout with no diff or issue-linked merge can still pass using objective current-target behavior evidence. Historical links are optional. Use `FAIL` for an observed unmet requirement, not missing history.
+- Tests unavailable: apply the shared acceptance policy. Missing mandatory evidence withholds whole-scope success; optional diagnostic limitations do not.
 - GitHub comment cannot be posted: return the draft comment artifact and sanitized posting error.
 - Completion cannot be attempted safely: leave the issue unchanged and report completion as `blocked` or `failed`, separate from the verification verdict.
 - Verdict is not `PASS`: never close the issue even when `mark_completed_if_pass` is true; report completion as `skipped`.
