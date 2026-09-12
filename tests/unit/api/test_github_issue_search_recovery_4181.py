@@ -63,6 +63,7 @@ def test_seed_has_optional_completion_target_and_no_second_recovery_preset():
     assert sorted(i["name"] for i in seed["inputs"]) == [
         "completion_target_ref",
         "constraints",
+        "include_all_authors",
         "issue_search",
         "repository",
         "run_verify",
@@ -115,6 +116,7 @@ def _issue(number=4025, **overrides):
         "body": "Acceptance body.",
         "html_url": f"https://github.com/{REPOSITORY}/issues/{number}",
         "labels": [{"name": "bug"}],
+        "user": {"id": 111, "login": "search-user"},
     }
     base.update(overrides)
     return base
@@ -128,6 +130,10 @@ def activity_boundary(monkeypatch):
 
     def handler(request):
         requests.append(request)
+        if request.url.path == "/user":
+            return httpx.Response(
+                200, json={"id": 111, "login": "search-user", "type": "user"}
+            )
         if "/comments" in request.url.path:
             if request.method == "GET":
                 return httpx.Response(200, json=[])

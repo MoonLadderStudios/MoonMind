@@ -1,11 +1,13 @@
 slug: github-issue-search-and-implement
 title: GitHub Issue Search and Implement
-description: Search GitHub issues for the best eligible match under the shared lifecycle
-  eligibility decision (Available means no MoonMind status label; Recovery-needed
-  is a continuation candidate only with sufficient stopped-writer, prior-work, retry,
-  and policy evidence), or the first eligible unblocked issue when the search is blank,
-  then implement it following the GitHub Issue Implement workflow, adopting any safely
-  recoverable partial PR and updating the issue.
+description: Search GitHub issues for the best eligible match created by the authenticated
+  search account by default (enable Include issues created by other users to broaden
+  author eligibility) under the shared lifecycle eligibility decision (Available means
+  no MoonMind status label; Recovery-needed is a continuation candidate only with
+  sufficient stopped-writer, prior-work, retry, and policy evidence), or the first
+  eligible unblocked self-authored issue when the search is blank, then implement
+  it following the GitHub Issue Implement workflow, adopting any safely recoverable
+  partial PR and updating the issue.
 scope: global
 tags:
 - github
@@ -51,15 +53,23 @@ annotations:
         type: string
         title: GitHub issue search
         description: Free-text search used as '<search> is:issue state:open' for candidate
-          discovery only; every candidate is revalidated through the shared lifecycle
-          eligibility decision (Available means no MoonMind status label, not no labels
-          at all; Recovery-needed continuations require stopped-writer, prior-work,
-          retry, and policy evidence; in-progress, code-review, needs-attention, closed,
-          mixed/unknown states, unresolved active comments, and unsafe or incomplete
-          handoffs are excluded). Leave blank to fall back to a bounded repository
-          scan for the first eligible candidate without blocking dependencies. Safe
-          recoveries within equivalent scope/priority are preferred under a bounded
+          discovery only; by default only issues created by the GitHub account used
+          for this search are eligible (enable Include issues created by other users
+          to broaden author eligibility). Every candidate is revalidated through the
+          shared lifecycle eligibility decision (Available means no MoonMind status
+          label, not no labels at all; Recovery-needed continuations require stopped-writer,
+          prior-work, retry, and policy evidence; in-progress, code-review, needs-attention,
+          closed, mixed/unknown states, unresolved active comments, and unsafe or
+          incomplete handoffs are excluded). Leave blank to fall back to a bounded
+          repository scan for the first eligible candidate without blocking dependencies.
+          Safe recoveries within equivalent scope/priority are preferred under a bounded
           fair policy so one difficult issue cannot monopolize recurring runs.
+      include_all_authors:
+        type: boolean
+        title: Include issues created by other users
+        description: By default, only issues created by the GitHub account used for
+          this search are eligible.
+        default: false
       repository:
         type: string
         title: Repository
@@ -85,11 +95,14 @@ annotations:
     issue_search:
       widget: text
       searchPlaceholder: Search GitHub issues
+    include_all_authors:
+      widget: checkbox
     repository:
       widget: text
       advanced: true
   defaults:
     completion_target_ref: ''
+    include_all_authors: false
     run_verify: true
 inputs:
 - name: issue_search
@@ -97,6 +110,11 @@ inputs:
   type: text
   required: false
   default: ''
+- name: include_all_authors
+  label: Include issues created by other users
+  type: boolean
+  required: false
+  default: false
 - name: repository
   label: Repository
   type: text
@@ -122,9 +140,11 @@ steps:
 - title: Resolve GitHub issue and load trusted brief
   type: tool
   instructions: >-
-    Resolve one eligible open issue through the shared lifecycle eligibility decision
-    and load its trusted issue brief, preserving the resolved identity and search
-    evidence for downstream steps.
+    Resolve one eligible open issue created by the GitHub account used for this
+    search by default (only when Include issues created by other users is explicitly
+    enabled may another author's issue be selected) through the shared lifecycle
+    eligibility decision and load its trusted issue brief, preserving the resolved
+    identity and search evidence for downstream steps.
 
     Available means no MoonMind status label (ordinary labels do not block); a
     Recovery-needed issue is a continuation candidate only with sufficient
@@ -163,6 +183,7 @@ steps:
     inputs:
       repository: '{{ inputs.repository or context.get(''repository'', '''') }}'
       issueSearch: '{{ inputs.issue_search }}'
+      includeAllAuthors: '{{ inputs.include_all_authors }}'
       artifactPath: artifacts/github-issue-implement-brief.json
       predecessorStopped: '{{ context.get(''predecessorStopped'', context.get(''predecessor_stopped'', '''')) }}'
       handoffUsable: '{{ context.get(''handoffUsable'', context.get(''handoff_usable'', '''')) }}'
