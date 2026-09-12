@@ -1,4 +1,4 @@
 interface:
   display_name: "MoonSpec Assess"
-  short_description: "Assess source acceptance coverage before planning."
-  default_prompt: "Use $moonspec-assess to produce artifacts/moonspec/acceptance-assessment.json from matching source acceptance evidence."
+  short_description: "Assess issue or source coverage before implementation."
+  default_prompt: "Use $moonspec-assess to inspect the original issue brief or matching source acceptance matrix and preserve the initial assessment separately from objective verification."

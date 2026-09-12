@@ -560,6 +560,8 @@ RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH = "run-assessment-consumer-handoff-v1"
 RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = "run-assessment-attachment-handoff-v1"
 RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = "run-issue-brief-attachment-handoff-v1"
 RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
+# New gates bind objective acceptance; old histories retain their recorded routing.
+RUN_ACCEPTANCE_EVIDENCE_PATCH = "run-acceptance-evidence-v1"
 # MoonLadderStudios/MoonMind#4099: automatic "<base>: #<number>" display-title
 # enrichment for opt-in issue-search presets. Gated so in-flight histories
 # replay without the new memo/search-attribute commands.
@@ -4638,7 +4640,36 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             or self._assessment_context.get("assessment_verdict")
             or ""
         ).strip().upper()
+        if self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH):
+            return bool(verdict and verdict != "BLOCKED" and not self._target_acceptance_evidence())
         return verdict in {"PARTIALLY_IMPLEMENTED", "NOT_IMPLEMENTED"}
+
+    def _target_acceptance_evidence(self) -> Mapping[str, Any] | None:
+        """Read the accepted verifier's target binding, never assessment prose.
+
+        This only routes publication. The status Activity re-reads the live target
+        before mutation; this deterministic workflow cannot attest to live refs.
+        """
+        from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
+
+        gate = self._publish_context.get("moonSpecGate")
+        if (
+            not isinstance(gate, Mapping)
+            or gate.get("verdict") != "FULLY_IMPLEMENTED"
+            or gate.get("invalid")
+            or gate.get("degraded")
+        ):
+            return None
+        evidence = acceptance_evidence(gate)
+        if evidence is None or not evidence.is_current(workflow.now()):
+            return None
+        if not evidence.matches_target(
+            repository=str(self._repo or ""),
+            ref=evidence.completion_target.ref,
+            revision=evidence.completion_target.revision,
+        ):
+            return None
+        return gate
 
     def _github_issue_ref_from_parameters(
         self,
@@ -8113,8 +8144,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 if source.get(key):
                     payload = dict(source)
                     payload["verdict"] = source.get(key)
+                    require_acceptance = bool(self._assessment_context) and self._patched_or_false_outside_workflow(
+                        RUN_ACCEPTANCE_EVIDENCE_PATCH
+                    )
                     return parse_step_gate_result(
                         payload,
+                        require_acceptance=require_acceptance,
+                        validation_time=workflow.now() if require_acceptance else None,
                         validate_action_compatibility=(
                             self._patched_or_false_outside_workflow(
                                 RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
@@ -9660,6 +9696,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         request: AgentExecutionRequest | None = None,
         source_tool_name: str | None = None,
     ) -> None:
+        initial_recorded = bool(self._assessment_context.get("assessmentArtifactRef"))
         record_aliases = self._patched_or_false_outside_workflow(
             RUN_JIRA_BLOCKER_RECHECK_ASSESSMENT_CONTEXT_ALIAS_PATCH
         )
@@ -9677,6 +9714,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 and source_tool_name not in ISSUE_BRIEF_LOADER_TOOL_NAMES
             ):
                 # Agent-produced copies cannot replace the loader's source.
+                continue
+            if (
+                aliases[0] in {"assessmentArtifactRef", "assessmentVerdict"}
+                and self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH)
+                and any(self._assessment_context.get(alias) for alias in aliases)
+            ):
                 continue
             for key in aliases:
                 value = outputs.get(key)
@@ -9697,7 +9740,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "assessment_verdict",
             )
         )
-        if assessment_present and request is not None:
+        if assessment_present and request is not None and not (
+            initial_recorded and self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH)
+        ):
             repository = authored_repository_source(request)
             branch = authored_starting_branch(request)
             if repository and branch:
@@ -9736,6 +9781,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 for alias in aliases:
                     if alias == aliases[0] or alias in merged_outputs:
                         value = self._assessment_context["briefArtifactRef"]
+                        changed = changed or merged_outputs.get(alias) != value
+                        merged_outputs[alias] = value
+                continue
+            if (
+                aliases[0] in {"assessmentArtifactRef", "assessmentVerdict"}
+                and self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH)
+                and self._assessment_context.get(aliases[0])
+            ):
+                value = self._assessment_context[aliases[0]]
+                for alias in aliases:
+                    if alias == aliases[0] or alias in merged_outputs:
                         changed = changed or merged_outputs.get(alias) != value
                         merged_outputs[alias] = value
                 continue
@@ -9786,6 +9842,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH
                     )
                 ):
+                    merged[key] = value
+                elif key in {"assessmentArtifactRef", "assessment_artifact_ref", "assessmentVerdict", "assessment_verdict"} and self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH):
                     merged[key] = value
                 else:
                     merged.setdefault(key, value)
@@ -17608,6 +17666,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "storyOutputMode"
         ) in {"jira", "github"}:
             return False
+        if (
+            self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH)
+            and self._assessment_context
+            and self._issue_implement_pr_required()
+        ):
+            return True
         if self._publish_status in {"not_required", "skipped"}:
             return False
         return not pr_publish_optional
@@ -18834,6 +18898,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 post_merge_github.setdefault("required", True)
                 post_merge_github.setdefault("repository", github_issue["repository"])
                 post_merge_github.setdefault("issueNumber", github_issue["issueNumber"])
+                if self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH):
+                    task = self._mapping_value(parameters, "workflow") or self._mapping_value(parameters, "task") or {}
+                    inputs = self._mapping_value(task, "inputs") or {}
+                    target_ref = self._coerce_text(inputs.get("completion_target_ref"), max_chars=500)
+                    if target_ref:
+                        post_merge_github["completionTargetRef"] = target_ref
             return {
                 "enabled": True,
                 "checks": self._coerce_text(candidate.get("checks"), max_chars=20)
@@ -19309,9 +19379,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return
         if not self._has_no_commit_publish_evidence():
             return
-        evidence = self._already_implemented_no_work_evidence()
-        if not evidence:
-            return
+        target_acceptance = None
+        if self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH):
+            target_acceptance = self._target_acceptance_evidence()
+            if target_acceptance is None:
+                raise ValueError("Issue completion requires objective evidence on the completion target")
+            evidence = "Objective verification on the intended completion target."
+        else:
+            evidence = self._already_implemented_no_work_evidence()
+            if not evidence:
+                return
 
         issue_key = self._canonical_jira_issue_key_from_parameters(parameters)
         if not issue_key:
@@ -19324,6 +19401,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             parameters=parameters,
             issue_key=issue_key,
         )
+        task_payload = self._mapping_value(parameters, "workflow") or self._mapping_value(parameters, "task")
+        task_inputs = self._mapping_value(task_payload, "inputs")
         decision = await workflow.execute_activity(
             "merge_automation.complete_post_merge_jira",
             {
@@ -19337,6 +19416,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     "taskMetadataIssueKey": issue_key,
                     "publishContextIssueKey": issue_key,
                     "alreadyImplementedEvidence": evidence[:700],
+                    **({
+                        "acceptanceGate": dict(target_acceptance),
+                        "completionTargetRef": str(task_inputs.get("completion_target_ref") or ""),
+                    } if target_acceptance else {}),
                 },
             },
             start_to_close_timeout=timedelta(minutes=2),
@@ -20049,6 +20132,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         parameters["verify_artifact_path"] = (
             verify_artifact_path or self._default_moonspec_verify_artifact_path(node_id)
         )
+        if self._assessment_context and self._patched_or_false_outside_workflow(RUN_ACCEPTANCE_EVIDENCE_PATCH):
+            parameters["acceptanceContract"] = "acceptance/v1"
 
     def _ensure_assessment_parameters(
         self,
@@ -20697,7 +20782,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                     break
             if assessment_parameter_injection_needed:
                 break
-        # The initial-assessment step (skill: auto) writes the verdict artifact;
+        # The initial-assessment step writes the verdict artifact;
         # moonspec-verify steps only read it, so exclude them from publication.
         # Guard the parameter injection so in-flight histories that already
         # scheduled an agent step keep replaying with their recorded command

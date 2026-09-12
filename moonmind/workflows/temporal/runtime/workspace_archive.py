@@ -17,8 +17,10 @@ from moonmind.schemas.saved_work_models import (
 )
 
 
-def build_workspace_archive(workspace: Path, *, members: set[str] | None = None):
-    """Never upload an unstable, oversized, or credential-shaped export."""
+def build_workspace_archive(
+    workspace: Path, *, members: set[str] | None = None, high_security_mode: bool = True
+):
+    """Enforce export bounds and exclusions, with explicitly selected scanning."""
     limits = SAVED_WORK_FORMAT_SIZE_LIMITS
     entries = []
     fingerprints = {}
@@ -99,6 +101,7 @@ def build_workspace_archive(workspace: Path, *, members: set[str] | None = None)
             iter(lambda: spool.read(limits["max_spool_chunk_bytes"]), b""),
             export_digest="pending",
             location="checkpoint.archive.tar",
+            high_security_mode=high_security_mode,
         )
         if scan["disposition"] == "blocked":
             raise ValueError("workspace archive failed export secret scanning")

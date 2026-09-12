@@ -1973,6 +1973,8 @@ class MoonMindAgentRun:
             moonmind_payload.setdefault("selectedSkill", selected_skill)
             metadata["moonmind"] = moonmind_payload
         if str(selected_skill or "").strip().lower() == "moonspec-verify":
+            if request_params.get("acceptanceContract") == "acceptance/v1":
+                metadata["acceptanceContract"] = "acceptance/v1"
             for key in (
                 "verify_artifact_path",
                 "verifyArtifactPath",

@@ -329,7 +329,9 @@ class ManagedCheckpointRestoreService:
         if self._git(["rev-parse", "HEAD"], workspace) != base:
             raise CheckpointRestoreError("CHECKPOINT_BASE_COMMIT_MISMATCH", "saved destination HEAD changed")
         index = manifest.get("git", {}).get("indexPatch")
-        actual_patch, actual_paths = capture_git_index_patch(workspace, base)
+        # This compares already-authorized immutable content; it does not grant
+        # export authority or re-scan a checkpoint under a different policy.
+        actual_patch, actual_paths = capture_git_index_patch(workspace, base, high_security_mode=False)
         if index is not None:
             if _digest(actual_patch) != index.get("digest") or actual_paths != index.get("paths"):
                 raise CheckpointRestoreError("CHECKPOINT_ENTRY_DIGEST_MISMATCH", "saved destination Git index changed")

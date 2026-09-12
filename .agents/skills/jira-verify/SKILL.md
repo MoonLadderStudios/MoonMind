@@ -9,6 +9,7 @@ description: >-
   when a user asks whether a branch or merged change completes a Jira ticket,
   or needs a Jira-visible verification comment.
 metadata:
+  required-skills: "moonspec-verify"
   required-capabilities:
     - jira
     - git
@@ -50,14 +51,27 @@ defaults:
   update_status: false
 ---
 
+Read the portable acceptance policy from the resolved `moonspec-verify` bundle
+before assessing, verifying, or completing work. Resolve it at
+`$MOONMIND_ACTIVE_SKILLS_DIR/moonspec-verify/references/acceptance-policy.md`;
+outside MoonMind use `.agents/skills/moonspec-verify/references/acceptance-policy.md`.
+It owns scope, mandatory versus optional evidence, reuse, and completion rules.
+Preserve the original scope and previously met requirements as regression constraints;
+prior reports are context, not current proof. Candidate success alone cannot close
+or transition an issue as already landed. Completion requires objective evidence
+on the intended completion target under that policy.
+
+
 # Jira Verify
 
 Verify whether the repository satisfies a Jira issue, then publish a concise Jira comment with the result. This skill supports two equally valid verification modes:
 
-- **Branch mode** — a feature branch is checked out, distinct from the base ref; verification compares the diff `<base>..HEAD` to the Jira requirements.
-- **Main/trunk mode** — the current checkout is the default branch itself (e.g. `main` at `origin/main`), or there is no meaningful diff against the base ref. In this mode, verify that the issue is already implemented in the codebase as it stands. This is the expected mode when the work has already merged and the user just wants confirmation that the story landed.
+- **Branch mode** verifies the actual candidate content against the original scope.
+- **Main/trunk mode** verifies the resolved completion target, regardless of the
+  current checkout. Explicit mode always controls which subject is inspected.
 
-Choose the mode automatically based on observed repository state. Do not treat "no feature branch / no diff vs. base" as an immediate `BLOCKED` — fall back to main/trunk verification first, and only block if even main/trunk evidence is missing.
+An empty diff does not prove landing or block verification. Detached HEAD and
+non-main completion branches are supported under the shared acceptance policy.
 
 ## Inputs
 
@@ -66,7 +80,7 @@ Choose the mode automatically based on observed repository state. Do not treat "
 - Required for Jira content and posting: MoonMind's trusted Jira tool surface, normally `jira.get_issue` and `jira.add_comment`.
 - Optional: update status, boolean, default `false`. When `true`, and only when the final verification verdict is `PASS`, the skill may move the Jira issue to a terminal done state through MoonMind's trusted Jira tool surface.
 - Optional: transition ID, transition name, or transition fields. Use these to disambiguate or satisfy required fields when moving the issue to a terminal state.
-- Optional: base branch or comparison ref. If omitted, infer from upstream, `origin/main`, `origin/master`, `main`, or `master`. When the checkout is already on the default branch or the diff against the inferred base is empty, switch to main/trunk verification (see Workflow) instead of blocking.
+- Optional: base/comparison ref and intended completion target. Resolve the explicit target or the remote default branch; do not infer completion from a feature upstream.
 - Optional: explicit verification mode hint (`branch`, `main`, or `auto`). Default `auto`.
 - Optional: history search window (commit count or date range) for locating prior merges that implement the issue on the default branch. Default: scan the last ~200 commits and any commits in the last ~90 days.
 - Optional: required test commands, scope limits, or explicit non-goals.
@@ -95,26 +109,23 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
    - Extract a requirements ledger: summary, description goals, acceptance criteria, constraints, explicit non-goals, linked issue dependencies, and any test or deployment expectations.
    - If requirements are ambiguous, mark them `unverifiable` instead of inventing criteria.
 
-2. Choose a verification mode and resolve the comparison.
-   - Record `git branch --show-current`, `git rev-parse HEAD`, and `git status --short`.
-   - Determine the candidate base ref from user input, upstream tracking branch, `origin/main`, `origin/master`, `main`, or `master`. Fetch the base ref only when needed and safe.
-   - Decide the mode:
-     - **Branch mode** when the current checkout is NOT the default branch AND `git rev-list --count <base>..HEAD` is greater than 0.
-     - **Main/trunk mode** when the current checkout IS the default branch, when HEAD already equals the base ref, when `git rev-list --count <base>..HEAD` is `0`, or when the user explicitly requested `main` mode.
-     - If a user-supplied mode hint is provided, honor it unless it is impossible (e.g. branch mode requested but no distinct branch exists — then block with a clear reason).
-   - For branch mode: use `git merge-base <base> HEAD`, then inspect `git diff --stat <merge-base>..HEAD`, `git diff --name-status <merge-base>..HEAD`, and relevant hunks as the primary evidence set.
-   - For main/trunk mode: do NOT block on the empty diff. The repository state at HEAD is itself the evidence. Additionally locate the merge(s) that implemented the issue:
-     - `git log -i --grep '<ISSUE-KEY>' --oneline -n 200` to find commits that reference the key in the message.
-     - `git log --oneline -n 200 -- <likely paths>` for paths matched by issue keywords when no key reference is found.
-     - `gh pr list --search '<ISSUE-KEY>' --state merged --limit 20` when `gh` is authenticated, to locate the merged PR(s) for the issue.
-     - For each candidate merge commit, inspect `git show --stat <sha>` and `git diff <sha>^..<sha>` to extract the implementation diff, and treat that as the diff under verification.
-     - If multiple merges plausibly implement parts of the issue, aggregate them and note each in the evidence ledger.
-   - Branch-mode reminder: if no meaningful diff exists against base AND the checkout is not the default branch, fall back to main/trunk mode rather than declaring `BLOCKED` — the work may already have merged. Only mark `BLOCKED` after both modes fail to yield evidence.
+2. Resolve and pin the subject under the shared acceptance policy.
+   - Record the current branch (possibly detached), revision, dirty content identity,
+     comparison base, and separately the intended completion ref and revision.
+   - Honor explicit `main` by reading the actual target using `git show <target>:<path>`
+     and `git grep <pattern> <target>`. Run checks in an isolated detached worktree
+     created at that pinned revision; never use feature HEAD as target evidence.
+   - In `branch` mode inspect all relevant candidate content, including dirty work;
+     use the merge-base diff to focus investigation without narrowing acceptance.
+   - In `auto` mode use candidate verification when candidate content differs from
+     the target; otherwise inspect the actual target. Do not require a named branch.
+   - Merge/PR history is optional enrichment. Current target behavior and required
+     checks suffice, including squash merges and empty diffs.
 
 3. Inspect implementation evidence.
    - In branch mode: read changed source, tests, docs, workflow/config, migrations, and generated artifacts within `<merge-base>..HEAD`.
-   - In main/trunk mode: read the current state of files relevant to the Jira ledger AND, when available, the implementing merge commit(s) diffs identified above. The "current state on main" is acceptable evidence on its own when it clearly satisfies a requirement; the historical diff is supplementary.
-   - In both modes: search the repository with `rg -i` for Jira terms, feature names, acceptance criteria keywords, old behavior, and new behavior. In main/trunk mode, also `rg -i -w` the issue key itself (`MM-555`, etc.) across source, tests, docs, changelog, `docs/tmp/`, and local handoff folders.
+   - In main/trunk mode: read files at the pinned completion target relevant to the Jira ledger AND, when available, the implementing merge commit(s) diffs identified above. The "current state on main" is acceptable evidence on its own when it clearly satisfies a requirement; the historical diff is supplementary.
+   - In the selected subject workspace: search with `rg -i` for Jira terms, feature names, acceptance criteria keywords, old behavior, and new behavior. In the target worktree, also `rg -i -w` the issue key itself (`MM-555`, etc.) across source, tests, docs, changelog, `docs/tmp/`, and local handoff folders.
    - Identify deleted or superseded paths so the verdict accounts for removals as well as additions.
    - Run local tests when required by repo instructions, user request, or when the verdict depends on unproven behavior. If tests cannot run, record exactly why.
    - In main/trunk mode, if no implementing commits, no issue-key references, and no code matching the requirements can be found, then — and only then — record the verdict as `FAIL` (not implemented on main) or `BLOCKED` (requirements too ambiguous to tell), with a clear distinction between the two.
@@ -130,13 +141,13 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
    - Keep non-repo requirements separate from branch-verifiable requirements.
 
 5. Decide the overall result.
-   - `PASS`: all in-scope Jira requirements are `met`, whether evidence comes from the branch diff (branch mode) or from the current state of the default branch and prior merge(s) (main/trunk mode).
+   - `PASS`: objective acceptance under the shared policy; include `validatedRefs.acceptance`. A candidate PASS is not a landing verdict.
    - `PARTIAL`: at least one in-scope item is `partially_met` or `unverifiable`, but no clear in-scope miss exists.
    - `FAIL`: at least one in-scope item is `not_met` — including the main/trunk case where no implementing change can be found and the requirements are concrete enough to expect one.
    - `BLOCKED`: trusted Jira content or Jira comment access is unavailable, OR both branch mode and main/trunk mode failed to produce any usable evidence and the requirements are too ambiguous to assess from repository state alone. Simply being on `main` with a clean tree is NOT, by itself, a `BLOCKED` condition.
 
 6. If `update status` is true, decide whether to update Jira status.
-   - Do not attempt any status update unless the overall verification result is `PASS`.
+   - Do not attempt a terminal status update unless the result is `PASS` and objective evidence satisfies the freshly resolved intended completion target. Candidate-only PASS preserves the review/publication path.
    - Treat an issue that is already in a done-category status as already done; record that no transition was needed.
    - Fetch available transitions through the trusted Jira tool surface.
    - Select a completion transition: if a specific transition ID or name was provided, use it if available; otherwise, select a completion transition only when exactly one available transition targets a Jira done-category status.
@@ -229,8 +240,8 @@ Status update:
 - Jira issue inaccessible: `BLOCKED`; include issue key and sanitized tool error.
 - Branch comparison unavailable AND main/trunk mode also yields no usable evidence: `BLOCKED`; identify the missing base ref, missing history, or unsearchable repository state.
 - Current checkout is the default branch with a clean tree: do NOT block. Run main/trunk verification — search the repository state and recent merge history for the issue. Block only if that also produces no evidence and the requirements are too ambiguous to assess.
-- Default-branch checkout with no diff and no Jira-keyed merge found: prefer `FAIL` ("not implemented on `<default-branch>`") over `BLOCKED` when the Jira requirements are concrete enough to expect a code change. Reserve `BLOCKED` for ambiguous requirements.
-- Tests unavailable: continue only if evidence is otherwise sufficient; otherwise mark affected items `unverifiable`.
+- A default-branch checkout with no diff or issue-linked merge can still pass using objective current-target behavior evidence. Historical links are optional. Use `FAIL` for an observed unmet requirement, not missing history.
+- Tests unavailable: apply the shared acceptance policy. Missing mandatory evidence withholds whole-scope success; optional diagnostic limitations do not.
 - Jira comment cannot be posted: return the draft comment artifact and the sanitized posting error.
 - Jira status update cannot be attempted safely: do not transition the issue; report status update as `blocked` or `failed` separately from the verification verdict.
 - Verification verdict is not `PASS`: do not transition the issue even when `update status` is true; report status update as `skipped`.

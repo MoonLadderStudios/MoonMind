@@ -60,61 +60,47 @@ inputs:
   type: textarea
   required: false
   default: ''
+- name: completion_target_ref
+  uiSchema:
+    widget: text
+    advanced: true
+  description: Optional refs/heads/ branch ref; blank uses the remote default branch.
+  label: Completion Target Ref
+  type: text
+  required: false
+  default: ''
 steps:
 - title: Implement the issue
-  instructions: 'Read {{ inputs.assessment_artifact_path }} (or the recorded verdict
-    from the assess step) before doing anything.
+  instructions: |-
+    Read {{ inputs.assessment_artifact_path }} (or the recorded verdict from the assess step) before doing anything.
 
+    If the recorded verdict is FULLY_IMPLEMENTED, make no code changes and report that implementation is skipped because the issue is already implemented in the current repository state.
+
+    If the recorded verdict is BLOCKED, stop without changing code and report the blocking evidence from the assessment.
 
     Use the assessment requirements verification map to prepare test prerequisites
     and reproduce the required production boundaries before editing. If historical
-    assessment rows lack executable checks, derive and persist them from the visible
-    issue requirements using the issue-implement-assessment contract. Preserve
-    prerequisite attempt counts and candidate identity. Setup failures that can be
-    repaired through authorized tools stay in that bounded loop; only an actual
-    missing capability or authority becomes a handoff. Save completed code before
-    retrying verification infrastructure, and do not redo implementation when only
-    evidence collection remains.
+    assessment rows lack executable checks, derive them from the original visible
+    issue requirements under the portable acceptance policy and persist the map in
+    subsequent evidence without overwriting the initial assessment. Preserve its
+    candidate subject, original scope, completionTarget, and prerequisite attempt
+    counts. Setup failures that can be repaired through authorized tools stay in
+    that bounded loop; only an actual missing capability or authority becomes a
+    handoff. Save completed code before retrying verification infrastructure, and
+    do not redo implementation when only evidence collection remains.
 
+    If the recorded verdict is PARTIALLY_IMPLEMENTED, treat the assessment's unmet and partially-met requirements as a bounded implementation backlog. Finish only the remaining gaps. Do not redo work that is already satisfied and do not broaden scope.
 
-    If the recorded verdict is FULLY_IMPLEMENTED, make no code changes and report
-    that implementation is skipped because the issue is already implemented in the
-    current repository state.
-
-
-    If the recorded verdict is BLOCKED, stop without changing code and report the
-    blocking evidence from the assessment.
-
-
-    If the recorded verdict is PARTIALLY_IMPLEMENTED, treat the assessment''s unmet
-    and partially-met requirements as the authoritative bounded backlog. Finish only
-    the remaining gaps. Do not redo work that is already satisfied and do not broaden
-    scope.
-
-
-    If the recorded verdict is NOT_IMPLEMENTED, implement the work described by {{
-    inputs.issue_provider }} issue {{ inputs.issue_ref }} using the loaded issue preset
-    brief as the authoritative implementation input.
-
+    If the recorded verdict is NOT_IMPLEMENTED, implement the work described by {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} using the loaded issue preset brief as the authoritative implementation input.
 
     Additional constraints:
-
     {{ inputs.constraints }}
 
+    Scope the implementation strictly to what the brief and acceptance criteria describe. Do not broaden scope, refactor unrelated code, or introduce backwards-compatibility shims unless the brief explicitly requires them.
 
-    Scope the implementation strictly to what the brief and acceptance criteria describe.
-    Do not broaden scope, refactor unrelated code, or introduce backwards-compatibility
-    shims unless the brief explicitly requires them.
+    Follow the project's testing standards: add or update tests that cover the behavior changes required by the brief, and confirm the relevant unit and integration tests pass locally before continuing.
 
-
-    Follow the project''s testing standards: add or update tests that cover the behavior
-    changes required by the brief, and confirm the relevant unit and integration tests
-    pass locally before continuing.
-
-
-    Preserve {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} in commit messages
-    and in any implementation artifacts so downstream verification and the pull request
-    can reference it.'
+    Preserve {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} in commit messages and in any implementation artifacts so downstream verification and the pull request can reference it.
   skill:
     id: auto
     args: {}
@@ -123,69 +109,17 @@ steps:
 - title: Verify implementation
   enabled: '{{ inputs.run_verify }}'
   repositoryOperation: read
-  instructions: 'Read {{ inputs.assessment_artifact_path }} (or the recorded verdict
-    from the assess step) before doing anything.
+  instructions: |-
+    Run moonspec-verify against the original scope and constraints. The initial assessment is context, not objective proof. Reuse valid evidence only when it matches the current candidate content, original scope, requirement identities, completion policy, and required freshness; otherwise execute the missing checks. Bind objective success using validatedRefs.acceptance (acceptance/v1). Preserve incomplete source scope and mandatory evidence gaps; optional enrichment and diagnostics are disclosed limitations.
 
+    Use verification target {{ inputs.verification_target }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }}. Read {{ inputs.brief_artifact_path }} as original scope and {{ inputs.assessment_artifact_path }} as initial process context; no MoonSpec packet is required. Completion target override: {{ inputs.completion_target_ref }} (empty resolves the remote default).
 
-    If the recorded verdict is FULLY_IMPLEMENTED and the implementation step did no
-    code changes, report verification as already satisfied by the initial assessment
-    and skip rerunning verification.
-
-
-    If the recorded verdict is BLOCKED, stop without running verification and report
-    the blocking evidence from the assessment.
-
-
-    Otherwise run moonspec-verify against verification target {{ inputs.verification_target
-    }} for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }}. The default
-    verification target is issue_brief. Use {{ inputs.brief_artifact_path }} as the
-    authoritative issue brief and {{ inputs.assessment_artifact_path }} as the initial
-    state assessment. Do not require a MoonSpec feature directory, spec.md, plan.md,
-    or tasks.md for issue_brief verification mode.
-
-
-    Re-read the issue preset brief and confirm every required behavior change that
-    is visible in the brief artifact is implemented and covered by tests. Run the
-    focused unit and integration checks named by the brief or implied by the changed
-    code paths.
-
-
-    Verification scope rules: the visible content of {{ inputs.brief_artifact_path
-    }} plus the assessment backlog in {{ inputs.assessment_artifact_path }} define
-    the verification scope. If the brief artifact is marked truncated, first attempt
-    one bounded recovery of the full issue content through the trusted MoonMind tool
-    surface; verify against the recovered content when recovery succeeds, otherwise
-    verify the visible requirements and report the residual truncation as a disclosed
-    scope limitation instead of NO_DETERMINATION, unless the acceptance criteria
-    themselves are truncated and unrecoverable. Treat assessment requirements with
-    status unverifiable, and requirements provable only by manual testing, external
-    deployment, or provider tooling unavailable in this runtime, as disclosed scope
-    exclusions: list them with reasons in the verifier result, and do not let them
-    block FULLY_IMPLEMENTED or justify NO_DETERMINATION when every repo-verifiable
-    in-scope requirement is VERIFIED. Record optional retrieval or enrichment tooling
-    that is unavailable or misconfigured (for example MoonMind RAG search failing
-    with embedding_provider_not_configured) as a NOT RUN environment note; it never
-    gates the verdict. Reserve NO_DETERMINATION for a missing or unreadable brief
-    artifact, unrecoverably truncated acceptance criteria, or visible in-scope requirements
-    whose repository evidence cannot be inspected in this runtime.
-
-
-    If verification returns ADDITIONAL_WORK_NEEDED, produce structured remaining
-    work with implementation gaps, verification gaps, required tests, and concrete
-    next files or commands so the following remediation step can consume it. Do
-    not modify source code or tests in this read-only verification step. Write the
-    complete structured verifier result to {{ inputs.verify_artifact_path }}.
-
-
-    If verification returns NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or
-    ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, stop and report the terminal evidence.
-
-
-    Do not create a pull request until the controlling moonspec-verify verdict is
-    FULLY_IMPLEMENTED and the relevant tests pass.'
+    Write the complete verifier result to {{ inputs.verify_artifact_path }}. Return bounded remainingWork and the canonical continuation decision to the existing remediation controller; do not edit code or tests in this read-only step.
   skill:
     id: moonspec-verify
     args:
+      completion_target_ref: '{{ inputs.completion_target_ref }}'
+      constraints: '{{ inputs.constraints }}'
       verification_target: '{{ inputs.verification_target }}'
       issue_provider: '{{ inputs.issue_provider }}'
       issue_ref: '{{ inputs.issue_ref }}'
@@ -228,6 +162,8 @@ steps:
         inputs:
           repositoryOperation: read
           selectedSkill: moonspec-verify
+          completion_target_ref: '{{ inputs.completion_target_ref }}'
+          constraints: '{{ inputs.constraints }}'
           instructions: 'Run the selected moonspec-verify Skill against the latest
             remediation workspace head using the supplied Skill inputs. Do not modify
             source code or tests. Write the complete structured verifier result to
@@ -275,88 +211,29 @@ steps:
 - title: Create pull request
   annotations:
     issueImplementRole: pull-request-handoff
-  instructions: 'Read {{ inputs.assessment_artifact_path }} (or the recorded verdict
-    from the assess step) before doing anything.
+  instructions: |-
+    Read {{ inputs.assessment_artifact_path }} (or the recorded verdict from the assess step) before doing anything.
 
+    Skip publication only when objective acceptance evidence satisfies the freshly resolved intended completion target under the shared policy. A FULLY_IMPLEMENTED initial assessment alone cannot skip the PR. A later FULLY_IMPLEMENTED verifier result approves candidate work for review; it does not rewrite the initial assessment or prove landing. Publish candidate-only work through the existing PR path even when the worktree is clean and commits are already pushed. Reuse an exact existing PR for the same candidate when available.
 
-    If the recorded verdict is FULLY_IMPLEMENTED and the implementation step did no
-    code changes, skip pull request creation entirely and report it as skipped because
-    there is nothing new to publish. Do not write {{ inputs.pr_artifact_path }} in
-    this case. The final step will move {{ inputs.issue_ref }} directly to Done.
+    If the recorded verdict is BLOCKED, stop without creating a pull request and report the blocking evidence from the assessment.
 
+    Otherwise create a pull request for the completed work for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} {% if inputs.run_verify %}only after the latest controlling post-remediation moonspec-verify verdict is FULLY_IMPLEMENTED in {{ inputs.verify_artifact_path }}. If the verifier reported ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, or if {{ inputs.remediation_max_attempts }} remediation attempts have been exhausted without FULLY_IMPLEMENTED, stop without creating a pull request and report the verifier evidence.{% else %}after implementation is complete and the focused tests required by the issue have passed. Verification was disabled for this workflow execution, so do not require {{ inputs.verify_artifact_path }} or a moonspec-verify verdict before creating the pull request.{% endif %}
 
-    If the recorded verdict is BLOCKED, stop without creating a pull request and report
-    the blocking evidence from the assessment.
+    This Issue Implement handoff step is the explicit PR-publication step for this preset. It intentionally owns pull request creation before the {{ inputs.issue_provider }} code review transition so the confirmed pull request URL is available to both {{ inputs.issue_provider }} and MoonMind publish handling. If generic managed-runtime guidance says not to push or create a pull request, treat this step-specific handoff instruction as the controlling instruction for this step only. If the workflow is submitted with PR merge automation enabled, the parent workflow must use the pull request URL produced by this step as the published PR and then run merge automation against that PR; {% if inputs.issue_provider == "github" %}the required closing keyword closes issue {{ inputs.issue_ref }} when the pull request merges, and parent-owned post-merge completion applies the configured Done labels and confirms the closed state{% else %}on a successful merge the parent workflow will transition {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} to Done automatically{% endif %}. If the runtime instructions, workflow parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Review and report the exact blocker.
 
+    First confirm the working tree contains only intentional changes for this issue and no raw credentials. Commit the work with a concise message that includes {{ inputs.issue_ref }}. Push the current non-protected work branch and create a non-draft pull request with the available authenticated GitHub tooling.
 
-    Otherwise create a pull request for the completed work for {{ inputs.issue_provider
-    }} issue {{ inputs.issue_ref }} {% if inputs.run_verify %}only after the latest controlling post-remediation
-    moonspec-verify verdict is FULLY_IMPLEMENTED in {{ inputs.verify_artifact_path }}.
-    If the verifier reported ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED,
-    FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, or if
-    {{ inputs.remediation_max_attempts }} remediation attempts have been exhausted
-    without FULLY_IMPLEMENTED, stop without creating a pull request and report the
-    verifier evidence.{% else %}after implementation is complete and the focused tests
-    required by the issue have passed. Verification was disabled for this workflow
-    execution, so do not require {{ inputs.verify_artifact_path }} or a moonspec-verify
-    verdict before creating the pull request.{% endif %}
+    The pull request must be ready for review, not a draft. Do not pass draft flags when creating it. If the available tool or repository default creates a draft pull request, immediately mark it ready for review (for example, with the authenticated GitHub tooling's ready-for-review command) and verify the final pull request isDraft value is false before continuing.
 
-
-    This Issue Implement handoff step is the explicit PR-publication step for this
-    preset. It intentionally owns pull request creation before the {{ inputs.issue_provider
-    }} code review transition so the confirmed pull request URL is available to both
-    {{ inputs.issue_provider }} and MoonMind publish handling. If generic managed-runtime
-    guidance says not to push or create a pull request, treat this step-specific handoff
-    instruction as the controlling instruction for this step only. If the workflow is
-    submitted with PR merge automation enabled, the parent workflow must use the pull
-    request URL produced by this step as the published PR and then run merge automation
-    against that PR; {% if inputs.issue_provider == "github" %}the required closing
-    keyword closes issue {{ inputs.issue_ref }} when the pull request merges, and
-    parent-owned post-merge completion applies the configured Done labels and confirms
-    the closed state{% else %}on a successful merge
-    the parent workflow will transition {{ inputs.issue_provider }} issue {{
-    inputs.issue_ref }} to Done automatically{% endif %}. If
-    the runtime instructions, workflow parameters, authentication, remote configuration,
-    branch protection, or repository permissions prevent committing, pushing, or creating
-    the pull request in this step, stop before changing Jira to Review and report
-    the exact blocker.
-
-
-    First confirm the working tree contains only intentional changes for this issue
-    and no raw credentials. Commit the work with a concise message that includes {{
-    inputs.issue_ref }}. Push the current non-protected work branch and create a non-draft
-    pull request with the available authenticated GitHub tooling.
-
-
-    The pull request must be ready for review, not a draft. Do not pass draft flags
-    when creating it. If the available tool or repository default creates a draft
-    pull request, immediately mark it ready for review (for example, with the authenticated
-    GitHub tooling''s ready-for-review command) and verify the final pull request
-    isDraft value is false before continuing.
-
-
-    The pull request title must include {{ inputs.issue_ref }}. The pull request body
-    must include:
-
+    The pull request title must include {{ inputs.issue_ref }}. The pull request body must include:
     - the issue reference
-
-    - {% if inputs.issue_provider == "github" %}a standalone `Closes {{ inputs.issue_ref
-    }}` line so GitHub closes the issue only after the pull request merges{% else %}the
-    issue tracker reference required by the configured review transition{% endif %}
-
+    - {% if inputs.issue_provider == "github" %}a standalone `Closes {{ inputs.issue_ref }}` line so GitHub closes the issue only after the pull request merges{% else %}the issue tracker reference required by the configured review transition{% endif %}
     - a summary of the implementation
-
     - tests run
-
     - remaining risks
 
-
-    After creation and non-draft verification, record the confirmed pull request URL
-    in the step result and in a local handoff artifact at {{ inputs.pr_artifact_path
-    }} with keys issue_provider, issue_ref, pull_request_url, and, for Jira compatibility
-    when issue_provider is jira, jira_issue_key. Do not continue unless the pull_request_url
-    is a GitHub pull request URL for the current work branch and the pull request
-    is confirmed non-draft.'
+    After creation and non-draft verification, record the confirmed pull request URL in the step result and in a local handoff artifact at {{ inputs.pr_artifact_path }} with keys issue_provider, issue_ref, pull_request_url, and, for Jira compatibility when issue_provider is jira, jira_issue_key. Do not continue unless the pull_request_url is a GitHub pull request URL for the current work branch and the pull request is confirmed non-draft.
   skill:
     id: auto
     args: {}

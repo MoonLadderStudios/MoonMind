@@ -13211,6 +13211,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                       step.presetDetail?.uiSchema,
                       name,
                     );
+                    if (uiSchema.advanced === true && !showAdvancedStepOptions) {
+                      return false;
+                    }
                     return capabilityFieldVisible(
                       uiSchema,
                       step.presetInputValues,
@@ -13925,7 +13928,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                             )
                           }
                         />
-                      ) : visiblePresetInputs.length > 0 ? (
+                      ) : !schemaContractHasFields(step.presetDetail) && visiblePresetInputs.length > 0 ? (
                         <div className="grid-2">
                           {visiblePresetInputs.map((definition) => {
                               const inputId = `queue-step-${step.localId}-preset-input-${definition.name}`;
