@@ -2,6 +2,7 @@
 name: moonspec-doc-reconcile
 description: Reconcile canonical declarative documents under docs/ with verified implementation discoveries after a FULLY_IMPLEMENTED moonspec-verify verdict. Use when an orchestration run must decide whether verified discoveries show the owning canonical document is impossible, unclear, or inconsistent, apply the smallest correct doc update, or escalate ambiguous authority conflicts and deliberate divergences instead of editing.
 metadata:
+  required-skills: "document-update"
   required-capabilities:
     - git
 ---
@@ -95,16 +96,21 @@ Escalate instead of editing when:
 - the implementation deliberately diverged from a satisfiable documented approach and no explicit input authorized that desired-state change, or
 - an escalate-only invocation confirms a documentation-type gap is blocking verification.
 
-To escalate:
-
-1. If the repository provides an issue-tracker escalation skill (for example `.agents/skills/jira-issue-creator/SKILL.md`), read it and follow its workflow, then report `ESCALATED` with the issue key and URL.
-2. If no issue-tracker integration is available, still report `ESCALATED`: record the document path, the contradicted claim, the implementation evidence, and why the update needs an owner decision in the structured output and markdown summary so it reaches the run report or pull request body.
+To escalate, follow the provider-neutral handoff in the resolved `document-update`
+bundle's [repository conventions](../document-update/references/repository-conventions.md).
+Resolve that dependency from `MOONMIND_ACTIVE_SKILLS_DIR` first; outside MoonMind
+use the installed sibling bundle. Preserve `docPath` (the document), `claim`, `evidence`,
+`owningDecision`, `reason`, and `resumeCondition` in every escalated item.
+Use an available tracker only when the caller already authorized that mutation;
+discover its actual metadata and include `trackerIssue` with provider, key, URL
+and verified receipt only after success. Missing or denied integration retains
+the complete artifact and summary, never retries with broader credentials.
 
 Escalation does not retroactively fail verification or block the surrounding orchestration.
 
 ## Boundaries
 
-- Read-only outside `docs/`: never edit source code, tests, `spec.md`, `plan.md`, `tasks.md`, or configuration.
+- Read-only outside canonical docs and requested result artifacts: never edit source code, tests, `spec.md`, `plan.md`, `tasks.md`, or configuration.
 - Never commit, push, or create pull requests; the orchestration's publication step owns git operations.
 - Never delete or rewrite the discovery ledger; it is run evidence.
 - Respect secret hygiene: redact secret-like content before writing or reporting.
@@ -119,16 +125,16 @@ Write the structured result to the path provided by the orchestration step when 
   "docPaths": ["docs/Workflows/Example.md"],
   "updated": [{"docPath": "docs/Workflows/Example.md", "reason": "definite function drift in owning module contract"}],
   "noUpdateRequired": [{"docPath": "docs/ExampleDesign.md", "reason": "possible drift only"}],
-  "escalated": [{"docPath": "docs/Workflows/Example.md", "reason": "ambiguous module-owned contract authority"}],
+  "escalated": [{"docPath": "docs/Workflows/Example.md", "claim": "affected contract claim", "evidence": ["verified discovery"], "owningDecision": "resolve competing owners", "reason": "ambiguous module-owned contract authority", "resumeCondition": "authoritative owner resolution recorded"}],
   "gateRationale": "which gate criterion each applied discovery met, or why each discovery was rejected",
   "evidence": ["file, test, or report references backing the decision"],
-  "jiraIssue": {"key": "MM-000", "url": "https://..."}
+  "trackerIssue": {"provider": "configured tracker", "key": "verified key", "url": "https://...", "receipt": "verified creation/read evidence"}
 }
 ```
 
-`docPaths` lists edited documents for `updated`, the considered documents otherwise. The `updated`, `noUpdateRequired`, and `escalated` lists are always present; use empty lists for categories that do not apply. Every updated/noUpdateRequired/escalated item must include a reason. Include `jiraIssue` only when an escalation created a tracker issue; when no tracker integration is available, the escalation record in `escalated` and the markdown summary carry the full detail instead.
+`docPaths` lists edited documents for `updated`, the considered documents otherwise. The `updated`, `noUpdateRequired`, and `escalated` lists are always present; use empty lists for categories that do not apply. Every updated/noUpdateRequired/escalated item must include a reason. Include `trackerIssue` only when an escalation created a tracker issue; when no tracker integration is available, the escalation record in `escalated` and the markdown summary carry the full detail instead.
 
-Also return a short markdown summary suitable for inclusion in a pull request body: outcome, canonical sources considered, owning canonical docs edited or rejected, temporary artifacts consulted, claim coverage, and escalation issue key when present.
+Also return a short markdown summary suitable for inclusion in a pull request body: outcome, canonical sources considered, owning canonical docs edited or rejected, temporary artifacts consulted, claim coverage, and escalation issue key when present. When edits and escalations coexist, set `action` to `escalated` and preserve both lists; an escalation must not erase verified edits. A normal no-op is `no_update_required`, not failure. Publication and verification keep their own outcomes.
 
 ## Key Rules
 

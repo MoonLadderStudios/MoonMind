@@ -5208,6 +5208,7 @@ async def test_create_document_update_tasks_from_inline_paths():
         "args": {
             "document_path": "/docs/readme.md",
             "source_directory": "/docs",
+            "edit_scope": "target_only",
         },
     }
 
@@ -5698,3 +5699,129 @@ async def test_update_github_issue_status_prefers_durable_ref_over_compact() -> 
     assert result.outputs["decision"] == "blocked"
     assert result.outputs["assessmentVerdict"] == "BLOCKED"
     assert service.token_requests == []
+
+
+@pytest.mark.asyncio
+async def test_document_dispatch_preserves_intent_and_scopes_each_child():
+    creator = _FakeExecutionCreator()
+    result = await create_document_update_tasks_from_paths(
+        {'documentPaths': ['docs/a.md', 'docs/b.md', 'docs/a.md'],
+         'maxDocuments': 2,
+         'documentUpdateOrchestration': {
+             'task': {'repository': 'example/repo',
+                      'runtime': {'mode': 'codex_cli', 'model': 'chosen-model'},
+                      'publish': {'mode': 'pr', 'mergeAutomation': {'enabled': False}},
+                      'instructions': 'Preserve accepted contracts',
+                      'inputs': {'constraints': 'Do not change ownership', 'document_path': 'wrong.md'}},
+             'traceability': {'sourceDirectory': 'docs'}}},
+        {'workflow_id': 'parent-1'}, execution_creator=creator,
+    )
+    receipt = result.outputs['documentUpdateOrchestration']
+    assert receipt['documentCompletion'] == 'not_verified'
+    assert receipt['createdWorkflowCount'] == 2
+    for index, path in enumerate(['docs/a.md', 'docs/b.md']):
+        workflow = creator.requests[index]['initial_parameters']['workflow']
+        assert workflow['inputs'] == workflow['skill']['args']
+        assert workflow['inputs']['document_path'] == path
+        assert workflow['inputs']['edit_scope'] == 'target_only'
+        assert workflow['inputs']['constraints'] == 'Do not change ownership'
+        assert workflow['runtime']['model'] == 'chosen-model'
+        assert workflow['publish']['mergeAutomation']['enabled'] is False
+        assert 'Preserve accepted contracts' in workflow['instructions']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('paths,limit', [(['docs/a.md', 'docs/b.md'], 1),
+                                       (['docs/a.md'], 0), (['docs/a.md'], True),
+                                       (['outside/a.md'], 100), (['docs/../a.md'], 100)])
+async def test_document_dispatch_checks_bounds_before_any_creation(paths, limit):
+    creator = _FakeExecutionCreator()
+    result = await create_document_update_tasks_from_paths(
+        {'documentPaths': paths, 'maxDocuments': limit, 'sourceDirectory': 'docs'},
+        execution_creator=creator,
+    )
+    assert result.status == 'FAILED'
+    assert creator.requests == []
+
+
+@pytest.mark.asyncio
+async def test_document_dispatch_explicit_empty_does_not_use_previous_inventory():
+    creator = _FakeExecutionCreator()
+    result = await create_document_update_tasks_from_paths(
+        {'documentPaths': []}, {'previousOutputs': {'documentPaths': ['docs/a.md']}},
+        execution_creator=creator,
+    )
+    assert result.outputs['documentUpdateOrchestration']['createdWorkflowCount'] == 0
+    assert creator.requests == []
+
+
+@pytest.mark.asyncio
+async def test_document_dispatch_requires_a_creation_receipt():
+    result = await create_document_update_tasks_from_paths(
+        {'documentPaths': ['docs/a.md', 'docs/b.md']}, execution_creator=lambda **_: {},
+    )
+    receipt = result.outputs['documentUpdateOrchestration']
+    assert receipt['createdWorkflowCount'] == 0
+    assert receipt['failures'][0]['errorCode'] == 'task_creation_failed'
+    assert receipt['failures'][1]['errorCode'] == 'dependency_not_created'
+
+
+@pytest.mark.asyncio
+async def test_document_dispatch_identity_is_stable_per_document_and_parent():
+    async def identities(paths, parent):
+        result = await create_document_update_tasks_from_paths(
+            {'documentPaths': paths, 'maxDocuments': 100, 'sourceDirectory': 'docs', 'task': {'repository': 'example/repo'}},
+            {'workflow_id': parent}, execution_creator=_FakeExecutionCreator(),
+        )
+        return {t['documentPath']: t['idempotencyKey'] for t in result.outputs['documentUpdateOrchestration']['tasks']}
+
+    first = await identities(['docs/a.md', 'docs/b.md'], 'parent-1')
+    reordered = await identities(['docs/b.md', 'docs/a.md'], 'parent-1')
+    repeated_run = await identities(['docs/a.md', 'docs/b.md'], 'parent-2')
+    assert first == reordered
+    assert first['docs/a.md'] != repeated_run['docs/a.md']
+
+
+@pytest.mark.asyncio
+async def test_document_discovery_ignores_symlink_outside_scope(tmp_path):
+    (tmp_path / 'docs').mkdir()
+    (tmp_path / 'docs/inside.md').write_text('inside')
+    (tmp_path / 'outside.md').write_text('outside')
+    (tmp_path / 'docs/escape.md').symlink_to(tmp_path / 'outside.md')
+    result = await discover_documents({'directory': 'docs', 'repoRoot': str(tmp_path)})
+    assert result.status == 'COMPLETED'
+    assert result.outputs['documentPaths'] == ['docs/inside.md']
+
+
+@pytest.mark.asyncio
+async def test_document_discovery_to_dispatch_uses_real_activity_input_shape(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/a.md").write_text("# A")
+    discovery = await discover_documents({"directory": str(tmp_path / "docs")})
+    creator = _FakeExecutionCreator()
+    result = await create_document_update_tasks_from_paths(
+        {"previousOutputs": discovery.outputs, "maxDocuments": 10,
+         "documentUpdateOrchestration": {
+             "task": {"repository": "example/repo", "publish": {"mode": "pr"}},
+             "traceability": {"sourceDirectory": str(tmp_path / "docs")}}},
+        {"workflow_id": "wf-document", "run_id": "run-document", "node_id": "dispatch",
+         "idempotency_key": "wf-document:dispatch:execute"},
+        execution_creator=creator,
+    )
+    assert result.status == "COMPLETED"
+    assert result.outputs["documentUpdateOrchestration"]["createdWorkflowCount"] == 1
+    child = creator.requests[0]["initial_parameters"]["workflow"]
+    assert child["inputs"]["document_path"] == "docs/a.md"
+    assert child["publish"] == {"mode": "pr"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("paths", ["docs/a.md", [123], [""], {}])
+async def test_document_dispatch_rejects_malformed_inventory(paths):
+    creator = _FakeExecutionCreator()
+    result = await create_document_update_tasks_from_paths(
+        {"documentPaths": paths}, execution_creator=creator,
+    )
+    assert result.status == "FAILED"
+    assert creator.requests == []

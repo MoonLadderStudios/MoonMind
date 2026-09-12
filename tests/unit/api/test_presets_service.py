@@ -2865,7 +2865,9 @@ async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
                 "Document health review",
                 "Document health remediate",
             ]
-            assert [step["skill"]["id"] for step in steps] == ["auto", "auto"]
+            assert [step["skill"]["id"] for step in steps] == [
+                "document-health-review", "document-health-remediate"
+            ]
             assert [
                 step["annotations"]["documentHealthRole"] for step in steps
             ] == ["review", "remediate"]
@@ -2881,22 +2883,39 @@ async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
             assert len(expanded["steps"]) == 2
             review_step, remediate_step = expanded["steps"]
             assert "docs/Workflows/" in review_step["instructions"]
-            assert "review-only step" in review_step["instructions"]
-            assert (
-                "artifacts/document-health-review.json"
-                in review_step["instructions"]
+            from moonmind.services.skill_step_inputs import extract_skill_input_contract_metadata, _validate_schema_object
+
+            for step in (review_step, remediate_step):
+                args = step["skill"]["args"]
+                assert args == {
+                    "scope": "docs/Workflows/",
+                    "report_path": "artifacts/document-health-review.json",
+                    "output_mode": "summary",
+                    "constraints": "",
+                    "allowed_actions": ["update", "reference_repair"],
+                    "allow_destructive": False,
+                }
+                skill_path = seed_dir.parents[2] / ".agents/skills" / step["skill"]["id"] / "SKILL.md"
+                contract = extract_skill_input_contract_metadata(
+                    skill_path.read_text(), content_digest="fixture"
+                )
+                assert not _validate_schema_object(values=args, schema=contract["input_schema"], path="inputs")
+
+            custom = await service.expand_template(
+                slug="document-health-update", scope="global", scope_ref=None,
+                inputs={"documentation_scope": "Docs/", "report_path": "artifacts/custom.json",
+                        "output_mode": "full_report", "constraints": "Preserve unique content",
+                        "allowed_actions": "all", "allow_destructive": True}, context={},
             )
-            assert "missing metadata" in review_step["instructions"]
-            assert "authority ladder" in review_step["instructions"]
-            assert "docs/tmp/" in review_step["instructions"]
-            assert (
-                "artifacts/document-health-review.json"
-                in remediate_step["instructions"]
-            )
-            assert "remediate ONLY" in remediate_step["instructions"]
-            assert "missing embedded rationale" in remediate_step["instructions"]
-            assert "unverifiable canonical claims" in remediate_step["instructions"]
-            assert "docs/tmp/" in remediate_step["instructions"]
+            for step in custom["steps"]:
+                args = step["skill"]["args"]
+                assert args["allow_destructive"] is True
+                assert args["report_path"] == "artifacts/custom.json"
+                assert args["output_mode"] == "full_report"
+                assert args["constraints"] == "Preserve unique content"
+                assert "delete" in args["allowed_actions"]
+                assert not _validate_schema_object(values=args, schema=contract["input_schema"], path="inputs")
+
 
 
 async def test_seed_catalog_includes_document_author_preset(tmp_path):
@@ -2945,8 +2964,7 @@ async def test_seed_catalog_includes_document_author_preset(tmp_path):
             assert "Document a new runtime contract." in step["instructions"]
             assert "docs/Workflows/" in step["instructions"]
             assert "MM-931 from MM-927" in step["instructions"]
-            assert "Do not create spec.md" in step["instructions"]
-            assert "docs/tmp/" in step["instructions"]
+            assert "document set" in step["instructions"]
 
 async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
     tmp_path,
@@ -3935,14 +3953,14 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
     assert expanded["steps"][0]["tool"]["id"] == "github.load_issue_preset_brief"
     assert expanded["steps"][0]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",
-        "issueNumber": "1067",
+        "issueNumber": 1067,
         "artifactPath": "artifacts/github-issue-orchestrate-brief.json",
     }
     assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
     assert expanded["steps"][4]["tool"]["id"] == "github.update_issue_status"
     assert expanded["steps"][4]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",
-        "issueNumber": "1067",
+        "issueNumber": 1067,
         "targetStatus": "In Progress",
         "mode": "start",
         "assessmentArtifactPath": "artifacts/github-issue-orchestrate-assessment.json",
@@ -3950,7 +3968,7 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
     assert expanded["steps"][26]["tool"]["id"] == "github.update_issue_status"
     assert expanded["steps"][26]["tool"]["inputs"] == {
         "repository": "MoonLadderStudios/MoonMind",
-        "issueNumber": "1067",
+        "issueNumber": 1067,
         "mode": "finalize_after_pr_or_done",
         "pullRequestArtifactPath": "artifacts/github-issue-orchestrate-pr.json",
         "verificationArtifactPath": "var/artifacts/moonspec-verify/github-issue-orchestrate.json",
@@ -4040,6 +4058,17 @@ async def test_seed_catalog_github_issue_orchestrate_expands_gated_workflow(tmp_
     assert "Verification was disabled" in no_verify["steps"][-2]["instructions"]
     assert "Verification was disabled" in no_verify["steps"][-1]["instructions"]
     assert no_verify["steps"][-1]["tool"]["inputs"]["requireVerification"] is False
+
+
+    # Typed expansion preserves numeric issue identity; the receiving tool also
+    # continues accepting historical string-valued Activity payloads.
+    from moonmind.workflows.temporal.story_output_tools import _github_issue_inputs
+
+    for index in (0, 4, 26):
+        inputs = expanded["steps"][index]["tool"]["inputs"]
+        expected = ("MoonLadderStudios/MoonMind", 1067)
+        assert _github_issue_inputs(inputs) == expected
+        assert _github_issue_inputs({**inputs, "issueNumber": "1067"}) == expected
 
 
 async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
@@ -4317,6 +4346,7 @@ async def test_seed_catalog_includes_document_update_orchestrate_preset(tmp_path
                 "MoonLadderStudios/MoonMind"
             )
             assert expanded["steps"][1]["tool"]["id"] == "story.create_document_update_tasks"
+            assert expanded["steps"][1]["tool"]["inputs"]["maxDocuments"] == 100
             assert expanded["steps"][1]["documentUpdateOrchestration"]["task"]["publish"] == {
                 "mode": "pr",
                 "mergeAutomation": {"enabled": True},
@@ -4324,6 +4354,22 @@ async def test_seed_catalog_includes_document_update_orchestrate_preset(tmp_path
             assert expanded["steps"][1]["documentUpdateOrchestration"]["traceability"][
                 "sourceDirectory"
             ] == "docs"
+
+    # Both child publication choices and the numeric cap survive real expansion.
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+            expanded = await service.expand_template(
+                slug="document-update-orchestrate", scope="global", scope_ref=None,
+                inputs={"document_directory": "docs", "publish_mode": "pr",
+                        "max_documents": "2", "constraints": "Preserve ownership"},
+                context={"repository": "example/repo", "targetRuntime": "codex_cli"},
+            )
+            step = expanded["steps"][1]
+            assert step["tool"]["inputs"]["maxDocuments"] == 2
+            assert step["documentUpdateOrchestration"]["task"]["inputs"]["constraints"] == "Preserve ownership"
+            assert step["documentUpdateOrchestration"]["task"]["publish"]["mergeAutomation"]["enabled"] is False
 
 async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
     tmp_path,
@@ -5048,3 +5094,43 @@ async def test_mm569_preset_draft_validation_reports_field_addressable_error(
             "recoverable": True,
         }
     ]
+
+
+@pytest.mark.parametrize(
+    "template,value,expected",
+    [
+        ("{{ inputs.value }}", ["update", "reference_repair"], ["update", "reference_repair"]),
+        ("{{ inputs.value }}", {"scope": "docs"}, {"scope": "docs"}),
+        ("{{ inputs.value | int }}", "100", 100),
+        ("{{- inputs.value | int -}}", "100", 100),
+        ("{{ inputs.value }}", "001", "001"),
+        ("count={{ inputs.value }}", 100, "count=100"),
+        ("{{ inputs.value }} / {{ inputs.value }}", 2, "2 / 2"),
+        ("{{ inputs.value }}", False, False),
+    ],
+)
+async def test_preset_rendering_preserves_typed_expressions_and_text(template, value, expected):
+    from jinja2 import StrictUndefined
+    from jinja2.sandbox import SandboxedEnvironment
+    from api_service.services.presets.catalog import _render_value
+
+    result = _render_value(
+        SandboxedEnvironment(undefined=StrictUndefined), template,
+        variables={"inputs": {"value": value}},
+    )
+    assert result == expected
+    assert type(result) is type(expected)
+    if isinstance(value, (list, dict)):
+        assert result is not value
+
+
+async def test_preset_typed_expression_is_evaluated_once():
+    from jinja2.sandbox import SandboxedEnvironment
+    from api_service.services.presets.catalog import _render_value
+
+    values = [{"scope": "docs"}]
+    assert _render_value(
+        SandboxedEnvironment(), "{{ inputs['values'].pop() }}",
+        variables={"inputs": {"values": values}},
+    ) == {"scope": "docs"}
+    assert values == []

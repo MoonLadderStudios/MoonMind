@@ -12,6 +12,7 @@ import socket
 import threading
 import time
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,7 +21,7 @@ from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import yaml
-from jinja2 import StrictUndefined, TemplateError, UndefinedError
+from jinja2 import StrictUndefined, TemplateError, UndefinedError, nodes
 from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -715,7 +716,29 @@ def _render_value(
 ) -> Any:
     if isinstance(value, str):
         try:
-            rendered = env.from_string(value).render(**variables)
+            native_expression = False
+            if _NATIVE_SCALAR_TEMPLATE_PATTERN.match(value.strip()):
+                parsed = env.parse(value.strip())
+                native_expression = (
+                    len(parsed.body) == 1
+                    and isinstance(parsed.body[0], nodes.Output)
+                    and len(parsed.body[0].nodes) == 1
+                    and not isinstance(parsed.body[0].nodes[0], nodes.TemplateData)
+                )
+            if native_expression:
+                # Evaluate once through the same sandbox. Preserve JSON values
+                # for typed Skill inputs and limits; do not coerce identifiers
+                # such as "001" merely because they look numeric.
+                template = value.strip()
+                start = 3 if template.startswith("{{-") else 2
+                end = -3 if template.endswith("-}}") else -2
+                expression = env.compile_expression(template[start:end], undefined_to_none=False)
+                native = expression(**variables)
+                if type(native) in (list, dict, int, float):
+                    return deepcopy(native)
+                rendered = str(native)
+            else:
+                rendered = env.from_string(value).render(**variables)
         except UndefinedError as exc:
             raise PresetValidationError(
                 f"Template references an unknown variable: {exc}."

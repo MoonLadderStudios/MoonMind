@@ -1,66 +1,62 @@
 slug: document-author
 title: Document Author
-description: Author a new docs-native document by selecting its document class, location, filename, viewpoint template, metadata, stable claims, and rationale without creating spec.md.
+description: Author repository documentation with role, ownership, metadata, traceability and evidence
+  resolved from local conventions.
 scope: global
 tags:
-  - documentation
-  - document-authoring
-  - docs-native
+- documentation
+- document-authoring
+- docs-native
 requiredCapabilities:
-  - git
+- git
 annotations:
   sourceSkill: document-author
   sourceIssueKey: MM-931
   sourceReference: MM-927
   output: authored-document
 inputs:
-  - name: documentation_intent
-    label: Documentation Intent
-    type: textarea
-    required: true
-    default: ""
-  - name: preferred_area
-    label: Preferred Docs Area
-    type: text
-    required: false
-    default: "docs/"
-  - name: traceability
-    label: Traceability
-    type: text
-    required: false
-    default: ""
-  - name: constraints
-    label: Constraints
-    type: textarea
-    required: false
-    default: ""
+- name: documentation_intent
+  label: Documentation Intent
+  type: textarea
+  required: true
+  default: ''
+- name: preferred_area
+  label: Preferred Docs Area
+  type: text
+  required: false
+  default: docs/
+- name: traceability
+  label: Traceability
+  type: text
+  required: false
+  default: ''
+- name: constraints
+  label: Constraints
+  type: textarea
+  required: false
+  default: ''
 steps:
-  - title: Author docs-native document
-    type: skill
-    annotations:
-      documentAuthoringRole: author
-      sourceIssueKey: MM-931
-      sourceReference: MM-927
-    instructions: |-
-      Author one docs-native document for this intent:
-      {{ inputs.documentation_intent }}
+- title: Author docs-native document
+  type: skill
+  annotations:
+    documentAuthoringRole: author
+    sourceIssueKey: MM-931
+    sourceReference: MM-927
+  instructions: 'Author the requested documentation using document-author:
 
-      Preferred docs area:
-      {{ inputs.preferred_area }}
+    {{ inputs.documentation_intent }}
 
-      Traceability:
-      {{ inputs.traceability }}
 
-      Additional constraints:
-      {{ inputs.constraints }}
+    Preferred area: {{ inputs.preferred_area }}
 
-      Follow the document-author skill. Choose the document class, location, filename, viewpoint template, metadata header, stable claims, and embedded rationale before writing. If the request is broad or cleanup-oriented, write a bounded improvement plan under docs/tmp/ instead of editing canonical docs.
+    Traceability: {{ inputs.traceability }}
 
-      Keep canonical docs declarative. Put imperative plans under docs/tmp/ or a gitignored handoff path. Do not create spec.md and do not write under specs/.
+    Constraints: {{ inputs.constraints }}
 
-      Report the chosen path, ownership reason, metadata fields, stable claims, rationale placement, duplicate/authority checks, verification, and confirmation that no docs-native spec.md was created.
-    skill:
-      id: document-author
-      args: {}
-      requiredCapabilities:
-        - git
+
+    Complete the authorized document or document set and return paths and verification evidence.'
+  skill:
+    id: document-author
+    args: {}
+    requiredCapabilities:
+    - git

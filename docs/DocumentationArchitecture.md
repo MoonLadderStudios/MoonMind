@@ -2,7 +2,7 @@
 
 **Document Class:** Canonical declarative
 **Status:** Current standard and target direction
-**Updated:** 2026-06-24
+**Updated:** 2026-09-12
 **Audience:** Anyone authoring, classifying, reviewing, or reorganizing durable documentation in a MoonSpec project
 **Purpose:** Establish the single canonical taxonomy that names the document types a MoonSpec durable docs tree uses, the authority rules that resolve conflicts between canonical documents of the same class, and where design rationale must live — so that anyone classifying, writing, or reconciling a doc has one authoritative vocabulary, one set of viewpoints, one precedence ladder, and one module-boundary policy to apply.
 
@@ -298,7 +298,7 @@ Example:
 ```markdown
 **Document Class:** Canonical declarative
 **Status:** Current
-**Updated:** 2026-06-24
+**Updated:** 2026-09-12
 **Audience:** Contributors and runtime authors
 **Authority:** Target semantics for the managed-runtime launcher
 **Owning Surface:** moonmind/workflows/temporal/runtime/
@@ -417,3 +417,21 @@ The four canonical-viewpoint templates embed the **Canonical metadata header** f
 - [System / Feature Design View](./_viewpoints/SystemFeatureDesignView.template.md) — canonical (§3.3)
 - [Module Contract Specification](./_viewpoints/ModuleContractSpecification.template.md) — canonical (§3.4)
 - [Migration / Implementation Plan](./_viewpoints/MigrationImplementationPlan.template.md) — imperative working document (§4)
+
+## Documentation maintenance boundaries
+
+Documentation workflows apply the role-first maintenance rules in the
+[Document Model](Workflows/MoonSpecDocumentModel.md#role-first-documentation-maintenance).
+Ownership, metadata and embedded rationale are part of strategic coherence review;
+they are compatible with its bounded review dimensions. Document length is an
+investigation signal only: topic boundaries, authority and maintenance value decide
+whether splitting improves a document. Preserve useful unique content and repair
+inbound and relative links before completing moves, merges, splits or removals.
+
+The `document-health-update` preset supplies dedicated review/remediation Skills
+with one structured report handoff, not parallel preset policy. Directory update
+children receive exact document paths and inherited execution/publication intent.
+They edit only their own targets and retain shared-owner/reference changes as
+coordinated handoffs, so dependency scheduling alone is never mistaken for safe
+concurrent ownership of global docs. Queue receipts demonstrate dispatch, not
+completed documentation or publication.
