@@ -8,6 +8,7 @@ tokens, and no-op idempotency without touching the record.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -193,10 +194,21 @@ async def test_set_title_repairs_memo_provenance_revision_and_tokens(
 
 
 @pytest.mark.asyncio
-async def test_set_title_noop_does_not_touch_record(tmp_path, mock_client_adapter):
+async def test_set_title_noop_does_not_touch_record(
+    tmp_path, mock_client_adapter, monkeypatch
+):
+    # Separate semantic time from the database clock so metadata-only writes
+    # cannot hide an accidental onupdate timestamp change within one second.
+    initial_time = datetime(2025, 1, 1, 12, 0, 0, 123456, tzinfo=UTC)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.service._utc_now", lambda: initial_time
+    )
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         created = await _create(service, title="Operator choice")
+        before_updated_at = created.updated_at
+        before_revision = created.memo["titleRevision"]
+        before_search_time = created.search_attributes["mm_updated_at"]
 
         first = await service.update_execution(
             workflow_id=created.workflow_id,
@@ -209,7 +221,7 @@ async def test_set_title_noop_does_not_touch_record(tmp_path, mock_client_adapte
         )
         assert first["accepted"] is True
         before = await service.describe_execution(created.workflow_id)
-        before_updated_at = before.updated_at
+        assert before.updated_at == before_updated_at
 
         second = await service.update_execution(
             workflow_id=created.workflow_id,
@@ -222,8 +234,15 @@ async def test_set_title_noop_does_not_touch_record(tmp_path, mock_client_adapte
         )
         assert second["accepted"] is True
         after = await service.describe_execution(created.workflow_id)
-        assert after.memo["titleRevision"] == before.memo["titleRevision"]
+        assert after.memo["titleRevision"] == before_revision
         assert after.updated_at == before_updated_at
+        assert after.search_attributes["mm_updated_at"] == before_search_time
+        canonical = await session.get(
+            TemporalExecutionCanonicalRecord, created.workflow_id
+        )
+        assert canonical.updated_at == before_updated_at
+        assert canonical.last_update_idempotency_key == "set-title-second"
+        assert canonical.last_update_response == second
 
 
 @pytest.mark.asyncio

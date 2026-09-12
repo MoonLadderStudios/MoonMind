@@ -8,7 +8,7 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import profileFirstFixture from "../runtime/fixtures/profile-first-authoring.json";
@@ -19267,7 +19267,93 @@ describe("Task Create schema-driven capability inputs", () => {
                 unsafe_default: "token=raw-secret",
               },
             },
+            {
+              slug: "github-search-scope-schema-preset",
+              scope: "global",
+              title: "GitHub Search Scope Preset",
+              description: "Schema-driven GitHub issue search preset.",
+              latestVersion: "1",
+              version: "1",
+              inputSchema: {
+                type: "object",
+                required: [],
+                properties: {
+                  issue_search: { type: "string", title: "GitHub Issue Search" },
+                  include_all_authors: {
+                    type: "boolean",
+                    title: "Include issues created by other users",
+                    description:
+                      "By default, only issues created by the GitHub account used for this search are eligible.",
+                    default: false,
+                  },
+                },
+              },
+              uiSchema: {
+                issue_search: {
+                  widget: "text",
+                  searchPlaceholder: "Search GitHub issues",
+                },
+                include_all_authors: { widget: "checkbox" },
+              },
+              defaults: { include_all_authors: false },
+            },
           ],
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/presets/github-search-scope-schema-preset?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          slug: "github-search-scope-schema-preset",
+          scope: "global",
+          title: "GitHub Search Scope Preset",
+          description: "Schema-driven GitHub issue search preset.",
+          latestVersion: "1",
+          version: "1",
+          inputSchema: {
+            type: "object",
+            required: [],
+            properties: {
+              issue_search: { type: "string", title: "GitHub Issue Search" },
+              include_all_authors: {
+                type: "boolean",
+                title: "Include issues created by other users",
+                description:
+                  "By default, only issues created by the GitHub account used for this search are eligible.",
+                default: false,
+              },
+            },
+          },
+          uiSchema: {
+            issue_search: {
+              widget: "text",
+              searchPlaceholder: "Search GitHub issues",
+            },
+            include_all_authors: { widget: "checkbox" },
+          },
+          defaults: { include_all_authors: false },
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/presets/github-search-scope-schema-preset:expand?scope=global")) {
+      const payload = JSON.parse(String(init?.body || "{}")) as {
+        inputs?: Record<string, unknown>;
+      };
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          steps: [
+            {
+              id: "tpl:github-search-scope-schema-preset:1:01",
+              title: "Search GitHub issues",
+              instructions: "Search GitHub issues.",
+              tool: { type: "tool", id: "github.load_issue_preset_brief", inputs: payload.inputs },
+            },
+          ],
+          appliedTemplate: { slug: "github-search-scope-schema-preset", version: "1", inputs: payload.inputs },
+          capabilities: ["gh"],
+          warnings: [],
         }),
       } as Response);
     }
@@ -20004,6 +20090,97 @@ describe("Task Create schema-driven capability inputs", () => {
     ).toBeTruthy();
     expect((within(step).getByLabelText("Unsafe default") as HTMLInputElement).value).toBe("");
     expect(within(step).queryByDisplayValue("token=raw-secret")).toBeNull();
+  });
+
+  it("renders the self-author scope checkbox below the search field and submits its value", async () => {
+    async function selectScopePreset(): Promise<HTMLElement> {
+      renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+      const step = (await screen.findByText("Step 1")).closest(
+        "section",
+      ) as HTMLElement;
+      selectStepType(step, "Preset");
+      const presetSelect = within(step).getByLabelText(
+        "Preset Template",
+      ) as HTMLSelectElement;
+      await waitFor(() => {
+        expect(presetSelect.options.length).toBeGreaterThan(1);
+      });
+      fireEvent.change(presetSelect, {
+        target: { value: "global::::github-search-scope-schema-preset" },
+      });
+      await within(step).findByLabelText("GitHub Issue Search");
+      return step;
+    }
+
+    function latestScopeExpandInputs(): Record<string, unknown> {
+      const call = fetchSpy.mock.calls
+        .filter(([url]) =>
+          String(url).startsWith(
+            "/api/presets/github-search-scope-schema-preset:expand",
+          ),
+        )
+        .at(-1);
+      expect(call).toBeTruthy();
+      const payload = JSON.parse(String(call?.[1]?.body || "{}")) as {
+        inputs?: Record<string, unknown>;
+      };
+      return payload.inputs || {};
+    }
+
+    // Unchecked by default: the generated checkbox renders immediately below
+    // the search field through the shared schema renderer and submits false.
+    {
+      const step = await selectScopePreset();
+      const searchInput = within(step).getByLabelText(
+        "GitHub Issue Search",
+      ) as HTMLInputElement;
+      const scopeCheckbox = within(step).getByLabelText(
+        "Include issues created by other users",
+      ) as HTMLInputElement;
+      expect(scopeCheckbox.type).toBe("checkbox");
+      expect(scopeCheckbox.checked).toBe(false);
+      expect(
+        within(step).getByText(
+          "By default, only issues created by the GitHub account used for this search are eligible.",
+        ),
+      ).toBeTruthy();
+      expect(
+        searchInput.compareDocumentPosition(scopeCheckbox) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+
+      fireEvent.change(searchInput, { target: { value: "dashboard" } });
+      fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+      await waitFor(() => {
+        expect(latestScopeExpandInputs().include_all_authors).toBe(false);
+        expect(latestScopeExpandInputs().issue_search).toBe("dashboard");
+      });
+    }
+
+    // Cleanup between flows: expansion replaces the preset step, so the
+    // opt-in flow starts from a fresh draft.
+    cleanup();
+    fetchSpy.mockClear();
+
+    // Checking the box submits an explicit true opt-in.
+    {
+      const step = await selectScopePreset();
+      const scopeCheckbox = within(step).getByLabelText(
+        "Include issues created by other users",
+      ) as HTMLInputElement;
+      fireEvent.click(scopeCheckbox);
+      expect(
+        (
+          within(step).getByLabelText(
+            "Include issues created by other users",
+          ) as HTMLInputElement
+        ).checked,
+      ).toBe(true);
+      fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+      await waitFor(() => {
+        expect(latestScopeExpandInputs().include_all_authors).toBe(true);
+      });
+    }
   });
 
   it("shows required Skill inputs by default and reveals optional schema fields in Advanced mode", async () => {
