@@ -178,12 +178,21 @@ async def test_worker_auth_rejects_legacy_token_with_gone(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_worker_auth_resolves_oidc_principal(monkeypatch):
+async def test_worker_auth_rejects_ordinary_browser_principal_for_worker_work(
+    monkeypatch,
+):
+    # K4 conversion (MoonLadderStudios/MoonMind#4126, inventory E9): the
+    # pre-change baseline where any OIDC login satisfied worker-only
+    # mutations is replaced. An ordinary browser principal is authenticated
+    # but not authorized for worker-only work; the scoped machine bearer
+    # (covered in test_worker_cli_chat_boundaries_4126.py) is required.
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "oidc")
-    resolved = await worker_auth_module._require_worker_auth(
-        worker_token=None, user=_user(OWNER_PRINCIPAL)
-    )
-    assert resolved.auth_source == "oidc"
+    with pytest.raises(HTTPException) as exc_info:
+        await worker_auth_module._require_worker_auth(
+            worker_token=None, user=_user(OWNER_PRINCIPAL)
+        )
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["code"] == "worker_authorization_required"
 
 
 @pytest.mark.asyncio
