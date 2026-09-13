@@ -119,7 +119,7 @@ material in JSON.
 
 MoonMind authentication is selected only by the explicit `AUTH_PROVIDER`
 selector (`accounts` / `oidc` / `header` / `disabled`). Retired
-selectors (`keycloak`, `default`, `google`) and unknown values fail
+selectors (`keycloak`, `default`, `google`, `local`) and unknown values fail
 startup with migration guidance and are never silently translated.
 Runtime-server `OMNIGENT_AUTH_*` variables never select MoonMind's
 mode, key, or identity store, including hostile ambient values. Invalid

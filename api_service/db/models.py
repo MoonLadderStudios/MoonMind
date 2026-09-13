@@ -246,6 +246,33 @@ class IdentityMigrationRun(Base):
     )
 
 
+class MoonmindAccountNonce(Base):
+    """One-use account-lifecycle capability record (K3, #4122).
+
+    Durable backing for the ``LifecycleStore`` protocol in
+    ``moonmind/security/account_lifecycle_4122.py``: each HMAC-bound
+    bootstrap/invite/recovery capability carries a random nonce, and
+    redemption inserts that nonce here in the same transaction as the
+    account change. The primary-key constraint is the single-use
+    enforcement — a concurrent or replayed redemption converges on the
+    winner instead of admitting a second account. No secret material is
+    stored: only the nonce, its purpose, and the bound login name.
+
+    Source issue: MoonLadderStudios/MoonMind#4122 (parent #4116; docs
+    #4130). Additive table; no existing table, column, or historical
+    revision is altered.
+    """
+
+    __tablename__ = "moonmind_account_nonces"
+
+    nonce: Mapped[str] = mapped_column(String(64), primary_key=True)
+    purpose: Mapped[str] = mapped_column(String(16), nullable=False)
+    login: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class MoonmindSession(Base):
     """One durable browser-session row per issued MoonMind session JWT (K4, #4121).
 
