@@ -34,7 +34,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliabil
 @workflow.defn(name="MoonMind.UserWorkflow")
 class OrphanCancelWorkflow:
     @workflow.run
-    async def run(self, mode: str):
+    async def run(self, mode: str) -> str | None:
         if mode == "complete":
             return "finished"
         if mode == "parent":
@@ -45,6 +45,7 @@ class OrphanCancelWorkflow:
                 parent_close_policy=workflow.ParentClosePolicy.TERMINATE,
             )
         await workflow.wait_condition(lambda: False)
+        return None
 
     @workflow.query
     def ready(self):
@@ -58,6 +59,8 @@ async def wait_ready(handle):
                 if await handle.query("ready", rpc_timeout=timedelta(seconds=1)):
                     return
             except Exception:
+                # Queries can race the first workflow task; the outer deadline
+                # bounds these readiness retries and fails an unready workflow.
                 pass
             await asyncio.sleep(0.05)
 

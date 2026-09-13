@@ -292,10 +292,11 @@ async def test_terminal_rerun_restarts_generated_title_from_base(
         canonical.memo = memo
         await session.commit()
 
-        await service.cancel_execution(
+        await service.record_terminal_state(
             workflow_id=created.workflow_id,
-            reason="done",
-            graceful=True,
+            state="canceled",
+            close_status="canceled",
+            summary="done",
         )
         response = await service.update_execution(
             workflow_id=created.workflow_id,
@@ -329,10 +330,11 @@ async def test_terminal_rerun_preserves_explicit_title(
         )
         assert created.memo["titleProvenance"] == "user_explicit"
 
-        await service.cancel_execution(
+        await service.record_terminal_state(
             workflow_id=created.workflow_id,
-            reason="done",
-            graceful=True,
+            state="canceled",
+            close_status="canceled",
+            summary="done",
         )
         response = await service.update_execution(
             workflow_id=created.workflow_id,
