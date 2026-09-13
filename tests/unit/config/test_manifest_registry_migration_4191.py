@@ -204,7 +204,7 @@ def test_export_requires_required_fields() -> None:
     row = _fixture_rows()[0]
     incomplete = dict(row)
     del incomplete["content"]
-    with pytest.raises(ValueError, match="required field"):
+    with pytest.raises(ValueError, match="missing preserved column"):
         export_row_envelope(incomplete)
 
 
