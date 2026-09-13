@@ -180,6 +180,16 @@ reconciler and the bounded `MoonMind.AgentRun` wait, not incompatibility evidenc
 See [SharedHostImage.md](SharedHostImage.md#server-compatibility-and-deployment-readiness).
 Activity retries continue to reconcile the same owned runtime binding.
 
+Reader compatibility and runtime capability are separate contracts. A retained
+release that predates server patch interoperability can read a newly written v1
+plan and launch against its recorded deployment. Its original preflight still
+rejects server replacement before launch. Patch interoperability requires a
+consumer that implements the catalog-based compatibility contract; the immutable
+release controller qualifies and promotes those consumers. A source revision
+match is not a compatibility test, and plan serialization cannot expand the
+authority of an already-running historical binary. Exact reruns encountering a
+transient evidence gap return `nextAction=retry` and retain their original plan.
+
 ### 4.6 Plan digests are not self-referential
 
 The canonical plan payload does not contain its own digest. MoonMind canonicalizes and hashes `OmnigentExecutionPlanPayload`, then stores it in an envelope:

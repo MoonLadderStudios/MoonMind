@@ -50,11 +50,28 @@ def retained_reader():
         sys.modules.pop(spec.name, None)
 
 
+@pytest.fixture
+def retained_preflight():
+    path = (
+        Path(__file__).with_name("replays")
+        / "omnigent-plan-reader-skew/retained_deployment_identity.py"
+    )
+    spec = importlib.util.spec_from_file_location("retained_deployment_identity", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        yield module
+    finally:
+        sys.modules.pop(spec.name, None)
+
+
 @pytest.mark.parametrize("reader", ["retained", "current"])
 async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_match(
     tmp_path,
     monkeypatch,
     retained_reader,
+    retained_preflight,
     reader,
 ):
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/plans.db")
@@ -127,6 +144,27 @@ async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_m
             loaded.payload.modelConfig.model_dump()
             == compiled.envelope.payload.modelConfig.model_dump()
         )
+        if reader == "retained":
+            # Parsing alone does not prove launchability. Exercise the exact
+            # retained validator under the incident's unchanged deployment.
+            # That binary predates patch interoperability; its narrower
+            # admitted authority must reject replacement before any launch.
+            planned = loaded.payload.supportIdentity.omnigentServerBuildRef
+            monkeypatch.setattr(
+                retained_preflight, "resolve_deployed_server_build_digest", lambda: planned
+            )
+            monkeypatch.setattr(
+                retained_preflight, "_resolve_deployed_host_image_ref",
+                lambda _: loaded.payload.hostImageRef,
+            )
+            retained_preflight.assert_plan_matches_deployed_runtime(loaded.payload)
+            monkeypatch.setattr(
+                retained_preflight, "resolve_deployed_server_build_digest",
+                lambda: "sha256:" + "f" * 64,
+            )
+            with pytest.raises(retained_preflight.OmnigentDeploymentIdentityConflict):
+                retained_preflight.assert_plan_matches_deployed_runtime(loaded.payload)
+            assert loaded.planRef == compiled.envelope.planRef
         serialized["payload"]["model"]["effort"] = "changed"
         artifacts.payloads[compiled.binding.plan_artifact_ref] = json.dumps(
             serialized

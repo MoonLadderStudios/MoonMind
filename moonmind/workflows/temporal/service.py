@@ -516,16 +516,18 @@ class TemporalExecutionRerunPlanError(TemporalExecutionValidationError):
         message: str,
         *,
         code: str = "exact_rerun_execution_plan_stale",
+        retryable: bool = False,
     ) -> None:
         super().__init__(message)
         self.code = code
+        self.retryable = retryable
 
     @property
     def detail(self) -> dict[str, Any]:
         return {
             "code": self.code,
             "message": str(self),
-            "nextAction": "edit_for_rerun",
+            "nextAction": "retry" if self.retryable else "edit_for_rerun",
         }
 
 
@@ -2770,6 +2772,7 @@ class TemporalExecutionService:
             return
         from moonmind.omnigent.deployment_identity import (
             OmnigentDeploymentIdentityConflict,
+            OmnigentDeploymentNotReady,
             assert_plan_matches_deployed_runtime,
         )
         from moonmind.omnigent.harness_platform.stores import (
@@ -2801,6 +2804,13 @@ class TemporalExecutionService:
             )
         try:
             await assert_plan_matches_deployed_runtime(plan.payload)
+        except OmnigentDeploymentNotReady as exc:
+            raise TemporalExecutionRerunPlanError(
+                "Exact rerun is waiting for deployment evidence. Retry the same "
+                "request after readiness recovers; its original plan is preserved.",
+                code="exact_rerun_deployment_not_ready",
+                retryable=True,
+            ) from exc
         except OmnigentDeploymentIdentityConflict as exc:
             raise TemporalExecutionRerunPlanError(
                 "Exact rerun preserves the original Omnigent execution plan, "
