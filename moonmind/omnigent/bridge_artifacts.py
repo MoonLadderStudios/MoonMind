@@ -231,7 +231,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                     "correlation_id": str(request.correlation_id)[:255],
                 },
             )
-            completed = await service.write_complete(
+            completed = await service.write_payload_complete(
                 artifact_id=artifact.artifact_id,
                 principal=self._principal,
                 payload=payload,

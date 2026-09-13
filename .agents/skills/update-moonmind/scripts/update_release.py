@@ -33,6 +33,10 @@ def main(argv=None):
     parser.add_argument("--branch", default="main")
     parser.add_argument("--compose-project")
     parser.add_argument(
+        "--operator-url", action="append", default=[],
+        help="Existing operator origin to verify without changing API authentication configuration; repeat for multiple origins",
+    )
+    parser.add_argument(
         "--image-repository", default="ghcr.io/moonladderstudios/moonmind"
     )
     parser.add_argument(
@@ -40,6 +44,8 @@ def main(argv=None):
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    if args.resume and args.operator_url:
+        raise ValueError("Resume preserves the original operator URLs; omit --operator-url")
     repo = args.repo.resolve(strict=True)
     submissions = repo / "deploy" / "state" / "release-submissions"
     if args.resume:
@@ -120,6 +126,7 @@ def main(argv=None):
                 "idempotency_key": f"host-update:{submission_id}",
                 "operator": "local-operator",
                 "operator_role": "operator",
+                **({"deployment_operator_urls": args.operator_url} if args.operator_url else {}),
             },
         }
         submissions.mkdir(parents=True, exist_ok=True)

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from temporalio.testing import ActivityEnvironment
@@ -35,6 +37,8 @@ from tests.unit.omnigent.test_generic_platform_production_services import (
     _generic_publication_harness,
     _plan,
     _prime_attested_host_binding,
+    _Artifacts,
+    _DockerBackend,
 )
 
 
@@ -98,6 +102,50 @@ async def replay_capacity_readmission(store, monkeypatch):
     realizer._turn_commands = CanonicalTurnCommandService(store)
     realizer._cleanup_authority = CanonicalCleanupAuthority(store)
     plan = _plan("opencode-go/model")
+    # Exercise the production credential ledger as well as canonical turn
+    # ownership. A fake cleanup here hid reuse of the first epoch's tombstone.
+    from moonmind.omnigent.credential_materializers import (
+        OmnigentCredentialProvisioningService,
+        build_default_credential_materializer_registry,
+    )
+    from moonmind.omnigent.secret_resolution import ScopedSecretBundle
+
+    async def acquire_leases(**kwargs):
+        harness.events.append("provider-acquired")
+        return (replace(
+            harness.acquired,
+            admission_epoch=kwargs["admitted_capacity"].admission_epoch,
+        ),)
+
+    realizer._provider_leases.acquire_all = acquire_leases
+
+    async def resolve_secrets(**kwargs):
+        acquired = kwargs["acquired"]
+        return ScopedSecretBundle(
+            acquired.provider_profile_ref, acquired.credential_generation,
+            {"opencode_api_key": "test-only-credential"},
+        )
+
+    class Credentials(OmnigentCredentialProvisioningService):
+        async def cleanup_all(self, handles):
+            result = await super().cleanup_all(handles)
+            harness.events.append("credentials-cleaned")
+            return result
+
+    class DockerBackend(_DockerBackend):
+        async def run(self, argv, **kwargs):
+            # The daemon boundary reports the volumes created by this test;
+            # the production materializer still constructs and checks labels.
+            if argv[1:3] == ["volume", "ls"]:
+                return 0, b"owned\n", b""
+            return await super().run(argv, **kwargs)
+
+    realizer._credentials = Credentials(
+        session_factory=store._session_factory,
+        secret_resolution_service=SimpleNamespace(resolve=resolve_secrets),
+        registry=build_default_credential_materializer_registry(backend=DockerBackend()),
+        artifact_gateway=_Artifacts(),
+    )
     registry = OmnigentExecutionRealizerRegistry()
     registry.register(realizer)
 
@@ -179,6 +227,15 @@ async def replay_capacity_readmission(store, monkeypatch):
     assert harness.events.count("host-ready") == 1
     assert harness.events.count("message-completed") == 1
 
+    from sqlalchemy import select
+    from api_service.db.models import OmnigentCredentialRuntimeRecord
+
+    async with store._session_factory() as session:
+        rows = (await session.scalars(select(OmnigentCredentialRuntimeRecord))).all()
+    assert len(rows) == 2
+    assert all(row.cleanup_state == "cleaned" for row in rows)
+    assert rows[0].cleanup_ref != rows[1].cleanup_ref
+
 
 @pytest.mark.asyncio
 async def test_capacity_readmission_survives_completed_cleanup(
@@ -247,6 +304,10 @@ async def test_existing_later_epoch_keeps_legacy_session_and_command(session_fac
     )
     # The worker died after persisting terminal evidence but before settlement.
     await _prime_attested_host_binding(harness, plan, admission_epoch=2)
+    async def acquire_current_ticket(**_kwargs):
+        return (replace(harness.acquired, admission_epoch=2),)
+
+    harness.realizer._provider_leases.acquire_all = acquire_current_ticket
     binding = await harness.runtime_store.get(
         stable_binding_id(
             execution_plan_ref=plan.planRef,

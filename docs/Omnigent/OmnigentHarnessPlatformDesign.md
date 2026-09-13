@@ -714,6 +714,13 @@ Re-admission re-reads the admission authority before it builds the next ticket. 
 
 The admission epoch is part of the attempt's identity. Retries of one admitted attempt share a runtime binding and its host reservation, which is what makes them idempotent; a deliberate re-admission is a new attempt, because the previous attempt's host, credentials and provider lease were already released and its aggregate is terminally cleaned. Reusing that identity would leave the recovery no state to advance and could only end as a binding conflict.
 
+Credential runtime and cleanup identities also carry that admission epoch. The
+Provider Profile, credential generation, and capacity owner stay fixed; each
+later admission receives distinct materialization authority. Historical and
+first-admission identities remain stable, and an already-persisted active
+binding retains its recorded credential authority on redelivery. A cleaned
+credential record is never reopened to make a retry work.
+
 #### Machine resource accounting
 
 One machine carries every managed launch, so one deployment-owned ledger accounts for all of them. Container jobs and generic Omnigent hosts reserve their CPU, memory, process and temporary-storage demand in the same `machine_capacity_reservations` table under the same PostgreSQL advisory lock. Without that, each class would enforce its own ceiling and two full classes would still oversubscribe the machine.

@@ -843,10 +843,13 @@ The system verifies Compose state using:
 ## 12.2 Application-level verification
 
 The updater preserves and verifies the operator origins before replacing the API,
-and verifies those same origins again before recording release success. An explicit
-`MOONMIND_PUBLIC_BASE_URL` supplies the operator origin. Otherwise, fixed published
+and verifies those same origins again before recording release success. The portable
+updater accepts repeatable `--operator-url <existing-origin>` declarations, recorded
+as `deployment_operator_urls` in the immutable submission context. These supply
+verification targets without changing API authentication or published bindings.
+A configured `MOONMIND_PUBLIC_BASE_URL` remains a required target. Otherwise, fixed published
 API bindings supply the origins; omitted and explicitly empty public URL values
-use this same path. Wildcard bindings require a declared operator origin because
+use this same path when no operator origins were declared. Wildcard bindings require a declared operator origin because
 an unspecified address cannot identify the client's route. Missing targets or an
 unreachable route leave the existing release in place before replacement; a
 post-replacement failure retains the durable updater and recovery evidence.
