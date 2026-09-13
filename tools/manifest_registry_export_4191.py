@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Protected Manifest registry export/verify rehearsal (#4191)."
     )
-    parser.add_argument("--rows-json", required=True, help="Snapshot rows JSON file.")
+    parser.add_argument("--rows-json", required=False, default=None, help="Snapshot rows JSON file.")
     parser.add_argument("--export-dir", required=True, help="Operator-owned export dir.")
     parser.add_argument(
         "--expected-row-count",
@@ -235,6 +235,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.verify_only:
             report = verify_export_dir(export_dir)
         else:
+            if not args.rows_json:
+                print("rows JSON is required unless --verify-only is given", file=sys.stderr)
+                return 1
             rows = json.loads(Path(args.rows_json).read_text(encoding="utf-8"))
             if not isinstance(rows, list):
                 print("rows JSON must be a list of registry row objects", file=sys.stderr)
