@@ -93,6 +93,9 @@ MERGE_AUTOMATION_RESOLVER_ATTEMPT_TITLE_PATCH = (
 MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH = (
     "merge-automation-omnigent-resolver-plan-v1"
 )
+MERGE_AUTOMATION_RESOLVER_VERIFICATION_CAPABILITY_PATCH = (
+    "merge-automation-resolver-verification-capability-v1"
+)
 # Request/remediate/request loop for one configured automated review provider.
 # Guarded so histories recorded before the loop existed keep replaying their
 # original gate decisions.
@@ -1773,6 +1776,9 @@ class MoonMindMergeAutomationWorkflow:
                         else None
                     ),
                     finish_mode=self._finish_mode(),
+                    legacy_capabilities=not workflow.patched(
+                        MERGE_AUTOMATION_RESOLVER_VERIFICATION_CAPABILITY_PATCH
+                    ),
                 )
                 resolver_workflow_id_factory = (
                     deterministic_resolver_idempotency_key

@@ -49,6 +49,19 @@ Initial publication and final size-triggered compaction use one projection.
 Gate evidence remains essential when auxiliary metadata or excess references
 must be discarded to satisfy the result-size budget.
 
+Managed repository repair includes verification capability in its admission
+contract. Merge automation resolver children require `git`, `gh`, and `docker`
+through the existing capability mechanism, including omitted and historical
+templates that name only repository tools when used for a new child. Additional
+authored requirements remain intact. `docker` identifies the API-owned Docker
+Backend; it does not grant a daemon socket or host Docker credentials. Ordinary
+admission and workspace policy authorize the child-scoped test capability before
+launch. The host exposes the actual runtime, child, lease, and workspace context
+to the container CLI. Provider, model, credentials, and workspace selection stay
+under their existing authorities. Temporal patching preserves the exact
+capability payload of already-recorded child starts during replay; no live token
+or persisted execution plan is amended to retrofit missing authority.
+
 The normal Workflow Create compilation and acceptance journey for **Codex via Omnigent** is specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md); this execution model remains authoritative for the shared runtime lifecycle.
 
 ## Related documents

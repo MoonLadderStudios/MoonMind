@@ -92,6 +92,17 @@ The reviewed lock-boundary correction is commit
 
 ## 3. Durable architecture decisions
 
+The first successful publication attempt also exposed a verification-capability
+gap at merge automation: resolver child creation declared only `git` and `gh`.
+The generic host correctly minted no container-job capability, so the available
+CLI failed with missing runtime identity. The bounded repair declares the
+resolver's complete `git`/`gh`/`docker` minimum before child admission, preserves
+additional requirements, and leaves recorded child authority unchanged during
+replay. Regression evidence enters through production merge-workflow child
+creation and the scoped container submission boundary across all three supported
+native harnesses. This does not replace the broader executable verification
+ledger in story J.
+
 1. Extend the existing image-owned release controller as the single promotion,
    installation, rollback, and routing-repair owner. Reuse its durable jobs,
    locks, canaries, CAS, retained cohorts, and cleanup reconciliation.
