@@ -558,7 +558,7 @@ def test_migration_carries_export_notice_and_retires_manifest_run() -> None:
     with pytest.raises(namespace["RetiredManifestTargetError"], match="retired"):
         namespace["_workflow_type_for_target"]({"kind": "manifest_run"})
     # Ordinary definitions still convert.
-    assert namespace["_workflow_type_for_target"]({"kind": "queue_task"}) == "MoonMind.Run"
+    assert namespace["_workflow_type_for_target"]({"kind": "queue_task"}) == "MoonMind.UserWorkflow"
 
 
 # ---------------------------------------------------------------------------
