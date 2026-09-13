@@ -114,6 +114,15 @@ def test_duplicates_are_owner_pointers() -> None:
     assert "WorkflowTypeCatalogGenerated.md" in agent_execution
 
 
+def test_entrypoint_linked_from_readme_and_agents() -> None:
+    # MoonLadderStudios/MoonMind#3961 plan step 6: the concise entrypoint must
+    # be discoverable from the top-level README and agent instructions.
+    readme = _read(REPO_ROOT / "README.md")
+    assert "docs/Temporal/TemporalModuleArchitecture.md" in readme
+    agents = _read(REPO_ROOT / "AGENTS.md")
+    assert "docs/Temporal/TemporalModuleArchitecture.md" in agents
+
+
 def test_internal_links_and_anchors_resolve() -> None:
     checked = 0
     for path in sorted(TEMPORAL.glob("*.md")):
