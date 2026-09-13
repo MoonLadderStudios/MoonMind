@@ -688,6 +688,8 @@ async def test_repo_create_pr_transient_failure_retries_and_adopts_lost_ack(monk
             await repo_create_pr_activity(payload)
         assert exc.value.type == 'GitHubTransientError'
         assert not exc.value.non_retryable
+        if failure == 429:
+            assert exc.value.next_retry_delay.total_seconds() >= 60
         result = await repo_create_pr_activity(payload)
     assert result['adopted'] is True
     assert result['url'] == pr['html_url']

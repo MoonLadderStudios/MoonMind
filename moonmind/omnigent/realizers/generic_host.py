@@ -502,6 +502,9 @@ class GenericOmnigentHostRealizer:
                     "stateVolumeRef": host_context["stateVolumeRef"],
                     "controlVolumeRef": host_context.get("controlVolumeRef"),
                     "launchGeneration": host_lease.launchGeneration,
+                    "materializedInputPaths": dict(
+                        host_context.get("materializedInputPaths") or {}
+                    ),
                 },
             )
             # The container now exists, so the reservation stops being

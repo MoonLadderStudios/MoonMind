@@ -32,7 +32,10 @@ step's evidence. Re-admission verifies current artifact ownership, integrity,
 size, and containment while preserving candidate edits. Input replacement is
 staged and verified before atomically replacing a prior read-only input.
 Missing, foreign, or unreadable evidence prevents launch; a path supplied by
-the caller is never proof that materialization succeeded.
+the caller is never proof that materialization succeeded. The ready-host lease
+persists the verified path mapping with its authority so an Activity restart
+before first-turn delivery recovers the same inputs without launching another
+host or changing the candidate.
 
 The normal Workflow Create compilation and acceptance journey for **Codex via Omnigent** is specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md); this execution model remains authoritative for the shared runtime lifecycle.
 

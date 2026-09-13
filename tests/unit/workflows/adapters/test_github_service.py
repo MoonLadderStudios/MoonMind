@@ -1520,3 +1520,39 @@ async def test_close_issue_missing_token_is_auth_unavailable(monkeypatch):
 
     assert result["ok"] is False
     assert result["reasonCode"] == "auth_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('headers,message,retryable', [
+    ({'x-ratelimit-remaining': '0'}, 'API rate limit exceeded', True),
+    ({'retry-after': '60'}, 'Request temporarily forbidden', True),
+    ({}, 'You have exceeded a secondary rate limit.', True),
+    ({'x-ratelimit-remaining': '4999'}, 'Resource not accessible by personal access token', False),
+])
+async def test_create_pr_distinguishes_403_rate_limits_from_permissions(monkeypatch, headers, message, retryable):
+    monkeypatch.setenv('GITHUB_TOKEN', 'github-token-fixture')
+    calls = []
+    def respond(request):
+        calls.append(request.method)
+        return httpx.Response(403, headers=headers, json={'message': message})
+    client_class = httpx.AsyncClient
+    with patch('moonmind.workflows.adapters.github_service.httpx.AsyncClient',
+               side_effect=lambda **kwargs: client_class(transport=httpx.MockTransport(respond), **kwargs)):
+        result = await GitHubService().create_pull_request(repo='o/r', head='feature', base='main', title='T', body='B')
+    assert result.retryable is retryable
+    if retryable:
+        assert result.retry_after_seconds >= 60
+    else:
+        assert result.retry_after_seconds is None
+    assert not result.created
+    assert calls == ['GET']
+
+
+def test_github_primary_rate_limit_preserves_reset_time():
+    from datetime import datetime, timezone
+    response = httpx.Response(403, headers={'x-ratelimit-remaining': '0',
+                                          'x-ratelimit-reset': '1800000000'},
+                              json={'message': 'API rate limit exceeded'})
+    event = GitHubService._github_rate_limit_event(response)
+    assert event is not None
+    assert event.reset_at == datetime.fromtimestamp(1800000000, timezone.utc).isoformat()
