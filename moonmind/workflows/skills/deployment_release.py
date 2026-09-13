@@ -171,6 +171,7 @@ async def execute_detached(executor, inputs, context):
             "principal_role",
             "execution_ref",
             "deployment_evidence_principal",
+            "deployment_operator_urls",
         )
         if key in context
     }

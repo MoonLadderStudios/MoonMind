@@ -5,6 +5,7 @@
   "expected": "The immutable release submission carries explicit operator origins without changing installed API authentication or bindings; every configured authentication origin remains a required probe target.",
   "regressionTests": [
     "tests/unit/test_update_moonmind_skill.py",
+    "tests/unit/workflows/skills/test_deployment_release.py",
     "tests/unit/workflows/skills/test_release_authority_handoffs.py",
     "tests/integration/reliability/test_release_compose_configuration.py::test_wildcard_operator_probe_preserves_real_compose_auth_startup"
   ]
