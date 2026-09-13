@@ -37,6 +37,15 @@ persists the verified path mapping with its authority so an Activity restart
 before first-turn delivery recovers the same inputs without launching another
 host or changing the candidate.
 
+Artifact publication preserves the verifier's typed acceptance contract across
+the Activity-to-workflow projection. The full report remains authoritative in
+artifact storage. Compact metadata retains the exact subject, source scope,
+mandatory requirement identities, completion target, and freshness policy;
+requirement evidence references point to that published report. A string-only
+metadata filter cannot discard nested acceptance. Projection does not invent a
+verdict, fill missing requirements, or remove expiry. Validation of the report
+and consumption of the serialized projection are one required boundary test.
+
 The normal Workflow Create compilation and acceptance journey for **Codex via Omnigent** is specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md); this execution model remains authoritative for the shared runtime lifecycle.
 
 ## Related documents

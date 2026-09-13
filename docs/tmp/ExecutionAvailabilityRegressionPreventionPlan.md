@@ -325,6 +325,40 @@ required for the host and Activity fixes. Broader terminal recovery accounting
 and automatic replay remain owned by E/F; this bounded repair does not claim
 those stories are complete.
 
+### J. Preserve acceptance through publication and strengthen its evidence — P0/P1
+
+The 09:50 recurrence reached implementation and verification for issue #4191.
+Its verifier produced a structurally valid `acceptance/v1` report. The shared
+artifact publisher validated and stored that report, then a string-only metadata
+projection discarded `validatedRefs.acceptance`. The workflow saw missing
+acceptance and spent a contract-repair attempt rewriting an already valid file.
+This is a publisher/consumer contract defect, independently of whether the
+verifier's requirement classifications are correct.
+
+**Immediate repair:** Preserve typed acceptance identity, scope and freshness in
+the projection, with per-requirement references to the authoritative full report.
+Replay publication through actual artifact storage, the production worker
+binding, Temporal serialization, and the workflow gate; cover managed and
+Omnigent workspaces, large detailed evidence, historical omitted acceptance,
+malformed bindings, expiry, and deterministic replay. Never waive the gate.
+
+**Further verification hardening:** The same verifier classified every source
+requirement as met while disclosing unexecuted PostgreSQL migration checks as
+advisory. The original issue and existing portable acceptance policy require
+isolated implementation verification independently of production authorization.
+Preserve this counterexample and extend the portable verifier's existing
+verification inventory into an executable check ledger: bind each mandatory
+check to its source obligation, candidate, capability, command, terminal result,
+and durable evidence. Missing or unexecuted controlling checks must produce
+remaining work, not an approving report with limitations. Validate the ledger
+through the resolved portable Skill; native hosts may validate its declared
+contract but must not duplicate requirement classification. Prove refusal with
+the escaped contradictory report and success with actual isolated database
+migration/restore evidence. This hardening is planned work, not a claim that
+typed artifact references prove semantic correctness. The first report was not
+accepted; the existing contract-repair attempt subsequently returned actionable
+implementation and verification gaps.
+
 ## 5. Required verification matrix
 
 | Journey | Minimum real boundary / fault | Objective completion evidence |
