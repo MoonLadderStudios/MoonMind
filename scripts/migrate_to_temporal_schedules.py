@@ -10,18 +10,35 @@ from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.schedule_errors import (
     ScheduleAdapterError,
     ScheduleAlreadyExistsError,
+    ScheduleNotFoundError,
     ScheduleOperationError,
 )
 
 logger = logging.getLogger(__name__)
 
+
+class RetiredManifestTargetError(ValueError):
+    """Retired Manifest schedule target (MoonLadderStudios/MoonMind#4188)."""
+
+
 def _workflow_type_for_target(target: dict) -> str:
     kind = str(target.get("kind") or "")
     if kind in {"queue_task", "queue_task_template"}:
-        return "MoonMind.Run"
+        return "MoonMind.UserWorkflow"
     if kind == "manifest_run":
-        return "MoonMind.ManifestIngest"
-    return "MoonMind.Run"
+        # MoonLadderStudios/MoonMind#4188 (MR1): the native Manifest product
+        # is retired. Never convert a retired definition into an ordinary
+        # run and never create a Temporal Schedule for the retired
+        # MoonMind.ManifestIngest type. Callers skip these definitions so
+        # retirement (pause/remove with protected evidence) owns them.
+        raise RetiredManifestTargetError(
+            "manifest_run targets were retired "
+            "(MoonLadderStudios/MoonMind#4188/MoonLadderStudios/MoonMind#4192): "
+            "the new release does not register or launch manifest ingest "
+            "workflows; skipping Temporal Schedule creation."
+        )
+    return "MoonMind.UserWorkflow"
+
 
 async def migrate_definitions() -> None:
     logger.info("Starting migration to Temporal Schedules...")
@@ -57,7 +74,39 @@ async def migrate_definitions() -> None:
             jitter_seconds = max(0, jitter_seconds)
 
             target = dfn.target if isinstance(dfn.target, dict) else {}
-            workflow_type = _workflow_type_for_target(target)
+            try:
+                workflow_type = _workflow_type_for_target(target)
+            except RetiredManifestTargetError as exc:
+                logger.warning(
+                    "Skipping retired manifest_run definition %s (%s): %s",
+                    dfn.id,
+                    dfn.name,
+                    exc,
+                )
+                # An earlier migration may have created the deterministic
+                # mm-schedule:<definition_id> schedule but crashed before
+                # committing temporal_schedule_id. That orphan still matches
+                # the migration query while a live schedule exists, but
+                # reconcile_schedules only scans rows with a non-null
+                # schedule ID, so it would keep firing retired work.
+                # Probe and pause the deterministic schedule before skipping.
+                try:
+                    await adapter.pause_schedule(definition_id=dfn.id)
+                    logger.info(
+                        "Paused orphaned retired schedule for %s", dfn.id
+                    )
+                except ScheduleNotFoundError:
+                    logger.info(
+                        "No orphaned schedule for retired definition %s",
+                        dfn.id,
+                    )
+                except (ScheduleAdapterError, ScheduleOperationError) as pause_exc:
+                    logger.warning(
+                        "Failed to pause orphaned retired schedule for %s: %s",
+                        dfn.id,
+                        pause_exc,
+                    )
+                continue
 
             workflow_input = {
                 "title": dfn.name,
