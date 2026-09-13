@@ -129,13 +129,14 @@ each queued `pr-resolver` child owns its repository publishing outcome.
 
 ## Workflow
 
-1. Run the helper script:
+1. Run the helper script from the resolved active Skill snapshot (repo-relative
+path is a portable-host fallback only when no active snapshot is set):
 
 ```bash
-python3 .agents/skills/batch-dependabot-resolver/bin/batch_dependabot_resolver.py \
+python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-dependabot-resolver/bin/batch_dependabot_resolver.py" \
   --repo <owner/repo> \
   --merge-method squash \
-  --max-iterations 3 \
+  --max-iterations 5 \
   --package-managers pip,npm,github-actions \
   --max-prs 25 \
   --runtime-mode <runtime_mode> \
