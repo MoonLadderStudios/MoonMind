@@ -832,7 +832,7 @@ def test_verify_binds_expected_row_count(tmp_path: Path) -> None:
 def test_forward_audit_migration_covers_applied_drops() -> None:
     audit = (
         REPO_ROOT
-        / "api_service/migrations/versions/380_manifest_registry_drain_audit_4191.py"
+        / "api_service/migrations/versions/380_manifest_drain_audit_4191.py"
     )
     assert audit.exists()
     text = audit.read_text(encoding="utf-8")
