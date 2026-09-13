@@ -126,7 +126,7 @@ def _override_user(app: FastAPI, *, is_superuser: bool = True) -> SimpleNamespac
 def _override_temporal_client(app: FastAPI) -> None:
     from api_service.api.routers.executions import get_temporal_client
 
-    app.dependency_overrides[get_temporal_client] = lambda: SimpleNamespace()
+    app.dependency_overrides[get_temporal_client] = SimpleNamespace
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +307,7 @@ def test_http_create_manifest_ingest_rejected_before_service_effects(
     app.dependency_overrides[_get_service] = lambda: service
     _override_temporal_client(app)
     _override_user(app, is_superuser=True)
-    app.dependency_overrides[get_async_session] = lambda: AsyncMock()
+    app.dependency_overrides[get_async_session] = AsyncMock
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     monkeypatch.setattr(settings.temporal_dashboard, "submit_enabled", True)
 
