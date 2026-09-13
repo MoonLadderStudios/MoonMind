@@ -7393,7 +7393,9 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "terminated": {"can_edit_for_rerun", "can_rerun"},
         "timed_out": {"can_edit_for_rerun", "can_rerun"},
     }
-    enabled = state_actions.get(raw_state, set())
+    # Force cancellation verifies Temporal even when a stale local terminal
+    # state would hide the ordinary cancel action.
+    enabled = state_actions.get(raw_state, set()) | {"can_force_cancel"}
     if is_operator_paused and raw_state not in {
         "completed",
         "failed",
@@ -7452,6 +7454,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_retry_publication": "canRetryPublication",
         "can_full_retry": "canFullRetry",
         "can_cancel": "canCancel",
+        "can_force_cancel": "canForceCancel",
         "can_reject": "canReject",
         "can_send_message": "canSendMessage",
         "can_bypass_dependencies": "canBypassDependencies",
@@ -7596,6 +7599,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         can_full_retry="can_full_retry" in enabled,
         action_evidence=action_evidence,
         can_cancel="can_cancel" in enabled,
+        can_force_cancel="can_force_cancel" in enabled,
         can_reject="can_reject" in enabled,
         can_send_message="can_send_message" in enabled,
         can_bypass_dependencies="can_bypass_dependencies" in enabled,

@@ -6452,6 +6452,9 @@ async def test_signal_execution_rejects_unknown_signal_name(tmp_path):
 async def test_cancel_marks_terminal_state_and_close_status(
     tmp_path, mock_client_adapter
 ):
+    mock_client_adapter.describe_workflow.return_value = SimpleNamespace(
+        status=WorkflowExecutionStatus.CANCELED
+    )
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
         service._client_adapter = mock_client_adapter
@@ -6519,6 +6522,9 @@ async def test_cancel_execution_terminal_record_skips_temporal_call(
 async def test_cancel_execution_records_reject_audit_action(
     tmp_path, mock_client_adapter
 ):
+    mock_client_adapter.describe_workflow.return_value = SimpleNamespace(
+        status=WorkflowExecutionStatus.CANCELED
+    )
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
         service._client_adapter = mock_client_adapter
@@ -6559,6 +6565,9 @@ async def test_cancel_execution_records_reject_audit_action(
 async def test_cancel_execution_accepts_projection_only_child_workflow(
     tmp_path, mock_client_adapter
 ):
+    mock_client_adapter.describe_workflow.return_value = SimpleNamespace(
+        status=WorkflowExecutionStatus.CANCELED
+    )
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
         service._client_adapter = mock_client_adapter
@@ -6797,13 +6806,17 @@ async def test_cancel_execution_dispatches_temporal_cancel_before_session_cleanu
 
         assert cancel_dispatched.is_set()
         assert cleanup_started.is_set()
-        assert canceled.state is MoonMindWorkflowState.CANCELED
+        assert canceled.state is MoonMindWorkflowState.INITIALIZING
+        assert canceled.close_status is None
 
 
 @pytest.mark.asyncio
 async def test_cancel_execution_terminal_retry_retries_managed_session_cleanup(
     tmp_path, mock_client_adapter, monkeypatch
 ):
+    mock_client_adapter.describe_workflow.return_value = SimpleNamespace(
+        status=WorkflowExecutionStatus.CANCELED
+    )
     async with temporal_db(tmp_path) as session:
         monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "agent_jobs"))
         service = TemporalExecutionService(session)
@@ -7061,6 +7074,7 @@ async def test_forced_cancel_without_reason_uses_force_specific_audit_summary(
         mock_client_adapter.terminate_workflow.assert_called_once_with(
             created.workflow_id,
             reason="Force canceled by operator.",
+            run_id=created.run_id,
         )
 
 @pytest.mark.asyncio

@@ -24,6 +24,8 @@ from sqlalchemy import Select, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
+from temporalio.client import WorkflowExecutionStatus
+from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.db.models import (
     MoonMindWorkflowState,
@@ -3492,7 +3494,7 @@ class TemporalExecutionService:
         record = await self.describe_execution(correlation.workflow_id)
         return correlation, record
 
-    async def _require_processable_graceful_cancellation(self, workflow_id: str) -> None:
+    async def _require_processable_graceful_cancellation(self, workflow_id: str) -> bool:
         """Refuse to report a cancel the execution cannot currently process.
 
         Graceful cancellation is delivered through a workflow task: Temporal
@@ -3506,8 +3508,9 @@ class TemporalExecutionService:
         This runs after the request is submitted, never instead of it: a task
         failing now may still retry successfully after a worker restart, and the
         retained request is then honored without the operator asking twice.
-        What it prevents is reporting a cancel as done when the execution has
-        not acted on it.
+        Return true only when Temporal confirms cancellation. A first-attempt
+        task may also be stranded on a worker version with no pollers; acceptance
+        alone must never authorize a terminal projection or dependency fan-out.
         """
 
         try:
@@ -3521,11 +3524,14 @@ class TemporalExecutionService:
                 workflow_id,
                 exc_info=True,
             )
-            return
+            return False
+
+        if getattr(description, "status", None) == WorkflowExecutionStatus.CANCELED:
+            return True
 
         attempt = _pending_workflow_task_attempt(description)
         if attempt <= 1:
-            return
+            return False
 
         raise TemporalExecutionCancelUndeliverableError(
             "Cancellation was requested and Temporal will retain it, but this "
@@ -3535,6 +3541,77 @@ class TemporalExecutionService:
             "execution now, which does not require the workflow to run."
         )
 
+    async def _terminate_cancel_target(
+        self,
+        record: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+        *,
+        reason_text: str,
+    ) -> tuple[dict[str, Any] | None, str]:
+        """Terminate the recorded run or reconcile its closed/absent evidence."""
+        terminal_payload = None
+        force_summary = f"forced_termination: {reason_text}"
+        try:
+            await self._client_adapter.terminate_workflow(
+                record.workflow_id,
+                reason=reason_text,
+                run_id=record.run_id,
+            )
+        except RPCError as exc:
+            if exc.status != RPCStatusCode.NOT_FOUND:
+                raise
+            # Temporal also returns NOT_FOUND for a closed run.
+            # Distinguish that race from an absent execution before
+            # repairing the record; outages never prove absence.
+            try:
+                description = await self._client_adapter.describe_workflow(
+                    record.workflow_id, run_id=record.run_id
+                )
+            except RPCError as describe_error:
+                if describe_error.status != RPCStatusCode.NOT_FOUND:
+                    raise
+                if record.state in TERMINAL_STATES and record.close_status:
+                    terminal_payload = {
+                        "state": record.state,
+                        "close_status": record.close_status,
+                        "closed_at": record.closed_at,
+                    }
+                    force_summary = (record.memo or {}).get("summary") or reason_text
+                else:
+                    terminal_payload = {
+                        "state": MoonMindWorkflowState.CANCELED,
+                        "close_status": TemporalExecutionCloseStatus.CANCELED,
+                    }
+                    force_summary = (
+                        f"Force canceled orphaned record: {reason_text} "
+                        "Temporal execution not found; runtime cleanup unconfirmed."
+                    )
+            else:
+                if description.status in {
+                    WorkflowExecutionStatus.RUNNING,
+                    WorkflowExecutionStatus.CONTINUED_AS_NEW,
+                }:
+                    raise TemporalExecutionValidationError(
+                        "The execution changed while force canceling. "
+                        "Refresh the execution and retry."
+                    )
+                from api_service.core.sync import map_temporal_state_to_projection
+
+                terminal_payload = await map_temporal_state_to_projection(description)
+                if not terminal_payload.get("close_status"):
+                    raise TemporalExecutionValidationError(
+                        "Temporal did not confirm a terminal execution. Retry force cancel."
+                    )
+                force_summary = (
+                    (record.memo or {}).get("summary")
+                    if record.state == terminal_payload["state"]
+                    and record.close_status == terminal_payload["close_status"]
+                    else None
+                ) or (
+                    f"Temporal execution already {description.status.name.lower()}; "
+                    "local record reconciled."
+                )
+        return terminal_payload, force_summary
+
     async def cancel_execution(
         self,
         *,
@@ -3543,7 +3620,9 @@ class TemporalExecutionService:
         graceful: bool,
         action: str = "cancel",
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
-        record = await self._require_cancel_target_execution(workflow_id)
+        record = await self._require_cancel_target_execution(
+            workflow_id, include_orphaned=not graceful
+        )
 
         action_name = "reject" if action == "reject" else "cancel"
         if action_name == "reject":
@@ -3554,7 +3633,7 @@ class TemporalExecutionService:
             default_reason = "Force canceled by operator."
         reason_text = (reason or default_reason).strip() or default_reason
 
-        if record.state in TERMINAL_STATES:
+        if graceful and record.state in TERMINAL_STATES:
             if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
                 # The Temporal close may have committed before auxiliary
                 # managed-session cleanup ran. Retrying cancel against a
@@ -3568,6 +3647,8 @@ class TemporalExecutionService:
                 return await self._sync_projection_best_effort(record)
             return record
 
+        terminal_payload = None
+        force_summary = f"forced_termination: {reason_text}"
         try:
             if graceful:
                 # Temporal cancellation is the authoritative terminal action.
@@ -3579,51 +3660,71 @@ class TemporalExecutionService:
                 # AgentRun cleanup path that releases provider leases.
                 await self._client_adapter.cancel_workflow(record.workflow_id)
             else:
-                await self._client_adapter.terminate_workflow(
-                    record.workflow_id,
-                    reason=reason_text,
+                # A local terminal flag can be an old cancellation acceptance,
+                # not a Temporal close. Always reach Temporal for force cancel,
+                # pinning the recorded run so a reused workflow ID is safe.
+                terminal_payload, force_summary = await asyncio.wait_for(
+                    self._terminate_cancel_target(record, reason_text=reason_text),
+                    timeout=10,
                 )
         except Exception as exc:
             raise TemporalExecutionValidationError(
-                f"Temporal cancel failed: {exc}"
+                f"Temporal cancel failed: {str(exc) or type(exc).__name__}. Retry cancellation."
             ) from exc
 
+        cancellation_confirmed = False
         if graceful:
             # The request is now durable in Temporal whatever this reports.
-            await self._require_processable_graceful_cancellation(record.workflow_id)
+            cancellation_confirmed = await self._require_processable_graceful_cancellation(
+                record.workflow_id
+            )
 
-        record.paused = False
-        self._clear_waiting_metadata(record)
+        if cancellation_confirmed or not graceful:
+            record.paused = False
+            self._clear_waiting_metadata(record)
         self._append_intervention_audit(
             record,
             action=action_name,
-            transport="temporal_cancel",
+            transport="temporal_cancel" if graceful else "temporal_terminate",
             summary=reason_text,
         )
-        if graceful:
+        if cancellation_confirmed:
             self._set_state(
                 record,
                 MoonMindWorkflowState.CANCELED,
                 close_status=TemporalExecutionCloseStatus.CANCELED,
             )
             self._update_summary(record, reason_text)
+        elif graceful:
+            self._update_summary(
+                record, "Cancellation requested. Waiting for the workflow to stop."
+            )
         else:
             self._set_state(
                 record,
-                MoonMindWorkflowState.FAILED,
-                close_status=TemporalExecutionCloseStatus.TERMINATED,
+                terminal_payload["state"] if terminal_payload else MoonMindWorkflowState.FAILED,
+                close_status=(
+                    terminal_payload["close_status"] if terminal_payload
+                    else TemporalExecutionCloseStatus.TERMINATED
+                ),
             )
-            self._update_summary(record, f"forced_termination: {reason_text}")
+            if terminal_payload and terminal_payload.get("closed_at"):
+                record.closed_at = terminal_payload["closed_at"]
+            self._update_summary(record, force_summary)
 
         await self._sync_integration_correlation_record(record)
         await self._session.commit()
         await self._session.refresh(record)
-        await self._fan_out_dependency_resolution(record)
-        if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
-            # Session cleanup is auxiliary to the authoritative Temporal close
-            # request. Dispatch it only after the parent cancellation and
-            # terminal state are durable so a stuck runtime cannot make
-            # the operator's cancel command a no-op.
+        if cancellation_confirmed or not graceful:
+            await self._fan_out_dependency_resolution(record)
+        if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW and (
+            graceful or terminal_payload is None
+        ):
+            # Session cleanup is auxiliary to the authoritative Temporal cancel
+            # request. Dispatch it only after that request and its audit are
+            # durable so a stuck runtime cannot make the command a no-op.
+            # Reconciliation of a closed/absent run grants no cleanup authority:
+            # workflow-scoped sessions may already belong to a replacement run.
             await self._best_effort_terminate_workflow_scoped_managed_sessions(
                 workflow_id=record.workflow_id,
                 reason=reason_text,
@@ -3855,10 +3956,11 @@ class TemporalExecutionService:
 
         Canonical source rows remain authoritative. Projection-only rows are
         accepted for child workflows that were discovered from Temporal but do
-        not have source rows of their own.
+        not have source rows of their own. Include orphaned projections for
+        ownership checks; only force cancellation may mutate those rows.
         """
 
-        return await self._require_cancel_target_execution(workflow_id)
+        return await self._require_cancel_target_execution(workflow_id, include_orphaned=True)
 
     async def mark_execution_executing(
         self,
@@ -5972,6 +6074,8 @@ class TemporalExecutionService:
     async def _require_cancel_target_execution(
         self,
         workflow_id: str,
+        *,
+        include_orphaned: bool = False,
     ) -> TemporalExecutionCanonicalRecord | TemporalExecutionRecord:
         canonical_workflow_id = self.canonicalize_workflow_id(workflow_id)
         source = await self._load_source_execution(canonical_workflow_id)
@@ -5980,7 +6084,7 @@ class TemporalExecutionService:
 
         projection = await self._load_projection_execution(
             canonical_workflow_id,
-            include_orphaned=False,
+            include_orphaned=include_orphaned,
         )
         if projection is None:
             raise TemporalExecutionNotFoundError(
