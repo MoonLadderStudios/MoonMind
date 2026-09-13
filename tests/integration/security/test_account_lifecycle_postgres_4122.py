@@ -157,6 +157,41 @@ async def test_postgres_first_owner_claim_is_single_winner(pg_maker) -> None:
 
 
 @pytest.mark.asyncio
+async def test_postgres_first_owner_distinct_concurrent_claims_single_winner(pg_maker) -> None:
+    """Distinct concurrent claims on a fresh database yield exactly one owner.
+
+    Each racer carries a distinct bootstrap nonce and login, so neither the
+    nonce primary key nor the login constraint converges them; the empty-
+    to-owned transition must serialize and every loser must fail closed.
+    """
+    import asyncio
+
+    async def setup_once(login: str, nonce: str) -> uuid.UUID | None:
+        async with pg_maker() as session:
+            try:
+                user = await claim_first_owner_and_create_user(
+                    session, login=login, nonce=nonce
+                )
+                return user.id
+            except BootstrapError:
+                await session.rollback()
+                return None
+
+    results = await asyncio.gather(
+        *[
+            setup_once(f"racer-{index}@example.invalid", f"pg-fresh-racer-{index}")
+            for index in range(4)
+        ]
+    )
+    assert sum(result is not None for result in results) == 1
+    async with pg_maker() as session:
+        users = (await session.execute(select(User))).scalars().all()
+        assert len(users) == 1
+        store = AsyncDbLifecycleStore(session)
+        assert await store.has_owner() is True
+
+
+@pytest.mark.asyncio
 async def test_postgres_invite_replay_refused_after_restart(pg_maker) -> None:
     """Redeemed invite nonces stay consumed across instances (restart)."""
     async with pg_maker() as session:

@@ -17,6 +17,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 CANONICAL_DOC = REPO_ROOT / "docs/Security/AuthenticationContracts.md"
@@ -112,8 +114,10 @@ def test_env_template_selector_examples_match_implementation() -> None:
     # Every retired selector named in the template is rejected by settings.
     for retired in OIDCSettings.RETIRED_AUTH_PROVIDERS:
         assert retired in text
-        with _raises():
-            OIDCSettings.validate_auth_provider(retired)
+        settings = OIDCSettings()
+        settings.AUTH_PROVIDER = retired
+        with pytest.raises(RuntimeError):
+            settings.validate_auth_provider()
     # Documented OIDC/header example values are well-formed inputs.
     assert "MOONMIND_OIDC_ISSUER" in text
     assert "MOONMIND_TRUSTED_PROXIES" in text
@@ -124,14 +128,6 @@ def test_env_template_selector_examples_match_implementation() -> None:
     assert fresh.migration_required is False
     upgraded = classify_deployment(raw_selector="", explicit=False, has_users=True)
     assert upgraded.migration_required is True
-
-
-class _raises:
-    def __enter__(self):  # noqa: ANN204
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> bool:  # noqa: ANN001
-        return exc_type is not None
 
 
 def test_no_active_realm_urls_outside_classified_residuals() -> None:

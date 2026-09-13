@@ -15,6 +15,7 @@ import time
 import pytest
 
 from moonmind.security.account_lifecycle_4122 import (
+    AccountLifecycleError,
     AdminRefusedError,
     BootstrapError,
     InMemoryLifecycleStore,
@@ -23,11 +24,14 @@ from moonmind.security.account_lifecycle_4122 import (
     RecoveryError,
     apply_member_action,
     assert_no_secret_leak,
+    bootstrap_nonce_for_login,
     claim_first_owner,
     http_status_for_lifecycle_error,
+    invite_nonce_for_login,
     mint_bootstrap_capability,
     mint_invite,
     mint_recovery_capability,
+    recovery_nonce_for_login,
     redacted_lifecycle_event,
     redeem_invite,
     redeem_recovery_capability,
@@ -184,3 +188,59 @@ def test_lifecycle_clock_defaults_to_wall_time() -> None:
     store = _store()
     assert claim_first_owner(token, key=KEY, store=store, login="owner") == "owner"
     assert time.time() > 0
+
+
+def test_capability_nonce_helpers_verify_binding_and_expiry() -> None:
+    store = _store()
+    token = mint_bootstrap_capability("owner", key=KEY, now=NOW)
+    nonce = bootstrap_nonce_for_login(token, key=KEY, login="owner", now=NOW + 1)
+    assert nonce
+    # The extracted nonce drives the synchronous rule end to end.
+    assert claim_first_owner(token, key=KEY, store=store, login="owner", now=NOW + 1) == "owner"
+    with pytest.raises(BootstrapError):
+        bootstrap_nonce_for_login(token, key=KEY, login="someone-else", now=NOW + 1)
+    expired = mint_invite("alice", key=KEY, ttl_seconds=60, now=NOW)
+    with pytest.raises(InviteError):
+        invite_nonce_for_login(expired, key=KEY, login="alice", now=NOW + 61)
+    recovery = mint_recovery_capability("owner", key=KEY, ttl_seconds=60, now=NOW)
+    with pytest.raises(RecoveryError):
+        recovery_nonce_for_login(recovery, key=KEY, login="owner", now=NOW + 61)
+
+
+def test_sync_rules_reject_async_stores_fail_closed() -> None:
+    """An ``async def`` store must never read as truthy-coroutine answers."""
+
+    class AsyncStore:
+        async def has_owner(self) -> bool:
+            return False
+
+        async def try_claim_owner(self, login: str, nonce: str) -> bool:
+            return True  # noqa: ARG002
+
+        async def consume_nonce(self, nonce: str) -> bool:
+            return True  # noqa: ARG002
+
+        async def is_nonce_consumed(self, nonce: str) -> bool:
+            return False  # noqa: ARG002
+
+    store = AsyncStore()
+    token = mint_bootstrap_capability("owner", key=KEY, now=NOW)
+    with pytest.raises(BootstrapError) as excinfo:
+        claim_first_owner(token, key=KEY, store=store, login="owner", now=NOW + 1)
+    assert excinfo.value.code == "auth_invalid"
+    invite = mint_invite("alice", key=KEY, now=NOW)
+    with pytest.raises(InviteError):
+        redeem_invite(invite, key=KEY, store=store, login="alice", now=NOW + 1)
+    recovery = mint_recovery_capability("owner", key=KEY, now=NOW)
+    with pytest.raises(RecoveryError):
+        redeem_recovery_capability(recovery, key=KEY, store=store, login="owner", now=NOW + 1)
+
+
+def test_redacted_event_refusals_carry_typed_codes() -> None:
+    token = mint_invite("alice", key=KEY, now=NOW)
+    with pytest.raises(AccountLifecycleError) as excinfo:
+        redacted_lifecycle_event("invite", action="minted", login="alice", extra={"token": token})
+    assert excinfo.value.code == "auth_invalid"
+    with pytest.raises(AccountLifecycleError) as excinfo:
+        redacted_lifecycle_event("bootstrap", action="claimed", login="o", extra={"note": token})
+    assert excinfo.value.code == "auth_invalid"
