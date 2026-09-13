@@ -656,6 +656,32 @@ def stable_disposition_digest() -> str:
     return sha256_hex(canonical.encode("utf-8"))
 
 
+def build_sanitized_supply_package() -> dict[str, Any]:
+    """Build the sanitized schema/upgrade/restore evidence handoff.
+
+    This is the durable, reviewable supply package for #4189 and the
+    integration gate (REQ-9): disposition identity, drop-migration
+    identity/ancestry, drain-approval switch name, and the operator
+    procedure text. It carries counts, names, refs, and digests only —
+    never registry YAML bytes, state payloads, or other sensitive values —
+    and performs no database, Temporal, or network I/O, so preparing the
+    handoff never applies a production migration/export/delete. The
+    owning workflow controls any external publication of this package.
+    """
+    table = registry_disposition_table()
+    return {
+        "contract": MANIFEST_REGISTRY_MIGRATION_CONTRACT,
+        "issue": ISSUE_REF,
+        "disposition_digest": stable_disposition_digest(),
+        "disposition_rows": len(table),
+        "drop_revision": DROP_REVISION,
+        "drop_parent_revision": DROP_PARENT_REVISION,
+        "drop_child_revision": DROP_CHILD_REVISION,
+        "drain_approval_env_var": DRAIN_APPROVAL_ENV_VAR,
+        "operator_procedure": render_operator_procedure(),
+    }
+
+
 def is_drain_approved(environ: dict[str, str] | None = None) -> bool:
     """Return True when the operator approved destructive registry removal.
 

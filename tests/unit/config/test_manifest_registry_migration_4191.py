@@ -40,6 +40,7 @@ from moonmind.gates.manifest_registry_migration_4191 import (
     MANIFEST_TABLE,
     MANIFEST_TABLE_COLUMNS,
     RegistryDrainInputs,
+    build_sanitized_supply_package,
     check_disposition_complete,
     check_migration_text_self_contained,
     downgrade_refusal_message,
@@ -448,6 +449,33 @@ def test_sanitized_evidence_supply_contract() -> None:
     text = doc.read_text(encoding="utf-8")
     assert "manifest_registry_migration_4191" in text
     assert "manifest_registry_export_4191" in text
+
+
+def test_sanitized_supply_package_is_durable_and_secret_free() -> None:
+    """Pin the REQ-9 handoff: stable identity, no content, no I/O.
+
+    The package the owning workflow publishes to #4189/integration gate
+    must be reproducible (stable digest), complete (ancestry + approval
+    switch + procedure), and sanitized (no YAML bytes, state payloads,
+    or credentials). Building it must not touch a database or network.
+    """
+    package = build_sanitized_supply_package()
+    assert package["contract"] == MANIFEST_REGISTRY_MIGRATION_CONTRACT
+    assert package["issue"] == ISSUE_REF
+    assert package["disposition_digest"] == stable_disposition_digest()
+    assert package["disposition_rows"] == len(registry_disposition_table())
+    assert package["drop_revision"] == DROP_REVISION
+    assert package["drop_parent_revision"] == DROP_PARENT_REVISION
+    assert package["drop_child_revision"] == DROP_CHILD_REVISION
+    assert package["drain_approval_env_var"] == DRAIN_APPROVAL_ENV_VAR
+    assert "pg_dump" in package["operator_procedure"]
+    # Sanitized: procedure + identity metadata only; no registry content,
+    # state payloads, or credential values travel in the handoff.
+    text = json.dumps(package, sort_keys=True)
+    assert "nodes:" not in text
+    assert "state_json" not in text
+    assert "ghp_" not in text
+    assert "BEGIN PRIVATE KEY" not in text
 
 
 def test_postgres_coverage_is_deployment_owned_not_sqlite() -> None:

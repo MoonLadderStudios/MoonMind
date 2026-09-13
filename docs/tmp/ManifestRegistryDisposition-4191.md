@@ -56,7 +56,11 @@ unrelated newer executions, credentials, or shared database changes.
 
 Sanitized schema/upgrade/restore evidence (disposition digest, sanitized
 export reports, drain decisions) is supplied to #4189 and the integration
-gate. Hermetic unit coverage lives in
+gate via `build_sanitized_supply_package()` in the gate module (contract
+identity, disposition digest/row count, drop ancestry, drain-approval
+switch name, operator procedure; counts/names/refs/digests only, no
+registry content or credentials, no database/network I/O). Hermetic unit
+coverage lives in
 `tests/unit/config/test_manifest_registry_migration_4191.py`; real
 supported PostgreSQL migration coverage stays deployment-owned and is
 distinguished from SQLite/helper tests. No production migration, export, or
