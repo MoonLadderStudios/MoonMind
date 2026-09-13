@@ -333,7 +333,7 @@ def _support_identity_drift(
     if not isinstance(attested, Mapping):
         return ["supportIdentity"]
     drift: list[str] = []
-    for field in sorted(set(requested) | set(attested)):
+    for field in sorted(SupportKeyPayload.model_fields):
         if field in DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS:
             continue
         if requested.get(field) != attested.get(field):
@@ -350,11 +350,23 @@ def _unqualified_combination_message(
     so only bounded field names may appear in this pre-validation diagnostic.
     """
 
-    drift: list[str] = []
-    for candidate in candidates:
-        if isinstance(candidate, Mapping):
-            drift.extend(_support_identity_drift(plan_payload, candidate))
-    detail = "; ".join(drift) if drift else "no deployment evidence is published"
+    differences = [
+        _support_identity_drift(plan_payload, candidate)
+        for candidate in candidates
+        if isinstance(candidate, Mapping)
+    ]
+    # Historical rows are diagnostic hints, never admission authority. Report
+    # the closest row so one current source change is not buried underneath
+    # every image, policy, and credential class this deployment ever used.
+    if differences:
+        closest = min(differences, key=lambda fields: (len(fields), fields))
+        detail = (
+            "closest published identity: " + "; ".join(closest)
+            if closest
+            else "published identity does not resolve to unique deployment evidence"
+        )
+    else:
+        detail = "no deployment evidence is published"
     return (
         "this deployment is not qualified for the requested execution "
         f"combination {plan_payload.supportCombinationKey} ({detail}). "
