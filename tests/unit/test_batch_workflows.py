@@ -1226,3 +1226,58 @@ def test_read_constraints_file_delivers_adversarial_content_byte_identical(tmp_p
 
     marker = tmp_path / "pwned"
     assert not marker.exists()
+
+
+def test_max_workflows_omitted_string_and_int_are_equivalent():
+    """Preset string '25', int 25, and omitted default coerce identically (REQ-01).
+
+    The preset layer types ``max_workflows`` as a string for Jinja/CLI
+    interpolation; the helper coerces via ``type=int``. All three spellings
+    must produce the same effective cap.
+    """
+
+    module = _load_module()
+    base = ["--run-ref", "skill:jira-verify"]
+    assert module["_parse_args"](base).max_workflows == 25
+    assert module["_parse_args"](base + ["--max-workflows", "25"]).max_workflows == 25
+    assert module["_parse_args"](base + ["--max-workflows", "10"]).max_workflows == 10
+
+
+def test_publish_mode_explicit_none_survives_helper_normalization():
+    """Explicit publish choices survive; the helper default is fallback only (REQ-01/02).
+
+    Preset recipes always forward their derived ``publish_mode`` value, so the
+    helper ``pr`` default only applies to direct CLI invocations without the
+    flag.
+    """
+
+    module = _load_module()
+    assert module["_parse_args"](["--run-ref", "skill:jira-verify"]).publish_mode == "pr"
+    assert module["_normalize_publish_mode"]("none") == "none"
+    assert module["_normalize_publish_mode"]("pr") == "pr"
+    assert module["_normalize_publish_mode"]("branch") == "branch"
+    assert module["_normalize_publish_mode"]("pr_with_merge_automation") == (
+        "pr_with_merge_automation"
+    )
+    assert module["_normalize_publish_mode"](None) == "pr"
+    assert module["_normalize_publish_mode"]("") == "pr"
+    assert module["_publish_payload_for_mode"]("none") == {"mode": "none"}
+
+
+def test_batch_skill_recipes_resolve_from_active_snapshot():
+    """Batch recipes use the resolved immutable bundle path (REQ-10)."""
+
+    repo_root = Path(__file__).resolve().parents[2]
+    for skill_id in ("batch-workflows", "batch-github-workflows"):
+        skill_doc = (
+            repo_root / ".agents" / "skills" / skill_id / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        assert f"$MOONMIND_ACTIVE_SKILLS_DIR/{skill_id}/bin/batch_workflows.py" in skill_doc
+    for skill_id, helper in (
+        ("batch-pr-resolver", "batch_pr_resolver.py"),
+        ("batch-dependabot-resolver", "batch_dependabot_resolver.py"),
+    ):
+        skill_doc = (
+            repo_root / ".agents" / "skills" / skill_id / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        assert f"$MOONMIND_ACTIVE_SKILLS_DIR/{skill_id}/bin/{helper}" in skill_doc
