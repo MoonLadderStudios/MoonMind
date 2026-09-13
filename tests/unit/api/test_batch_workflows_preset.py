@@ -273,11 +273,21 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             )
 
             # Parent records a summary artifact that links child workflows.
+            # Executable fan-out: preset prose invokes the resolved Skill
+            # entrypoint with data-safe arguments (fixed --constraints-file
+            # path, never an interpolated constraints value).
             assert "artifacts/batch-workflows-result.json" in step["instructions"]
             assert "runtimeInheritance" in step["instructions"]
-            assert "--no-run-verify" in step["instructions"]
-            assert " --run-verify" not in step["instructions"]
-            assert "--update-status" in step["instructions"]
+            assert 'run_verify="False"' in step["instructions"]
+            assert 'update_status="True"' in step["instructions"]
+            assert "python3" in step["instructions"]
+            assert "batch-workflows/bin/batch_workflows.py" in step["instructions"]
+            assert "--run-ref" in step["instructions"]
+            assert "--publish-mode" in step["instructions"]
+            assert "--max-workflows" in step["instructions"]
+            assert "--constraints-file" in step["instructions"]
+            assert '--constraints "' not in step["instructions"]
+            assert "$MOONMIND_ACTIVE_SKILLS_DIR" in step["instructions"]
 
             assert "git" in expanded["capabilities"]
             assert "gh" in expanded["capabilities"]
@@ -379,10 +389,10 @@ async def test_batch_workflows_child_publish_default_follows_run_ref(
     assert expanded["appliedTemplate"]["inputs"]["publish_mode"] == (
         expected_publish_mode
     )
-    assert (
-        f'--publish-mode "{expected_publish_mode}"'
-        in expanded["steps"][0]["instructions"]
-    )
+    # The derived publish value renders as prose data and as a data-safe CLI flag.
+    assert f'"{expected_publish_mode}"' in expanded["steps"][0]["instructions"]
+    assert "--publish-mode" in expanded["steps"][0]["instructions"]
+    assert "python3" in expanded["steps"][0]["instructions"]
     # The parent queues children and writes summary artifacts; it never
     # publishes repository changes itself.
     assert expanded["publish"] == {"mode": "none"}
@@ -409,3 +419,44 @@ async def test_batch_workflows_explicit_publish_override_wins_over_run_ref(tmp_p
             )
 
     assert expanded["steps"][0]["batchOrchestration"]["publish"]["mode"] == "none"
+
+
+async def test_batch_workflows_constraints_travel_via_file_not_shell(tmp_path):
+    """Arbitrary constraints must never be interpolated into a shell command.
+
+    The value travels as orchestration data and is materialized with a file
+    write; preset prose names only the fixed file path and never a CLI flag
+    carrying the value (REQ-04, REQ-10).
+    """
+
+    adversarial = 'a"; $(touch /tmp/pwned) # `backtick` $HOME\nnewline ☃'
+    async with _catalog_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+
+            expanded = await service.expand_template(
+                slug="batch-workflows",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "jira_project_key": "MM",
+                    "jira_status": "In Progress",
+                    "run_ref": "preset:jira-implement",
+                    "constraints": adversarial,
+                },
+            )
+
+    step = expanded["steps"][0]
+    assert '--constraints "' not in step["instructions"]
+    assert "--constraints-file" in step["instructions"]
+    assert "python3" in step["instructions"]
+    assert "batch-workflows/bin/batch_workflows.py" in step["instructions"]
+    assert (
+        "artifacts/batch-workflows-constraints.txt" in step["instructions"]
+    )
+    # The fixed file path is named in prose; the arbitrary value is not.
+    assert adversarial not in step["instructions"]
+    assert (
+        step["batchOrchestration"]["sharedInputs"]["constraints"] == adversarial
+    )

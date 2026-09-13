@@ -41,7 +41,9 @@ execute the same portable fan-out engine from the resolved active Skill snapshot
 - `run_verify` (boolean, optional): verification toggle for child presets;
   default `true`.
 - `publish_mode` (string, optional): `none`, `branch`, `pr`, or
-  `pr_with_merge_automation`; default `none`.
+  `pr_with_merge_automation`; default `pr`. Both curated run options
+  implement code, so children publish a pull request by default. The batch
+  parent itself publishes nothing (`workflowPublish.mode: none`).
 
 ## Workflow
 
