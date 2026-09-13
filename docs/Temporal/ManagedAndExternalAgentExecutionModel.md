@@ -560,6 +560,13 @@ is an ancestor of the advertised remote base by fetching that exact object and
 checking ancestry. It retains the original checkout and revision and emits
 `no_commits`, with zero commits to publish. That evidence does not claim the
 checkout equals the newer base or grant candidate, PR, or completion authority.
+`remoteVerified` remains exact branch-tip proof: it is false for ancestor-only
+`no_commits` evidence. Existing exact-head consumers, including headless
+remediation admission in retained workflow versions, reject that evidence as a
+write source. The saved checkpoint remains available; admission must obtain
+independent valid workspace authority before another write. Historical
+exact-tip no-change records remain valid, and pushed records still require
+`remoteVerified=true`.
 Unchanged owned-candidate reuse still requires equality with its exact remote
 branch head. Diverged history and unreadable remote evidence remain failures.
 

@@ -270,7 +270,9 @@ class OmnigentWorkspacePublicationService:
             "push_base_branch": normalized_base,
             "push_head_sha": head_sha,
             "push_commit_count": 0,
-            "remote_verified": True,
+            # Reachability saves the admitted revision; only equality proves
+            # the exact branch tip required by existing write consumers.
+            "remote_verified": remote_heads == {head_sha},
         }
 
     async def publish_workspace(

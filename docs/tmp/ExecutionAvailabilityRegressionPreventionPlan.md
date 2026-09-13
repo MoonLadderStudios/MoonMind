@@ -135,6 +135,12 @@ omitted and explicit bases, both publish modes, unchanged remote refs and
 checkout, rejection of advanced owned candidates, and the parent classifying
 the result as having no publishable candidate. Unmet issue prerequisites remain
 unmet; this evidence does not turn the issue into a completed implementation.
+Review also found that ancestor-only evidence could authorize headless
+remediation from a stale branch tip. The repair preserves `remoteVerified` as
+exact-tip proof and emits false for ancestry-only `no_commits`. The real result
+passes through serialization into the existing remediation admission guard,
+which rejects that write source without losing the checkpoint. Historical
+exact-tip records still pass, and pushed records cannot omit exact-tip proof.
 
 1. Extend the existing image-owned release controller as the single promotion,
    installation, rollback, and routing-repair owner. Reuse its durable jobs,
