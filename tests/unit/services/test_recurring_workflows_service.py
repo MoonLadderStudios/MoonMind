@@ -1853,8 +1853,9 @@ async def test_unsupported_schedule_target_update_policy_fails_fast(
 
 @pytest.mark.parametrize("lost_ack", [False, True])
 @pytest.mark.parametrize("historical", [False, True])
+@pytest.mark.parametrize("final_evidence", ["started", "pending", "unavailable"])
 async def test_manual_request_persists_before_rpc_and_resumes_observation_without_retrigger(
-    tmp_path, mock_temporal_adapter, lost_ack, historical
+    tmp_path, mock_temporal_adapter, lost_ack, historical, final_evidence
 ):
     async with recurring_db(tmp_path) as maker:
         async with maker() as session:
@@ -1933,8 +1934,26 @@ async def test_manual_request_persists_before_rpc_and_resumes_observation_withou
                         disposition="started",
                     )
                 )
+            run = await session.get(RecurringWorkflowRun, request_id)
+            run.created_at = datetime.now(UTC) - timedelta(minutes=6)
+            await session.commit()
+            if final_evidence == "pending":
+                mock_temporal_adapter.observe_schedule_trigger.return_value = (
+                    ScheduleTriggerResult()
+                )
+            elif final_evidence == "unavailable":
+                mock_temporal_adapter.observe_schedule_trigger.side_effect = (
+                    ConnectionError("offline")
+                )
             assert await observer.reconcile_manual_runs() == 1
             run = await session.get(RecurringWorkflowRun, request_id)
-            assert run.outcome == RecurringWorkflowRunOutcome.ENQUEUED
-            assert run.temporal_run_id == "exact-run"
+            if final_evidence == "started":
+                assert run.outcome == RecurringWorkflowRunOutcome.ENQUEUED
+                assert run.temporal_run_id == "exact-run"
+            else:
+                assert run.outcome == RecurringWorkflowRunOutcome.DISPATCH_ERROR
+                assert "Check schedule history before retrying" in run.message
+                assert run.temporal_run_id is None
+                assert run.dispatch_after is None
+                assert await observer.reconcile_manual_runs() == 0
             mock_temporal_adapter.trigger_schedule.assert_awaited_once()

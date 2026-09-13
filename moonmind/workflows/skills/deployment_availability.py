@@ -17,11 +17,13 @@ from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.skills.deployment_release import (
     ReleaseCohort,
     docker,
+    retained_release_records,
     state_root,
     write_record,
 )
 from moonmind.workflows.temporal.release_routing import (
     current_version,
+    ramping_version,
     routing_snapshot,
     version_availability,
     version_drained,
@@ -33,14 +35,16 @@ async def reconcile_availability(client, *, deployment, runner, root):
     """Restore authorized current/ramping or undrained historical cohorts."""
     snapshot = await routing_snapshot(client, deployment)
     current = current_version(snapshot)
-    routing = snapshot.worker_deployment_info.routing_config
-    ramping = routing.ramping_version
+    ramping = ramping_version(snapshot)
     versions = {current, ramping} - {"", "__unversioned__"}
     # A successful release is an authority to retain its exact old workers.
     # A never-promoted candidate is not added by receipt discovery.
+    errors = []
     for path in root.glob("*/deployment-result.json"):
         source = path.parent / "routing.json"
-        if source.exists():
+        if not source.exists():
+            continue
+        try:
             receipt = json.loads(path.read_text())
             record = json.loads(source.read_text())
             if (
@@ -48,7 +52,19 @@ async def reconcile_availability(client, *, deployment, runner, root):
                 and record["deployment"] == deployment
             ):
                 versions.add(f"{deployment}.{record['candidate']}")
-    result = {"owner": "deployment-control", "current": current, "versions": []}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            if len(errors) < 20:
+                errors.append(
+                    {"record": path.parent.name, "errorCode": type(exc).__name__}
+                )
+    for _, retained in retained_release_records(root, deployment, errors=errors):
+        versions.add(retained["version"])
+    result = {
+        "owner": "deployment-control",
+        "current": current,
+        "versions": [],
+        "discoveryErrors": errors,
+    }
     for version in sorted(
         versions, key=lambda value: (value != current, value != ramping, value)
     ):
@@ -262,8 +278,11 @@ async def supervise_availability(client, spec, metadata, *, stop=None):
                     state_root() / "availability.json", metadata["releaseAvailability"]
                 )
             except (OSError, ValueError):
+                # Readiness metadata still exposes the failure when durable
+                # projection storage is unavailable; retry on the next sweep.
                 pass
         try:
             await asyncio.wait_for(stop.wait(), timeout=30)
         except TimeoutError:
+            # The periodic timeout starts another bounded observation sweep.
             pass

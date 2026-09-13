@@ -20,6 +20,7 @@ from temporalio.client import (
     ScheduleIntervalSpec,
     ScheduleSpec,
 )
+from temporalio.common import PinnedVersioningOverride, WorkerDeploymentVersion
 
 from moonmind.release_identity import build_release
 from moonmind.workflows.skills import deployment_availability as availability
@@ -30,7 +31,10 @@ from moonmind.workflows.skills.deployment_execution import (
 )
 from moonmind.workflows.temporal import worker_runtime, workers
 from moonmind.workflows.temporal.client import TemporalClientAdapter
-from moonmind.workflows.temporal.release_routing import bootstrap_version_routing
+from moonmind.workflows.temporal.release_routing import (
+    bootstrap_version_routing,
+    promote_version,
+)
 from tests.integration.reliability.test_release_routing_journey import connect
 
 pytestmark = [
@@ -40,8 +44,9 @@ pytestmark = [
 ]
 
 
-async def test_background_owner_restores_missing_exact_image_without_promoting_newer_image(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("retained_only", [False, True])
+async def test_background_owner_restores_authoritative_missing_image(
+    tmp_path, monkeypatch, retained_only
 ):
     client = await connect()
     key = uuid4().hex
@@ -203,6 +208,42 @@ async def test_background_owner_restores_missing_exact_image_without_promoting_n
         assert (await bootstrap_version_routing(client, spec))[
             "status"
         ] == "awaiting_promotion"
+        if retained_only:
+            # First controlled upgrade: A has only the new job's previous-image
+            # receipt, while B is the authorized current version.
+            request = json.loads((prior / "request.json").read_text())
+            request.update(image=replacement_id, imageId=replacement_id)
+            request["authored"]["inputs"]["sourceRevision"] = key + "-newer"
+            release.write_record(prior / "request.json", request)
+            release.write_record(
+                prior / "routing.json",
+                {
+                    "deployment": deployment,
+                    "candidate": newer["digest"],
+                    "previous": f"{deployment}.{digest}",
+                },
+            )
+            release.write_record(
+                prior / "retained.json",
+                {
+                    "owner": key,
+                    "version": f"{deployment}.{digest}",
+                    "image": immutable,
+                    "retired": [],
+                },
+            )
+            receipt["result"]["outputs"]["resolvedDigest"] = replacement_id
+            release.write_record(prior / "deployment-result.json", receipt)
+            release.write_record(prior / "result.json", receipt)
+            await promote_version(
+                client,
+                deployment=deployment,
+                build_id=newer["digest"],
+                expected_current=f"{deployment}.{digest}",
+                task_queue=queue,
+                task_queues=(queue, merge_queue),
+                canary_id=key + "-promote",
+            )
         original_command = HostDockerComposeRunner._run_compose_command
         lost_ack = False
 
@@ -237,14 +278,26 @@ async def test_background_owner_restores_missing_exact_image_without_promoting_n
                 ),
             ),
         )
-        adapter = TemporalClientAdapter(client=client)
-        await adapter.trigger_schedule(definition_id=definition)
-        for _ in range(50):
-            actions = (await schedule.describe()).info.recent_actions
-            if actions:
-                break
-            await asyncio.sleep(0.1)
-        accepted = client.get_workflow_handle(actions[-1].action.workflow_id)
+        if retained_only:
+            accepted = await client.start_workflow(
+                "MoonMind.ReleaseCanary",
+                {"digest": digest, "taskQueues": [queue, merge_queue]},
+                id=key + "-pinned",
+                task_queue=queue,
+                versioning_override=PinnedVersioningOverride(
+                    WorkerDeploymentVersion(deployment, digest)
+                ),
+                execution_timeout=timedelta(seconds=180),
+            )
+        else:
+            adapter = TemporalClientAdapter(client=client)
+            await adapter.trigger_schedule(definition_id=definition)
+            for _ in range(50):
+                actions = (await schedule.describe()).info.recent_actions
+                if actions:
+                    break
+                await asyncio.sleep(0.1)
+            accepted = client.get_workflow_handle(actions[-1].action.workflow_id)
         assert (await accepted.describe()).history_length == 2
         metadata = {}
         # Enter the actual startup/periodic owner. The test never invokes a
@@ -257,20 +310,22 @@ async def test_background_owner_restores_missing_exact_image_without_promoting_n
             "status": "verified",
         }
         assert lost_ack
-        assert (
-            json.loads(next(record_root.glob("*/retained.json")).read_text())[
-                "sourceReceipt"
-            ]
-            == key
+        assert any(
+            json.loads(path.read_text()).get("sourceReceipt") == key
+            for path in record_root.glob("*/retained.json")
         )
         for _ in range(100):
             if metadata.get("releaseAvailability", {}).get("versions"):
                 break
             await asyncio.sleep(0.1)
-        assert (
-            metadata["releaseAvailability"]["versions"][0]["ordinaryTraffic"]["status"]
-            == "verified"
+        recovered = next(
+            item
+            for item in metadata["releaseAvailability"]["versions"]
+            if item["version"] == f"{deployment}.{digest}"
         )
+        assert recovered["phase"] == "available"
+        if not retained_only:
+            assert recovered["ordinaryTraffic"]["status"] == "verified"
         # Process replacement resumes the durable owner and original cohort.
         background.cancel()
         await asyncio.gather(background, return_exceptions=True)
@@ -278,18 +333,19 @@ async def test_background_owner_restores_missing_exact_image_without_promoting_n
             availability.supervise_availability(client, spec, metadata)
         )
         # Ordinary unpinned traffic on the separate merge route must work too.
+        current_digest = newer["digest"] if retained_only else digest
         assert await client.execute_workflow(
             "MoonMind.ReleaseCanary",
-            {"digest": digest, "taskQueues": [merge_queue, queue]},
+            {"digest": current_digest, "taskQueues": [merge_queue, queue]},
             id=key + "-ordinary",
             task_queue=merge_queue,
             execution_timeout=timedelta(seconds=30),
-        ) == {"digest": digest, "status": "verified"}
+        ) == {"digest": current_digest, "status": "verified"}
         assert (
             (
                 await availability.routing_snapshot(client, deployment)
             ).worker_deployment_info.routing_config.current_version
-            == f"{deployment}.{digest}"
+            == f"{deployment}.{current_digest}"
         )
     finally:
         if background is not None:

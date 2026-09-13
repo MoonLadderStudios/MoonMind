@@ -95,9 +95,14 @@ ID prove the observed start; the latest action and lifetime skip count do not.
 For Skip, a positively observed running owner can answer "already running"
 without submitting another trigger. After an uncertain acknowledgement, the
 API-owned observer reads the recorded request every 30 seconds and after restart.
-It never resubmits a pending request. Uncorrelated or historical ambiguous rows
-remain pending; lack of an execution ID never proves a skip. Reusing an
-idempotency key returns the existing request, including after response loss.
+It never resubmits a pending request. After five minutes from the persisted
+request creation time, a final exact-evidence observation either confirms the
+start or settles the request as `dispatch_error` with an explicit unconfirmed
+acceptance message and a schedule-history link before retry. This request
+disposition proves neither workflow failure nor permission to repeat uncertain
+remote effects. Historical ambiguous rows use the same bounded observation;
+lack of an execution ID never proves a skip. Reusing an idempotency key returns
+the existing request, including after response loss or observation exhaustion.
 
 An occurrence waiting for an absent worker release reports infrastructure
 unavailability and points to the deployment recovery owner. Recurring
