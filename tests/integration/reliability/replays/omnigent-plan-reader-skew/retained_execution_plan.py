@@ -15,10 +15,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from moonmind.omnigent.harness_platform.support import SupportKeyPayload
 
 from moonmind.omnigent.harness_platform.credential_bindings import CredentialBinding
-from moonmind.omnigent.harness_platform.failures import (
-    HarnessPlatformError,
-    HarnessPlatformFailure,
-)
 from moonmind.omnigent.harness_platform.support import (
     SupportKeyPayload,
     compute_support_combination_key,
