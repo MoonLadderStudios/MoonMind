@@ -271,3 +271,79 @@ async def test_retained_only_receipt_requires_exact_owner_and_manifest(
     )
     assert list(release.retained_release_records(tmp_path, deployment)) == []
     assert docker.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_serving_receipt_survives_observation_loss_without_an_update_job(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    from unittest.mock import AsyncMock
+
+    deployment = "compose-install"
+    digest = "sha256:" + "a" * 64
+    image = "sha256:" + "b" * 64
+    version = deployment + "." + digest
+    key = hashlib.sha256(version.encode()).hexdigest()[:32]
+    directory = tmp_path / key
+    directory.mkdir()
+    receipt = {
+        "owner": f"release-availability:{version}",
+        "version": version,
+        "image": image,
+    }
+    release.write_record(directory / "retained.json", receipt)
+    # Observation is mutable and may be lost or exhausted. It cannot revoke
+    # the image receipt needed to recover the same current or pinned version.
+    release.write_record(directory / "availability.json", {"phase": "exhausted"})
+    docker = AsyncMock(side_effect=[
+        json.dumps([{"Id": image}]),
+        json.dumps({"digest": digest, "sourceRevision": "source"}),
+    ])
+    monkeypatch.setattr(release, "docker", docker)
+    assert list(release.retained_release_records(tmp_path, deployment)) == [
+        (directory, receipt)
+    ]
+    assert await release.successful_release_image(tmp_path, version) == {
+        "image": image, "sourceReceipt": key, "sourceRevision": "source",
+    }
+    # A copied receipt cannot claim a different availability owner's directory.
+    directory.rename(tmp_path / "foreign")
+    assert list(release.retained_release_records(tmp_path, deployment)) == []
+    assert await release.successful_release_image(tmp_path, version) is None
+    assert docker.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("coherent", [False, True])
+async def test_recording_serving_image_requires_coherent_installed_fleets(
+    tmp_path, monkeypatch, coherent
+):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from moonmind.workflows.temporal import workers
+
+    monkeypatch.setattr(workers, "_FLEET_SERVICE_NAMES", {"workflow": "workflow", "llm": "llm"})
+    runner = SimpleNamespace(_run_compose_command=AsyncMock(side_effect=[
+        {"exitCode": 0, "stdout": "workflow-id"},
+        {"exitCode": 0, "stdout": "llm-id"},
+    ]))
+    monkeypatch.setattr(release, "worker_readiness", AsyncMock(return_value={"ready": True, "buildId": "a"}))
+    docker = AsyncMock(side_effect=[
+        json.dumps([{"Image": "sha256:a"}]),
+        json.dumps([{"Image": "sha256:a" if coherent else "sha256:b"}]),
+    ])
+    monkeypatch.setattr(release, "docker", docker)
+    cohort = release.ReleaseCohort(runner, tmp_path, "owner")
+    if coherent:
+        result = await cohort.record_serving_image("fleet.a", "fleet")
+        assert result["image"] == "sha256:a"
+        assert json.loads((tmp_path / "retained.json").read_text()) == result
+        # Restart uses its receipt without looking for now-missing containers.
+        assert await cohort.record_serving_image("fleet.a", "fleet") == result
+    else:
+        with pytest.raises(ValueError, match="different images"):
+            await cohort.record_serving_image("fleet.a", "fleet")
+        assert not (tmp_path / "retained.json").exists()
+    assert not cohort.names
+    assert all(call.args[0] == "inspect" for call in docker.await_args_list)

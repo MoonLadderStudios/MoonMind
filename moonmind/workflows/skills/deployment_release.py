@@ -184,30 +184,45 @@ async def launch_updater(runner, directory, request):
 
 
 def retained_release_records(root, deployment, *, errors=None):
-    """Yield previous-image authority recorded by its original release job."""
+    """Yield image authority recorded by a release or its availability owner."""
     for path in sorted(root.glob("*/retained.json")):
         directory = path.parent
         request_file = directory / "request.json"
         routing_file = directory / "routing.json"
-        if not request_file.exists() or not routing_file.exists():
-            continue
         try:
-            routing = json.loads(routing_file.read_text())
-            if routing.get("deployment") != deployment:
-                continue
-            request = json.loads(request_file.read_text())
             retained = json.loads(path.read_text())
             if (
                 not isinstance(retained.get("owner"), str)
                 or not retained["owner"]
-                or retained["owner"] != request["authored"]["owner"]
                 or not isinstance(retained.get("version"), str)
                 or not retained["version"].startswith(deployment + ".")
-                or retained["version"] != routing.get("previous")
                 or not isinstance(retained.get("image"), str)
                 or not retained["image"].startswith("sha256:")
             ):
                 raise ValueError("Retained release receipt authority differs")
+            # The availability owner records the exact serving image before
+            # loss, including plain Compose installations with no update job.
+            # Its deterministic directory and owner bind that durable receipt;
+            # mutable observation/retry records are not image authority.
+            availability_owner = f"release-availability:{retained['version']}"
+            availability_key = hashlib.sha256(
+                retained["version"].encode()
+            ).hexdigest()[:32]
+            if retained["owner"] == availability_owner:
+                if directory.name != availability_key:
+                    raise ValueError("Retained availability receipt owner differs")
+            else:
+                if not request_file.exists() or not routing_file.exists():
+                    continue
+                routing = json.loads(routing_file.read_text())
+                if routing.get("deployment") != deployment:
+                    continue
+                request = json.loads(request_file.read_text())
+                if (
+                    retained["owner"] != request["authored"]["owner"]
+                    or retained["version"] != routing.get("previous")
+                ):
+                    raise ValueError("Retained release receipt authority differs")
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
             if errors is not None and len(errors) < 20:
                 errors.append(
@@ -285,7 +300,7 @@ async def successful_release_image(root, version):
             "sourceRevision": manifest["sourceRevision"],
         }
     # An initial Compose installation may never have produced its own release
-    # receipt. The first updater records its proven previous image instead.
+    # receipt. Its availability owner or first updater records the proven image.
     deployment, _, expected_digest = version.partition(".sha256:")
     if expected_digest:
         for directory, retained in retained_release_records(root, deployment):
@@ -440,22 +455,24 @@ class ReleaseCohort:
         self.runner, self.directory, self.owner = runner, directory, owner
         self.names = []
 
-    async def preserve_previous(self, previous, deployment, candidate):
-        """Keep the exact previous image polling until Temporal drains it."""
-        if previous in {"", "__unversioned__", f"{deployment}.{candidate}"}:
-            return
+    async def record_serving_image(self, version, deployment):
+        """Capture recovery authority while the serving image is observable.
+
+        Recording an image does not launch another worker or change routing.
+        The same receipt is consumed by normal updates and outage recovery.
+        """
         from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
 
         record_file = self.directory / "retained.json"
-        expected_digest = previous.removeprefix(deployment + ".")
+        expected_digest = version.removeprefix(deployment + ".")
         if record_file.exists():
             retained = json.loads(record_file.read_text())
-            if retained["owner"] != self.owner or retained["version"] != previous:
+            if retained["owner"] != self.owner or retained["version"] != version:
                 raise ValueError("Retained release authority differs")
         else:
-            evidence = await successful_release_image(self.directory.parent, previous)
+            evidence = await successful_release_image(self.directory.parent, version)
             if evidence is not None:
-                retained = {"owner": self.owner, "version": previous, **evidence}
+                retained = {"owner": self.owner, "version": version, **evidence}
             else:
                 images = set()
                 for service in _FLEET_SERVICE_NAMES.values():
@@ -476,11 +493,21 @@ class ReleaseCohort:
                     raise ValueError("Previous release spans different images")
                 retained = {
                     "owner": self.owner,
-                    "version": previous,
+                    "version": version,
                     "image": images.pop(),
                     "retired": [],
                 }
             write_record(record_file, retained)
+        return retained
+
+    async def preserve_previous(self, previous, deployment, candidate):
+        """Keep the exact previous image polling until Temporal drains it."""
+        if previous in {"", "__unversioned__", f"{deployment}.{candidate}"}:
+            return
+        from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
+
+        expected_digest = previous.removeprefix(deployment + ".")
+        retained = await self.record_serving_image(previous, deployment)
         retained_runner = self.runner
         if self.runner.compose_file == "/app/release/docker-compose.yaml":
             retained_compose = self.directory / "retained-compose.yaml"
