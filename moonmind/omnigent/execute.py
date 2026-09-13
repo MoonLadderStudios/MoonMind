@@ -488,6 +488,11 @@ async def _build_omnigent_first_message(
             },
             skills_on_demand_enabled=False,
         )
+    if isinstance(profile_authorization, Mapping):
+        input_paths = profile_authorization.get("materializedInputPaths")
+        if isinstance(input_paths, Mapping) and input_paths:
+            text += "\n\nMoonMind materialized input files (relative to the workspace):\n"
+            text += "\n".join(f"- {name}: {path}" for name, path in input_paths.items())
     metadata = parameters.get("metadata")
     moonmind = metadata.get("moonmind") if isinstance(metadata, dict) else {}
     if not isinstance(moonmind, dict):

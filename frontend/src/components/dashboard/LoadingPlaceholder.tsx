@@ -5,7 +5,6 @@ export type LoadingPlaceholderSurface =
   | 'workflow-detail'
   | 'settings'
   | 'schedules'
-  | 'manifests'
   | 'skills'
   | 'workflow-start';
 
@@ -35,7 +34,6 @@ const surfaceLabels: Record<LoadingPlaceholderSurface, string> = {
   'workflow-detail': 'Workflow detail',
   settings: 'Settings',
   schedules: 'Recurring',
-  manifests: 'Manifests',
   skills: 'Skills',
   'workflow-start': 'Workflow start',
 };

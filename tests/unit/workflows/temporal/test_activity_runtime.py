@@ -3050,6 +3050,95 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
             )
 
 
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "omnigent"])
+@pytest.mark.parametrize("evidence_state", ["valid", "expired", "malformed"])
+@pytest.mark.parametrize("near_limit", [False, True])
+async def test_acceptance_projection_crosses_publisher_and_workflow_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime: str,
+    evidence_state: str,
+    near_limit: bool,
+) -> None:
+    fixture = Path(__file__).resolve().parents[3] / "fixtures/reliability/acceptance-evidence-projection.json"
+    payload = json.loads(fixture.read_text())["gatePayload"]
+    acceptance = payload["validatedRefs"]["acceptance"]
+    # Evidence bodies belong in the artifact even when a producer mistakenly
+    # supplies a large inline reference. No acceptance identity may be truncated.
+    acceptance["evidence"][0]["evidenceRefs"] = ["evidence " * 4000]
+    if evidence_state == "expired":
+        acceptance["freshness"]["validUntil"] = "2020-01-01T00:00:00Z"
+    elif evidence_state == "malformed":
+        acceptance["evidence"].pop()
+    workspace = tmp_path / "temporal_sandbox" / "verify-workspace" / "repo"
+    report = workspace / "artifacts/verify.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps(payload))
+    run_store = ManagedRunStore(tmp_path / "runs")
+    run_store.save(ManagedRunRecord(
+        runId="verify-run", agentId=runtime, runtimeId=runtime,
+        status="completed", startedAt=datetime.now(timezone.utc),
+        workspacePath=workspace.as_posix(),
+    ))
+    metadata = {"agentRunId": "verify-run"}
+    if runtime == "omnigent":
+        SandboxWorkspaceRecordStore(tmp_path).ensure(SandboxWorkspaceRecord(
+            workspace_id="verify-workspace", workflow_id="parent-wf",
+            step_execution_id="parent-wf:run:verify:execution:1", relative_path="repo",
+        ))
+        metadata = {
+            "correlationId": "parent-wf",
+            "idempotencyKey": "parent-wf:run:verify:execution:1:agent_execute",
+            "workspaceLocator": {"kind": "sandbox", "workspaceId": "verify-workspace", "relativePath": "repo"},
+        }
+    monkeypatch.setattr(temporal_activity, "info", lambda: SimpleNamespace(
+        namespace="default", workflow_id="parent-wf:agent:verify", workflow_run_id="child-run",
+    ))
+    monkeypatch.setattr(run_module.workflow, "info", lambda: SimpleNamespace(workflow_id="parent-wf", run_id="run"))
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch: True)
+    monkeypatch.setattr(run_module.workflow, "now", lambda: datetime(2026, 9, 13, tzinfo=timezone.utc))
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service, run_store=run_store, workspace_root=tmp_path,
+            )
+            monkeypatch.setattr(activities, "execution_notify_completion", AsyncMock(return_value={"status": "skipped"}))
+            incoming_metadata = {**metadata, "verify_artifact_path": "artifacts/verify.json", "acceptanceContract": "acceptance/v1"}
+            if near_limit:
+                from moonmind.schemas.temporal_payload_policy import MAX_TEMPORAL_METADATA_BYTES
+
+                incoming_metadata.update(diagnostic1="p" * 8000, diagnostic2="")
+                used_bytes = len(json.dumps(incoming_metadata, separators=(",", ":")).encode())
+                incoming_metadata["diagnostic2"] = "q" * (MAX_TEMPORAL_METADATA_BYTES - 100 - used_bytes)
+            result = await activities.agent_runtime_publish_artifacts(AgentRunResult(metadata=incoming_metadata))
+            # Exercise the actual serialized boundary, not only the file reader.
+            result = AgentRunResult(**result.model_dump(mode="json", by_alias=True))
+            if near_limit:
+                assert result.metadata["workflowHistoryMetadataCompacted"] is True
+            parent = run_module.MoonMindRunWorkflow()
+            parent._assessment_context = {"issueRef": "example/repo#1"}
+            gate = parent._moonspec_verify_gate_result(result.metadata)
+            if evidence_state == "valid":
+                assert gate.verdict == "FULLY_IMPLEMENTED"
+                assert not gate.invalid and not gate.degraded
+                projected = result.metadata["moonSpecVerify"]["validatedRefs"]["acceptance"]
+                for field in ("subject", "scope", "completionTarget", "freshness"):
+                    assert projected[field] == acceptance[field]
+                assert [r["requirementId"] for r in projected["evidence"]] == ["REQ-1", "ACC-1"]
+                assert all(r["evidenceRefs"] == [result.metadata["sourceMoonSpecVerifyArtifactRef"]] for r in projected["evidence"])
+            else:
+                assert gate.verdict == "NO_DETERMINATION"
+                assert gate.invalid and gate.degraded
+            _, stored = await service.read_path(
+                artifact_id=result.metadata["sourceMoonSpecVerifyArtifactRef"], principal="system:agent_runtime",
+            )
+            assert json.loads(stored.read_text())["validatedRefs"]["acceptance"] == acceptance
+
+
 async def test_agent_runtime_publish_artifacts_publishes_remediation_attempt_json(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

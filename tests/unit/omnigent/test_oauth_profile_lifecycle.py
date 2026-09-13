@@ -4156,8 +4156,11 @@ async def test_coordinator_rejects_false_success_without_publishable_commits() -
 
 
 @pytest.mark.asyncio
-async def test_coordinator_accepts_remotely_verified_trusted_no_commit() -> None:
-    """A trusted assessment may authorize an exact verified unchanged base."""
+@pytest.mark.parametrize("remote_verified", [True, False])
+async def test_coordinator_accepts_remotely_verified_trusted_no_commit(
+    remote_verified,
+) -> None:
+    """A trusted no-change result retains whether its saved head is the tip."""
 
     async def execute(request, **_kwargs):
         return AgentRunResult(
@@ -4174,7 +4177,7 @@ async def test_coordinator_accepts_remotely_verified_trusted_no_commit() -> None
                 "push_base_branch": "main",
                 "push_head_sha": "a" * 40,
                 "push_commit_count": 0,
-                "remote_verified": True,
+                "remote_verified": remote_verified,
             },
             request_parameters={
                 "repositoryOutcomePolicy": {
@@ -4203,7 +4206,7 @@ async def test_coordinator_accepts_remotely_verified_trusted_no_commit() -> None
         "repositoryChanged": False,
         "publicationAuthorized": True,
         "candidateContaminated": False,
-        "remoteVerified": True,
+        "remoteVerified": remote_verified,
         "authority": "omnigent.profile_bound_execution",
     }
     assert authority_metadata[0]["terminal"]["harvestState"] == "completed"

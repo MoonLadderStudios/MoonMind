@@ -14,10 +14,53 @@ with the run rather than rewriting it after registry or credential changes.
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-09-07
+**Last updated:** 2026-09-13
 **Authority:** Unified Temporal lifecycle and ownership model for true agent execution, including profile-bound Codex execution through Omnigent hosts
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines durable product and runtime contracts.
+
+Declared recovery evidence is a host input contract. `gateResultRef` and
+`remainingWorkRef` must be materialized through the artifact owner before the
+agent consumes them, including historical requests that did not duplicate
+these fields in `inputRefs`. The host supplies `gateResultPath` and
+`remainingWorkPath` from successful materialization evidence; when both refs
+identify one artifact, both paths identify that same file. The host does not
+interpret verifier findings or replace the resolved Skill's decisions.
+
+A ready workspace establishes repository readiness, not delivery of the next
+step's evidence. Re-admission verifies current artifact ownership, integrity,
+size, and containment while preserving candidate edits. Input replacement is
+staged and verified before atomically replacing a prior read-only input.
+Missing, foreign, or unreadable evidence prevents launch; a path supplied by
+the caller is never proof that materialization succeeded. The ready-host lease
+persists the verified path mapping with its authority so an Activity restart
+before first-turn delivery recovers the same inputs without launching another
+host or changing the candidate.
+
+Artifact publication preserves the verifier's typed acceptance contract across
+the Activity-to-workflow projection. The full report remains authoritative in
+artifact storage. Compact metadata retains the exact subject, source scope,
+mandatory requirement identities, completion target, and freshness policy;
+requirement evidence references point to that published report. A string-only
+metadata filter cannot discard nested acceptance. Projection does not invent a
+verdict, fill missing requirements, or remove expiry. Validation of the report
+and consumption of the serialized projection are one required boundary test.
+Initial publication and final size-triggered compaction use one projection.
+Gate evidence remains essential when auxiliary metadata or excess references
+must be discarded to satisfy the result-size budget.
+
+Managed repository repair includes verification capability in its admission
+contract. Merge automation resolver children require `git`, `gh`, and `docker`
+through the existing capability mechanism, including omitted and historical
+templates that name only repository tools when used for a new child. Additional
+authored requirements remain intact. `docker` identifies the API-owned Docker
+Backend; it does not grant a daemon socket or host Docker credentials. Ordinary
+admission and workspace policy authorize the child-scoped test capability before
+launch. The host exposes the actual runtime, child, lease, and workspace context
+to the container CLI. Provider, model, credentials, and workspace selection stay
+under their existing authorities. Temporal patching preserves the exact
+capability payload of already-recorded child starts during replay; no live token
+or persisted execution plan is amended to retrofit missing authority.
 
 The normal Workflow Create compilation and acceptance journey for **Codex via Omnigent** is specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md); this execution model remains authoritative for the shared runtime lifecycle.
 
@@ -511,6 +554,22 @@ head must still match the verified commit before its URL crosses the durable
 result boundary. Older requests without accepted publication authority retain
 no-commit evidence but cannot discover a PR from that base alone.
 
+For an unchanged checkout, ordinary advancement of the authored base does not
+lose the saved work. The workspace owner may prove that the exact saved commit
+is an ancestor of the advertised remote base by fetching that exact object and
+checking ancestry. It retains the original checkout and revision and emits
+`no_commits`, with zero commits to publish. That evidence does not claim the
+checkout equals the newer base or grant candidate, PR, or completion authority.
+`remoteVerified` remains exact branch-tip proof: it is false for ancestor-only
+`no_commits` evidence. Existing exact-head consumers, including headless
+remediation admission in retained workflow versions, reject that evidence as a
+write source. The saved checkpoint remains available; admission must obtain
+independent valid workspace authority before another write. Historical
+exact-tip no-change records remain valid, and pushed records still require
+`remoteVerified=true`.
+Unchanged owned-candidate reuse still requires equality with its exact remote
+branch head. Diverged history and unreadable remote evidence remain failures.
+
 Before repository publication, the workspace owner fetches the authored base
 branch into its explicit remote-tracking ref using the same repository
 credential. A candidate-only clone must remain publishable without agent edits
@@ -797,6 +856,39 @@ to stop it.
 ### 16.1 Activity retry
 
 An activity retry reuses the same canonical request and idempotency key. It inspects durable run/provider/session/host state before creating side effects.
+
+A revoked Activity delivery cannot settle its canonical turn command. It leaves
+the claim and runtime binding for the replacement delivery to reconcile. User
+cancellation and unknown provider responses retain their distinct cancellation
+and delivery-ambiguity handling.
+
+An interrupted generic host allocation that has not created a provider session
+retains its fenced cleanup owner. After cleanup reaches `cleaned` with a durable
+cleanup attestation and successful canonical cleanup settlement, the owner may
+return `metadata.admissionRecovery`
+(`agent-admission-recovery/v1`). This typed control receipt binds the execution
+plan, admission epoch, runtime binding, and cleanup attestation. The workflow
+validates those identities against its admitted request before using the existing
+bounded capacity re-admission loop. The next epoch preserves the original
+request, workspace, provider and model; it cannot resurrect the cleaned binding.
+The receipt is persisted as the attempt result so a lost acknowledgement does
+not repeat cleanup. It does not represent provider execution or task success.
+The cleanup claim is persisted before teardown and reused after a lost
+acknowledgement; canonical completion rechecks the exact generation. A fenced
+completion leaves cleanup pending and releases no provider capacity or new
+admission. The settlement outcome is recorded with the cleanup evidence.
+Cleanup consumes the cumulative execution allowance: replacement Activities
+receive only the time still available, without a fresh minimum execution
+window. Exhaustion returns the failed attempt without another allocation.
+Durable capacity queueing remains outside the execution allowance.
+Missing, malformed, stale or cross-attempt receipts authorize no re-admission.
+An active provider session retains its existing reattachment path; incomplete
+cleanup retains its owner and cannot manufacture a fresh-host grant.
+
+Historical Activity results without this optional metadata retain their recorded
+behavior. The result envelope is unchanged; only newly recorded, validated
+cleanup evidence selects the new continuation, so replay does not reinterpret
+old cleanup hints or error strings as authority.
 
 Direct managed-session state is written through a monotonic revision compare-and-swap boundary. A provider turn is admitted while holding the state authority lock from the final locator/revision check through persistence of the provider's accepted turn identifier; concurrent control actions therefore cannot create an accepted but untracked turn. Longer provider observation remains outside the lock, and later publications succeed only when the persisted revision they read is still current. A concurrent clear, turn, or observer that advanced the revision makes a stale publication fail as a managed-session locator mismatch; the caller reloads the authoritative epoch, thread, and container locator before deciding whether to retry. An observer must never roll session state back to an older epoch or thread. When the controller deliberately replaces a missing, stale, or explicitly superseded container, it authorizes exactly that container transition while preserving the logical session, epoch, thread, workspace, and revision chain.
 

@@ -1,0 +1,11 @@
+{
+  "workflowId": "mm:07161650-68db-4325-8583-c6711e2cb8bc-2026-09-13T11:32:32Z",
+  "repository": "MoonLadderStudios/MoonMind",
+  "issueNumber": 4188,
+  "prNumber": 4295,
+  "publishedHead": "c60ed8a35637d883a9899c6289bf3c21a50e4f95",
+  "mergedHead": "59a3d6f5a8f64248a43a6876e2228602b62ee27d",
+  "mergeCommit": "5f4bdd99c9cd87c4a7ecb53a575e6a2eb3905afa",
+  "resolverResult": {"status": "success", "mergeAutomationDisposition": "merged", "headSha": null},
+  "escapedFailure": "The pull request does not match the current published candidate"
+}

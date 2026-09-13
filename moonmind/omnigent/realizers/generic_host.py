@@ -12,10 +12,11 @@ import json
 import logging
 import time
 from contextlib import suppress
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import Any, Awaitable, Callable
 
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+from moonmind.omnigent.control_plane.cleanup_authority import CanonicalCleanupClaim
 from moonmind.omnigent.attempt_completion import complete_skill_turns
 from moonmind.omnigent.credential_materializers import (
     CredentialRuntimeHandle,
@@ -41,7 +42,11 @@ from moonmind.omnigent.runtime_bindings import (
     StableRuntimeBinding,
     stable_binding_id,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentAdmissionRecovery,
+    AgentExecutionRequest,
+    AgentRunResult,
+)
 from moonmind.schemas.temporal_activity_models import AcceptedRepositoryEvidence
 
 
@@ -371,6 +376,24 @@ class GenericOmnigentHostRealizer:
                         credential_handles=credential_handles,
                         acquired=acquired,
                     )
+                if (
+                    binding.state is RuntimeBindingState.host_allocating
+                    and not binding.omnigentSessionId
+                    and admission_epoch(request) > 0
+                ):
+                    # This phase precedes provider-session creation. Persist the
+                    # interrupted admission before cleanup so a lost cleanup
+                    # acknowledgement can recover the same control result.
+                    sink = RuntimeBindingSessionAuthoritySink(
+                        self._runtime_bindings, binding
+                    )
+                    await sink.record_phase(
+                        "interruptedAdmission",
+                        {
+                            "admissionEpoch": admission_epoch(request),
+                        },
+                    )
+                    binding = sink.binding
                 raise HarnessPlatformError(
                     "an interrupted generic host allocation requires fenced cleanup",
                     code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
@@ -502,6 +525,9 @@ class GenericOmnigentHostRealizer:
                     "stateVolumeRef": host_context["stateVolumeRef"],
                     "controlVolumeRef": host_context.get("controlVolumeRef"),
                     "launchGeneration": host_lease.launchGeneration,
+                    "materializedInputPaths": dict(
+                        host_context.get("materializedInputPaths") or {}
+                    ),
                 },
             )
             # The container now exists, so the reservation stops being
@@ -638,6 +664,10 @@ class GenericOmnigentHostRealizer:
                 binding=binding,
             )
 
+        if primary_error is not None and cleanup_error is None and binding is not None:
+            recovery = await self._interrupted_admission_result(request, binding)
+            if recovery is not None:
+                return recovery
         if primary_error is not None:
             raise primary_error
         if result is None:
@@ -859,8 +889,8 @@ class GenericOmnigentHostRealizer:
         )
         push_status = str(publication.get("push_status") or "").strip().lower()
         # ``no_commits`` is a canonical terminal publication outcome, not a
-        # dispatch failure. The publisher already proved the workspace head is
-        # exactly the remote base head, so no repository work was lost, and the
+        # dispatch failure. The publisher already proved the unchanged workspace
+        # head is retained in the authored remote base, so no work was lost. The
         # durable workflow owns whether a step without commits satisfies its
         # publish contract -- exactly as it does for the managed-runtime push
         # boundary. Failing here instead strands workflow-owned side effects
@@ -903,6 +933,9 @@ class GenericOmnigentHostRealizer:
         phases = binding.phaseResults or {}
         if binding.terminalResult is not None or "publication" in phases:
             return recorded_attempt_result(binding)
+        recovery = await self._interrupted_admission_result(request, binding)
+        if recovery is not None:
+            return recovery
         compute = phases.get("compute")
         workspace = phases.get("workspace")
         if workspace is None or (compute is None and not any(key.startswith("turn:") for key in phases)):
@@ -926,6 +959,50 @@ class GenericOmnigentHostRealizer:
             compute = result.model_dump(by_alias=True, mode="json", exclude_none=True)
             await sink.record_phase("compute", compute)
         return await self._finish_owned_execution(bound, sink, AgentRunResult.model_validate(compute))
+
+    async def _interrupted_admission_result(self, request, binding):
+        """Issue readmission authority only after fenced, pre-session cleanup."""
+        interrupted = (binding.phaseResults or {}).get("interruptedAdmission")
+        settlement = (binding.phaseResults or {}).get("cleanupSettlement", {})
+        capacity = request.admitted_provider_capacity
+        cleanup_ref = binding.attestationRefs.get("cleanupAttestationRef")
+        if (
+            binding.state is not RuntimeBindingState.cleaned
+            or binding.omnigentSessionId
+            or binding.terminalResult is not None
+            or not isinstance(interrupted, dict)
+            or settlement.get("status") not in {"completed", "not_required"}
+            or capacity is None
+            or capacity.admission_epoch < 1
+            or interrupted.get("admissionEpoch") != capacity.admission_epoch
+            or capacity.execution_plan_ref != binding.executionPlanRef
+            or not cleanup_ref
+        ):
+            return None
+        recovery = AgentAdmissionRecovery(
+            executionPlanRef=binding.executionPlanRef,
+            admissionEpoch=capacity.admission_epoch,
+            runtimeBindingRef=binding.bindingId,
+            cleanupAttestationRef=cleanup_ref,
+        )
+        result = AgentRunResult(
+            summary="Interrupted host allocation was cleaned before provider execution; the same execution can be re-admitted.",
+            failureClass="integration_error",
+            providerErrorCode=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED.value,
+            retryRecommendation="retry_same_execution",
+            metadata={
+                "admissionRecovery": recovery.model_dump(mode="json", by_alias=True)
+            },
+        )
+        await self._update_binding(
+            binding,
+            updates={
+                "terminalResult": result.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+            },
+        )
+        return result
 
     async def _finish_execution(self, request, sink, result):
         async with self._runtime_bindings.finalization(sink.binding.bindingId) as current:
@@ -964,13 +1041,21 @@ class GenericOmnigentHostRealizer:
                     if attempt < 2:
                         await asyncio.sleep(2 ** attempt)
             else:
-                result = result.model_copy(update={
-                    "failure_class": "integration_error",
-                    "provider_error_code": (sink.binding.phaseResults or {})["publication_failure:2"]["code"],
-                    "retry_recommendation": "do_not_retry",
-                    "summary": "Agent work is saved; repository publication exhausted its retry budget.",
-                    "metadata": {**(result.metadata or {}), "unfinishedPhase": "publication", "workPreserved": bool(saved)},
-                })
+                result = result.model_copy(
+                    update={
+                        "failure_class": "integration_error",
+                        "provider_error_code": (sink.binding.phaseResults or {})[
+                            "publication_failure:2"
+                        ]["code"],
+                        "retry_recommendation": "do_not_retry",
+                        "summary": "Agent work is saved; repository publication exhausted its retry budget.",
+                        "metadata": {
+                            **(result.metadata or {}),
+                            "unfinishedPhase": "publication",
+                            "workPreserved": bool(saved),
+                        },
+                    }
+                )
         await sink.record_phase("publication", result.model_dump(mode="json", by_alias=True, exclude_none=True))
         return result
 
@@ -1010,10 +1095,17 @@ class GenericOmnigentHostRealizer:
         if binding.state is RuntimeBindingState.cleaned:
             return binding, host_lease
 
-        cleanup_claim = await self._claim_canonical_cleanup(
-            await self._recovered_session_id(binding)
-            or await resolve_admission_session_id(self._turn_commands, request)
-        )
+        recorded_claim = (binding.phaseResults or {}).get("cleanupClaim")
+        if recorded_claim:
+            # Completion can commit before its acknowledgement is delivered.
+            # Reuse this exact persisted claim: complete() rechecks its fence
+            # and accepts an already-settled generation idempotently.
+            cleanup_claim = CanonicalCleanupClaim(**recorded_claim)
+        else:
+            cleanup_claim = await self._claim_canonical_cleanup(
+                await self._recovered_session_id(binding)
+                or await resolve_admission_session_id(self._turn_commands, request)
+            )
         if cleanup_claim is _CLEANUP_NOT_OWNED:
             # Another owner holds this session's cleanup, or an admitted turn
             # already completed it: releasing the host, credentials, or provider
@@ -1021,6 +1113,16 @@ class GenericOmnigentHostRealizer:
             raise HarnessPlatformError(
                 "canonical cleanup authority is owned by another janitor",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        if cleanup_claim is not None and not recorded_claim:
+            binding = await self._update_binding(
+                binding,
+                updates={
+                    "phaseResults": {
+                        **(binding.phaseResults or {}),
+                        "cleanupClaim": asdict(cleanup_claim),
+                    },
+                },
             )
         cleanup_evidence: dict[str, Any] = {}
         if binding.omnigentSessionId:
@@ -1070,6 +1172,8 @@ class GenericOmnigentHostRealizer:
             item.model_dump(by_alias=True, mode="json")
             for item in await self._credentials.cleanup_all(credential_handles)
         ]
+        settlement = await self._complete_canonical_cleanup(cleanup_claim)
+        cleanup_evidence["canonicalCleanup"] = settlement
         evidence_ref: str | None = None
         if self._artifacts is not None:
             evidence_ref = await self._artifacts.write_json(
@@ -1085,14 +1189,19 @@ class GenericOmnigentHostRealizer:
             )
         # Provider capacity releases after all credential-consuming state.
         await self._provider_leases.release_all(acquired)
-        await self._complete_canonical_cleanup(cleanup_claim)
         attestation_refs = dict(binding.attestationRefs)
         if evidence_ref:
             attestation_refs["cleanupAttestationRef"] = evidence_ref
         binding = await self._update_binding(
             binding,
             state=RuntimeBindingState.cleaned,
-            updates={"attestationRefs": attestation_refs},
+            updates={
+                "attestationRefs": attestation_refs,
+                "phaseResults": {
+                    **(binding.phaseResults or {}),
+                    "cleanupSettlement": settlement,
+                },
+            },
         )
         return binding, host_lease
 
@@ -1159,10 +1268,24 @@ class GenericOmnigentHostRealizer:
         )
         return claim if claim is not None else _CLEANUP_NOT_OWNED
 
-    async def _complete_canonical_cleanup(self, claim: Any) -> None:
-        if claim is None or self._cleanup_authority is None:
-            return
-        await self._cleanup_authority.complete(claim)
+    async def _complete_canonical_cleanup(self, claim: Any) -> dict[str, Any]:
+        if claim is None:
+            return {"status": "not_required"}
+        if self._cleanup_authority is None:
+            raise HarnessPlatformError(
+                "persisted cleanup claim requires its canonical authority",
+                code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
+            )
+        if not await self._cleanup_authority.complete(claim):
+            raise HarnessPlatformError(
+                "canonical cleanup settlement was fenced by newer authority",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        return {
+            "status": "completed",
+            "sessionId": claim.session_id,
+            "generation": claim.generation,
+        }
 
     async def _update_binding(
         self,
@@ -1489,6 +1612,9 @@ class GenericOmnigentHostRealizer:
             "hostLeaseRef": binding.hostLeaseRef,
             "endpointRef": plan.payload.endpointRef,
             "omnigentHostId": host_id,
+            "materializedInputPaths": dict(
+                host_context.get("materializedInputPaths") or {}
+            ),
         }
         if primary_lease is not None:
             profile_authorization.update(
@@ -1582,8 +1708,8 @@ class GenericOmnigentHostRealizer:
             )
         await self._host_runtime.cleanup_authorities(binding.cleanupAuthorityRefs)
         await self._credentials.cleanup_all(cleanup_handles)
-        await self._provider_leases.release_from_binding(binding.providerLeases)
         await self._complete_canonical_cleanup(cleanup_claim)
+        await self._provider_leases.release_from_binding(binding.providerLeases)
         await self._runtime_bindings.update(
             binding.bindingId,
             expected_revision=binding.revision,

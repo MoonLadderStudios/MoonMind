@@ -29,6 +29,8 @@ first boundary did not establish that the user's recurring work could finish.
 | Temporary capacity escaped as fatal input failure | The recovered occurrence reached dispatch, then ended with `OMNIGENT_HOST_CAPACITY_UNAVAILABLE`, `wait_for_host_capacity`, CPU pressure, and a non-retryable parent ValueError. | Successful dispatch still did not mean useful work could finish. The precise retry-budget/host-pressure cause requires its own replay. |
 | Remote issue attempts were checked too late | The 08:08:20 and 08:09:53 UTC occurrences selected issues 4269 and 4268. Other deployments' preparing comments existed; new SQL receipts had `announcement_started=true` with no own comment ID. | An ordinary conflicting candidate poisoned the occurrence instead of being skipped safely. |
 | Architectural authority contradicted production | Temporal architecture section 18 said Worker Deployment routing was not in use. | Agents reading the architecture could make changes against an obsolete deployment model. |
+| Remediation evidence was not a usable runtime input | The 08:21:51 occurrence's fourth remediation had `gateResultRef` and `remainingWorkRef` only in parameters; its host received only brief/assessment attachments. A later Continue-As-New activated attachment forwarding, but explicit local paths were still absent. | Old histories wasted remediation attempts without editing; patch activation was accidentally required for input delivery. |
+| A provider outage bypassed durable retry | The same occurrence failed at draft publication when GitHub returned HTTP 500. The adapter returned `created=false`; the workflow classified that result as `user_error`. | Temporal saw a completed Activity, so its configured retry policy never ran. |
 
 The repeated pattern is treating a local success as a completed authority
 handoff: process ready as dispatch ready, trigger accepted as enqueued, a
@@ -89,6 +91,56 @@ The reviewed lock-boundary correction is commit
   marked-success override cannot satisfy this requirement.
 
 ## 3. Durable architecture decisions
+
+The first successful publication attempt also exposed a verification-capability
+gap at merge automation: resolver child creation declared only `git` and `gh`.
+The generic host correctly minted no container-job capability, so the available
+CLI failed with missing runtime identity. The bounded repair declares the
+resolver's complete `git`/`gh`/`docker` minimum before child admission, preserves
+additional requirements, and leaves recorded child authority unchanged during
+replay. Regression evidence enters through production merge-workflow child
+creation and the scoped container submission boundary across all three supported
+native harnesses. This does not replace the broader executable verification
+ledger in story J.
+
+The 11:32:32 UTC occurrence subsequently merged PR #4295 after three repair
+commits. Its resolver returned a successful merged disposition with no head SHA;
+the parent still finalized against the initial publication head and failed with
+an exact-candidate mismatch. The bounded repair re-reads the same PR through the
+existing GitHub readiness Activity after either merged disposition and carries
+the remotely confirmed head into required finalization. It does not weaken
+identity or completion-target checks. The minimized incident fixture runs through
+a real Temporal child, production GitHub HTTP reads, and the production issue
+handoff validator. Old histories reproduce the mismatch; new histories accept
+the repaired merged head, and both replay with the production data converter.
+The original failed occurrence remains truthful historical evidence.
+
+Operational recovery completed at 13:58:57 UTC: Temporal reset the failed parent
+to the workflow task immediately before its merge child was created. Recorded
+implementation, verification, and publication stayed intact. The canonical
+merge gate re-read the already-merged PR, confirmed its repaired head, completed
+GitHub issue finalization, and returned parent `success` / Temporal `COMPLETED`.
+The terminal receipt is retained as `recurring-terminal-success.json` in the
+incident directory. The next unchanged schedule occurrence had independently
+started at 13:50 UTC. This proves a recovered production occurrence; it does not
+claim the broader automatic recovery stories below are complete.
+
+The 13:50 occurrence later produced a no-change remediation handoff while
+`main` advanced from its saved revision. The no-commit publisher demanded tip
+equality and exhausted retries even though the saved commit remained in the
+remote base's history. The bounded repair accepts proven ancestry only for
+zero-change base comparison, retains the saved revision, and leaves owned
+candidate reuse exact. Real Git fixtures cover same/advanced/diverged histories,
+omitted and explicit bases, both publish modes, unchanged remote refs and
+checkout, rejection of advanced owned candidates, and the parent classifying
+the result as having no publishable candidate. Unmet issue prerequisites remain
+unmet; this evidence does not turn the issue into a completed implementation.
+Review also found that ancestor-only evidence could authorize headless
+remediation from a stale branch tip. The repair preserves `remoteVerified` as
+exact-tip proof and emits false for ancestry-only `no_commits`. The real result
+passes through serialization into the existing remediation admission guard,
+which rejects that write source without losing the checkpoint. Historical
+exact-tip records still pass, and pushed records cannot omit exact-tip proof.
 
 1. Extend the existing image-owned release controller as the single promotion,
    installation, rollback, and routing-repair owner. Reuse its durable jobs,
@@ -247,6 +299,27 @@ reconciliation owner; the next tick does not repeatedly rediscover it as fresh.
 **Dependencies:** E for resuming old failed occurrences; ordinary wait behavior
 is independently testable. Do not raise resource thresholds to hide the defect.
 
+**Observed allocation interruption:** The 11:25 occurrence lost its Activity
+delivery during an update, then completed fenced host cleanup without ever
+creating a provider session. Its adapter returned `OMNIGENT_CLEANUP_DEFERRED`
+and the workflow failed despite the durable cleanup attestation. The bounded
+repair carries a typed, attempt-bound cleanup receipt through the existing
+Activity result and re-admission loop, preserving the original request and
+retry and cumulative execution bounds. Cleanup time is debited before another
+Activity is scheduled. Canonical settlement must succeed before provider
+capacity is released; its persisted claim survives a lost acknowledgement. Revoked Activity delivery
+must also leave the canonical turn claim unchanged so a retry reaches runtime
+reconciliation; unknown provider responses remain parked. Local artifact refs
+must retain earlier cleanup evidence when replacement attempts use the same name.
+Required coverage enters the production AgentRun workflow, replaces a real Temporal worker during
+allocation, reconstructs PostgreSQL binding state, removes owned Docker
+resources through the production cleanup service, and proves release,
+reacquisition, a new admission epoch and replacement completion. Old hints,
+unproven or fenced cleanup, exhausted execution budgets and wrong-attempt
+receipts must not grant a new host. Broader interrupted-release preservation,
+pending-cleanup reconciliation and terminal claim settlement remain separate
+requirements in B/F; this repair does not claim those paths are complete.
+
 ### G. Gate supported release artifacts on production journeys — P1
 
 **Owner/files:** `pytest-unit-tests.yml`, `docker-publish.yml`,
@@ -292,6 +365,87 @@ may mark recovery complete from a container check or a workflow merely starting.
 
 **Dependencies:** B/C for live recovery evidence. Canonical corrections and
 agent rules are authored with this incident and do not wait for all code.
+
+### I. Make recovery inputs and provider retry semantics executable — P0
+
+**Owner/files:** Generic host workspace materialization, artifact projection,
+first-message binding, GitHub adapter and `repo.create_pr` Activity.
+
+**Build:** Admit existing named verifier refs at the host boundary, independently
+of workflow patch activation. Project paths only after artifact authorization and
+verified file writes. Re-admit inputs on a ready workspace without replaying its
+checkpoint. Preserve transient GitHub failures as retryable Activity failures;
+lookup failure must stop creation, and a subsequent attempt must adopt a PR
+whose creation acknowledgment was lost.
+
+**Acceptance:** Replay the actual parameter-only request with shared/separate
+verifier artifacts through the real artifact service, workspace materializer,
+generic host binding, and first message. Cover fresh and already-ready
+workspaces, repeated admission of read-only files, wrong-owner evidence, and
+preservation of uncommitted work, and Activity revocation after host readiness
+before first-turn delivery. Exercise HTTP 500/503/429, rate-limited versus
+permission-denied HTTP 403, provider cooldowns, and transport loss
+through the production adapter and Activity; prove the failure is retryable and
+that retry observes/adopts the existing PR with exactly one create request.
+Retain source/request evidence and observe a real recurring terminal outcome
+before claiming the incident resolved. Draft preservation of an incomplete
+issue does not establish successful issue implementation.
+
+**Dependencies:** No workflow command-order change or new patch marker is
+required for the host and Activity fixes. Broader terminal recovery accounting
+and automatic replay remain owned by E/F; this bounded repair does not claim
+those stories are complete.
+
+### J. Preserve acceptance through publication and strengthen its evidence — P0/P1
+
+The 09:50 recurrence reached implementation and verification for issue #4191.
+Its verifier produced a structurally valid `acceptance/v1` report. The shared
+artifact publisher validated and stored that report, then a string-only metadata
+projection discarded `validatedRefs.acceptance`. The workflow saw missing
+acceptance and spent a contract-repair attempt rewriting an already valid file.
+This is a publisher/consumer contract defect, independently of whether the
+verifier's requirement classifications are correct.
+
+**Immediate repair:** Preserve typed acceptance identity, scope and freshness in
+the projection, with per-requirement references to the authoritative full report.
+Replay publication through actual artifact storage, the production worker
+binding, Temporal serialization, and the workflow gate; cover managed and
+Omnigent workspaces, large detailed evidence, historical omitted acceptance,
+malformed bindings, expiry, and deterministic replay. Never waive the gate.
+Use the same projection for initial publication and the final size-triggered
+compactor. Exercise near-limit incoming metadata and excess artifact references;
+discarding auxiliary annotations must not discard the gate itself. The review
+of the first repair exposed a second string-only filter at that final boundary,
+so both paths now share one implementation instead of accumulating fixes.
+
+**Further verification hardening:** The same verifier classified every source
+requirement as met while disclosing unexecuted PostgreSQL migration checks as
+advisory. The original issue and existing portable acceptance policy require
+isolated implementation verification independently of production authorization.
+Preserve this counterexample and extend the portable verifier's existing
+verification inventory into an executable check ledger: bind each mandatory
+check to its source obligation, candidate, capability, command, terminal result,
+and durable evidence. Missing or unexecuted controlling checks must produce
+remaining work, not an approving report with limitations. Validate the ledger
+through the resolved portable Skill; native hosts may validate its declared
+contract but must not duplicate requirement classification. Prove refusal with
+the escaped contradictory report and success with actual isolated database
+migration/restore evidence. This hardening is planned work, not a claim that
+typed artifact references prove semantic correctness. The first report was not
+accepted; the existing contract-repair attempt subsequently returned actionable
+implementation and verification gaps.
+
+The subsequent verifier also treated isolated database checks as production
+operations. The configured Python-test image successfully started a disposable
+PostgreSQL 15.19 instance during incident diagnosis; that demonstrates an
+available capability, not qualification of PostgreSQL 17 or of the migration.
+Require discovery at the actual test-job boundary and preserve any explicit
+version requirement. A separate 184-test job outlived the agent tool's wait
+limit and later succeeded. Expose its durable job identity before waiting,
+recover status/logs after caller interruption, and distinguish a client wait
+timeout from a terminal test failure. Cover lost callers with the existing
+container-job owner and stable request identity instead of launching duplicate
+jobs or declaring the environment unavailable.
 
 ## 5. Required verification matrix
 

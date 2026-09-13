@@ -3410,3 +3410,40 @@ async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
         == "/daemon/agent_workspaces/temporal_sandbox/granted-ws-1/repo"
     )
     assert read_only_attachment["accessMode"] == "read-only"
+
+
+@pytest.mark.asyncio
+async def test_ready_host_retry_preserves_materialized_input_paths(monkeypatch):
+    """Revoke the first Activity after host readiness, before sending its turn."""
+    from moonmind.omnigent.execute import _build_omnigent_first_message, _first_message_text
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _plan('opencode-go/model')
+    paths = {'gateResultPath': '.moonmind/attachments/gate',
+             'remainingWorkPath': '.moonmind/attachments/gate'}
+    original_realize = harness.realizer._host_runtime.realize
+
+    async def realized(**kwargs):
+        return {**await original_realize(**kwargs), 'materializedInputPaths': paths}
+
+    harness.realizer._host_runtime.realize = realized
+    original_drive = harness.realizer._drive_session
+    harness.realizer._drive_session = AsyncMock(side_effect=asyncio.CancelledError())
+    monkeypatch.setattr('moonmind.omnigent.activity_ownership.delivery_was_revoked', lambda: True)
+    with pytest.raises(asyncio.CancelledError):
+        await harness.realizer._execute_lifecycle(harness.publish_request, plan)
+    assert 'host-cleaned' not in harness.events
+    harness.realizer._drive_session = original_drive
+    original_session = harness.realizer._session_driver
+
+    async def resumed(request, **kwargs):
+        message = await _build_omnigent_first_message(request=request, prompt={'text': 'Remediate'}, artifact_gateway=None)
+        text = _first_message_text(message)
+        for name, path in paths.items():
+            assert f'- {name}: {path}' in text
+        return await original_session(request, **kwargs)
+
+    harness.realizer._session_driver = resumed
+    result = await harness.realizer._execute_lifecycle(harness.publish_request, plan)
+    assert result.summary == 'done'
+    assert harness.events.count('host-ready') == 1

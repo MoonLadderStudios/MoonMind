@@ -12,6 +12,7 @@ lifecycle branches -- the operation it wraps is supplied by the realizer.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Awaitable, Callable
 
@@ -266,7 +267,15 @@ async def deliver_canonical_turn(
 
     try:
         result = recorded_result if recorded_result is not None else await operation()
-    except BaseException:
+    except BaseException as exc:
+        from moonmind.omnigent.activity_ownership import delivery_was_revoked
+
+        if isinstance(exc, asyncio.CancelledError) and delivery_was_revoked():
+            # This delivery no longer owns journal settlement. Preserve the
+            # claimed command with its durable runtime binding so Temporal's
+            # replacement can reconcile it under the same fence. A provider
+            # failure with unknown delivery still parks below.
+            raise
         try:
             await turn_commands.settle(
                 workflow_id=workflow_id,
