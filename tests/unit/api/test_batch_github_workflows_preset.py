@@ -60,6 +60,7 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
                     "publish_mode": "pr_with_merge_automation",
                     "max_workflows": "10",
                     "run_verify": True,
+                    "constraints": "Be safe",
                 },
             )
 
@@ -106,11 +107,18 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
         "--constraints-file artifacts/batch-workflows-constraints.txt"
         in step["instructions"]
     )
-    assert "constraints" not in orchestration["sharedInputs"]
-    assert "constraints" not in expanded["appliedTemplate"]["inputs"]
+    assert orchestration["sharedInputs"]["constraints"] == "Be safe"
+    assert expanded["appliedTemplate"]["inputs"]["constraints"] == "Be safe"
 
 
-async def test_batch_github_workflows_drops_constraints_input(tmp_path):
+async def test_batch_github_workflows_exposes_constraints_input(tmp_path):
+    """Operator guidance travels as a distinct `constraints` input (REQ-03).
+
+    The preset must not ask the agent to separate operator-added text from
+    template prose inside the instructions box; constraints arrive as data
+    through the input contract, sharedInputs, and child bindings.
+    """
+
     async with _catalog_db(tmp_path) as sessions:
         async with sessions() as session:
             service = PresetCatalogService(session)
@@ -133,25 +141,41 @@ async def test_batch_github_workflows_drops_constraints_input(tmp_path):
                 },
             )
 
-    assert "constraints" not in template["inputSchema"]["properties"]
-    assert "constraints" not in template["uiSchema"]
-    assert "constraints" not in template["defaults"]
-    assert all(
-        definition["name"] != "constraints" for definition in template["inputs"]
+    assert "constraints" in template["inputSchema"]["properties"]
+    assert template["uiSchema"]["constraints"] == {
+        "widget": "textarea",
+        "advanced": True,
+    }
+    assert template["defaults"]["constraints"] == ""
+    assert any(
+        definition["name"] == "constraints" for definition in template["inputs"]
     )
     for binding in template["annotations"]["bindings"].values():
-        assert "constraints" not in binding
+        assert binding["constraints"] == "{{ shared.constraints }}"
 
-    assert "constraints" not in expanded["appliedTemplate"]["inputs"]
+    assert (
+        expanded["appliedTemplate"]["inputs"]["constraints"]
+        == "Stale client value"
+    )
     step = expanded["steps"][0]
     assert '--constraints "' not in step["instructions"]
-    assert "Stale client value" not in step["instructions"]
-    assert "constraints" not in step["batchOrchestration"]["sharedInputs"]
+    assert (
+        "--constraints-file artifacts/batch-workflows-constraints.txt"
+        in step["instructions"]
+    )
+    # The arbitrary value travels as orchestration data, never on the shell
+    # command line: only the fixed file path appears in the recipe.
+    assert (
+        step["batchOrchestration"]["sharedInputs"]["constraints"]
+        == "Stale client value"
+    )
+    assert "Copy only that added guidance" not in step["instructions"]
+    assert "never this template text" not in step["instructions"]
 
 
-async def test_batch_github_workflows_forwards_step_instruction_constraints(
-    tmp_path,
-):
+async def test_batch_github_workflows_materializes_constraints_via_file(tmp_path):
+    """Constraints travel as a distinct input written via file, not shell."""
+
     async with _catalog_db(tmp_path) as sessions:
         async with sessions() as session:
             service = PresetCatalogService(session)
@@ -174,7 +198,11 @@ async def test_batch_github_workflows_forwards_step_instruction_constraints(
         in instructions
     )
     assert "artifacts/batch-workflows-constraints.txt" in instructions
-    assert "this Instructions box is the" in instructions
+    assert "never via" in instructions
+    assert "shell" in instructions
+    assert "never forward this template text" in instructions
+    assert "This preset has no separate constraints input" not in instructions
+    assert "Copy only that added guidance" not in instructions
 
 
 async def test_batch_github_workflows_uses_repository_context(tmp_path):

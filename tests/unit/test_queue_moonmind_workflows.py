@@ -35,7 +35,10 @@ def _task_request() -> dict[str, Any]:
             "task": {
                 "title": "Implement issue",
                 "instructions": "Implement GitHub issue MoonLadderStudios/MoonMind#722.",
-                "skill": {"name": "github-issue-implement"},
+                "taskTemplate": {
+                    "slug": "github-issue-implement",
+                    "scope": "global",
+                },
                 "inputs": {"github_issue_ref": "MoonLadderStudios/MoonMind#722"},
                 "publish": {"mode": "pr"},
             },
@@ -451,3 +454,33 @@ def test_main_fails_when_workflow_cap_skips_entries(tmp_path: Path) -> None:
     assert result["skipped"] == [
         {"ref": "child-2", "reason": "max_workflows_exceeded"}
     ]
+
+
+def test_skill_example_references_registered_preset_via_task_template() -> None:
+    """The queue Skill example must use the real preset identity (REQ-05).
+
+    ``github-issue-implement`` is a registered preset, not a Skill: the
+    example child must author it via ``task.taskTemplate`` and resolve the
+    helper from the active Skill snapshot.
+    """
+
+    repo_root = Path(__file__).resolve().parents[2]
+    skill_doc = (
+        repo_root
+        / ".agents"
+        / "skills"
+        / "queue-moonmind-workflows"
+        / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert '"skill": {"name": "github-issue-implement"}' not in skill_doc
+    assert '"taskTemplate": {"slug": "github-issue-implement"' in skill_doc
+    assert "$MOONMIND_ACTIVE_SKILLS_DIR/queue-moonmind-workflows" in skill_doc
+
+    preset_path = (
+        repo_root / "api_service" / "data" / "presets" / "github-issue-implement.yaml"
+    )
+    assert preset_path.is_file()
+    assert not (
+        repo_root / ".agents" / "skills" / "github-issue-implement"
+    ).exists()
