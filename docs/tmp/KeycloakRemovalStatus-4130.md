@@ -43,6 +43,16 @@
   `tests/unit/api/test_auth_session_cutover_4125.py`). This partly
   supersedes the `BearerTransport`/`JWTStrategy` retention row in
   [KeycloakRemovalResidual-4129.md](./KeycloakRemovalResidual-4129.md).
+- #4122: account lifecycle and operator recovery as hermetic contract +
+  implementation (`moonmind/security/account_lifecycle_4122.py`:
+  operator-held expiring one-use bootstrap with single-winner first-owner
+  claim, expiring one-use login-bound invites, member administration with
+  last-admin protection, short-lived one-use local recovery capability,
+  redacted observability; covered by
+  `tests/unit/security/test_account_lifecycle_4122.py`). AuthenticationContracts
+  §7 is now hermetic contract + implementation, not bare contract text;
+  database wiring and end-to-end operator journeys still await #4128
+  product qualification (see below).
 - #4129: bundled Keycloak live behavior removed (Compose service, realm
   assets, routers, helpers, fixtures); remaining `keycloak` strings are
   classified retirement, negative-test, or migration residuals per
@@ -50,15 +60,37 @@
 
 ## What is still pending
 
-Account lifecycle implementation and operator recovery (#4122-era),
-remaining cutover slices (#4126/#4127), and product qualification evidence
-(#4128) have no merged implementation on this checkout. Until they land,
-AuthenticationContracts §7 (enrollment and administration) is contract
-text: first-owner setup, expiring one-use invites, and local operator
-recovery are declared desired state backed by the #4121 session/revocation
-and #4124 identity primitives, not verified operator procedure. Likewise
-the `accounts`/`oidc`/`header` end-to-end browser journeys are hermetic
-contract + implementation, not browser-verified product behavior.
+Remaining cutover slices (#4126/#4127) and product qualification evidence
+(#4128) have no merged implementation on this checkout. The
+`accounts`/`oidc`/`header` end-to-end browser journeys (two-user login,
+admin/worker negative matrix, stream expiry and revocation, restart and
+replica consistency) are hermetic contract + implementation, not
+browser-verified product behavior. Likewise the #4122 lifecycle rules are
+unit-verified against the portable store protocol; production database
+wiring (existing `User`-table transactions) and the operated fresh-install
+/ recovery runbook still await #4128 qualification.
+
+## Documentation validation recorded here (#4130 RW-5/AC-5/AC-6)
+
+- Link check: `tests/unit/security/test_auth_docs_validation_4130.py`
+  resolves every repo-relative link in the reconciled docs (canonical,
+  MCP, DockerBackend, artifact, CombinedStack, README) plus the canonical
+  tmp backlinks. No network fetch; external URLs are never probed.
+- Configuration-example validation: the same suite checks the
+  `.env-template` selector story against the real implementation
+  (omitted selector selects `accounts` on fresh installs with protected
+  setup; populated-database omission stops for
+  `MOONMIND_AUTH_MIGRATION_DECISION`; every retired selector is rejected
+  by `OIDCSettings.validate_auth_provider`).
+- Active-claim zero-state: the suite proves no live Keycloak realm URL
+  (`keycloak:8080`, `realms/moonmind`, `http://keycloak`) survives in
+  active Security/ExternalAgents/ManagedAgents/Temporal/Omnigent docs,
+  generated clients, README, CLI help, OpenAPI help, or Compose — and no
+  active onboarding/operator/client guidance claims retired Keycloak
+  setup still works. Remaining mentions live only in classified homes
+  (tmp scaffolding, retired-selector rejection, negative tests,
+  historical migrations) per
+  [KeycloakRemovalResidual-4129.md](./KeycloakRemovalResidual-4129.md).
 
 ## Reconciliation audits recorded here (#4130 RW-4/RW-5)
 
