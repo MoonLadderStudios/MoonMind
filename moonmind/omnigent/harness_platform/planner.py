@@ -1088,6 +1088,7 @@ def compile_execution_plan(
                 agent_profile_snapshot_ref or profile.snapshot_ref()
             ),
             "harnessCatalogRef": harness_catalog.catalogRef,
+            "omnigentVersion": harness_catalog.omnigentVersion,
             "harnessId": profile.harness.id,
             "harnessImplementationRef": profile.harness.implementationRef,
             "agentSource": agent_source_dict,

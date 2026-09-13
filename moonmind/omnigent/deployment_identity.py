@@ -6,11 +6,11 @@ import os
 import re
 from typing import Any
 
+from moonmind.omnigent.compatibility import versions_compatible
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
-
 
 _IMAGE_REF = re.compile(r"^.+@sha256:([0-9a-f]{64})$")
 _BUILD_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -18,6 +18,10 @@ _BUILD_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 class OmnigentDeploymentIdentityConflict(ValueError):
     """Raised when a plan targets a different deployed runtime build."""
+
+
+class OmnigentDeploymentNotReady(HarnessPlatformError):
+    """Transient deployment discovery gap; the workflow owns bounded waiting."""
 
 
 def resolve_deployed_server_build_digest() -> str:
@@ -29,6 +33,12 @@ def resolve_deployed_server_build_digest() -> str:
             return explicit
         raise HarnessPlatformError(
             "OMNIGENT_BUILD_DIGEST must be an exact sha256 identity",
+            code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
+        )
+    image_ref = str(os.getenv("OMNIGENT_IMAGE_REF") or "").strip()
+    if image_ref and not _IMAGE_REF.fullmatch(image_ref):
+        raise HarnessPlatformError(
+            "OMNIGENT_IMAGE_REF must be an exact immutable image reference",
             code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
         )
     try:
@@ -51,8 +61,9 @@ def resolve_deployed_server_build_digest() -> str:
     match = _IMAGE_REF.fullmatch(image_ref)
     if match:
         return f"sha256:{match.group(1)}"
-    raise HarnessPlatformError(
-        "OMNIGENT_IMAGE_REF must identify the exact Omnigent server digest",
+    raise OmnigentDeploymentNotReady(
+        "Omnigent deployment identity is temporarily unavailable; waiting for "
+        "the bootstrap reconciler to observe the running server",
         code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
     )
 
@@ -73,11 +84,11 @@ def _resolve_deployed_host_image_ref(harness_id: str) -> str | None:
 
 
 def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
-    """Reject a plan whose qualified server or host is no longer deployed.
+    """Validate server compatibility without replacing immutable host authority.
 
-    This check does not re-select or rewrite immutable plan authority. It
-    verifies that the mutable endpoint the plan is about to call is still the
-    exact server build included in the plan's support identity.
+    New plans permit server patch releases within their recorded major.minor.
+    Historical plans without version evidence retain their exact-build reader.
+    The pinned host remains launchable when the default host image advances.
     """
 
     if getattr(plan_payload, "executionRealizerRef", None) != (
@@ -92,11 +103,31 @@ def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
         raise OmnigentDeploymentIdentityConflict(
             "execution plan lacks exact Omnigent server build authority"
         )
-    if planned != resolve_deployed_server_build_digest():
-        raise OmnigentDeploymentIdentityConflict(
-            "execution plan targets an Omnigent server build that is no longer "
-            "deployed; create a fresh execution to compile current runtime authority"
+    deployed = resolve_deployed_server_build_digest()
+    version = getattr(plan_payload, "omnigentVersion", None)
+    if planned != deployed:
+        from moonmind.omnigent.bootstrap.store import load_resolved_state
+
+        state = load_resolved_state()
+        observation = (
+            state.details.get("opencodeHostCompatibility", {}) if state else {}
         )
+        observed_version = observation.get("serverVersion")
+        if version and (
+            not observed_version or observation.get("serverBuildDigest") != deployed
+        ):
+            raise OmnigentDeploymentNotReady(
+                "Waiting for Omnigent version evidence bound to the deployed server",
+                code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
+            )
+        if not versions_compatible(version, observed_version):
+            raise OmnigentDeploymentIdentityConflict(
+                "execution plan targets an Omnigent server build that is no longer "
+                "deployed with compatible major.minor evidence; "
+                "the deployment owner must restore a compatible server"
+            )
+    if version:
+        return
     harness_id = str(getattr(plan_payload, "harnessId", None) or "").strip()
     deployed_host = _resolve_deployed_host_image_ref(harness_id)
     if deployed_host is None:

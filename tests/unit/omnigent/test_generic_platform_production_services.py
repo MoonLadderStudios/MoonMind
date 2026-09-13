@@ -2417,6 +2417,9 @@ async def test_fresh_host_launch_checks_current_deployment_before_prepare() -> N
         )
 
     assert "host-inputs-prepared" not in harness.events
+    assert "provider-acquired" not in harness.events
+    assert "credentials-materialized" not in harness.events
+    assert "command-claimed" not in harness.events
 
 
 _PUSHED_PUBLICATION: dict[str, object] = {
