@@ -726,24 +726,27 @@ class SecretsService:
         if reconciled is not None:
             return reconciled
 
-        secret = await _load_secret(db, slug, for_update=True)
-        if secret is None:
+        # Short metadata-only read with no row lock held.
+        snapshot = await _load_secret(db, slug)
+        if snapshot is None:
             logger.warning("secret_not_found_for_repair", slug=slug)
             return None
-        if _status_value(secret.status) != SecretStatus.ROTATED.value:
+        if _status_value(snapshot.status) != SecretStatus.ROTATED.value:
             raise SecretFencedError(
                 f"Managed secret {slug!r} is not ROTATED; repair is not required."
             )
+        snapshot_cred = _credential_revision_of(snapshot.details)
+        snapshot_policy = _policy_revision_of(snapshot.details)
 
-        current_cred = _credential_revision_of(secret.details)
-        current_policy = _policy_revision_of(secret.details)
+        # Validate the replacement outside any write lock: no database
+        # transaction is held across the provider probe.
         probe = await validator(
             SecretValidationRequest(
                 slug=slug,
                 candidate_id=f"repair-{uuid4().hex}",
-                expected_credential_revision=current_cred,
+                expected_credential_revision=snapshot_cred,
                 actor_ref=actor_ref,
-                policy_revision=current_policy,
+                policy_revision=snapshot_policy,
             ),
             new_plaintext,
         )
@@ -752,6 +755,23 @@ class SecretsService:
                 "secret_repair_rejected", slug=slug, reason=probe.reason_code
             )
             raise SecretFencedError(f"Repair validation failed: {probe.reason_code}.")
+
+        # Atomic section: lock, recheck versions, then mutate.
+        secret = await _load_secret(db, slug, for_update=True)
+        if secret is None:
+            logger.warning("secret_not_found_for_repair", slug=slug)
+            return None
+        if _status_value(secret.status) != SecretStatus.ROTATED.value:
+            raise SecretFencedError(
+                f"Managed secret {slug!r} is not ROTATED; repair is not required."
+            )
+        current_cred = _credential_revision_of(secret.details)
+        current_policy = _policy_revision_of(secret.details)
+        if current_cred != snapshot_cred or current_policy != snapshot_policy:
+            raise SecretFencedError(
+                "Repair validation is stale: ownership, policy, credentials, "
+                "or candidate context changed."
+            )
 
         new_cred = current_cred + 1
         secret.ciphertext = new_plaintext
@@ -1399,6 +1419,16 @@ class SecretsService:
                 # path and are never silently reactivated here.
                 if _status_value(existing.status) == SecretStatus.ROTATED.value:
                     logger.warning("secret_import_skipped_rotated", slug=key)
+                    continue
+                # Per-key idempotency: a retried import with the same
+                # request_id reconciles instead of advancing twice.
+                reconciled = await _reconcile_request_id(
+                    db,
+                    slug=key,
+                    event_type="secrets.imported",
+                    request_id=request_id,
+                )
+                if reconciled is not None:
                     continue
                 now = datetime.now(timezone.utc)
                 old_status = _status_value(existing.status)
