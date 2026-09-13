@@ -43,8 +43,9 @@ def test_release_qualification_validates_every_supervised_child(children, expect
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("module_entrypoint", [False, True])
+@pytest.mark.parametrize("operator_urls", [None, ["http://installed.example:7000"]])
 async def test_detached_update_reconciles_lost_launch_ack_and_reuses_terminal_receipt(
-    tmp_path, monkeypatch, module_entrypoint
+    tmp_path, monkeypatch, module_entrypoint, operator_urls
 ):
     execute = release.execute_detached
     if module_entrypoint:
@@ -72,6 +73,8 @@ async def test_detached_update_reconciles_lost_launch_ack_and_reuses_terminal_re
         "image": {"repository": "example/moonmind", "reference": "candidate"},
     }
     context = {"idempotency_key": owner, "principal": "system:deployment"}
+    if operator_urls is not None:
+        context["deployment_operator_urls"] = operator_urls
     container = None
     launches = []
 
@@ -89,6 +92,7 @@ async def test_detached_update_reconciles_lost_launch_ack_and_reuses_terminal_re
             request = release.Path(command[-1])
             record = json.loads(request.read_text())
             assert record["image"] == f"example/moonmind@{digest}"
+            assert record["authored"]["context"].get("deployment_operator_urls") == operator_urls
             release.write_record(
                 request.parent / "result.json",
                 {
@@ -135,6 +139,8 @@ async def test_detached_update_reconciles_lost_launch_ack_and_reuses_terminal_re
     changed = {**inputs, "reason": "different authorized operation"}
     with pytest.raises(ValueError, match="different inputs"):
         await execute(executor, changed, context)
+    with pytest.raises(ValueError, match="different inputs"):
+        await execute(executor, inputs, {**context, "deployment_operator_urls": ["http://different.example:7000"]})
 
 
 @pytest.mark.asyncio

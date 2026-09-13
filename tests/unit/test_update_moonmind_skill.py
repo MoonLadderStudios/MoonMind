@@ -13,7 +13,8 @@ update = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(update)
 
 @pytest.mark.parametrize("mismatch", [False, True])
-def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypatch, mismatch):
+@pytest.mark.parametrize("operator_url", [None, "http://installed.example:7000"])
+def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypatch, mismatch, operator_url):
     repo = tmp_path / "installed"
     repo.mkdir()
     def git(*args):
@@ -45,6 +46,7 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
             payload = json.loads(args[-1])
             assert payload["inputs"]["sourceRevision"] == revision
             assert payload["inputs"]["image"]["reference"] == digest
+            assert payload["context"].get("deployment_operator_urls") == ([operator_url] if operator_url else None)
             assert "--submit" in args
             assert kwargs["env"]["MOONMIND_IMAGE"].endswith("@" + digest)
             output = ""
@@ -54,14 +56,18 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
             output = ""
         return SimpleNamespace(returncode=0, stdout=output)
     monkeypatch.setattr(update.subprocess, "run", command)
+    args = ["--repo", str(repo)] + (["--operator-url", operator_url] if operator_url else [])
     if mismatch:
         with pytest.raises(ValueError, match="source revision"):
-            update.main(["--repo", str(repo)])
+            update.main(args)
         assert not any("--submit" in item for item in commands)
     else:
-        assert update.main(["--repo", str(repo)]) == 0
+        assert update.main(args) == 0
         submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
         assert update.main(["--repo", str(repo), "--resume", submission.stem]) == 0
+        with pytest.raises(ValueError, match="original operator URLs"):
+            update.main(["--repo", str(repo), "--resume", submission.stem,
+                         "--operator-url", "http://different.example:7000"])
         assert len([item for item in commands if item[1] == "pull"]) == 1
         assert len(list((repo / "deploy/state/release-submissions").glob("*.json"))) == 1
     assert (repo / "source.txt").read_text() == "operator edits"

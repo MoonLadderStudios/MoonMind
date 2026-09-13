@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 from temporalio import activity, workflow
-from temporalio.client import Client
+from temporalio.client import Client, Schedule, ScheduleActionStartWorkflow, ScheduleIntervalSpec, ScheduleSpec
 from temporalio.common import (
     PinnedVersioningOverride,
     VersioningBehavior,
@@ -75,6 +75,93 @@ async def connect():
         except RuntimeError:
             await asyncio.sleep(1)
     return await Client.connect(address)
+
+
+async def test_schedule_recovers_when_installed_release_replaces_absent_current_worker(
+    tmp_path, monkeypatch,
+):
+    """Replay definition 68d074f1: healthy replacement, unroutable schedule."""
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    client = await connect()
+    definition_id = uuid4()
+    deployment = f"schedule-recovery-{definition_id.hex}"
+    queue = deployment + "-workflow"
+    root = tmp_path / "image"
+    (root / "moonmind").mkdir(parents=True)
+    source = root / "moonmind" / "entry.py"
+    monkeypatch.setattr(release_identity, "__file__", str(source))
+
+    def install(value):
+        source.write_text(value)
+        release = release_identity.build_release(root)
+        (root / release_identity.RELEASE_FILE).write_text(json.dumps(release))
+        return release["digest"]
+
+    def worker_for(build):
+        return Worker(
+            client, task_queue=queue, workflows=[ReleaseCanaryWorkflow],
+            activities=[inspect_release_activity],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+            deployment_config=WorkerDeploymentConfig(
+                version=WorkerDeploymentVersion(deployment, build),
+                use_worker_versioning=True,
+                default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
+            ),
+        )
+
+    def spec(build):
+        return SimpleNamespace(
+            versioning_enabled=True, workflows=(ReleaseCanaryWorkflow,),
+            deployment_id=deployment, build_id=build, task_queues=(queue,),
+        )
+
+    old = install("old")
+    async with worker_for(old):
+        await bootstrap_version_routing(client, spec(old))
+    current = install("current")
+    async with worker_for(current):
+        assert (await bootstrap_version_routing(client, spec(current)))["status"] == "awaiting_promotion"
+        schedule = await client.create_schedule(
+            f"mm-schedule:{definition_id}",
+            Schedule(
+                action=ScheduleActionStartWorkflow(
+                    "MoonMind.ReleaseCanary", {"digest": current, "taskQueues": [queue]},
+                    id=f"mm:{definition_id}", task_queue=queue,
+                    execution_timeout=timedelta(seconds=120),
+                ),
+                spec=ScheduleSpec(intervals=[ScheduleIntervalSpec(every=timedelta(days=1))]),
+            ),
+        )
+        adapter = TemporalClientAdapter(client=client)
+        try:
+            await adapter.trigger_schedule(definition_id=definition_id)
+            for _ in range(50):
+                actions = (await schedule.describe()).info.recent_actions
+                if actions:
+                    break
+                await asyncio.sleep(0.1)
+            assert actions
+            blocked = client.get_workflow_handle(actions[-1].action.workflow_id)
+            assert (await blocked.describe()).history_length == 2
+            await promote_version(
+                client, deployment=deployment, build_id=current,
+                expected_current=f"{deployment}.{old}", task_queue=queue,
+                task_queues=(queue,), canary_id=deployment + "-canary",
+            )
+            assert await blocked.result() == {"digest": current, "status": "verified"}
+            await adapter.trigger_schedule(definition_id=definition_id)
+            for _ in range(50):
+                actions = (await schedule.describe()).info.recent_actions
+                if len(actions) == 2:
+                    break
+                await asyncio.sleep(0.1)
+            assert len(actions) == 2
+            fresh = client.get_workflow_handle(actions[-1].action.workflow_id)
+            assert fresh.id != blocked.id
+            assert await fresh.result() == {"digest": current, "status": "verified"}
+        finally:
+            await schedule.delete()
 
 
 @pytest.mark.parametrize("pinned", [False, True])

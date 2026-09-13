@@ -128,8 +128,9 @@ async def test_operator_probe_uses_host_namespace_and_verifies_receipt(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("host", ["0.0.0.0", "127.0.0.1"])
+@pytest.mark.parametrize("declared_urls", [None, ["http://installed.example:7000"]])
 async def test_release_cannot_replace_api_before_operator_path_is_verified(
-    tmp_path, monkeypatch, host
+    tmp_path, monkeypatch, host, declared_urls
 ):
     from moonmind.workflows.skills.deployment_execution import (
         DeploymentUpdateExecutor,
@@ -177,7 +178,7 @@ async def test_release_cannot_replace_api_before_operator_path_is_verified(
             {
                 "authored": {
                     "owner": "owner",
-                    "context": {},
+                    "context": {"deployment_operator_urls": declared_urls},
                     "inputs": {"sourceRevision": "source"},
                 },
                 "image": "example/image@sha256:pinned",
@@ -189,6 +190,22 @@ async def test_release_cannot_replace_api_before_operator_path_is_verified(
     execute.assert_not_awaited()
     assert not (tmp_path / "deployment-result.json").exists()
     assert not (tmp_path / "result.json").exists()
+    if declared_urls:
+        targets = json.loads((tmp_path / "operator-access-targets.json").read_text())
+        assert targets == {"owner": "owner", "urls": declared_urls}
+
+
+@pytest.mark.parametrize("invalid", ["http://host:7000", [""], [None], ["file:///tmp/app"], ["http://user:password@host"], ["http://host"] * 33])
+def test_declared_operator_origins_reject_invalid_authority(invalid):
+    with pytest.raises(ValueError):
+        operator_urls({}, declared_urls=invalid)
+
+
+def test_declared_origins_do_not_hide_configured_authentication_origin():
+    config = {"services": {"api": {"environment": {"MOONMIND_PUBLIC_BASE_URL": "https://auth.example"}}}}
+    assert operator_urls(config, declared_urls=["http://vpn.example:7000"]) == [
+        "http://vpn.example:7000", "https://auth.example",
+    ]
 
 
 @pytest.mark.parametrize(

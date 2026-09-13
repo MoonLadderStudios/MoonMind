@@ -8,6 +8,17 @@
     "message": "Waiting for machine resource capacity; missing_condition=machine_cpu; utilization_percent={'cpu': 89, 'memory': 73, 'processes': 11, 'temporaryStorage': 6}."
   },
   "observedRetryFailure": "canonical turn admission returned cold_restore",
+  "credentialCleanupRegression": {
+    "incidentWorkflowId": "mm:68d074f1-1e17-401d-8f03-1818f38ad17f-2026-09-13T00:05:25Z",
+    "observedRetryFailure": "cleaned credential runtime authority cannot be reused",
+    "requiredBoundary": "real credential materialization and durable cleanup ledger across both admissions"
+  },
+  "retainedHostRegression": {
+    "observedFailure": "Workspace checkpoint was not captured",
+    "archiveFailure": "artifact expects multipart completion; use /complete with parts",
+    "requiredBoundary": "PostgreSQL and MinIO gateway upload, remote readback, then restoration after source workspace loss",
+    "regressionTest": "tests/integration/reliability/test_saved_workspace_journey.py::test_saved_candidate_is_readable_after_worker_and_workspace_loss[s3-True]"
+  },
   "recordedSession": {"providerSessionRef": null, "runtimeBindingRef": null, "cleanupState": "complete"},
   "expected": "Re-admission owns a distinct session, command, runtime binding and cleanup aggregate; same-epoch redelivery reuses terminal evidence."
 }

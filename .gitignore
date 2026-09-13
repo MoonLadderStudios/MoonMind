@@ -58,6 +58,8 @@ artifacts*/
 /deploy/state/desired-state.json
 /deploy/state/operator-http-headers.json
 /deploy/state/locks/
+/deploy/state/release-jobs/
+/deploy/state/release-submissions/
 live_streams.spool
 .specify/feature.json
 
