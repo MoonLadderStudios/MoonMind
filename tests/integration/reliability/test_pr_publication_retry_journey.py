@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from datetime import timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from uuid import uuid4
@@ -30,9 +31,11 @@ class PublicationRetryJourney:
         )
 
 
-async def test_recurring_publication_uses_durable_retry_and_one_remote_create(monkeypatch):
+@pytest.mark.parametrize('rate_limited', [False, True])
+async def test_recurring_publication_uses_durable_retry_and_one_remote_create(monkeypatch, rate_limited):
     monkeypatch.setenv('GITHUB_TOKEN', 'github-token-fixture')
     calls = []
+    observed_times = []
     created = False
     pr = {'number': 42, 'html_url': 'https://github.com/o/r/pull/42', 'draft': True,
           'head': {'ref': 'feature', 'sha': 'abc123', 'repo': {'full_name': 'o/r'}},
@@ -45,18 +48,21 @@ async def test_recurring_publication_uses_durable_retry_and_one_remote_create(mo
         def handle_request(self):
             nonlocal created
             calls.append(self.command)
+            observed_times.append(time.monotonic())
             assert self.headers['Authorization'] == 'Bearer github-token-fixture'
             if self.command == 'GET':
                 status, payload = 200, [pr] if created else []
             elif self.command == 'POST':
                 assert not created
                 created = True
-                status, payload = 500, {'message': 'lost acknowledgment'}
+                status, payload = (403 if rate_limited else 500), {'message': 'lost acknowledgment'}
             else:
                 assert self.command == 'PATCH'
                 status, payload = 200, pr
             body = json.dumps(payload).encode()
             self.send_response(status)
+            if rate_limited and status == 403:
+                self.send_header('Retry-After', '1')
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
@@ -96,6 +102,8 @@ async def test_recurring_publication_uses_durable_retry_and_one_remote_create(mo
             )
         assert result['adopted'] and result['url'] == pr['html_url']
         assert calls == ['GET', 'POST', 'GET', 'PATCH']
+        if rate_limited:
+            assert observed_times[2] - observed_times[1] >= 1
     finally:
         server.shutdown()
         server.server_close()

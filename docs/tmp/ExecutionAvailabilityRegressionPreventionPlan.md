@@ -311,7 +311,9 @@ whose creation acknowledgment was lost.
 verifier artifacts through the real artifact service, workspace materializer,
 generic host binding, and first message. Cover fresh and already-ready
 workspaces, repeated admission of read-only files, wrong-owner evidence, and
-preservation of uncommitted work. Exercise HTTP 500/503/429 and transport loss
+preservation of uncommitted work, and Activity revocation after host readiness
+before first-turn delivery. Exercise HTTP 500/503/429, rate-limited versus
+permission-denied HTTP 403, provider cooldowns, and transport loss
 through the production adapter and Activity; prove the failure is retryable and
 that retry observes/adopts the existing PR with exactly one create request.
 Retain source/request evidence and observe a real recurring terminal outcome

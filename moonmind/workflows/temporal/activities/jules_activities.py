@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import timedelta
 
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -417,7 +418,14 @@ async def repo_create_pr_activity(payload: dict) -> dict:
     if result.retryable:
         # Temporal owns bounded retries. Each attempt re-reads the frozen
         # head/base before creating, so a lost POST acknowledgment is adopted.
-        raise ApplicationError(result.summary, type="GitHubTransientError")
+        raise ApplicationError(
+            result.summary,
+            type="GitHubTransientError",
+            next_retry_delay=(
+                timedelta(seconds=result.retry_after_seconds)
+                if result.retry_after_seconds is not None else None
+            ),
+        )
     return result.model_dump(by_alias=True)
 
 __all__ = [
