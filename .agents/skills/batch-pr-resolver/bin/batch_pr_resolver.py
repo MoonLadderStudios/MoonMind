@@ -571,18 +571,6 @@ def _parse_args() -> argparse.Namespace:
         default="open",
         help="PR state filter (default: open).",
     )
-    parser.add_argument(
-        "--include-forks",
-        action="store_true",
-        default=False,
-        help="Include fork PRs when creating tasks.",
-    )
-    parser.add_argument(
-        "--skip-existing-only",
-        action="store_true",
-        default=False,
-        help="Deprecated compatibility alias; kept for older callers.",
-    )
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--priority", type=int, default=0)
     parser.add_argument(
@@ -802,16 +790,6 @@ def _build_request_records(
 ) -> tuple[list[JobSubmission], list[dict[str, Any]]]:
     queue_requests: list[JobSubmission] = []
     skipped: list[dict[str, Any]] = []
-
-    if args.include_forks and args.skip_existing_only:
-        raise RuntimeError(
-            "--include-forks conflicts with --skip-existing-only; choose only one."
-        )
-    if args.include_forks:
-        raise RuntimeError(
-            "--include-forks is not supported for queued pr-resolver jobs because fork "
-            "head branches are not reliably check-outable by the worker."
-        )
 
     def _get_pr_number(pr_data: dict[str, Any]) -> int:
         try:
