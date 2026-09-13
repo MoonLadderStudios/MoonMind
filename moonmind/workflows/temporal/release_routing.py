@@ -33,6 +33,81 @@ def current_version(snapshot) -> str:
     return f"{current.deployment_name}.{current.build_id}" if current.build_id else ""
 
 
+def ramping_version(snapshot) -> str:
+    routing = snapshot.worker_deployment_info.routing_config
+    if routing.ramping_version:
+        return routing.ramping_version
+    ramping = routing.ramping_deployment_version
+    return f"{ramping.deployment_name}.{ramping.build_id}" if ramping.build_id else ""
+
+
+async def version_availability(
+    client, version: str, *, live_container_ids=None
+) -> dict:
+    """Observe pollers at the deployment-aware (legacy) task-queue API.
+
+    Enhanced Build-ID selection does not expose Worker Deployment pollers on
+    Temporal 1.29. Docker inventory additionally disproves cached pollers from
+    containers removed since the server's last poll observation.
+    """
+    import re
+    from datetime import datetime, timezone
+    from temporalio.api.enums.v1 import DescribeTaskQueueMode
+    from temporalio.api.taskqueue.v1 import TaskQueue
+    from temporalio.api.workflowservice.v1 import DescribeTaskQueueRequest
+
+    description = await client.workflow_service.describe_worker_deployment_version(
+        DescribeWorkerDeploymentVersionRequest(
+            namespace=client.namespace, version=version
+        )
+    )
+    queues = []
+    for queue in description.worker_deployment_version_info.task_queue_infos:
+        response = await client.workflow_service.describe_task_queue(
+            DescribeTaskQueueRequest(
+                namespace=client.namespace,
+                task_queue=TaskQueue(name=queue.name),
+                api_mode=DescribeTaskQueueMode.DESCRIBE_TASK_QUEUE_MODE_UNSPECIFIED,
+                task_queue_type=queue.type,
+                report_pollers=True,
+                report_stats=True,
+            )
+        )
+        pollers = []
+        for poller in response.pollers:
+            options = poller.deployment_options
+            if f"{options.deployment_name}.{options.build_id}" != version:
+                continue
+            host = poller.identity.partition("@")[2]
+            if (
+                live_container_ids is not None
+                and re.fullmatch(r"[0-9a-f]{12,64}", host)
+                and not any(
+                    identifier.startswith(host) for identifier in live_container_ids
+                )
+            ):
+                continue
+            age = (
+                datetime.now(timezone.utc)
+                - poller.last_access_time.ToDatetime(tzinfo=timezone.utc)
+            ).total_seconds()
+            if age <= 90:
+                pollers.append(poller.identity)
+        queues.append(
+            {
+                "queue": queue.name,
+                "type": queue.type,
+                "livePollers": len(pollers),
+                "pendingAgeSeconds": response.stats.approximate_backlog_age.ToTimedelta().total_seconds(),
+            }
+        )
+    return {
+        "version": version,
+        "available": bool(queues) and all(item["livePollers"] for item in queues),
+        "queues": queues,
+    }
+
+
 async def version_drained(client, version: str) -> bool:
     """Only Temporal's terminal drainage evidence releases old pollers."""
     from temporalio.api.enums.v1 import VersionDrainageStatus
@@ -91,11 +166,16 @@ async def qualification_closed_without_activation(
         return True
 
 
-async def await_registered_queues(client, *, version, workflow_queue, activity_queues):
+async def await_registered_queues(
+    client, *, version, workflow_queue, activity_queues, workflow_queues=()
+):
     """Do not admit a pinned canary until the service knows every target queue."""
     from temporalio.api.enums.v1 import TaskQueueType
 
-    required = {(workflow_queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW)}
+    required = {
+        (queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW)
+        for queue in (workflow_queues or (workflow_queue,))
+    }
     required.update(
         (queue, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY) for queue in activity_queues
     )
@@ -121,6 +201,73 @@ async def await_registered_queues(client, *, version, workflow_queue, activity_q
     )
 
 
+async def verify_ordinary_route(client, *, version, canary_id, timeout_seconds=120):
+    """Prove ordinary unpinned traffic on every registered workflow queue."""
+    import hashlib
+    from temporalio.api.enums.v1 import TaskQueueType
+    from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
+    from temporalio.exceptions import WorkflowAlreadyStartedError
+
+    response = await client.workflow_service.describe_worker_deployment_version(
+        DescribeWorkerDeploymentVersionRequest(
+            namespace=client.namespace, version=version
+        )
+    )
+    info = response.worker_deployment_version_info
+    deployment = info.deployment_version.deployment_name or info.deployment_name
+    digest = version.removeprefix(deployment + ".")
+    queues = info.task_queue_infos
+    activities = sorted(
+        {
+            item.name
+            for item in queues
+            if item.type == TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY
+        }
+    )
+    workflows = sorted(
+        {
+            item.name
+            for item in queues
+            if item.type == TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW
+        }
+    )
+    if not workflows or not activities:
+        raise ValueError(
+            "Ordinary release qualification requires workflow and Activity queues"
+        )
+    if current_version(await routing_snapshot(client, deployment)) != version:
+        raise ValueError(
+            "Ordinary release qualification lost current routing authority"
+        )
+    for queue in workflows:
+        execution_id = (
+            canary_id + "-ordinary-" + hashlib.sha256(queue.encode()).hexdigest()[:12]
+        )
+        try:
+            handle = await client.start_workflow(
+                "MoonMind.ReleaseCanary",
+                {"digest": digest, "taskQueues": activities},
+                id=execution_id,
+                task_queue=queue,
+                id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+                execution_timeout=timedelta(seconds=timeout_seconds),
+            )
+        except WorkflowAlreadyStartedError:
+            handle = client.get_workflow_handle(execution_id)
+        if await handle.result() != {"digest": digest, "status": "verified"}:
+            raise ValueError("Ordinary installed release traffic failed verification")
+    if current_version(await routing_snapshot(client, deployment)) != version:
+        raise ValueError("Routing changed during ordinary release qualification")
+    return {
+        "version": version,
+        "status": "verified",
+        "workflowQueues": workflows,
+        "activityQueues": activities,
+        "canaryId": canary_id,
+    }
+
+
 async def promote_version(
     client,
     *,
@@ -129,6 +276,7 @@ async def promote_version(
     expected_current: str,
     task_queue: str,
     task_queues: tuple[str, ...] = (),
+    workflow_queues: tuple[str, ...] = (),
     canary_id: str | None = None,
 ):
     """CAS the routing owner; concurrent promotion never silently overwrites it."""
@@ -148,6 +296,7 @@ async def promote_version(
         version=f"{deployment}.{build_id}",
         workflow_queue=task_queue,
         activity_queues=task_queues or (task_queue,),
+        workflow_queues=workflow_queues,
     )
     from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
     from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -195,10 +344,14 @@ async def promote_version(
     observed = current_version(await routing_snapshot(client, deployment))
     if observed != target:
         raise RuntimeError("Temporal did not confirm the candidate release as current")
+    ordinary = await verify_ordinary_route(
+        client, version=target, canary_id=execution_id
+    )
     return {
         "previousVersion": expected_current,
         "currentVersion": target,
         "verified": True,
+        "ordinaryTraffic": ordinary,
     }
 
 
@@ -223,6 +376,7 @@ async def bootstrap_version_routing(client, spec):
                     "status": "current" if current == target else "awaiting_promotion",
                     "currentVersion": current,
                     "candidateVersion": target,
+                    "recoveryOwner": "deployment-control",
                 }
             try:
                 await promote_version(

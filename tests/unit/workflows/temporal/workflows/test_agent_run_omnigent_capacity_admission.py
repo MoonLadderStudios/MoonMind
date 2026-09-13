@@ -56,8 +56,6 @@ from moonmind.workflows.temporal.workflows.agent_run import (
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 
-
-
 def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     """Install a deterministic workflow context and record every timer sleep."""
 
@@ -1747,3 +1745,29 @@ async def test_a_run_that_admits_no_capacity_keeps_its_original_deadlines(
     options = run.execution_options[0]
     assert "schedule_to_start_timeout" not in options
     assert options["schedule_to_close_timeout"] == timedelta(seconds=600)
+
+
+@pytest.mark.asyncio
+async def test_repeated_host_admission_consumes_one_cumulative_wait_budget(monkeypatch):
+    slept = _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(agent_run_module, "_OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS", 45)
+    run = _RecordingRun()
+    wait = {"admitted": False, "retryAfterSeconds": 30}
+    run.host_decisions = [wait, {"admitted": True}]
+    await run._await_omnigent_host_capacity(parent_info=None)
+    run.host_decisions = [wait, wait, {"admitted": True}]
+    with pytest.raises(ApplicationError) as error:
+        await run._await_omnigent_host_capacity(parent_info=None)
+    assert error.value.type == "HostCapacityAcquisitionTimeout"
+    assert slept == [30, 15]
+
+
+@pytest.mark.asyncio
+async def test_unsatisfiable_host_demand_fails_without_capacity_retry(monkeypatch):
+    slept = _configure_workflow_runtime(monkeypatch)
+    run = _RecordingRun()
+    run.host_decisions = [{"admitted": False, "unsatisfiable": True}]
+    with pytest.raises(ApplicationError) as error:
+        await run._await_omnigent_host_capacity(parent_info=None)
+    assert error.value.type == "HostCapacityUnsatisfiable"
+    assert slept == []

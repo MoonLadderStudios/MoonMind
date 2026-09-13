@@ -4222,10 +4222,13 @@ async def test_fresh_omnigent_launch_is_not_reaped_before_materialization() -> N
     cleanup_records: list[dict] = []
 
     class Repository:
-        async def list_active_host_leases(self):
+
+        async def list_active_host_leases(self, *, failures=None):
             return [lease]
 
-        async def list_terminal_host_leases_with_active_provider_capacity(self):
+        async def list_terminal_host_leases_with_active_provider_capacity(
+            self, *, failures=None
+        ):
             return []
 
         async def get_binding_for_profile(self, _profile_id):

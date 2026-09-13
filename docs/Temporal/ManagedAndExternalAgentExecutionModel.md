@@ -213,6 +213,23 @@ timed_out
 
 `awaiting_slot` means a required execution resource, commonly Provider Profile capacity or machine capacity, has not yet been acquired. Metadata states the exact reason and authority rather than using a vague waiting state.
 
+Generic-host preadmission resolves resource demand from the committed plan's
+launch policy and compares it with the same machine budget and ledger used by
+allocation. A short control Activity reports the limiting resource; workflow
+timers own waiting without occupying an execution Activity or consuming a host
+attempt. An existing owned lease reuses its reservation. The cumulative waiting
+budget survives capacity requeues, and an unsatisfiable demand is rejected rather
+than queued indefinitely. Atomic allocation remains the final admission fence.
+
+The scheduled host janitor bounds OAuth and generic-host cleanup independently.
+A historical credential-generation failure remains fenced and visible while
+unrelated leases and machine reconciliation continue. Generic reclamation needs
+positive closure evidence for the exact Temporal workflow/run owner; stale age
+alone cannot release a host. Existing workspace preservation, canonical cleanup
+claims, generation fences, and Docker-observed resource release remain the
+cleanup authority.
+
+
 ### 3.4 `AgentRunResult`
 
 A terminal result contains compact fields such as:

@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Iterable, Mapping
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -1491,55 +1491,151 @@ class RecurringWorkflowsService:
         await self._session.commit()
         return definition
 
+    @staticmethod
+    def _record_trigger_observation(run, observation):
+        if not isinstance(observation, ScheduleTriggerResult):
+            return
+        if observation.disposition == "skipped":
+            run.outcome = RecurringWorkflowRunOutcome.SKIPPED
+            run.message = (
+                observation.message or "Already running; no new execution started."
+            )
+        elif (
+            observation.disposition == "started"
+            and observation.workflow_id
+            and observation.run_id
+        ):
+            run.outcome = RecurringWorkflowRunOutcome.ENQUEUED
+            run.message = "Execution started."
+        else:
+            return
+        run.temporal_workflow_id = observation.workflow_id
+        run.temporal_run_id = observation.run_id
+        run.updated_at = datetime.now(UTC)
+        run.dispatch_after = None
+
     async def create_manual_run(
         self,
         definition: RecurringWorkflowDefinition,
+        *,
+        request_id: UUID | None = None,
     ) -> RecurringWorkflowRun:
+        request_id = request_id or uuid4()
+        # Serialize product requests on the existing definition, including
+        # response-loss retries with the same request ID.
+        await self._session.execute(
+            select(RecurringWorkflowDefinition)
+            .where(RecurringWorkflowDefinition.id == definition.id)
+            .with_for_update()
+        )
+        existing = await self._session.get(RecurringWorkflowRun, request_id)
+        if existing is not None:
+            if existing.definition_id != definition.id:
+                raise RecurringWorkflowValidationError(
+                    "Run request belongs to another definition"
+                )
+            return existing
+        await self._ensure_schedule_action_current(definition)
         now = datetime.now(UTC)
-
-        try:
-            await self._ensure_schedule_action_current(definition)
-            trigger_result = await self._adapter.trigger_schedule(
-                definition_id=definition.id
-            )
-        except Exception as exc:
-            logger.error(
-                "Failed to trigger temporal schedule for %s: %s",
-                definition.id,
-                exc,
-            )
-            raise RecurringWorkflowValidationError(f"Failed to trigger schedule: {exc}")
-
-        if not isinstance(trigger_result, ScheduleTriggerResult):
-            trigger_result = ScheduleTriggerResult()
-        scheduled_for = trigger_result.scheduled_at or now
-        message = "Triggered via Temporal Schedule"
-        if trigger_result.workflow_id:
-            message = f"Triggered Temporal workflow {trigger_result.workflow_id}"
-
+        # The row owns observation before any external effect, including an
+        # uncertain RPC response. Never automatically resubmit a pending row.
         run = RecurringWorkflowRun(
-            id=uuid4(),
+            id=request_id,
             definition_id=definition.id,
-            scheduled_for=scheduled_for,
+            scheduled_for=now,
             trigger=RecurringWorkflowRunTrigger.MANUAL,
-            outcome=RecurringWorkflowRunOutcome.ENQUEUED,
+            outcome=RecurringWorkflowRunOutcome.PENDING_DISPATCH,
             dispatch_attempts=1,
             dispatch_after=now,
-            temporal_workflow_id=trigger_result.workflow_id,
-            temporal_run_id=trigger_result.run_id,
             created_at=now,
             updated_at=now,
-            message=message,
+            message="Request recorded; waiting for Temporal execution evidence.",
         )
-        definition.last_scheduled_for = scheduled_for
-        definition.last_dispatch_status = RecurringWorkflowRunOutcome.ENQUEUED.value
-        definition.last_dispatch_error = None
-        definition.updated_at = now
         self._session.add(run)
-        await self._session.flush()
-        await self._session.refresh(run)
+        await self._session.commit()
+        try:
+            observation = await self._adapter.trigger_schedule(
+                definition_id=definition.id,
+                request_id=str(run.id),
+                scheduled_at=run.scheduled_for,
+            )
+            self._record_trigger_observation(run, observation)
+        except Exception:
+            # The service may have accepted a request whose acknowledgement was
+            # lost. The observation owner resumes this exact identity on restart.
+            logger.warning("Manual trigger observation pending for %s", run.id)
+        definition.last_scheduled_for = run.scheduled_for
+        definition.last_dispatch_status = run.outcome.value
+        definition.last_dispatch_error = None
+        definition.updated_at = datetime.now(UTC)
         await self._session.commit()
         return run
+
+    async def reconcile_manual_runs(self, *, limit: int = 100) -> int:
+        """Observe requests within a bounded budget, without uncertain resubmission."""
+        now = datetime.now(UTC)
+        runs = (
+            (
+                await self._session.execute(
+                    select(RecurringWorkflowRun)
+                    .where(
+                        RecurringWorkflowRun.trigger
+                        == RecurringWorkflowRunTrigger.MANUAL,
+                        or_(
+                            RecurringWorkflowRun.outcome
+                            == RecurringWorkflowRunOutcome.PENDING_DISPATCH,
+                            and_(
+                                RecurringWorkflowRun.outcome
+                                == RecurringWorkflowRunOutcome.ENQUEUED,
+                                or_(
+                                    RecurringWorkflowRun.temporal_workflow_id.is_(None),
+                                    RecurringWorkflowRun.temporal_run_id.is_(None),
+                                ),
+                            ),
+                        ),
+                        or_(
+                            RecurringWorkflowRun.dispatch_after.is_(None),
+                            RecurringWorkflowRun.dispatch_after <= now,
+                        ),
+                    )
+                    .order_by(RecurringWorkflowRun.dispatch_after)
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for run in runs:
+            if run.outcome == RecurringWorkflowRunOutcome.ENQUEUED:
+                run.outcome = RecurringWorkflowRunOutcome.PENDING_DISPATCH
+                run.message = (
+                    "Historical request has no exact Temporal execution evidence."
+                )
+            run.dispatch_after = now + timedelta(seconds=30)
+            try:
+                async with asyncio.timeout(5):
+                    observation = await self._adapter.observe_schedule_trigger(
+                        definition_id=run.definition_id, scheduled_at=run.scheduled_for
+                    )
+                self._record_trigger_observation(run, observation)
+            except Exception:
+                logger.warning("Manual trigger evidence unavailable for %s", run.id)
+            if (
+                run.outcome == RecurringWorkflowRunOutcome.PENDING_DISPATCH
+                and now >= _coerce_utc(run.created_at) + timedelta(minutes=5)
+            ):
+                # This is an unconfirmed request, not proof of workflow failure
+                # or permission to repeat a possibly accepted external effect.
+                run.outcome = RecurringWorkflowRunOutcome.DISPATCH_ERROR
+                run.message = (
+                    "Request acceptance could not be confirmed within five minutes. "
+                    "Check schedule history before retrying Run now."
+                )
+                run.dispatch_after = None
+                run.updated_at = now
+            # Preserve each observation if the outer sweep budget expires.
+            await self._session.commit()
+        return len(runs)
 
     async def delete_definition(
         self,
@@ -1798,7 +1894,7 @@ class RecurringWorkflowsService:
         )
         result = await self._session.execute(stmt)
         runs = list(result.scalars().all())
-        
+
         # Temporal reconciliation could be added here in the future using adapter.describe_schedule
         return runs
 

@@ -522,17 +522,22 @@ async def test_create_manual_run_triggers_temporal_schedule(
                 started_at=triggered_at,
                 workflow_id="workflow-from-trigger",
                 run_id="run-from-trigger",
+                disposition="started",
             )
 
             run = await service.create_manual_run(definition)
 
-            mock_temporal_adapter.trigger_schedule.assert_called_once_with(definition_id=definition.id)
+            mock_temporal_adapter.trigger_schedule.assert_called_once_with(
+                definition_id=definition.id,
+                request_id=str(run.id),
+                scheduled_at=run.scheduled_for,
+            )
             assert run.outcome == RecurringWorkflowRunOutcome.ENQUEUED
-            assert run.scheduled_for.replace(tzinfo=UTC) == triggered_at
+            assert run.scheduled_for.replace(tzinfo=UTC) >= triggered_at
             assert run.temporal_workflow_id == "workflow-from-trigger"
             assert run.temporal_run_id == "run-from-trigger"
-            assert run.message == "Triggered Temporal workflow workflow-from-trigger"
-            assert definition.last_scheduled_for.replace(tzinfo=UTC) == triggered_at
+            assert run.message == "Execution started."
+            assert definition.last_scheduled_for == run.scheduled_for
             assert definition.last_dispatch_status == "enqueued"
             mock_temporal_adapter.update_schedule.assert_not_called()
 
@@ -578,7 +583,7 @@ async def test_create_manual_run_repairs_legacy_task_queue_before_trigger(
                 )
             )
 
-            await service.create_manual_run(definition)
+            run = await service.create_manual_run(definition)
 
             mock_temporal_adapter.update_schedule.assert_called_once()
             call_kwargs = mock_temporal_adapter.update_schedule.call_args.kwargs
@@ -586,7 +591,9 @@ async def test_create_manual_run_repairs_legacy_task_queue_before_trigger(
             assert call_kwargs["workflow_type"] == workflow_type
             assert call_kwargs["workflow_input"] == workflow_input
             mock_temporal_adapter.trigger_schedule.assert_called_once_with(
-                definition_id=definition.id
+                definition_id=definition.id,
+                request_id=str(run.id),
+                scheduled_at=run.scheduled_for,
             )
 
 async def test_delete_definition_deletes_temporal_schedule_and_db_row(
@@ -1842,3 +1849,111 @@ async def test_unsupported_schedule_target_update_policy_fails_fast(
         await service._refresh_omnigent_execution_plan_target(
             definition, target=target, initial_parameters=initial_parameters
         )
+
+
+@pytest.mark.parametrize("lost_ack", [False, True])
+@pytest.mark.parametrize("historical", [False, True])
+@pytest.mark.parametrize("final_evidence", ["started", "pending", "unavailable"])
+async def test_manual_request_persists_before_rpc_and_resumes_observation_without_retrigger(
+    tmp_path, mock_temporal_adapter, lost_ack, historical, final_evidence
+):
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            definition = await service.create_definition(
+                name="Recovery",
+                description="",
+                enabled=True,
+                schedule_type="cron",
+                cron="0 6 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {"task": {"instructions": "Work"}},
+                },
+                policy={},
+            )
+            service._ensure_schedule_action_current = AsyncMock()
+            request_id = uuid4()
+
+            async def trigger(**kwargs):
+                async with maker() as other:
+                    recorded = await other.get(RecurringWorkflowRun, request_id)
+                    assert (
+                        recorded.outcome == RecurringWorkflowRunOutcome.PENDING_DISPATCH
+                    )
+                    assert recorded.temporal_workflow_id is None
+                    assert kwargs["scheduled_at"].replace(
+                        tzinfo=UTC
+                    ) == recorded.scheduled_for.replace(tzinfo=UTC)
+                if lost_ack:
+                    raise ConnectionError("accepted, response lost")
+                return ScheduleTriggerResult()
+
+            mock_temporal_adapter.trigger_schedule.side_effect = trigger
+            run = await service.create_manual_run(definition, request_id=request_id)
+            assert run.outcome == RecurringWorkflowRunOutcome.PENDING_DISPATCH
+            assert (
+                await service.create_manual_run(definition, request_id=request_id)
+            ).id == run.id
+            mock_temporal_adapter.trigger_schedule.assert_awaited_once()
+            if historical:
+                run.outcome = RecurringWorkflowRunOutcome.ENQUEUED
+                run.dispatch_after = None
+                await session.commit()
+        # A new process/session owns only observation of the recorded identity.
+        async with maker() as session:
+            observer = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            mock_temporal_adapter.observe_schedule_trigger = AsyncMock(
+                return_value=ScheduleTriggerResult(
+                    workflow_id="started-workflow",
+                    run_id="exact-run",
+                    disposition="started",
+                )
+            )
+            if historical:
+                mock_temporal_adapter.observe_schedule_trigger.return_value = (
+                    ScheduleTriggerResult()
+                )
+                assert await observer.reconcile_manual_runs() == 1
+                uncertain = await session.get(RecurringWorkflowRun, request_id)
+                assert uncertain.outcome == RecurringWorkflowRunOutcome.PENDING_DISPATCH
+                uncertain.dispatch_after = datetime.now(UTC) - timedelta(seconds=1)
+                await session.commit()
+                mock_temporal_adapter.observe_schedule_trigger.return_value = (
+                    ScheduleTriggerResult(
+                        workflow_id="started-workflow",
+                        run_id="exact-run",
+                        disposition="started",
+                    )
+                )
+            run = await session.get(RecurringWorkflowRun, request_id)
+            run.created_at = datetime.now(UTC) - timedelta(minutes=6)
+            await session.commit()
+            if final_evidence == "pending":
+                mock_temporal_adapter.observe_schedule_trigger.return_value = (
+                    ScheduleTriggerResult()
+                )
+            elif final_evidence == "unavailable":
+                mock_temporal_adapter.observe_schedule_trigger.side_effect = (
+                    ConnectionError("offline")
+                )
+            assert await observer.reconcile_manual_runs() == 1
+            run = await session.get(RecurringWorkflowRun, request_id)
+            if final_evidence == "started":
+                assert run.outcome == RecurringWorkflowRunOutcome.ENQUEUED
+                assert run.temporal_run_id == "exact-run"
+            else:
+                assert run.outcome == RecurringWorkflowRunOutcome.DISPATCH_ERROR
+                assert "Check schedule history before retrying" in run.message
+                assert run.temporal_run_id is None
+                assert run.dispatch_after is None
+                assert await observer.reconcile_manual_runs() == 0
+            mock_temporal_adapter.trigger_schedule.assert_awaited_once()
