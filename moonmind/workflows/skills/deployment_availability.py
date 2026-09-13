@@ -119,6 +119,13 @@ async def reconcile_availability(client, *, deployment, runner, root):
                 if observation["available"]:
                     record.update(phase="available", attempts=0, deadline=None)
                     retained_file = directory / "retained.json"
+                    if version == current and not retained_file.exists():
+                        record["ordinaryTraffic"] = await verify_ordinary_route(
+                            client,
+                            version=version,
+                            canary_id=f"mm-availability-{key}-record-{int(record['observedAt'] * 1000)}",
+                        )
+                        await cohort.record_serving_image(version, deployment)
                     if (
                         version == current
                         and retained_file.exists()
