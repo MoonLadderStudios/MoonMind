@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import random
 import shutil
 import subprocess
 import tarfile
@@ -11,6 +12,7 @@ import tarfile
 import pytest
 
 from api_service.db import models
+from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_artifacts import TemporalOmnigentArtifactGateway
 from moonmind.omnigent.workspace_publication import OmnigentWorkspacePublicationService
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
@@ -33,9 +35,12 @@ pytestmark = [
 ]
 
 
-@pytest.mark.parametrize("backend", ["local_fs", "s3"])
+@pytest.mark.parametrize(
+    ("backend", "multipart"),
+    [("local_fs", False), ("s3", False), ("s3", True)],
+)
 async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
-    tmp_path, monkeypatch, backend
+    tmp_path, monkeypatch, backend, multipart
 ):
     root = tmp_path / "worker"
     workflow_id = "saved-workflow"
@@ -65,6 +70,15 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
     git("add", "file.txt")
     (workspace / "file.txt").write_text("validated candidate\n")
     (workspace / "new.bin").write_bytes(b"\x00\xff\x80")
+    if multipart:
+        # Minimized replay of host cleanup retaining capacity when a saved
+        # workspace exceeds the artifact gateway's single-put limit. Random
+        # bytes keep the compressed archive large enough to cross two S3 parts.
+        large_payload = random.Random(0).randbytes(9 * 1024 * 1024)
+        (workspace / "large.bin").write_bytes(large_payload)
+        monkeypatch.setattr(
+            settings.workflow, "temporal_artifact_direct_upload_max_bytes", 1024 * 1024
+        )
     (workspace / "cache").mkdir()
     (workspace / "cache" / "ignored-escape").symlink_to(
         tmp_path, target_is_directory=True
@@ -169,6 +183,13 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
         service = OmnigentWorkspacePublicationService(root, artifact_gateway=gateway)
         evidence = await service.save_request_workspace(request)
         assert evidence["archiveRef"].startswith("artifact://art_")
+        if multipart:
+            async with sessions() as session:
+                artifact = await TemporalArtifactRepository(session).get_artifact(
+                    gateway._artifact_id(evidence["archiveRef"])
+                )
+                assert artifact.upload_mode is models.TemporalArtifactUploadMode.MULTIPART
+                assert artifact.status is models.TemporalArtifactStatus.COMPLETE
         from moonmind.schemas.checkpoint_restore_models import CheckpointRestoreError
 
         # A still-present directory has no authority merely by existing. Both
@@ -223,6 +244,8 @@ async def test_saved_candidate_is_readable_after_worker_and_workspace_loss(
         )
         assert git("rev-parse", "HEAD") == head
         assert (workspace / "committed.txt").read_text() == "unpublished work\n"
+        if multipart:
+            assert (workspace / "large.bin").read_bytes() == large_payload
         repeated = await replacement.restore_saved_request_workspace(request, evidence)
         assert repeated == restored_original
         assert git("show", ":file.txt") == "staged candidate"
