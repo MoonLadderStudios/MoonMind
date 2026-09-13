@@ -90,7 +90,7 @@ For direct create requests, idempotency is stored at `request.idempotencyKey`.
 2. Run the helper:
 
    ```bash
-   python3 "$MOONMIND_ACTIVE_SKILLS_DIR/queue-moonmind-workflows/scripts/queue_moonmind_workflows.py" \
+   python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/queue-moonmind-workflows/scripts/queue_moonmind_workflows.py" \
      --manifest artifacts/queue-moonmind-workflows-manifest.json \
      --max-workflows 25
    ```

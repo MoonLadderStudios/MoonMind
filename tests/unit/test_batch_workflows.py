@@ -1280,4 +1280,7 @@ def test_batch_skill_recipes_resolve_from_active_snapshot():
         skill_doc = (
             repo_root / ".agents" / "skills" / skill_id / "SKILL.md"
         ).read_text(encoding="utf-8")
-        assert f"$MOONMIND_ACTIVE_SKILLS_DIR/{skill_id}/bin/{helper}" in skill_doc
+        assert (
+            f"${{MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}}/{skill_id}/bin/{helper}"
+            in skill_doc
+        )

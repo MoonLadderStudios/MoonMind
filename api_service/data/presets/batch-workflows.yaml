@@ -234,13 +234,21 @@ steps:
     Materialize the shared `constraints` input value to
     artifacts/batch-workflows-constraints.txt with a file write (never via
     shell echo, redirection, or interpolation of the value into a shell
-    command); when empty, leave the file absent. The arbitrary constraints
-    value travels only as batchOrchestration sharedInputs data and the fixed
-    file path, never on a shell command line.
-    Queue through the batchOrchestration binding on this step, executed by the
-    batch-workflows Skill implementation from the resolved active snapshot
-    ($MOONMIND_ACTIVE_SKILLS_DIR). Do not reconstruct helper CLI flags or
-    interpolate constraint values into shell commands.
+    command); when empty, leave the file absent. Invoke the resolved Skill
+    entrypoint exactly once with data-safe arguments:
+    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-workflows/bin/batch_workflows.py" \
+    --targets artifacts/batch-workflows-targets.json \
+    --run-ref "{{ inputs.run_ref }}" \
+    --publish-mode "{{ inputs.publish_mode }}" \
+    --max-workflows "{{ inputs.max_workflows }}" \
+    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
+    {% if inputs.update_status %}--update-status{% else %}--no-update-status{% endif %} \
+    --constraints-file artifacts/batch-workflows-constraints.txt
+    The arbitrary constraints value travels only as batchOrchestration
+    sharedInputs data and the fixed constraints file path, never on a shell
+    command line. The batchOrchestration binding on this step documents the
+    same queue for future runtimes; the helper invocation above is the
+    authoritative executable path.
     The queue path stamps runtimeInheritance="caller" plus a fallback copy of the parent
     runtime on each child and assigns a stable idempotency key per target kind,
     target slug, and resolved issue so reruns and retries do not duplicate child

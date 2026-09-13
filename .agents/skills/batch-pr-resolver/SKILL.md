@@ -48,7 +48,7 @@ Use the repository path below only outside MoonMind when no active path is set.
 1. Run the helper script:
 
 ```bash
-python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-pr-resolver/bin/batch_pr_resolver.py" \
+python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/batch-pr-resolver/bin/batch_pr_resolver.py" \
   --repo <owner/repo> \
   --state <open|merged|closed> \
   --max-attempts 3 \
