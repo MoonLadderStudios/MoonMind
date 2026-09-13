@@ -89,11 +89,10 @@ def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
     or the exception type doesn't match.
     """
     try:
-        from temporalio.service import RPCError
-        from grpc import StatusCode
+        from temporalio.service import RPCError, RPCStatusCode
 
         if isinstance(exc, RPCError):
-            return exc.status == getattr(StatusCode, status_name, None)
+            return exc.status == getattr(RPCStatusCode, status_name, None)
     except ImportError:
         pass  # gRPC/Temporal SDK not available; fall through to string match
     # Fallback: string match on the exception message.
