@@ -546,30 +546,29 @@ async def resolve_omnigent_images(
         # digest instead of launching a mismatched host for Codex or Claude.
         shared_ref = opencode_ref
 
-    if compatibility_failure:
-        # Keep the current server as catalog authority while quarantining the
-        # incompatible runtime pack. The selector consumes this same verdict,
-        # so existing signed qualification evidence cannot launch the stale
-        # image while the registry catches up.
-        omnigent_build_digest = configured_build_digest or server_image_digest
-        build_identity_source = (
-            "operator-quarantine"
-            if configured_build_digest
-            else "server-image-quarantine"
-        )
-    elif configured_build_digest:
-        omnigent_build_digest = configured_build_digest
-        build_identity_source = "operator"
-    elif server_image_digest:
-        omnigent_build_digest = server_image_digest
-        build_identity_source = "server-image-digest"
-    elif previous and previous.omnigent_build_digest:
-        omnigent_build_digest = previous.omnigent_build_digest
-        build_identity_source = "persisted"
-    else:
-        # Legacy Codex-only deployments do not select the OpenCode Host Class.
-        omnigent_build_digest = server_image_digest
-        build_identity_source = "server-image-digest"
+    # Catalog/plan authority always identifies the actual server image. The
+    # optional operator host-build pin remains a separate admission constraint.
+    omnigent_build_digest = server_image_digest
+    build_identity_source = (
+        "server-image-quarantine" if compatibility_failure else "server-image-digest"
+    )
+
+    # Persist provenance for every distinct selected image. Shared and Pi hosts
+    # can be built independently of the OpenCode image and of the server.
+    host_provenance = {}
+    observed_verdicts = {verdict.image_ref: verdict for verdict in verdicts}
+    for image_ref in sorted({ref for ref in (opencode_ref, pi_ref, shared_ref) if ref}):
+        verdict = observed_verdicts.get(image_ref)
+        host_provenance[image_ref] = {
+            "buildDigest": (
+                verdict.build_digest
+                if verdict
+                else await _image_build_identity(image_ref)
+            ),
+            "version": (
+                verdict.version if verdict else await _image_omnigent_version(image_ref)
+            ),
+        }
 
     # Architecture detection
     arch = "linux/amd64"
@@ -597,6 +596,7 @@ async def resolve_omnigent_images(
         source="auto",
         details={
             "serverImageDigest": server_image_digest,
+            "hostImageProvenance": host_provenance,
             "buildIdentitySource": build_identity_source,
             "opencodeHostCompatibility": {
                 "status": "blocked" if compatibility_failure else "ready",
@@ -642,7 +642,6 @@ async def _image_opencode_bootstrap_ready(image_ref: str) -> bool:
 # writes, captured once at their operator-supplied values.
 _PUBLISHED_IMAGE_KEYS = (
     "OMNIGENT_IMAGE_REF",
-    "OMNIGENT_BUILD_DIGEST",
     "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
     "OMNIGENT_PI_HOST_IMAGE_REF",
     "OMNIGENT_SHARED_HOST_IMAGE_REF",
@@ -705,7 +704,6 @@ async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
     save_resolved_state(state)
     exported = {
         "OMNIGENT_IMAGE_REF": state.server_image_ref,
-        "OMNIGENT_BUILD_DIGEST": state.omnigent_build_digest,
         "OMNIGENT_OPENCODE_HOST_IMAGE_REF": state.opencode_host_image_ref,
         "OMNIGENT_PI_HOST_IMAGE_REF": state.pi_host_image_ref,
         "OMNIGENT_SHARED_HOST_IMAGE_REF": state.shared_host_image_ref,
@@ -730,11 +728,6 @@ def resolved_opencode_image_ref(state: ResolvedOmnigentDeploymentState | None) -
 
 
 def resolved_build_digest(state: ResolvedOmnigentDeploymentState | None) -> str:
-    if state and state.omnigent_build_digest:
-        return state.omnigent_build_digest
-    bd = os.getenv("OMNIGENT_BUILD_DIGEST", "").strip()
-    if bd and _SHA256_RE.fullmatch(bd):
-        return bd
     ref = resolved_server_image_ref(state)
     if ref:
         d = _extract_digest(ref)

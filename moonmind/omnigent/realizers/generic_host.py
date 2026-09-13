@@ -207,6 +207,13 @@ class GenericOmnigentHostRealizer:
         if completed is not None and completed.state is RuntimeBindingState.cleaned:
             return await self._reconcile_finalization(request, completed)
 
+        # Readiness is a no-side-effect precondition, before canonical command
+        # ownership. A failure inside delivery would park that command as
+        # delivery-unknown and prohibit a safe retry after discovery recovers.
+        # An owned host retains its recorded attestation/reattachment authority.
+        if completed is None or not completed.hostLeaseRef:
+            self._deployment_validator(plan.payload)
+
         return await deliver_canonical_turn(
             self._turn_commands,
             request=request,
@@ -232,11 +239,6 @@ class GenericOmnigentHostRealizer:
         )
         if prior is not None and prior.state is RuntimeBindingState.cleaned:
             return await self._reconcile_finalization(request, prior)
-        # Fresh allocation validates before acquiring credentials or mutating
-        # binding authority. An already owned host instead uses its recorded
-        # attestation and cleanup/reattachment contract below.
-        if prior is None or not prior.hostLeaseRef:
-            self._deployment_validator(plan.payload)
         workflow_id, step_execution_id = _execution_identity(request)
         acquired: tuple[Any, ...] = ()
         credential_handles: tuple[CredentialRuntimeHandle, ...] = ()

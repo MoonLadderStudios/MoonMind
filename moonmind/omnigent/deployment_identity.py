@@ -28,9 +28,9 @@ def resolve_deployed_server_build_digest() -> str:
     """Return the exact server build currently owned by this deployment."""
 
     explicit = str(os.getenv("OMNIGENT_BUILD_DIGEST") or "").strip()
-    if explicit:
-        if _BUILD_DIGEST.fullmatch(explicit):
-            return explicit
+    # This optional operator value pins host build provenance, never the
+    # server image. A host pin cannot hide an incompatible server replacement.
+    if explicit and not _BUILD_DIGEST.fullmatch(explicit):
         raise HarnessPlatformError(
             "OMNIGENT_BUILD_DIGEST must be an exact sha256 identity",
             code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
@@ -45,10 +45,6 @@ def resolve_deployed_server_build_digest() -> str:
         from moonmind.omnigent.bootstrap.store import load_resolved_state
 
         state = load_resolved_state()
-        if state and state.omnigent_build_digest:
-            digest = str(state.omnigent_build_digest).strip()
-            if _BUILD_DIGEST.fullmatch(digest):
-                return digest
         if state and state.server_image_ref:
             match = _IMAGE_REF.fullmatch(str(state.server_image_ref).strip())
             if match:
