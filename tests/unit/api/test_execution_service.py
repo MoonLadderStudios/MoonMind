@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from temporalio.client import WorkflowExecutionStatus
+from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.db.models import (
     MoonMindWorkflowState,
@@ -235,28 +237,47 @@ async def test_force_cancel_still_terminates_a_wedged_workflow(
     )
 
     mock_client_adapter.terminate_workflow.assert_awaited_once_with(
-        "mm:123", reason="Force canceled by operator."
+        "mm:123", reason="Force canceled by operator.", run_id="run-1"
     )
     assert record.state is MoonMindWorkflowState.FAILED
 
 
 @pytest.mark.asyncio
-async def test_graceful_cancel_proceeds_on_first_workflow_task_attempt(
-    service, mock_session, mock_client_adapter
+@pytest.mark.parametrize("confirmed", [False, True])
+async def test_graceful_cancel_requires_temporal_terminal_evidence(
+    service, mock_session, mock_client_adapter, confirmed
 ):
-    """A healthy execution keeps the ordinary graceful cancel path."""
+    """Attempt 1 can be stranded on the old deployment without any pollers."""
 
     record = _wedged_execution_record()
+    record.paused = True
+    record.waiting_reason = "provider_profile_slot"
+    service._fan_out_dependency_resolution = AsyncMock()
     service._require_cancel_target_execution = AsyncMock(return_value=record)
     service._sync_projection_best_effort = AsyncMock(return_value=record)
     mock_client_adapter.describe_workflow.return_value = (
         _describe_with_pending_workflow_task_attempt(1)
     )
+    mock_client_adapter.describe_workflow.return_value.status = (
+        WorkflowExecutionStatus.CANCELED if confirmed else WorkflowExecutionStatus.RUNNING
+    )
 
     await service.cancel_execution(workflow_id="mm:123", reason=None, graceful=True)
 
     mock_client_adapter.cancel_workflow.assert_awaited_once_with("mm:123")
-    assert record.state is MoonMindWorkflowState.CANCELED
+    if confirmed:
+        assert record.state is MoonMindWorkflowState.CANCELED
+        assert record.paused is False
+        assert record.waiting_reason is None
+        service._fan_out_dependency_resolution.assert_awaited_once()
+    else:
+        assert record.state is MoonMindWorkflowState.AWAITING_SLOT
+        assert record.close_status is None
+        assert record.closed_at is None
+        assert record.paused is True
+        assert record.waiting_reason == "provider_profile_slot"
+        assert record.memo["summary"].startswith("Cancellation requested.")
+        service._fan_out_dependency_resolution.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -273,7 +294,9 @@ async def test_graceful_cancel_proceeds_when_deliverability_cannot_be_checked(
     await service.cancel_execution(workflow_id="mm:123", reason=None, graceful=True)
 
     mock_client_adapter.cancel_workflow.assert_awaited_once_with("mm:123")
-    assert record.state is MoonMindWorkflowState.CANCELED
+    assert record.state is MoonMindWorkflowState.AWAITING_SLOT
+    assert record.close_status is None
+    assert record.memo["summary"].startswith("Cancellation requested.")
 
 
 @pytest.mark.asyncio
@@ -296,9 +319,30 @@ async def test_force_terminate_routes_to_temporal_terminate(
     )
 
     mock_client_adapter.terminate_workflow.assert_called_once_with(
-        "mm:123", reason="force stop"
+        "mm:123", reason="force stop", run_id="run-1"
     )
     mock_client_adapter.cancel_workflow.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("during_describe", [False, True])
+@pytest.mark.parametrize("status", [RPCStatusCode.UNAVAILABLE, RPCStatusCode.PERMISSION_DENIED, RPCStatusCode.DEADLINE_EXCEEDED])
+async def test_force_cancel_never_treats_transport_or_authorization_failure_as_absence(
+    service, mock_session, mock_client_adapter, during_describe, status
+):
+    record = _wedged_execution_record()
+    service._require_cancel_target_execution = AsyncMock(return_value=record)
+    service._fan_out_dependency_resolution = AsyncMock()
+    mock_client_adapter.terminate_workflow.side_effect = RPCError(
+        "not available", RPCStatusCode.NOT_FOUND if during_describe else status, b""
+    )
+    mock_client_adapter.describe_workflow.side_effect = RPCError("not available", status, b"")
+    with pytest.raises(TemporalExecutionValidationError):
+        await service.cancel_execution(workflow_id="mm:123", reason=None, graceful=False)
+    assert record.state == MoonMindWorkflowState.AWAITING_SLOT
+    assert record.closed_at is None
+    mock_session.commit.assert_not_awaited()
+    service._fan_out_dependency_resolution.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_action_validation_relies_on_temporal(

@@ -106,6 +106,7 @@ const PENDING_WORKFLOW_ACTION_CAPABILITIES = {
   canResume: true,
   canResumeFromFailedStep: true,
   canCancel: true,
+  canForceCancel: true,
   canReject: true,
   canSendMessage: true,
   canBypassDependencies: true,

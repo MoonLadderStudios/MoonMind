@@ -7636,6 +7636,11 @@ export interface components {
              */
             canCancel: boolean;
             /**
+             * Canforcecancel
+             * @default false
+             */
+            canForceCancel: boolean;
+            /**
              * Canreject
              * @default false
              */

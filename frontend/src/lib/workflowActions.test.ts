@@ -54,6 +54,16 @@ function buildParams(
 }
 
 describe('buildWorkflowActionMenuItems', () => {
+  it('keeps force cancel available when a terminal projection hides ordinary cancel', () => {
+    const handlers = noopHandlers();
+    const items = buildWorkflowActionMenuItems(buildParams({
+      actions: { canCancel: false, canForceCancel: true }, handlers,
+    }));
+    expect(items.map((item) => item.id)).toEqual(['force-cancel']);
+    const force = items[0];
+    force?.onSelect?.();
+    expect(handlers.onForceCancel).toHaveBeenCalledOnce();
+  });
   it('returns no items when actions are disabled', () => {
     expect(buildWorkflowActionMenuItems(buildParams({ actionsOn: false }))).toEqual([]);
   });
@@ -72,6 +82,7 @@ describe('buildWorkflowActionMenuItems', () => {
           canApprove: true,
           canReject: true,
           canCancel: true,
+          canForceCancel: true,
           canSendMessage: true,
           canBypassDependencies: true,
         },

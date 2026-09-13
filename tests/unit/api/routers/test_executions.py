@@ -14621,10 +14621,11 @@ async def test_request_rerun_update_flushes_snapshot_reuse_before_serializing_re
                 idempotency_key=None,
             )
             source_workflow_id = created.workflow_id
-            await service.cancel_execution(
+            await service.record_terminal_state(
                 workflow_id=source_workflow_id,
-                reason="terminal source",
-                graceful=True,
+                state="canceled",
+                close_status="canceled",
+                summary="terminal source",
             )
 
             session.add(
