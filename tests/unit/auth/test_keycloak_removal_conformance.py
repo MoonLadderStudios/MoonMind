@@ -849,12 +849,43 @@ def test_resource_authorization_owner_denies_non_owner(monkeypatch):
 async def test_machine_authority_worker_gate_and_runtime_rejection(monkeypatch):
     from types import SimpleNamespace
 
+    from moonmind.security import execution_fanout_capabilities as fanout_caps
+
     _set_production_mode(monkeypatch, "oidc")
     user = SimpleNamespace(id=uuid.uuid4(), email="w@example.invalid")
-    resolved = await worker_auth_module._require_worker_auth(
-        worker_token=None, user=user
+    # K4 conversion (MoonLadderStudios/MoonMind#4126): an ordinary browser
+    # principal alone never satisfies worker-only mutations. The supported
+    # machine path is the workflow-scoped fanout bearer verified at the
+    # worker owner (exact scope + expiry, no browser cookies).
+    with pytest.raises(Exception) as exc_info:
+        await worker_auth_module._require_worker_auth(
+            worker_token=None, user=user
+        )
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail["code"] == "worker_authorization_required"
+    monkeypatch.setattr(
+        settings_module.security,
+        "JWT_SECRET_KEY",
+        "conformance-fanout-secret-4126-32b!!",
+        raising=False,
     )
-    assert resolved.auth_source == "oidc"
+    fanout_token = fanout_caps.mint_execution_fanout_capability(
+        secret="conformance-fanout-secret-4126-32b!!",
+        parent_workflow_id="wf-4128",
+        agent_run_id="run-4128",
+        session_id="sess-4128",
+        runtime_id="runtime-4128",
+        source_kind="managed_session",
+        lifetime_seconds=600,
+    )
+    resolved = await worker_auth_module._require_worker_auth(
+        worker_token=None,
+        fanout_marker="v1",
+        authorization=f"Bearer {fanout_token}",
+        user=None,
+    )
+    assert resolved.auth_source == "execution_fanout"
+    assert resolved.parent_workflow_id == "wf-4128"
     with pytest.raises(Exception) as exc_info:
         await worker_auth_module._require_worker_auth(worker_token="legacy", user=user)
     assert exc_info.value.status_code == 410
