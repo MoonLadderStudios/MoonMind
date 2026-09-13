@@ -39,15 +39,16 @@ async def journey(tmp_path, monkeypatch, request):
     repository = "example/repo"
 
     class Handler(BaseHTTPRequestHandler):
-        def issue(self):
+        def issue(self, number=3970):
+            issue_state = state if number == 3970 else state["extra_state"]
             return {
-                "number": 3970,
+                "number": number,
                 "title": "Implement bounded work",
                 "user": {"id": 123, "login": "fixture-owner"},
                 "body": state.get("body", "Acceptance: automated fixture passes."),
-                "html_url": f"https://github.com/{repository}/issues/3970",
-                "state": state.get("state", "open"),
-                "labels": [{"name": label} for label in state["labels"]],
+                "html_url": f"https://github.com/{repository}/issues/{number}",
+                "state": issue_state.get("state", "open"),
+                "labels": [{"name": label} for label in issue_state["labels"]],
             }
 
         def log_message(self, *_args):
@@ -68,8 +69,12 @@ async def journey(tmp_path, monkeypatch, request):
                 return
             if path == "/user":
                 self.respond({"id": 123, "login": "fixture-owner"})
+            elif path.endswith("/issues/3971/comments") and "extra_state" in state:
+                self.respond(state["extra_state"]["comments"])
             elif path.endswith("/comments"):
                 self.respond(state["comments"])
+            elif path.endswith("/issues/3971") and "extra_state" in state:
+                self.respond(self.issue(3971))
             elif path.endswith("/issues/3970"):
                 self.respond(self.issue())
             elif path.endswith("/issues/42"):
@@ -83,7 +88,8 @@ async def journey(tmp_path, monkeypatch, request):
                 )
             elif path.endswith("/issues"):
                 self.respond(
-                    [self.issue()] if state.get("state", "open") == "open" else []
+                    ([self.issue()] if state.get("state", "open") == "open" else [])
+                    + ([self.issue(3971)] if "extra_state" in state else [])
                 )
             else:
                 self.respond({"message": "unknown fixture route"}, 404)
@@ -91,22 +97,23 @@ async def journey(tmp_path, monkeypatch, request):
 
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            issue_state = state["extra_state"] if "/issues/3971/" in self.path else state
             if self.path.endswith("/comments"):
                 state["posts"] += 1
                 comment = {
-                    "id": len(state["comments"]) + 1,
+                    "id": len(issue_state["comments"]) + 1,
                     "body": payload["body"],
                     "user": {"id": 123, "login": "fixture-owner"},
                 }
-                state["comments"].append(comment)
+                issue_state["comments"].append(comment)
                 if state["lost_ack"]:
                     state["lost_ack"] = False
                     self.close_connection = True
                     return
                 self.respond(comment, 201)
             elif self.path.endswith("/labels"):
-                state["labels"] = list(set(state["labels"] + payload["labels"]))
-                self.respond([{"name": label} for label in state["labels"]])
+                issue_state["labels"] = list(set(issue_state["labels"] + payload["labels"]))
+                self.respond([{"name": label} for label in issue_state["labels"]])
             else:
                 self.respond({}, 404)
 
@@ -133,10 +140,11 @@ async def journey(tmp_path, monkeypatch, request):
             return
 
         def do_DELETE(self):
+            issue_state = state["extra_state"] if "/issues/3971/" in self.path else state
             label = unquote(self.path.rsplit("/", 1)[1])
-            if label in state["labels"]:
-                state["labels"].remove(label)
-            self.respond([{"name": label} for label in state["labels"]])
+            if label in issue_state["labels"]:
+                issue_state["labels"].remove(label)
+            self.respond([{"name": label} for label in issue_state["labels"]])
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -379,6 +387,58 @@ async def test_reselection_requires_proof_no_announcement_was_authorized(
     else:
         assert result.status == "COMPLETED", result.outputs
         assert result.completion_disposition == "idle"
+        assert retained is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("when", ["before_selection", "after_reservation"])
+@pytest.mark.parametrize("eligible_successor", [False, True])
+async def test_search_skips_remote_contender_before_authorizing_announcement(
+    journey, monkeypatch, when, eligible_successor
+):
+    """A prior deployment's preparing comment must not poison the next tick."""
+    state, service, sessions = journey
+    old_owner = "default/old-deployment-attempt"
+    existing = await tools._prepare_github_issue_claim(
+        inputs={"repository": "example/repo", "issueNumber": 3970},
+        context={"execution_owner": old_owner},
+        repository="example/repo", issue_number=3970, service=service,
+    )
+    # Its external attempt survives while this deployment has no local claim.
+    assert await IssueClaimStore(sessions).abandon_unannounced(
+        old_owner, existing.attempt_id
+    )
+    contender = {"id": 91, "body": existing.comment_body, "user": {"id": 123}}
+    if eligible_successor:
+        state["extra_state"] = {"comments": [], "labels": []}
+    if when == "before_selection":
+        state["comments"] = [contender]
+    else:
+        prepare = tools._prepare_github_issue_claim
+
+        async def contender_after_reservation(**kwargs):
+            receipt = await prepare(**kwargs)
+            state["comments"] = [contender]
+            return receipt
+
+        monkeypatch.setattr(tools, "_prepare_github_issue_claim", contender_after_reservation)
+    owner = "default/next-recurring-occurrence"
+    result = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueSearch": "", "includeAllAuthors": False},
+        {"execution_owner": owner}, github_service_factory=lambda: service,
+    )
+    assert result.status == "COMPLETED", result.outputs
+    assert state["labels"] == []
+    assert state["comments"] == [contender]
+    retained = await IssueClaimStore(sessions).get(owner)
+    if eligible_successor:
+        assert result.completion_disposition != "idle"
+        assert retained.issue_number == 3971 and retained.confirmed
+        assert state["posts"] == 1
+        assert state["extra_state"]["labels"] == ["status: in-progress"]
+    else:
+        assert result.completion_disposition == "idle"
+        assert state["posts"] == 0
         assert retained is None
 
 
