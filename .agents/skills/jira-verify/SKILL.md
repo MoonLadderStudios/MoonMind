@@ -87,14 +87,9 @@ non-main completion branches are supported under the shared acceptance policy.
 
 ## MoonMind Jira Access Model
 
-Do not expect raw Jira credentials inside the managed agent shell. MoonMind keeps Atlassian credentials on the trusted control-plane/tool side. Use Jira artifacts or trusted Jira tool output as the source of truth. Use `jira.add_comment` for comment mutation, and use `jira.get_transitions` plus `jira.transition_issue` for status mutation when `update status` is explicitly true.
+Do not expect raw Jira credentials inside the managed agent shell. MoonMind keeps Atlassian credentials on the trusted control-plane/tool side. Use Jira artifacts or trusted Jira tool output as the source of truth. Use `jira.add_comment` for comment mutation, and use `jira.get_transitions` plus `jira.transition_issue` for status mutation when `update status` is explicitly true. Selected-provider invocation shapes live in `references/provider-commands.md`.
 
-If Jira content is not already available to the runtime, use the trusted MCP path when exposed:
-
-1. List tools with `GET $MOONMIND_URL/mcp/tools`.
-2. Verify Jira authentication with `POST $MOONMIND_URL/mcp/tools/call` and JSON `{"tool":"jira.verify_connection","arguments":{}}`.
-3. Fetch the issue with `POST $MOONMIND_URL/mcp/tools/call` and JSON `{"tool":"jira.get_issue","arguments":{"issueKey":"ENG-123"}}`.
-4. If `update status` is true, fetch available transitions with `POST $MOONMIND_URL/mcp/tools/call` and JSON `{"tool":"jira.get_transitions","arguments":{"issueKey":"ENG-123"}}`, then transition only through `jira.transition_issue` with JSON `{"tool":"jira.transition_issue","arguments":{"issueKey":"ENG-123","transitionId":"101","fields":{}}}` after the PASS-only checks below succeed.
+If Jira content is not already available to the runtime, use the trusted MCP path when exposed (see `references/provider-commands.md` for the exact call shapes).
 
 If `jira.verify_connection` reports `jira_auth_failed`, or `jira.get_issue` / `jira.add_comment` is unavailable or policy-denied, report `BLOCKED`. If `update status` is true and transition tools are unavailable or policy-denied, leave the verification/comment path intact but report status update as skipped/blocked in the outputs and Jira comment. Do not scrape private Atlassian browser pages, ask for `ATLASSIAN_API_KEY`, or call Jira directly with raw credentials.
 
@@ -146,24 +141,15 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
    - `FAIL`: at least one in-scope item is `not_met` — including the main/trunk case where no implementing change can be found and the requirements are concrete enough to expect one.
    - `BLOCKED`: trusted Jira content or Jira comment access is unavailable, OR both branch mode and main/trunk mode failed to produce any usable evidence and the requirements are too ambiguous to assess from repository state alone. Simply being on `main` with a clean tree is NOT, by itself, a `BLOCKED` condition.
 
-6. If `update status` is true, decide whether to update Jira status.
-   - Do not attempt a terminal status update unless the result is `PASS` and objective evidence satisfies the freshly resolved intended completion target. Candidate-only PASS preserves the review/publication path.
-   - Treat an issue that is already in a done-category status as already done; record that no transition was needed.
-   - Fetch available transitions through the trusted Jira tool surface.
-   - Select a completion transition: if a specific transition ID or name was provided, use it if available; otherwise, select a completion transition only when exactly one available transition targets a Jira done-category status.
-   - If zero or multiple done-category transitions are available, do not guess. Record the status update as blocked and leave the issue unchanged.
-   - If the transition requires fields that were not explicitly provided by the trusted tool input or operator context, do not guess values. Record the status update as blocked and leave the issue unchanged.
-   - Execute the selected transition only through `jira.transition_issue`, then record selected transition ID/name, whether the issue was already done, and whether the transition succeeded.
-   - If transition execution fails, keep the verification verdict as decided above but report the status update failure separately. Do not claim the issue was moved.
-
-7. Draft the Jira comment.
+6. Draft the Jira comment.
    - Start with the verdict, issue key, the verification mode used (`branch` or `main/trunk`), branch name, commit SHA, and comparison ref (or "verified against current state of default branch" for main/trunk mode).
    - In main/trunk mode, list the merge commit SHA(s) or merged PR number(s) identified as the implementation evidence, when known.
    - Include blockers or gaps first for `PARTIAL`, `FAIL`, or `BLOCKED`.
    - Include a compact coverage table and evidence references.
    - Include validation observed, clearly separating passing tests from tests not run.
-   - Include status update outcome when `update status` is true: skipped because verdict was not `PASS`, already done, transitioned with selected transition, or blocked/failed with sanitized reason.
+   - Include the planned status update when `update status` is true (still pending at this point): skipped because verdict was not `PASS`, already done, or planned transition subject to the evidence-first order below.
    - Do not paste long private Jira text, raw command dumps, credentials, auth headers, cookies, or full environment/config dumps.
+   - Acceptance verdicts follow the shared acceptance policy referenced at the top of this skill; this skill only maps the policy outcome onto Jira comment and transition state. GitHub and Jira state/transition differences stay explicit and per-skill acceptance forks are not maintained here.
 
 Suggested comment shape (branch mode):
 
@@ -213,18 +199,23 @@ Status update:
 - <omitted when `update status` is false; otherwise already done / transitioned / skipped / blocked>
 ```
 
-8. Scan and post to Jira.
+7. Scan and post to Jira (evidence first, before any completion mutation).
    - Before posting, scan the outgoing comment for secret-like patterns such as `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
    - If any secret-like content appears, do not post. Redact and re-scan.
-   - If the bundled helper is materialized, post with:
+   - Post through the trusted Jira tool surface (`jira.add_comment`) or the bundled helper when materialized (see `references/provider-commands.md` for the exact shapes). When the MoonMind API requires auth, provide an existing runtime token via the documented header/token names; do not print those values.
+   - If posting fails, keep the comment body as a durable draft artifact and report the exact trusted-tool blocker. Do not claim Jira was updated and do not attempt the completion transition: comment failure prevents the associated completion transition.
+   - Bind comment retries to the exact issue, content, verification subject, and operation identity through existing receipt mechanisms (comment ID/URL, verification revision). When a post was accepted but its outcome is unknown, reconcile that exact operation first (re-fetch comments/receipts) before repeating the write. An incomplete search is not proof no prior comment exists.
 
-```bash
-.agents/skills/jira-verify/tools/post_jira_comment.py --issue <ISSUE> --body-file <comment_file>
-```
-
-   - When the MoonMind API requires auth, provide an existing runtime token via `MOONMIND_AUTH_HEADER`, `MOONMIND_API_TOKEN`, `MOONMIND_AUTH_TOKEN`, `MOONMIND_BEARER_TOKEN`, or `MOONMIND_API_KEY`; do not print those values.
-   - Otherwise call the trusted Jira tool directly with `jira.add_comment` and arguments `{"issueKey":"<ISSUE>","body":"<comment text>"}`.
-   - If posting fails, keep the comment body artifact and report the exact trusted-tool blocker. Do not claim Jira was updated.
+8. If `update status` is true, decide and execute the Jira status update only after the verification comment has posted successfully.
+   - Do not attempt a terminal status update unless the result is `PASS` and objective evidence satisfies the freshly resolved intended completion target. Candidate-only PASS preserves the review/publication path.
+   - Treat an issue that is already in a done-category status as already done; record that no transition was needed.
+   - Fetch available transitions through the trusted Jira tool surface.
+   - Select a completion transition: if a specific transition ID or name was provided, use it if available; otherwise, select a completion transition only when exactly one available transition targets a Jira done-category status.
+   - If zero or multiple done-category transitions are available, do not guess. Record the status update as blocked and leave the issue unchanged.
+   - If the transition requires fields that were not explicitly provided by the trusted tool input or operator context, do not guess values. Record the status update as blocked and leave the issue unchanged.
+   - Execute the selected transition only through `jira.transition_issue`, then record selected transition ID/name, whether the issue was already done, and whether the transition succeeded.
+   - If the comment posted successfully but the transition fails, preserve both outcomes: keep the verified verdict and comment receipt, report the mutation failure separately, and resume/retry only the unfinished transition side effect. Do not claim the issue was moved.
+   - Bind transition retries to the exact issue, transition ID, and operation identity; reconcile an accepted-but-unknown transition outcome before repeating it.
 
 ## Outputs
 

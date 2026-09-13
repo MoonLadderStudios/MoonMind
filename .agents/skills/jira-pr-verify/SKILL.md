@@ -63,22 +63,9 @@ For MoonMind workflow plans, the correct shape is:
 
 ## GitHub Access Policy
 
-Use `gh` as the primary and authoritative GitHub path for this skill.
+Use `gh` as the primary and authoritative GitHub path for this skill. Selected-provider preflight, metadata, diff, checks, and comment shapes live in `references/provider-commands.md`; normative secret hygiene, authority boundaries, and success evidence stay in this root.
 
-Before declaring GitHub access blocked, run these preflight checks from the managed
-agent shell. If the bundled helper is materialized in the workspace, use it:
-
-```bash
-.agents/skills/jira-pr-verify/tools/github_pr_preflight.py --repo <owner/repo> --pr <pr>
-```
-
-Otherwise run the equivalent `gh` commands directly:
-
-```bash
-gh auth status --hostname github.com
-gh repo view <owner/repo> --json nameWithOwner,viewerPermission,isPrivate
-gh pr view <pr> --repo <owner/repo> --json number,title,state,url,headRefName,baseRefName
-```
+Before declaring GitHub access blocked, run the preflight checks from the managed agent shell via the bundled helper when materialized, otherwise via the equivalent `gh` commands (see `references/provider-commands.md`).
 
 If `gh` can view the repository and PR, continue with `gh` even if the GitHub
 app/connector returns 404 or cannot list the repository. A connector 404 only
@@ -113,10 +100,9 @@ When both `gh` and the connector are available, prefer `gh` for:
 - If acceptance criteria are missing or ambiguous, record them as `unverifiable` rather than inventing requirements.
 
 3. Inspect the PR.
-- Use `gh pr view <pr> --repo <owner/repo> --json number,url,title,body,baseRefName,headRefName,files,commits,statusCheckRollup,reviewDecision,comments,reviews`.
-- Use `gh pr diff <pr> --repo <owner/repo>` or local `git diff <base>...HEAD` for implementation evidence.
+- Inspect PR metadata, diff, and checks through the selected-provider shapes in `references/provider-commands.md` (or local `git diff <base>...HEAD` for implementation evidence).
 - Read changed code, tests, docs, workflow files, and configuration relevant to the Jira ledger.
-- Check CI status with `gh pr checks <pr> --repo <owner/repo>` when available.
+- Check CI status when available.
 - Run local tests only when the user asks, the repo instructions require it for this verification, or the implementation claim depends on local validation.
 
 4. Build a traceability ledger before commenting.
@@ -130,6 +116,7 @@ When both `gh` and the connector are available, prefer `gh` for:
 - Keep repo-bound and non-repo-bound requirements separate when the user scopes verification to one repository.
 
 5. Decide the overall result.
+- Acceptance follows the shared policy referenced at the top of this skill; this skill only maps the policy outcome onto PR comment state. GitHub and Jira state/transition differences stay explicit and per-skill acceptance forks are not maintained here.
 - `PASS`: objective candidate acceptance satisfies the shared policy. Missing mandatory evidence remains a gap regardless of runtime availability.
 - `PARTIAL`: at least one in-scope item is `partially_met` or `unverifiable`, but no clear in-scope miss exists.
 - `FAIL`: at least one in-scope item is `not_met`.
@@ -163,8 +150,8 @@ Validation:
 7. Scan and post.
 - Before posting, scan the outgoing comment for secret-like patterns such as `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
 - If any secret-like content appears, do not post. Redact and re-scan.
-- If the bundled helper is materialized, post with `.agents/skills/jira-pr-verify/tools/post_pr_comment.py --repo <owner/repo> --pr <pr> --body-file <comment_file>`.
-- Otherwise post with `gh pr comment <pr> --repo <owner/repo> --body-file <comment_file>`.
+- Post through the bundled helper when materialized, otherwise through `gh` (see `references/provider-commands.md` for the exact shapes).
+- Bind comment retries to the exact PR, content, verification subject, and operation identity through receipts (comment ID/URL). When a post was accepted but its outcome is unknown, reconcile that exact operation first before repeating the write; an incomplete search is not proof no prior comment exists.
 - If the helper fails, record the exact `gh` error, then optionally try the GitHub connector as a fallback.
 - If connector posting also fails, leave the comment body in a local artifact and report both the `gh` and connector blockers.
 

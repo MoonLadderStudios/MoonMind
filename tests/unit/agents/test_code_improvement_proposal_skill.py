@@ -54,16 +54,39 @@ def test_code_improvement_proposal_skill_defaults_to_dry_run_with_dedupe() -> No
 
 def test_code_improvement_proposal_skill_documents_github_and_jira_publishing() -> None:
     text = _skill_text()
+    provider_ref = (
+        _SKILLS_DIR / "code-improvement-proposal" / "references" / "provider-commands.md"
+    ).read_text(encoding="utf-8")
 
     # GitHub routes to a repository; Jira routes to a project/issue type/component.
-    assert "POST /rest/api/3/issue" in text
+    # Selected-provider invocation shapes live in the portable bundle reference;
+    # the root keeps intent, hygiene, authority, and evidence visible.
+    assert "references/provider-commands.md" in text
+    assert "POST /rest/api/3/issue" not in text
+    assert "POST /rest/api/3/issue" not in provider_ref
+    assert '"project": { "key": "ENG" }' in provider_ref
     assert "Atlassian Document Format" in text
     assert (
         "GitHub routes to a repository; Jira routes to a project, issue type, "
         "component, and labels" in text
     )
-    assert "gh issue create" in text
+    assert "gh issue create" in provider_ref
+    assert "gh issue create" not in text
+    assert "POST /rest/api/3/issue" not in text
     assert "fetch create metadata" in text.lower()
+    # No direct-credential fallback in the root.
+    assert "ATLASSIAN_*" in text
+    assert "raw credentials" in text.lower()
+
+
+def test_code_improvement_proposal_skill_uses_executable_acceptance_not_manual_smoke() -> None:
+    text = _skill_text()
+
+    assert "Manual smoke test" not in text
+    assert "Executable acceptance" in text
+    assert "do not require a manual smoke test" in text.lower() or (
+        "not a mandatory human smoke test" in text.lower()
+    )
 
 
 def test_code_improvement_proposal_skill_keeps_security_guardrails() -> None:
@@ -83,6 +106,7 @@ def test_code_improvement_proposal_skill_defines_terminal_statuses() -> None:
         "`dry_run`",
         "`published`",
         "`duplicate`",
+        "`no_findings`",
         "`needs_routing`",
         "`blocked`",
     ):

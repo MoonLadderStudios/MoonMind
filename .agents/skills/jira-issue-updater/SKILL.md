@@ -126,22 +126,11 @@ Example tool payload:
    - Re-fetch the issue when possible to confirm the final status or description.
    - Report only sanitized results: issue key, issue type when known, final status, changed fields, and tool result IDs.
    - Never print auth headers, SecretRefs resolved to plaintext, API tokens, cookies, or full environment dumps.
+   - Bind edit/transition retries to the exact issue, fields/content, and operation identity through receipts (tool result IDs, re-fetched state). When an edit or transition was accepted but its outcome is unknown, reconcile that exact operation first (re-fetch the issue and receipts) before repeating the write. An incomplete search is not proof no prior update exists.
 
 ## HTTP MCP Invocation
 
-When no native Jira tool is exposed but an authenticated MoonMind API endpoint is available, call:
-
-```bash
-curl -sS -X POST "$MOONMIND_URL/mcp/tools/call" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tool": "jira.get_transitions",
-    "arguments": {
-      "issueKey": "ENG-123",
-      "expandFields": true
-    }
-  }'
-```
+When no native Jira tool is exposed but an authenticated MoonMind API endpoint is available, use the selected-provider invocation in `references/provider-commands.md`.
 
 Use the authentication mechanism already provided by the runtime or user. Do not ask the user to paste raw Atlassian credentials into the shell, task prompt, artifacts, or logs.
 
