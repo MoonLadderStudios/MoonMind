@@ -43,13 +43,7 @@ If the repository, issue, or Jira board target is ambiguous, resolve it from ava
 
 ## Access Model
 
-Use `gh` as the primary GitHub path when available:
-
-```bash
-gh auth status --hostname github.com
-gh repo view <owner/repo> --json nameWithOwner,viewerPermission,isPrivate
-gh issue view <issue> --repo <owner/repo> --json number,title,state,url,body,labels,comments,author,createdAt,updatedAt
-```
+Use `gh` as the primary GitHub path when available (see `references/provider-commands.md` for the exact commands).
 
 Use a GitHub connector only when `gh` is unavailable or unauthenticated.
 
@@ -87,11 +81,11 @@ Never print raw environment variables. Use targeted checks such as `test -n "$GI
 - Mark a requirement `unclear` only when the issue does not provide enough product or technical intent and reasonable inference from the codebase would risk creating the wrong work.
 
 4. Decide the terminal action.
-- **Already implemented:** choose this only when objective acceptance evidence on the freshly resolved completion target satisfies the shared policy. Equivalent behavior must satisfy the original requirements. Feature-only work follows its existing review/publication path and does not close the issue.
+- **Already implemented:** choose this only when objective acceptance evidence on the freshly resolved intended completion target satisfies the shared policy. Equivalent behavior must satisfy the original requirements. Feature-only work follows its existing review/publication path and does not close the issue. Candidate-only evidence never counts as landed.
 - **Needs clarification:** choose this when the work is not fully implemented and the missing work cannot reasonably be inferred from the issue, codebase, linked discussions, or surrounding product patterns.
 - **Create Jira story:** choose this when the work is not fully implemented and the remaining work is clear enough to express as a Jira story with acceptance criteria.
 
-Do not both create Jira and add `needs clarification`. Do not close the GitHub issue unless the implemented verdict is evidence-backed.
+Choose exactly one authorized terminal path. Do not both create Jira and add `needs clarification`. Do not close the GitHub issue unless the implemented verdict is evidence-backed on the intended target.
 
 ## GitHub Close Path
 
@@ -101,16 +95,9 @@ When the issue is already implemented:
 2. Include a compact evidence table with files, tests, commits, or merged PRs.
 3. Include tests observed or explain why tests were not run.
 4. Scan the outgoing comment for secret-like patterns: `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
-5. Post the comment, then close the issue.
+5. Post the comment, then close the issue (see `references/provider-commands.md`).
 
-Use `gh` when available:
-
-```bash
-gh issue comment <issue> --repo <owner/repo> --body-file <comment_file>
-gh issue close <issue> --repo <owner/repo> --reason completed
-```
-
-If posting succeeds but closing fails, report partial success and the sanitized close error.
+If posting succeeds but closing fails, report partial success and the sanitized close error. Resume/retry only the unfinished close side effect.
 
 ## Needs Clarification Path
 
@@ -123,17 +110,9 @@ When the issue is not fully implemented and the remaining work is unclear:
    - the specific question(s) needed to make the work actionable,
    - any codebase evidence that shaped the uncertainty.
 3. Scan the comment for secret-like patterns.
-4. Apply the `needs clarification` label and post the comment.
+4. Apply the `needs clarification` label and post the comment (see `references/provider-commands.md`).
 
-Use `gh` when available:
-
-```bash
-gh label create "needs clarification" --repo <owner/repo> --description "More product or technical detail is needed" --color C5DEF5 || true
-gh issue edit <issue> --repo <owner/repo> --add-label "needs clarification"
-gh issue comment <issue> --repo <owner/repo> --body-file <comment_file>
-```
-
-If label creation fails because the label already exists, continue by applying it. If labeling or commenting fails due to permissions, return blocked with the sanitized GitHub error.
+If label creation fails because the label already exists, continue by applying it. If labeling or commenting fails due to permissions, return blocked with the sanitized GitHub error. Bind label/comment retries to the exact issue, content, and operation identity through receipts; reconcile an accepted-but-unknown outcome before repeating the write.
 
 ## Jira Story Path
 
@@ -160,8 +139,8 @@ When the remaining work is clear:
 
 3. Create the Jira story through the trusted Jira tool surface.
 - Use metadata-driven field IDs; do not hardcode custom field IDs.
-- Before retrying after an uncertain network failure, search for a matching story by project, summary, and GitHub issue URL to avoid duplicates.
-- If Jira creation succeeds, comment on the GitHub issue with the Jira key/URL and a short summary of the triage decision. Do not close the GitHub issue unless the user explicitly requested closure after Jira creation.
+- Before retrying after an uncertain network failure, search for a matching story by project, summary, and GitHub issue URL to avoid duplicates. When creation was accepted but its outcome is unknown, reconcile that exact operation first before repeating the write; an incomplete search is not proof no prior story exists.
+- If Jira creation succeeds, comment on the GitHub issue with the Jira key/URL and a short summary of the triage decision. Do not close the GitHub issue unless the user explicitly requested closure after Jira creation. If the later GitHub comment fails, preserve partial success: keep the created Jira key/URL and report the GitHub error separately.
 
 ## Artifacts
 

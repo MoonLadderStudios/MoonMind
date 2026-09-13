@@ -124,13 +124,7 @@ non-main completion branches are supported under the shared acceptance policy.
 
 ## GitHub Access Model
 
-Use `gh` as the primary GitHub path when it is available and authenticated:
-
-```bash
-gh auth status --hostname github.com
-gh repo view <owner/repo> --json nameWithOwner,defaultBranchRef,viewerPermission,isPrivate
-gh issue view <issue> --repo <owner/repo> --json number,title,state,stateReason,url,body,labels,comments,author,createdAt,updatedAt
-```
+Use `gh` as the primary GitHub path when it is available and authenticated (see `references/provider-commands.md` for the exact commands).
 
 Use an equivalent trusted GitHub connector when `gh` is unavailable or unauthenticated. The connector must provide issue read access, issue commenting, and issue state updates before those operations are claimed as available.
 
@@ -254,16 +248,11 @@ Completion update:
 8. Scan and post the GitHub comment.
    - Before posting, scan the outgoing comment for secret-like patterns such as `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
    - If secret-like content appears, do not post. Redact and re-scan.
-   - With `gh`, post using:
-
-```bash
-gh issue comment <issue> --repo <owner/repo> --body-file <comment_file>
-```
-
-   - Otherwise use the trusted GitHub connector's issue-comment operation.
+   - Post through `gh` or the trusted GitHub connector's issue-comment operation (see `references/provider-commands.md` for the exact shapes).
+   - Bind comment/close retries to the exact issue, content, verification subject, and operation identity through receipts (comment ID/URL, issue state reason). When a comment or close was accepted but its outcome is unknown, reconcile that exact operation first (re-fetch the issue/comments/receipts) before repeating the write. An incomplete search is not proof no prior comment or close exists.
    - If posting fails, keep the comment body artifact and report the exact sanitized blocker. Do not claim GitHub was updated. When posting fails, also do not close the issue: report completion as `blocked`.
-   - Only after the comment posts successfully, perform any completion planned in step 6: close the issue with the `completed` reason through the authenticated GitHub path (`gh issue close <issue> --repo <owner/repo> --reason completed`, or update the issue to `state: closed` with `state_reason: completed` through a trusted connector). Posting the verification comment first keeps it as durable audit evidence for the completion.
-   - If the close fails after a successful post, leave the verification verdict and posted comment unchanged and report the completion failure separately. Do not claim the issue was completed.
+   - Only after the comment posts successfully, perform any completion planned in step 6: close the issue with the `completed` reason through the authenticated GitHub path (see `references/provider-commands.md`). Posting the verification comment first keeps it as durable audit evidence for the completion.
+   - If the close fails after a successful post, leave the verification verdict and posted comment unchanged and report the completion failure separately. Resume/retry only the unfinished close side effect. Do not claim the issue was completed.
 
 ## Outputs
 

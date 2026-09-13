@@ -103,20 +103,11 @@ thresholds:
 
 ## Access model
 
-Use trusted tool surfaces, never raw credentials in the shell.
+Use trusted tool surfaces, never raw credentials in the shell. Selected-provider invocation shapes live in `references/provider-commands.md`; normative draft/write intent, secret hygiene, authority boundaries, and success evidence stay in this root.
 
-For GitHub, prefer `gh` when available:
+For GitHub, prefer `gh` when available (see `references/provider-commands.md` for the exact commands). Use a GitHub connector only when `gh` is unavailable or unauthenticated.
 
-```bash
-gh auth status --hostname github.com
-gh repo view <owner/repo> --json nameWithOwner,viewerPermission,isPrivate
-gh issue list --repo <owner/repo> --state open --search "<theme/path terms>" --json number,title,url,labels
-gh issue create --repo <owner/repo> --title "<title>" --body-file <body_file> --label "<label>"
-```
-
-Use a GitHub connector only when `gh` is unavailable or unauthenticated.
-
-For Jira, prefer MoonMind's trusted Jira MCP/tool surface or connector. Do not expect raw Jira credentials in the agent shell and do not ask for `ATLASSIAN_*` secrets. Fetch project create metadata before publishing so required fields and issue-type IDs are validated.
+For Jira, use MoonMind's trusted Jira MCP/tool surface or connector. Do not expect raw Jira credentials in the agent shell and do not ask for `ATLASSIAN_*` secrets. Fetch project create metadata before publishing so required fields and issue-type IDs are validated. Never create Jira issues with raw credentials, scraped secrets, or a less-constrained direct-HTTP fallback; a denied or unavailable managed operation never falls back to broader authority.
 
 Never print raw environment variables. Use targeted checks such as `test -n "$GITHUB_TOKEN"` or trusted-tool health calls; do not run `printenv`, `env`, `set`, or equivalent commands that can expose secrets. Do not use bare heredocs (e.g. `<< 'EOF' > file`); use `cat << 'EOF' > file` or the `write_file` tool.
 
@@ -279,22 +270,9 @@ GitHub payload shape:
 
 Recommended GitHub labels: `code-quality`, `technical-debt`, `refactor`, `bug`, `performance`, `architecture`, `testing`, `needs-triage`.
 
-For Jira, keep the internal issue body in Markdown first, then convert it to Atlassian Document Format (ADF) at the final publishing step. Fetch create metadata for the target project and issue type first, because Jira fields vary by project; map requested fields to Jira field IDs through metadata instead of hardcoding custom field IDs. Then create the issue via `POST /rest/api/3/issue` (or the trusted Jira tool surface). Payload shape:
+For Jira, keep the internal issue body in Markdown first, then convert it to Atlassian Document Format (ADF) at the final publishing step. Fetch create metadata for the target project and issue type first, because Jira fields vary by project; map requested fields to Jira field IDs through metadata instead of hardcoding custom field IDs. Then create the issue through the trusted Jira tool surface. The selected-provider payload shape is documented in `references/provider-commands.md`.
 
-```json
-{
-  "fields": {
-    "project": { "key": "ENG" },
-    "issuetype": { "name": "Task" },
-    "summary": "Code improvement proposal: centralize payments retry and idempotency handling",
-    "labels": ["code-quality", "technical-debt", "refactor"],
-    "components": [{ "name": "Payments" }],
-    "description": { "type": "doc", "version": 1, "content": [] }
-  }
-}
-```
-
-Before retrying after an uncertain network failure on either backend, search for a matching recently created issue (by title/path/theme for GitHub, by project/summary/marker for Jira) to avoid duplicates.
+Before retrying after an uncertain network failure on either backend, search for a matching recently created issue (by title/path/theme for GitHub, by project/summary/marker for Jira) to avoid duplicates. When a creation call was accepted but its outcome is unknown, reconcile that exact operation first (re-fetch/search receipts for the created issue) before repeating the write. An incomplete search is not proof no prior issue exists.
 
 ### 11. Output
 
@@ -313,7 +291,7 @@ If published, include the created issue URL/key. If not published, include the e
 
 ## Final issue body template
 
-Use this structure for GitHub Markdown, and convert it to ADF for Jira.
+Adapt this structure for GitHub Markdown (convert it to ADF for Jira). Keep only the sections supported by the findings; omit empty sections rather than forcing a large fixed body, a findings count, a particular format, or stylistic cleanup.
 
 ```markdown
 ## Summary
@@ -366,7 +344,7 @@ Rationale: `<why this matters now>`
 - [ ] Integration test for `<flow>`
 - [ ] Existing test suite passes
 - [ ] Linter/typechecker passes
-- [ ] Manual smoke test for `<user-facing flow>`
+- [ ] Executable acceptance for `<user-facing flow>` (automated check or repo-suitable verification command suited to this repository; do not require a manual smoke test)
 
 ## Architecture alignment
 
@@ -417,7 +395,7 @@ Use the issue for human planning and the optional SARIF for file/line-level stat
 
 ## Output statuses
 
-Report exactly one terminal status: `dry_run` (payload only), `published` (issue created, include URL/key), `duplicate` (matched an existing open issue, no new issue created), `needs_routing` (no backend could be resolved), or `blocked` (a required tool, permission, or field is unavailable). Include sanitized blocker details when blocked.
+Report exactly one terminal status: `dry_run` (payload only), `published` (issue created, include URL/key), `duplicate` (matched an existing open issue, no new issue created), `no_findings` (clean review with no issue worth tracking; truthful no-ticket result, not a forced finding), `needs_routing` (no backend could be resolved), or `blocked` (a required tool, permission, or field is unavailable). A clean review may legitimately produce `no_findings`. Discovered issues must include executable automated acceptance, not a mandatory human smoke test. Include sanitized blocker details when blocked.
 
 ## Failure modes
 
@@ -426,4 +404,5 @@ Report exactly one terminal status: `dry_run` (payload only), `published` (issue
 - Ambiguous backend/target when publishing is requested: return `needs_routing` rather than guessing.
 - GitHub write permission to Issues unavailable: report `blocked` with the sanitized permission error and fall back to the dry-run payload.
 - Jira required field cannot be satisfied from input or create metadata: report `blocked` and list the field name.
-- Uncertain retry state: search for a matching recently created issue before creating another one.
+- Uncertain retry state: search for a matching recently created issue before creating another one; reconcile an accepted-but-unknown outcome before repeating the write.
+- Clean review with no trackable findings: return `no_findings` with the reviewed scope and rationale instead of forcing a ticket.
