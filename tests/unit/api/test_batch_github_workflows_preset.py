@@ -83,24 +83,24 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
     )
     assert orchestration["publish"]["mode"] == "pr_with_merge_automation"
     assert orchestration["runtime"]["inherit"] == "caller"
-    # REQ-10: preset prose is declarative (batchOrchestration + Skill from the
-    # active snapshot); it must not repeat helper CLI flags.
+    # Executable fan-out: preset prose invokes the resolved Skill entrypoint
+    # with data-safe arguments (fixed --constraints-file path, never
+    # interpolated constraints value).
     assert 'run_verify="True"' in step["instructions"]
     assert '"3142-3150"' in step["instructions"]
     assert '"MoonLadderStudios/MoonMind"' in step["instructions"]
     assert "only for open Issue objects returned by GitHub" in step["instructions"]
     assert "$MOONMIND_ACTIVE_SKILLS_DIR" in step["instructions"]
-    assert "python3" not in step["instructions"]
-    assert "--github-issue-range" not in step["instructions"]
-    assert "--github-repository" not in step["instructions"]
-    assert "--repository-connection-ref" not in step["instructions"]
-    assert "--run-ref" not in step["instructions"]
-    assert "--publish-mode" not in step["instructions"]
-    assert "--max-workflows" not in step["instructions"]
-    assert "--targets" not in step["instructions"]
-    assert "batch-github-workflows/bin/batch_workflows.py" not in step["instructions"]
+    assert "python3" in step["instructions"]
+    assert "--github-issue-range" in step["instructions"]
+    assert "--github-repository" in step["instructions"]
+    assert "--repository-connection-ref" in step["instructions"]
+    assert "--run-ref" in step["instructions"]
+    assert "--publish-mode" in step["instructions"]
+    assert "--max-workflows" in step["instructions"]
+    assert "batch-github-workflows/bin/batch_workflows.py" in step["instructions"]
     assert '--constraints "' not in step["instructions"]
-    assert "--constraints-file" not in step["instructions"]
+    assert "--constraints-file" in step["instructions"]
     assert "artifacts/batch-workflows-constraints.txt" in step["instructions"]
     assert orchestration["sharedInputs"]["constraints"] == "Be safe"
     assert expanded["appliedTemplate"]["inputs"]["constraints"] == "Be safe"
@@ -154,8 +154,8 @@ async def test_batch_github_workflows_exposes_constraints_input(tmp_path):
     )
     step = expanded["steps"][0]
     assert '--constraints "' not in step["instructions"]
-    assert "--constraints-file" not in step["instructions"]
-    assert "python3" not in step["instructions"]
+    assert "--constraints-file" in step["instructions"]
+    assert "python3" in step["instructions"]
     assert "artifacts/batch-workflows-constraints.txt" in step["instructions"]
     # The arbitrary value travels as orchestration data, never on a shell
     # command line: only the fixed file path is named in prose.
@@ -187,8 +187,9 @@ async def test_batch_github_workflows_materializes_constraints_via_file(tmp_path
             )
 
     instructions = expanded["steps"][0]["instructions"]
-    assert "--constraints-file" not in instructions
-    assert "python3" not in instructions
+    assert "--constraints-file" in instructions
+    assert "python3" in instructions
+    assert "batch-github-workflows/bin/batch_workflows.py" in instructions
     assert "artifacts/batch-workflows-constraints.txt" in instructions
     assert "never via" in instructions
     assert "shell" in instructions
@@ -257,8 +258,8 @@ async def test_batch_github_workflows_defaults_child_publish_to_pr(tmp_path):
     )
     assert step["batchOrchestration"]["publish"]["mode"] == "pr"
     assert '"pr"' in step["instructions"]
-    assert "--publish-mode" not in step["instructions"]
-    assert "python3" not in step["instructions"]
+    assert "--publish-mode" in step["instructions"]
+    assert "python3" in step["instructions"]
     # The parent queues children and writes summary artifacts; it never
     # publishes repository changes itself.
     assert expanded["publish"] == {"mode": "none"}

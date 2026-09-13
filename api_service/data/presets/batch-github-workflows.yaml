@@ -169,13 +169,22 @@ steps:
     resolved open Issue objects.
     Resolve the range and queue each matched issue with "{{ inputs.run_ref }}",
     publish override "{{ inputs.publish_mode }}", cap {{ inputs.max_workflows }}
-    targets, and run_verify="{{ inputs.run_verify }}" from inputs. Queue
-    through the batchOrchestration binding on this step, executed by the
-    batch-github-workflows Skill implementation from the resolved active
-    snapshot ($MOONMIND_ACTIVE_SKILLS_DIR). Do not reconstruct helper CLI
-    flags or interpolate constraint values into shell commands; the arbitrary
-    constraints value travels only as batchOrchestration sharedInputs data
-    and the fixed constraints file path.
+    targets, and run_verify="{{ inputs.run_verify }}" from inputs. Invoke the
+    resolved Skill entrypoint exactly once with data-safe arguments:
+    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py" \
+    --github-issue-range "{{ inputs.issue_range }}" \
+    --github-repository "{{ inputs.repository }}" \
+    --repository-connection-ref "$MOONMIND_REPOSITORY_CONNECTION_REF" \
+    --run-ref "{{ inputs.run_ref }}" \
+    --publish-mode "{{ inputs.publish_mode }}" \
+    --max-workflows "{{ inputs.max_workflows }}" \
+    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
+    --constraints-file artifacts/batch-workflows-constraints.txt
+    The arbitrary constraints value travels only as batchOrchestration
+    sharedInputs data and the fixed constraints file path; never interpolate
+    the constraints value into shell commands. The batchOrchestration binding
+    on this step documents the same queue for future runtimes; the helper
+    invocation above is the authoritative executable path.
     The queue path binds the canonical repository target and connection
     authority, stamps runtimeInheritance="caller", and assigns a stable
     idempotency key per target so reruns and retries do not duplicate child

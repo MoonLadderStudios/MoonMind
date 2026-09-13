@@ -273,21 +273,20 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             )
 
             # Parent records a summary artifact that links child workflows.
-            # REQ-10: preset prose is declarative (batchOrchestration + Skill
-            # from the active snapshot); it must not repeat helper CLI flags.
+            # Executable fan-out: preset prose invokes the resolved Skill
+            # entrypoint with data-safe arguments (fixed --constraints-file
+            # path, never an interpolated constraints value).
             assert "artifacts/batch-workflows-result.json" in step["instructions"]
             assert "runtimeInheritance" in step["instructions"]
             assert 'run_verify="False"' in step["instructions"]
             assert 'update_status="True"' in step["instructions"]
-            assert "python3" not in step["instructions"]
-            assert "--run-verify" not in step["instructions"]
-            assert "--no-run-verify" not in step["instructions"]
-            assert "--update-status" not in step["instructions"]
-            assert "--no-update-status" not in step["instructions"]
-            assert "--run-ref" not in step["instructions"]
-            assert "--publish-mode" not in step["instructions"]
-            assert "--max-workflows" not in step["instructions"]
-            assert "--constraints-file" not in step["instructions"]
+            assert "python3" in step["instructions"]
+            assert "batch-workflows/bin/batch_workflows.py" in step["instructions"]
+            assert "--run-ref" in step["instructions"]
+            assert "--publish-mode" in step["instructions"]
+            assert "--max-workflows" in step["instructions"]
+            assert "--constraints-file" in step["instructions"]
+            assert '--constraints "' not in step["instructions"]
             assert "$MOONMIND_ACTIVE_SKILLS_DIR" in step["instructions"]
 
             assert "git" in expanded["capabilities"]
@@ -390,10 +389,10 @@ async def test_batch_workflows_child_publish_default_follows_run_ref(
     assert expanded["appliedTemplate"]["inputs"]["publish_mode"] == (
         expected_publish_mode
     )
-    # REQ-10: the derived publish value renders as prose data, not a CLI flag.
+    # The derived publish value renders as prose data and as a data-safe CLI flag.
     assert f'"{expected_publish_mode}"' in expanded["steps"][0]["instructions"]
-    assert "--publish-mode" not in expanded["steps"][0]["instructions"]
-    assert "python3" not in expanded["steps"][0]["instructions"]
+    assert "--publish-mode" in expanded["steps"][0]["instructions"]
+    assert "python3" in expanded["steps"][0]["instructions"]
     # The parent queues children and writes summary artifacts; it never
     # publishes repository changes itself.
     assert expanded["publish"] == {"mode": "none"}
@@ -450,8 +449,9 @@ async def test_batch_workflows_constraints_travel_via_file_not_shell(tmp_path):
 
     step = expanded["steps"][0]
     assert '--constraints "' not in step["instructions"]
-    assert "--constraints-file" not in step["instructions"]
-    assert "python3" not in step["instructions"]
+    assert "--constraints-file" in step["instructions"]
+    assert "python3" in step["instructions"]
+    assert "batch-workflows/bin/batch_workflows.py" in step["instructions"]
     assert (
         "artifacts/batch-workflows-constraints.txt" in step["instructions"]
     )

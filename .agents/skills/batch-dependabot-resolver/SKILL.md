@@ -133,7 +133,7 @@ each queued `pr-resolver` child owns its repository publishing outcome.
 path is a portable-host fallback only when no active snapshot is set):
 
 ```bash
-python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-dependabot-resolver/bin/batch_dependabot_resolver.py" \
+python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/batch-dependabot-resolver/bin/batch_dependabot_resolver.py" \
   --repo <owner/repo> \
   --merge-method squash \
   --max-iterations 5 \
