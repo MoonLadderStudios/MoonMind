@@ -226,26 +226,29 @@ steps:
     Step 2 - Queue one child workflow per resolved target running
     "{{ inputs.run_ref }}". Auto-bind the resolved issue target into the child
     capability's issue input and copy the shared constraints into every child.
-    Apply publish override "{{ inputs.publish_mode }}" once to every child.
+    Apply publish override "{{ inputs.publish_mode }}" once to every child
+    (omitted values already resolve through the run_ref default map above),
+    cap at {{ inputs.max_workflows }} targets, and apply
+    run_verify="{{ inputs.run_verify }}" and
+    update_status="{{ inputs.update_status }}" from inputs.
     Materialize the shared `constraints` input value to
     artifacts/batch-workflows-constraints.txt with a file write (never via
     shell echo, redirection, or interpolation of the value into a shell
-    command); when empty, leave the file absent. Then run the helper as a
-    single command with the fixed file path only (the arbitrary constraints
-    value never appears on the shell command line):
-    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-workflows/bin/batch_workflows.py" \
-    --targets artifacts/batch-workflows-targets.json \
-    --run-ref "{{ inputs.run_ref }}" \
-    --publish-mode "{{ inputs.publish_mode }}" \
-    --max-workflows "{{ inputs.max_workflows }}" \
-    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
-    {% if inputs.update_status %}--update-status{% else %}--no-update-status{% endif %} \
-    --constraints-file artifacts/batch-workflows-constraints.txt
-    The helper stamps runtimeInheritance="caller" plus a fallback copy of the parent
+    command); when empty, leave the file absent. The arbitrary constraints
+    value travels only as batchOrchestration sharedInputs data and the fixed
+    file path, never on a shell command line.
+    Queue through the batchOrchestration binding on this step, executed by the
+    batch-workflows Skill implementation from the resolved active snapshot
+    ($MOONMIND_ACTIVE_SKILLS_DIR). Do not reconstruct helper CLI flags or
+    interpolate constraint values into shell commands.
+    The queue path stamps runtimeInheritance="caller" plus a fallback copy of the parent
     runtime on each child and assigns a stable idempotency key per target kind,
-    target slug, and resolved issue so reruns do not duplicate child workflows.
+    target slug, and resolved issue so reruns and retries do not duplicate child
+    workflows. On validation failure before a trustworthy target list exists,
+    record a preflight error in artifacts/batch-workflows-result.json and retry
+    only unfinished work; never handcraft or reuse a result artifact.
 
-    Step 3 - Record the summary. The helper writes artifacts/batch-workflows-result.json
+    Step 3 - Record the summary. The queue path writes artifacts/batch-workflows-result.json
     linking every queued child workflow id together with the resolved targets, skips,
     and errors. Report the queued/skipped/error counts honestly and link the child
     workflows in the run summary.

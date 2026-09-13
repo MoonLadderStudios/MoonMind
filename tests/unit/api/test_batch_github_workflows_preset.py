@@ -83,30 +83,25 @@ async def test_batch_github_workflows_seed_and_expansion_contract(tmp_path):
     )
     assert orchestration["publish"]["mode"] == "pr_with_merge_automation"
     assert orchestration["runtime"]["inherit"] == "caller"
-    assert "--run-verify" in step["instructions"]
-    assert '--github-issue-range "3142-3150"' in step["instructions"]
-    assert (
-        '--github-repository "MoonLadderStudios/MoonMind"'
-        in step["instructions"]
-    )
-    assert (
-        '--repository-connection-ref "$MOONMIND_REPOSITORY_CONNECTION_REF"'
-        in step["instructions"]
-    )
+    # REQ-10: preset prose is declarative (batchOrchestration + Skill from the
+    # active snapshot); it must not repeat helper CLI flags.
+    assert 'run_verify="True"' in step["instructions"]
+    assert '"3142-3150"' in step["instructions"]
+    assert '"MoonLadderStudios/MoonMind"' in step["instructions"]
     assert "only for open Issue objects returned by GitHub" in step["instructions"]
-    assert (
-        "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py"
-        in step["instructions"]
-    )
-    assert (
-        "--targets artifacts/batch-workflows-targets.json"
-        not in step["instructions"]
-    )
+    assert "$MOONMIND_ACTIVE_SKILLS_DIR" in step["instructions"]
+    assert "python3" not in step["instructions"]
+    assert "--github-issue-range" not in step["instructions"]
+    assert "--github-repository" not in step["instructions"]
+    assert "--repository-connection-ref" not in step["instructions"]
+    assert "--run-ref" not in step["instructions"]
+    assert "--publish-mode" not in step["instructions"]
+    assert "--max-workflows" not in step["instructions"]
+    assert "--targets" not in step["instructions"]
+    assert "batch-github-workflows/bin/batch_workflows.py" not in step["instructions"]
     assert '--constraints "' not in step["instructions"]
-    assert (
-        "--constraints-file artifacts/batch-workflows-constraints.txt"
-        in step["instructions"]
-    )
+    assert "--constraints-file" not in step["instructions"]
+    assert "artifacts/batch-workflows-constraints.txt" in step["instructions"]
     assert orchestration["sharedInputs"]["constraints"] == "Be safe"
     assert expanded["appliedTemplate"]["inputs"]["constraints"] == "Be safe"
 
@@ -159,12 +154,11 @@ async def test_batch_github_workflows_exposes_constraints_input(tmp_path):
     )
     step = expanded["steps"][0]
     assert '--constraints "' not in step["instructions"]
-    assert (
-        "--constraints-file artifacts/batch-workflows-constraints.txt"
-        in step["instructions"]
-    )
-    # The arbitrary value travels as orchestration data, never on the shell
-    # command line: only the fixed file path appears in the recipe.
+    assert "--constraints-file" not in step["instructions"]
+    assert "python3" not in step["instructions"]
+    assert "artifacts/batch-workflows-constraints.txt" in step["instructions"]
+    # The arbitrary value travels as orchestration data, never on a shell
+    # command line: only the fixed file path is named in prose.
     assert (
         step["batchOrchestration"]["sharedInputs"]["constraints"]
         == "Stale client value"
@@ -193,10 +187,8 @@ async def test_batch_github_workflows_materializes_constraints_via_file(tmp_path
             )
 
     instructions = expanded["steps"][0]["instructions"]
-    assert (
-        "--constraints-file artifacts/batch-workflows-constraints.txt"
-        in instructions
-    )
+    assert "--constraints-file" not in instructions
+    assert "python3" not in instructions
     assert "artifacts/batch-workflows-constraints.txt" in instructions
     assert "never via" in instructions
     assert "shell" in instructions
@@ -264,7 +256,9 @@ async def test_batch_github_workflows_defaults_child_publish_to_pr(tmp_path):
         "preset:github-issue-implement"
     )
     assert step["batchOrchestration"]["publish"]["mode"] == "pr"
-    assert '--publish-mode "pr"' in step["instructions"]
+    assert '"pr"' in step["instructions"]
+    assert "--publish-mode" not in step["instructions"]
+    assert "python3" not in step["instructions"]
     # The parent queues children and writes summary artifacts; it never
     # publishes repository changes itself.
     assert expanded["publish"] == {"mode": "none"}

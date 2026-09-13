@@ -160,26 +160,30 @@ steps:
     artifacts/batch-workflows-constraints.txt with a file write (never via
     shell echo, redirection, or interpolation of the value into a shell
     command). When the constraints input is empty, leave the file absent
-    and the helper sends empty constraints.
+    and send empty constraints.
 
-    Resolve the range and queue each matched issue with "{{ inputs.run_ref }}" and
-    publish override "{{ inputs.publish_mode }}" using one helper invocation. The
-    portable helper performs the trusted GitHub query, excludes closed issues,
-    pull requests, absent numbers, and responses without an explicit open state,
-    rejects numeric spans wider than 1,000 before querying, writes
-    artifacts/batch-workflows-targets.json, applies max_workflows to the resolved
-    open Issue objects, and queues the children:
-    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py" \
-    --github-issue-range "{{ inputs.issue_range }}" \
-    --github-repository "{{ inputs.repository }}" \
-    --repository-connection-ref "$MOONMIND_REPOSITORY_CONNECTION_REF" \
-    --run-ref "{{ inputs.run_ref }}" \
-    --publish-mode "{{ inputs.publish_mode }}" \
-    --max-workflows "{{ inputs.max_workflows }}" \
-    {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
-    --constraints-file artifacts/batch-workflows-constraints.txt
+    The trusted GitHub query excludes closed issues, pull requests, absent
+    numbers, and responses without an explicit open state, rejects numeric
+    spans wider than 1,000 before querying, writes
+    artifacts/batch-workflows-targets.json, and applies max_workflows to the
+    resolved open Issue objects.
+    Resolve the range and queue each matched issue with "{{ inputs.run_ref }}",
+    publish override "{{ inputs.publish_mode }}", cap {{ inputs.max_workflows }}
+    targets, and run_verify="{{ inputs.run_verify }}" from inputs. Queue
+    through the batchOrchestration binding on this step, executed by the
+    batch-github-workflows Skill implementation from the resolved active
+    snapshot ($MOONMIND_ACTIVE_SKILLS_DIR). Do not reconstruct helper CLI
+    flags or interpolate constraint values into shell commands; the arbitrary
+    constraints value travels only as batchOrchestration sharedInputs data
+    and the fixed constraints file path.
+    The queue path binds the canonical repository target and connection
+    authority, stamps runtimeInheritance="caller", and assigns a stable
+    idempotency key per target so reruns and retries do not duplicate child
+    workflows. On validation failure before a trustworthy target list exists,
+    record a preflight error in artifacts/batch-workflows-result.json and
+    retry only unfinished work; never handcraft or reuse a result artifact.
 
-    The helper writes artifacts/batch-workflows-result.json. Report its queued,
+    The queue path writes artifacts/batch-workflows-result.json. Report its queued,
     skipped, and error counts honestly and link every queued child workflow.
   batchOrchestration:
     source:
