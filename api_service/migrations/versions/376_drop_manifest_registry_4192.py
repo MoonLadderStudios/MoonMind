@@ -31,7 +31,7 @@ first landed 2026-09-10 via #4192 without the MR4 execution gate. Databases
 that already applied the original unconditional drop cannot re-invoke this
 guard through Alembic; for those installations the authoritative recovery is
 the pre-upgrade protected export plus forward repair
-(``380_manifest_drain_audit_4191`` verifies post-drop state and
+(``381_manifest_drain_audit_4191`` verifies post-drop state and
 refuses a surviving ``manifest`` table without a bound approval). The in-place
 guard amendment protects every pending upgrade that has not yet applied
 revision 376; it does not rewrite history for already-dropped databases.
