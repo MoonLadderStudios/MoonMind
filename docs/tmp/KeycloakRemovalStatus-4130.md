@@ -49,10 +49,19 @@
   claim, expiring one-use login-bound invites, member administration with
   last-admin protection, short-lived one-use local recovery capability,
   redacted observability; covered by
-  `tests/unit/security/test_account_lifecycle_4122.py`). AuthenticationContracts
-  §7 is now hermetic contract + implementation, not bare contract text;
-  database wiring and end-to-end operator journeys still await #4128
-  product qualification (see below).
+  `tests/unit/security/test_account_lifecycle_4122.py`), now backed by
+  production User-table wiring (`api_service/services/account_lifecycle_store_4122.py`:
+  `AsyncDbLifecycleStore` over the existing `User` table plus the additive
+  `moonmind_account_nonces` single-use record, migration
+  `380_account_lifecycle_4122`; transactional operated runbook —
+  `claim_first_owner_and_create_user`, `redeem_invite_and_create_user`,
+  `redeem_recovery_for_user`, `apply_member_action_transactional` — with
+  member rows deactivated, never deleted; covered by
+  `tests/unit/api/test_account_lifecycle_store_4122.py` on SQLite and
+  `tests/integration/security/test_account_lifecycle_postgres_4122.py` on
+  PostgreSQL). AuthenticationContracts §7 is now hermetic contract +
+  implementation + production wiring, not bare contract text; end-to-end
+  operator journeys still await #4128 product qualification (see below).
 - #4129: bundled Keycloak live behavior removed (Compose service, realm
   assets, routers, helpers, fixtures); remaining `keycloak` strings are
   classified retirement, negative-test, or migration residuals per
@@ -64,11 +73,12 @@ Remaining cutover slices (#4126/#4127) and product qualification evidence
 (#4128) have no merged implementation on this checkout. The
 `accounts`/`oidc`/`header` end-to-end browser journeys (two-user login,
 admin/worker negative matrix, stream expiry and revocation, restart and
-replica consistency) are hermetic contract + implementation, not
-browser-verified product behavior. Likewise the #4122 lifecycle rules are
-unit-verified against the portable store protocol; production database
-wiring (existing `User`-table transactions) and the operated fresh-install
-/ recovery runbook still await #4128 qualification.
+replica consistency) are implementation plus production wiring, not
+browser-verified product behavior. The #4122 lifecycle rules are
+unit-verified against the portable store protocol and integration-verified
+against the production User-table transactions on SQLite and PostgreSQL;
+the end-to-end operated fresh-install/recovery journeys still await #4128
+qualification.
 
 ## Documentation validation recorded here (#4130 RW-5/AC-5/AC-6)
 
