@@ -3052,11 +3052,13 @@ async def test_agent_runtime_publish_artifacts_publishes_moonspec_verify_json(
 
 @pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "omnigent"])
 @pytest.mark.parametrize("evidence_state", ["valid", "expired", "malformed"])
+@pytest.mark.parametrize("near_limit", [False, True])
 async def test_acceptance_projection_crosses_publisher_and_workflow_gate(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     runtime: str,
     evidence_state: str,
+    near_limit: bool,
 ) -> None:
     fixture = Path(__file__).resolve().parents[3] / "fixtures/reliability/acceptance-evidence-projection.json"
     payload = json.loads(fixture.read_text())["gatePayload"]
@@ -3105,11 +3107,18 @@ async def test_acceptance_projection_crosses_publisher_and_workflow_gate(
                 artifact_service=service, run_store=run_store, workspace_root=tmp_path,
             )
             monkeypatch.setattr(activities, "execution_notify_completion", AsyncMock(return_value={"status": "skipped"}))
-            result = await activities.agent_runtime_publish_artifacts(AgentRunResult(
-                metadata={**metadata, "verify_artifact_path": "artifacts/verify.json", "acceptanceContract": "acceptance/v1"},
-            ))
+            incoming_metadata = {**metadata, "verify_artifact_path": "artifacts/verify.json", "acceptanceContract": "acceptance/v1"}
+            if near_limit:
+                from moonmind.schemas.temporal_payload_policy import MAX_TEMPORAL_METADATA_BYTES
+
+                incoming_metadata.update(diagnostic1="p" * 8000, diagnostic2="")
+                used_bytes = len(json.dumps(incoming_metadata, separators=(",", ":")).encode())
+                incoming_metadata["diagnostic2"] = "q" * (MAX_TEMPORAL_METADATA_BYTES - 100 - used_bytes)
+            result = await activities.agent_runtime_publish_artifacts(AgentRunResult(metadata=incoming_metadata))
             # Exercise the actual serialized boundary, not only the file reader.
             result = AgentRunResult(**result.model_dump(mode="json", by_alias=True))
+            if near_limit:
+                assert result.metadata["workflowHistoryMetadataCompacted"] is True
             parent = run_module.MoonMindRunWorkflow()
             parent._assessment_context = {"issueRef": "example/repo#1"}
             gate = parent._moonspec_verify_gate_result(result.metadata)
