@@ -9,7 +9,7 @@ Read relevant documents in the following order before implementing tasks:
 3. **Docs:** `docs/*.md` as needed for system architecture (see **Documentation: canonical vs feature artifacts** below).
    - Start here for Agent Skills: `docs/Steps/SkillSystem.md`
    - For Executable Tools: `docs/Workflows/SkillAndPlanContracts.md`
-   - For Runtime boundaries: `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+   - For Runtime boundaries: `docs/Temporal/TemporalModuleArchitecture.md` (module entrypoint mapping each Temporal contract owner) and `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 
 ## MoonMind Principles
 
