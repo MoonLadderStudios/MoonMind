@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+
+import pytest
 
 from moonmind.omnigent.bootstrap.evidence import (
     build_deployment_evidence,
     write_deployment_evidence,
 )
 from moonmind.omnigent.deployment_evidence import (
+    load_deployment_evidence,
     load_deployment_evidence_entries,
 )
 from moonmind.omnigent.harness_platform.support import (
@@ -103,3 +107,71 @@ def test_publisher_preserves_independent_materializer_qualifications(
         if entry.support_identity.materializerRefs == ("opencode-auth-json@1",)
     )
     assert go_entry.support_identity.modelConfigDigest == "sha256:" + "b" * 64
+
+
+def test_profile_drift_reports_closest_identity_without_historical_error_explosion(
+    tmp_path, monkeypatch,
+) -> None:
+    """Replay admission after a profile advances while its qualification stalls."""
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
+        str(tmp_path / "deployment_evidence_key"),
+    )
+    evidence = _evidence("opencode-auth-json@1", profile_ref="opencode-go-default")
+    requested = _identity("opencode-auth-json@1").model_copy(
+        update={"agentSourceRef": "agent-source:sha256:" + "c" * 64}
+    )
+    plan = SimpleNamespace(
+        supportIdentity=requested,
+        supportCombinationKey=compute_support_combination_key(requested),
+        hostImageRef=evidence["hostImageRef"],
+    )
+    historical = {
+        **evidence,
+        "supportIdentity": {
+            **evidence["supportIdentity"],
+            "omnigentHostBuildRef": "sha256:" + "d" * 64,
+            "launchPolicyRef": "omnigent-on-demand@0",
+            # Even untrusted field names must never be copied into diagnostics.
+            "untrusted-private-field": "untrusted-private-value",
+        },
+    }
+    path = tmp_path / "deployment-evidence.json"
+    path.write_text(json.dumps({"entries": [historical] * 300 + [evidence]}))
+    with pytest.raises(ValueError) as failure:
+        load_deployment_evidence(plan, path=path)
+    message = str(failure.value)
+    assert "closest published identity: agentSourceRef differs" in message
+    assert message.count("agentSourceRef differs") == 1
+    assert "omnigentHostBuildRef differs" not in message
+    assert "launchPolicyRef differs" not in message
+    assert "untrusted-private" not in message
+    assert "retry deployment qualification" in message
+    assert len(message) < 700
+
+    # Duplicate exact identities still fail closed with a truthful diagnostic.
+    exact_plan = SimpleNamespace(
+        supportIdentity=_identity("opencode-auth-json@1"),
+        supportCombinationKey=evidence["supportCombinationKey"],
+        hostImageRef=evidence["hostImageRef"],
+    )
+    path.write_text(json.dumps({"entries": [evidence, evidence]}))
+    with pytest.raises(ValueError, match="does not resolve to unique"):
+        load_deployment_evidence(exact_plan, path=path)
+
+    # An unrecognized field cannot become a diagnostic label or evidence.
+    unknown_field = {
+        **evidence,
+        "supportIdentity": {
+            **evidence["supportIdentity"],
+            "untrusted-private-field": "untrusted-private-value",
+        },
+    }
+    path.write_text(json.dumps({"entries": [unknown_field]}))
+    with pytest.raises(ValueError) as failure:
+        load_deployment_evidence(exact_plan, path=path)
+    assert "untrusted-private" not in str(failure.value)
+
+    # Diagnostics do not change admission: one valid exact row still works.
+    path.write_text(json.dumps({"entries": [historical] * 300 + [evidence]}))
+    assert load_deployment_evidence(exact_plan, path=path) == evidence
