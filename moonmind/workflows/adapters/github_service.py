@@ -26,6 +26,7 @@ from moonmind.workflows.provider_failures import (
     PROVIDER_ERROR_CLASS_RATE_LIMIT,
     ProviderFailureEvent,
     build_provider_failure_event,
+    resolve_provider_cooldown_seconds,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,8 @@ class CreatePRResult(BaseModel):
     adopted: bool = Field(False, alias="adopted")
     summary: str = Field(..., alias="summary")
     head_sha: Optional[str] = Field(None, alias="headSha")
+    retryable: bool = Field(False, alias="retryable")
+    retry_after_seconds: int | None = Field(None, alias="retryAfterSeconds", gt=0)
 
 class MergePRResult(BaseModel):
     """Result from ``repo.merge_pr``."""
@@ -446,6 +449,36 @@ class GitHubService:
         return {"id": user_id, "login": login.strip()}, None
 
     @staticmethod
+    def _github_rate_limit_event(response: httpx.Response) -> ProviderFailureEvent | None:
+        """Decode GitHub's documented 403/429 limit contract at the adapter."""
+        if response.status_code not in {403, 429}:
+            return None
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        structured_limit = (
+            response.status_code == 429
+            or response.headers.get("x-ratelimit-remaining") == "0"
+            or bool(response.headers.get("retry-after"))
+        )
+        reset_at = None
+        if response.headers.get("x-ratelimit-remaining") == "0":
+            try:
+                reset_at = datetime.fromtimestamp(
+                    int(response.headers["x-ratelimit-reset"]), timezone.utc
+                ).isoformat()
+            except (KeyError, ValueError, OverflowError, OSError):
+                pass
+        event = build_provider_failure_event(
+            provider_error_class=PROVIDER_ERROR_CLASS_RATE_LIMIT if structured_limit else None,
+            reason=payload.get("message") if isinstance(payload, Mapping) else None,
+            retry_after_seconds=response.headers.get("retry-after"),
+            reset_at=reset_at,
+        )
+        return event if event and event.provider_error_class == PROVIDER_ERROR_CLASS_RATE_LIMIT else None
+
+    @staticmethod
     def _github_permission_summary(response: httpx.Response | None) -> str:
         if response is None:
             return ""
@@ -552,7 +585,9 @@ class GitHubService:
                 base,
                 exc.__class__.__name__,
             )
-            return None
+            # Unavailable readback is not evidence of absence. The create
+            # caller classifies the failure; no POST may follow this read.
+            raise
         data = response.json()
         if not isinstance(data, list):
             return None
@@ -913,8 +948,16 @@ class GitHubService:
                     repo,
                     resp_body,
                 )
+                rate_limit = self._github_rate_limit_event(exc.response)
                 return CreatePRResult(
                     created=False,
+                    retryable=status_code >= 500 or rate_limit is not None,
+                    retry_after_seconds=(
+                        resolve_provider_cooldown_seconds(
+                            rate_limit, now=datetime.now(timezone.utc), default_seconds=60
+                        ) + 1
+                        if rate_limit is not None else None
+                    ),
                     summary=(
                         f"GitHub create PR failed with HTTP {status_code}"
                         f" for {repo}."
@@ -933,6 +976,7 @@ class GitHubService:
                 )
                 return CreatePRResult(
                     created=False,
+                    retryable=True,
                     summary=(
                         f"GitHub create PR request failed:"
                         f" {exc.__class__.__name__}"

@@ -138,6 +138,18 @@ async def test_continuation_histories_replay_deterministically(
         "_publish_visibility",
         lambda self: None,
     )
+    # Record the historical continuation sequence, then replay it with the
+    # current workflow. Modern merge confirmation has its own HTTP journey.
+    original_patched = module.workflow.patched
+    monkeypatch.setattr(
+        module.workflow,
+        "patched",
+        lambda name: (
+            False
+            if name == module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH
+            else original_patched(name)
+        ),
+    )
     child_queue = module.settings.temporal.user_workflow_v2_task_queue
     parent_queue = "mm1209-merge-replay"
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -190,6 +202,7 @@ async def test_continuation_histories_replay_deterministically(
     if scenario == "rejected":
         assert result["continuationCounters"]["continuation_rejected_ownership"] == 1
 
+    monkeypatch.setattr(module.workflow, "patched", original_patched)
     replayer = Replayer(
         workflows=[MoonMindMergeAutomationWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),

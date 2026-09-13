@@ -166,6 +166,20 @@ The title prefix is lowercased, non-alphanumeric characters become `-`, and it i
 
 A previous publishing step may establish a verified cumulative candidate. A later step starts from that candidate when the plan calls for it but still compares against the original authored base. The candidate branch must never become its own publication base. Candidate-only clones and restored checkpoints refresh the exact remote base through the admitted publication authority before measuring commits. Unavailable base evidence blocks publication.
 
+An unchanged saved checkout can be behind an authored base that advanced during
+execution. A zero-change result may prove the saved revision is still reachable
+from that exact advertised remote base, preserving the original checkout and
+head. This is saved-work evidence with zero publishable commits, not a new
+publication or proof of completion on the current target. It cannot discover an
+unrelated PR from the shared base. Reusing an owned candidate and performing an
+actual publication retain exact remote-head checks; divergence is not ordinary
+base advancement.
+The accepted result keeps `remoteVerified` false for ancestor-only
+`no_commits` evidence. That distinction survives result serialization and
+prevents both current and retained exact-head remediation consumers from
+admitting a stale base as a write destination. It does not move the saved
+checkout or declare incomplete work complete.
+
 ## 5. Workflow and Batch Inheritance
 
 For a batch whose selected outcome is PR publication:

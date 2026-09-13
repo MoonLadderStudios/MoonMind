@@ -211,6 +211,23 @@ class OmnigentWorkspaceMaterializer:
             and workspace_id is not None
             and record_store.is_ready(workspace_id, fingerprint)
         )
+        parameters = request.parameters if isinstance(request.parameters, dict) else {}
+        # These are existing execution-contract fields, including persisted
+        # requests whose workflow patch did not also copy them into inputRefs.
+        # They declare data inputs; the host never interprets verifier semantics.
+        named_refs = {
+            path_key: str(parameters[ref_key]).strip()
+            for path_key, ref_key in (
+                ("gateResultPath", "gateResultRef"),
+                ("remainingWorkPath", "remainingWorkRef"),
+            )
+            if parameters.get(ref_key)
+        }
+        attachment_refs = getattr(request, "input_refs", ())
+        if not isinstance(attachment_refs, (list, tuple)):
+            attachment_refs = ()
+        attachment_refs = tuple(dict.fromkeys((*attachment_refs, *named_refs.values())))
+        attachment_evidence = []
         if not materialization_complete:
             # A retry reconciles the same generation; changed inputs are an
             # explicit new import that is fully re-admitted, staged, and
@@ -219,12 +236,9 @@ class OmnigentWorkspaceMaterializer:
             restore_refs = spec.get("restoreInputRefs")
             if not isinstance(restore_refs, (list, tuple)):
                 restore_refs = ()
-            attachment_refs = getattr(request, "input_refs", ())
-            if not isinstance(attachment_refs, (list, tuple)):
-                attachment_refs = ()
             checkpoint_ref = source.checkpoint_ref or source.artifact_ref
             try:
-                await self._artifact_projector.project(
+                projection = await self._artifact_projector.project(
                     candidate,
                     checkpoint_ref=checkpoint_ref,
                     checkpoint_digest=source.artifact_digest,
@@ -238,10 +252,26 @@ class OmnigentWorkspaceMaterializer:
                     and source.kind in {"artifact", "checkpoint"},
                     overlay_policy=source.overlay_policy,
                 )
+                attachment_evidence = projection.get("attachments", [])
             except WorkspaceArtifactProjectionError as exc:
                 raise HarnessPlatformError(str(exc), code=exc.code) from exc
             if record_store is not None and workspace_id is not None:
                 record_store.mark_ready(workspace_id, fingerprint)
+        elif named_refs:
+            # A ready repository is not evidence that current verifier inputs
+            # exist. Re-admit only attachments, preserving all candidate edits.
+            try:
+                attachment_evidence = await self._artifact_projector.project_attachments(
+                    candidate,
+                    refs=attachment_refs,
+                    workflow_id=owner_workflow_id,
+                    runtime_uid=runtime_uid,
+                    runtime_gid=runtime_gid,
+                )
+            except WorkspaceArtifactProjectionError as exc:
+                raise HarnessPlatformError(str(exc), code=exc.code) from exc
+        paths_by_ref = {item["ref"]: item["path"] for item in attachment_evidence}
+        named_paths = {name: paths_by_ref[ref] for name, ref in named_refs.items()}
         # An advanced selected directory is never permission for an arbitrary
         # host mount: the qualified locator/daemon mapping below is the only
         # path from a worker path to a daemon-visible bind path.
@@ -270,6 +300,7 @@ class OmnigentWorkspaceMaterializer:
             "targetPath": "/workspaces/run",
             "accessMode": access_mode,
             "cleanupRef": None,
+            **({"materializedInputPaths": named_paths} if named_paths else {}),
         }
 
     async def _resolve_source_directory(

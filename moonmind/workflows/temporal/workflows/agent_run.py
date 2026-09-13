@@ -17,12 +17,14 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from pydantic import ValidationError
+    from moonmind.omnigent.runtime_bindings import stable_binding_id
 
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
         MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
         AdmittedProviderCapacity,
         AdmittedProviderProfileCapacity,
+        AgentAdmissionRecovery,
         AgentExecutionRequest,
         AgentRunHandle,
         AgentRunResult,
@@ -4270,6 +4272,7 @@ class MoonMindAgentRun:
 
         admitted_at: Any = None
         capacity_requeue_attempts = 0
+        recovering_interrupted_admission = False
         reconcile_admission = self._workflow_patch_enabled("omnigent-resume-owned-admission-v1")
         while True:
             resuming = (
@@ -4329,6 +4332,7 @@ class MoonMindAgentRun:
                 # StartToClose from a server-side retry.
                 routed_overrides["retry_policy"] = retry_policy
             activity_returned = False
+            activity_started_at = workflow.now()
             try:
                 result_payload = await self._execute_routed_activity(
                     act_name,
@@ -4373,12 +4377,28 @@ class MoonMindAgentRun:
                     self._omnigent_pending_request = None
                     self._omnigent_pending_admitted_at = None
             requeue_reason = (
-                self._omnigent_capacity_requeue_reason(result_payload)
+                self._omnigent_capacity_requeue_reason(result_payload, request=request)
                 if admit_capacity_before_activity
                 else None
             )
             if requeue_reason is None:
                 return result_payload, admitted_at
+            metadata = (
+                result_payload.get("metadata", {})
+                if isinstance(result_payload, Mapping)
+                else getattr(result_payload, "metadata", {})
+            )
+            recovering_interrupted_admission = recovering_interrupted_admission or bool(
+                metadata.get("admissionRecovery")
+            )
+            if recovering_interrupted_admission:
+                # Only the new, validated cleanup receipt enters this branch;
+                # historical code-only capacity refusals keep their commands.
+                # Cleanup and Activity handoff consume the remaining execution
+                # allowance. Durable capacity queueing remains outside it.
+                stc_seconds -= (workflow.now() - activity_started_at).total_seconds()
+                if stc_seconds <= 0:
+                    return result_payload, admitted_at
             if (
                 capacity_requeue_attempts
                 >= _MAX_OMNIGENT_CAPACITY_REQUEUE_ATTEMPTS
@@ -4474,7 +4494,11 @@ class MoonMindAgentRun:
             )
 
     @staticmethod
-    def _omnigent_capacity_requeue_reason(result_payload: Any) -> str | None:
+    def _omnigent_capacity_requeue_reason(
+        result_payload: Any,
+        *,
+        request: AgentExecutionRequest | None = None,
+    ) -> str | None:
         """Name the capacity this run lost after admission, if any.
 
         MoonLadderStudios/MoonMind#3880 AC5. The execution Activity projects a
@@ -4484,6 +4508,45 @@ class MoonMindAgentRun:
         so it returns to durable waiting instead of failing the task.
         """
 
+        metadata = (
+            result_payload.get("metadata")
+            if isinstance(result_payload, Mapping)
+            else getattr(result_payload, "metadata", None)
+        )
+        if isinstance(metadata, Mapping) and "admissionRecovery" in metadata:
+            # A hint/error code cannot authorize another host. The lifecycle
+            # owner must prove pre-session cleanup for this exact admission.
+            # Old recorded results have no receipt and keep their old path.
+            failure_class = (
+                result_payload.get("failureClass")
+                if isinstance(result_payload, Mapping)
+                else getattr(result_payload, "failure_class", None)
+            )
+            if not failure_class:
+                return None
+            try:
+                recovery = AgentAdmissionRecovery.model_validate(
+                    metadata["admissionRecovery"]
+                )
+            except ValidationError:
+                return None
+            capacity = (
+                request.admitted_provider_capacity if request is not None else None
+            )
+            if capacity is None or request is None:
+                return None
+            if (
+                recovery.execution_plan_ref != capacity.execution_plan_ref
+                or recovery.admission_epoch != capacity.admission_epoch
+                or recovery.runtime_binding_ref
+                != stable_binding_id(
+                    execution_plan_ref=capacity.execution_plan_ref,
+                    idempotency_key=request.idempotency_key,
+                    admission_epoch=capacity.admission_epoch,
+                )
+            ):
+                return None
+            return "generic host admission (pre-session cleanup verified)"
         if isinstance(result_payload, Mapping):
             code = result_payload.get("providerErrorCode")
         else:
@@ -7801,7 +7864,7 @@ class MoonMindAgentRun:
                 runtime_mapping = {"claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                 manager_id = self._manager_workflow_id(runtime_id)
-                
+
                 async def _release_slot():
                     try:
                         manager_handle = workflow.get_external_workflow_handle(manager_id)
@@ -7815,7 +7878,7 @@ class MoonMindAgentRun:
                     except Exception:
                         # Errors are intentionally ignored to avoid masking the original cancellation
                         self._get_logger().warning("Failed to release slot on cancellation, which may lead to a leak.", exc_info=True)
-                
+
                 tasks.append(asyncio.shield(_release_slot()))
 
             if self.run_id is not None and self.agent_kind is not None:
@@ -7846,13 +7909,13 @@ class MoonMindAgentRun:
                             )
                     except Exception:
                         self._get_logger().warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
-                
+
                 tasks.append(asyncio.shield(_cancel_agent()))
 
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             raise
-            
+
         except Exception:
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
                 runtime_mapping = {"claude": "claude_code", "codex": "codex_cli"}

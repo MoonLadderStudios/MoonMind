@@ -238,7 +238,11 @@ class _Harness:
             ),
         )
         monkeypatch.setattr(
-            merge_automation_module.workflow, "patched", lambda _patch_id: True
+            merge_automation_module.workflow,
+            "patched",  # Preserve these historical Activity sequences; the modern confirmation
+            # path is covered by test_resolver_merge_confirmation and its real journey.
+            lambda _patch_id: _patch_id
+            != merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH,
         )
 
 
@@ -1167,7 +1171,11 @@ async def test_reenter_progress_budget_preserves_pre_patch_history(monkeypatch):
     monkeypatch.setattr(
         merge_automation_module.workflow,
         "patched",
-        lambda name: name != "merge-automation-bound-reenter-progress-v1",
+        lambda name: name
+        not in {
+            "merge-automation-bound-reenter-progress-v1",
+            merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH,
+        },
     )
     assert (await MoonMindMergeAutomationWorkflow().run(_payload()))[
         "status"

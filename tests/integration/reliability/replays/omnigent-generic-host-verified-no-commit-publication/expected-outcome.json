@@ -13,6 +13,5 @@
   "resultFailureClass": null,
   "publicationFeasibilityReason": "no_candidate_change",
   "publicationFeasible": false,
-  "workflowPublishStatus": "skipped",
-  "staleRemoteEvidenceFailureCode": "OMNIGENT_REPOSITORY_PUBLICATION_UNVERIFIED"
+  "workflowPublishStatus": "skipped"
 }
