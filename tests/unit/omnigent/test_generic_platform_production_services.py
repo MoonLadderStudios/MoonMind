@@ -2184,7 +2184,7 @@ async def _generic_publication_harness(
         workspace_publisher=WorkspacePublisher(),
         turn_command_service=TurnCommands(),
         execution_state_notifier=execution_state_notifier,
-        deployment_validator=lambda _payload: None,
+        deployment_validator=AsyncMock(return_value=None),
         heartbeat_interval_seconds=0.005,
         heartbeat_ttl_seconds=60,
     )

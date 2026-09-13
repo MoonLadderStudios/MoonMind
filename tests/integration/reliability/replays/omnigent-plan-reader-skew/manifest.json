@@ -1,0 +1,8 @@
+{
+  "incidentWorkflowId": "mm:07161650-68db-4325-8583-c6711e2cb8bc-2026-09-13T21:00:00Z",
+  "failure": "The retained execution-plan reader rejected payload.omnigentVersion before session admission.",
+  "readerSource": "moonmind/omnigent/harness_platform/execution_plan.py at 99795cc7f4be068fdea341338437c6e883b03385",
+  "writerSource": "1ef68528ed2990daae9662e1472358024e982bc6",
+  "invariant": "A new v1 plan reaches admission on the retained reader without matching MoonMind revisions. Version evidence remains in the immutable catalog. Previously persisted inline evidence and digests remain readable.",
+  "fixturePolicy": "Unmodified historical reader declarations, with unused writer and rebinding helpers omitted, form a test-only source fixture. They are never a production compatibility implementation. No production payloads or credentials are included."
+}

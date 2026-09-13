@@ -11,7 +11,18 @@ from uuid import uuid4
 
 import pytest
 from temporalio import activity, workflow
-from temporalio.client import Client
+from temporalio.client import (
+    Client,
+    Schedule,
+    ScheduleActionStartWorkflow,
+    ScheduleSpec,
+    ScheduleState,
+)
+from temporalio.common import (
+    SearchAttributeKey,
+    SearchAttributePair,
+    TypedSearchAttributes,
+)
 from temporalio.api.operatorservice.v1 import (
     AddSearchAttributesRequest,
     ListSearchAttributesRequest,
@@ -91,6 +102,42 @@ async def resolver_test_client():
         await asyncio.sleep(1)
     else:
         pytest.fail("isolated Temporal search attributes did not become available")
+
+    # Operator metadata can precede the namespace mapping used by admission.
+    # Prove the attributes are usable before handing the client to a journey.
+    probe = "search-attribute-readiness-" + uuid4().hex
+    for attempt in range(30):
+        try:
+            handle = await client.create_schedule(
+                probe,
+                Schedule(
+                    action=ScheduleActionStartWorkflow(
+                        "UnpolledSearchAttributeProbe",
+                        id=probe,
+                        task_queue=probe,
+                        typed_search_attributes=TypedSearchAttributes(
+                            [
+                                SearchAttributePair(
+                                    SearchAttributeKey.for_keyword(name), "test"
+                                )
+                                for name in sorted(required_attributes)
+                            ]
+                        ),
+                    ),
+                    spec=ScheduleSpec(),
+                    state=ScheduleState(paused=True),
+                ),
+            )
+        except RPCError as exc:
+            if exc.status not in {
+                RPCStatusCode.NOT_FOUND,
+                RPCStatusCode.INVALID_ARGUMENT,
+            } or attempt == 29:
+                raise
+            await asyncio.sleep(1)
+        else:
+            await handle.delete()
+            break
     return client
 
 
