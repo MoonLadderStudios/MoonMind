@@ -10,6 +10,7 @@ from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.schedule_errors import (
     ScheduleAdapterError,
     ScheduleAlreadyExistsError,
+    ScheduleNotFoundError,
     ScheduleOperationError,
 )
 
@@ -82,6 +83,29 @@ async def migrate_definitions() -> None:
                     dfn.name,
                     exc,
                 )
+                # An earlier migration may have created the deterministic
+                # mm-schedule:<definition_id> schedule but crashed before
+                # committing temporal_schedule_id. That orphan still matches
+                # the migration query while a live schedule exists, but
+                # reconcile_schedules only scans rows with a non-null
+                # schedule ID, so it would keep firing retired work.
+                # Probe and pause the deterministic schedule before skipping.
+                try:
+                    await adapter.pause_schedule(definition_id=dfn.id)
+                    logger.info(
+                        "Paused orphaned retired schedule for %s", dfn.id
+                    )
+                except ScheduleNotFoundError:
+                    logger.info(
+                        "No orphaned schedule for retired definition %s",
+                        dfn.id,
+                    )
+                except (ScheduleAdapterError, ScheduleOperationError) as pause_exc:
+                    logger.warning(
+                        "Failed to pause orphaned retired schedule for %s: %s",
+                        dfn.id,
+                        pause_exc,
+                    )
                 continue
 
             workflow_input = {
