@@ -191,7 +191,9 @@ fresh-install/recovery runbook is those transactional helpers:
 `claim_first_owner_and_create_user` (claim plus owner creation plus profile
 in one transaction), `redeem_invite_and_create_user` (redemption plus member
 creation plus profile in one transaction), `redeem_recovery_for_user`
-(one-use recovery without account creation or mutation), and
+(one-use recovery without account creation or mutation),
+`redeem_recovery_and_restore_access` (same-transaction nonce consumption
+plus reactivation/promotion for a stranded administrator), and
 `apply_member_action_transactional` (persisted administration with
 last-admin protection; deactivation also revokes sessions). Member rows are
 deactivated, never deleted: UUIDs and ownership records are preserved.

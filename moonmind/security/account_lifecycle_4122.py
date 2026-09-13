@@ -45,6 +45,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import inspect
 import json
 import logging
 import secrets
@@ -63,6 +64,9 @@ __all__ = [
     "LifecycleMember",
     "LifecycleStore",
     "InMemoryLifecycleStore",
+    "bootstrap_nonce_for_login",
+    "invite_nonce_for_login",
+    "recovery_nonce_for_login",
     "mint_bootstrap_capability",
     "claim_first_owner",
     "mint_invite",
@@ -213,6 +217,12 @@ class LifecycleStore(Protocol):
     Production implementations back this with the existing database
     (one ``User`` row per login; nonce consumption and owner claim in the
     same transaction as user creation). No second account database.
+
+    Synchronous only: implementations must use plain ``def`` methods. The
+    hermetic rules reject ``async def`` stores fail-closed so a truthy
+    coroutine can never read as an existing owner or a consumed nonce;
+    asynchronous persistence goes through the ``*_with_token`` boundary in
+    ``api_service.services.account_lifecycle_store_4122``.
     """
 
     def has_owner(self) -> bool:
@@ -343,6 +353,71 @@ def _verify_capability(
     return {"login": login, "nonce": nonce, "exp": exp}
 
 
+def _require_sync_store(store: LifecycleStore, error_cls: type[AccountLifecycleError]) -> LifecycleStore:
+    """Reject asynchronous stores at the synchronous persistence boundary.
+
+    An ``async def`` store passed here would hand back truthy coroutine
+    objects instead of real answers (``has_owner()`` always truthy,
+    ``consume_nonce()`` never awaited or persisted). Fail closed with the
+    caller's typed error instead; asynchronous persistence must go through
+    the ``*_with_token`` boundary in
+    ``api_service.services.account_lifecycle_store_4122``.
+    """
+    for method in ("has_owner", "try_claim_owner", "consume_nonce", "is_nonce_consumed"):
+        if inspect.iscoroutinefunction(getattr(store, method, None)):
+            raise error_cls(
+                "auth_invalid",
+                "synchronous lifecycle rule received an asynchronous store; "
+                "use the async token boundary instead",
+            )
+    return store
+
+
+def bootstrap_nonce_for_login(
+    token: str, *, key: bytes, login: str, now: float | None = None
+) -> str:
+    """Verify a bootstrap capability and return its nonce for ``login``.
+
+    Pure verification (no persistence): raises :class:`BootstrapError` on
+    malformed, expired, wrong-key, or login-mismatched capabilities. The
+    async database boundary verifies with this helper, then persists the
+    nonce atomically with user creation in one transaction.
+    """
+    try:
+        payload = _verify_capability(token, kind="bootstrap", key=key, now=now)
+    except AccountLifecycleError as exc:
+        raise BootstrapError(exc.code, str(exc)) from exc
+    if payload["login"] != login:
+        raise BootstrapError("auth_invalid", "bootstrap capability is bound to a different login name")
+    return payload["nonce"]
+
+
+def invite_nonce_for_login(
+    token: str, *, key: bytes, login: str, now: float | None = None
+) -> str:
+    """Verify an invitation capability and return its nonce for ``login``."""
+    try:
+        payload = _verify_capability(token, kind="invite", key=key, now=now)
+    except AccountLifecycleError as exc:
+        raise InviteError(exc.code, str(exc)) from exc
+    if payload["login"] != login:
+        raise InviteError("auth_invalid", "invitation is bound to a different login name")
+    return payload["nonce"]
+
+
+def recovery_nonce_for_login(
+    token: str, *, key: bytes, login: str, now: float | None = None
+) -> str:
+    """Verify a recovery capability and return its nonce for ``login``."""
+    try:
+        payload = _verify_capability(token, kind="recovery", key=key, now=now)
+    except AccountLifecycleError as exc:
+        raise RecoveryError(exc.code, str(exc)) from exc
+    if payload["login"] != login:
+        raise RecoveryError("auth_invalid", "recovery capability is bound to a different login name")
+    return payload["nonce"]
+
+
 def mint_bootstrap_capability(
     login: str, *, key: bytes, ttl_seconds: int = TOKEN_TTL_BOOTSTRAP_SECONDS, now: float | None = None
 ) -> str:
@@ -364,19 +439,18 @@ def claim_first_owner(
     atomic so concurrent setups produce exactly one owner. Reuse, expiry,
     login mismatch, or an already-populated database raises
     :class:`BootstrapError` without creating or modifying any owner.
+
+    Synchronous persistence only: an asynchronous store raises
+    :class:`BootstrapError` (use the async token boundary instead).
     """
-    try:
-        payload = _verify_capability(token, kind="bootstrap", key=key, now=now)
-    except AccountLifecycleError as exc:
-        raise BootstrapError(exc.code, str(exc)) from exc
-    if payload["login"] != login:
-        raise BootstrapError("auth_invalid", "bootstrap capability is bound to a different login name")
+    nonce = bootstrap_nonce_for_login(token, key=key, login=login, now=now)
+    _require_sync_store(store, BootstrapError)
     if store.has_owner():
         raise BootstrapError(
             "bootstrap_closed",
             "first-owner setup is closed: an owner already exists; use invitation or recovery",
         )
-    if not store.try_claim_owner(login, payload["nonce"]):
+    if not store.try_claim_owner(login, nonce):
         raise BootstrapError(
             "bootstrap_consumed",
             "bootstrap capability was already consumed or ownership was claimed concurrently",
@@ -394,14 +468,14 @@ def mint_invite(
 def redeem_invite(
     token: str, *, key: bytes, store: LifecycleStore, login: str, now: float | None = None
 ) -> str:
-    """Redeem an invitation for ``login`` (exact match), consuming it atomically."""
-    try:
-        payload = _verify_capability(token, kind="invite", key=key, now=now)
-    except AccountLifecycleError as exc:
-        raise InviteError(exc.code, str(exc)) from exc
-    if payload["login"] != login:
-        raise InviteError("auth_invalid", "invitation is bound to a different login name")
-    if not store.consume_nonce(payload["nonce"]):
+    """Redeem an invitation for ``login`` (exact match), consuming it atomically.
+
+    Synchronous persistence only: an asynchronous store raises
+    :class:`InviteError` (use the async token boundary instead).
+    """
+    nonce = invite_nonce_for_login(token, key=key, login=login, now=now)
+    _require_sync_store(store, InviteError)
+    if not store.consume_nonce(nonce):
         raise InviteError("auth_invalid", "invitation was already redeemed")
     return login
 
@@ -422,14 +496,14 @@ def mint_recovery_capability(
 def redeem_recovery_capability(
     token: str, *, key: bytes, store: LifecycleStore, login: str, now: float | None = None
 ) -> str:
-    """Redeem a recovery capability for ``login``, consuming it atomically."""
-    try:
-        payload = _verify_capability(token, kind="recovery", key=key, now=now)
-    except AccountLifecycleError as exc:
-        raise RecoveryError(exc.code, str(exc)) from exc
-    if payload["login"] != login:
-        raise RecoveryError("auth_invalid", "recovery capability is bound to a different login name")
-    if not store.consume_nonce(payload["nonce"]):
+    """Redeem a recovery capability for ``login``, consuming it atomically.
+
+    Synchronous persistence only: an asynchronous store raises
+    :class:`RecoveryError` (use the async token boundary instead).
+    """
+    nonce = recovery_nonce_for_login(token, key=key, login=login, now=now)
+    _require_sync_store(store, RecoveryError)
+    if not store.consume_nonce(nonce):
         raise RecoveryError("auth_invalid", "recovery capability was already consumed")
     return login
 
@@ -469,12 +543,14 @@ def redacted_lifecycle_event(
         lowered = str(key).lower()
         if any(hint in lowered for hint in _SECRET_KEY_HINTS):
             raise AccountLifecycleError(
-                f"lifecycle event must not carry secret material: {key!r}"
+                "auth_invalid",
+                f"lifecycle event must not carry secret material: {key!r}",
             )
         text = str(value)
         if _TOKEN_SEPARATOR in text and text.startswith(_TOKEN_VERSION):
             raise AccountLifecycleError(
-                f"lifecycle event value for {key!r} looks like capability material"
+                "auth_invalid",
+                f"lifecycle event value for {key!r} looks like capability material",
             )
         event[str(key)] = value
     logger.info("lifecycle_event %s action=%s login=%s", normalized, action, login)
