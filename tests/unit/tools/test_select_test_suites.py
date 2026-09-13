@@ -677,3 +677,32 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
         "omnigent-deterministic-conformance",
     ):
         assert f'require_selected "{gate}"' in workflow, gate
+
+
+def test_selector_documents_qualified_infra_ownership():
+    """MoonLadderStudios/MoonMind#3950 R6: the selector header must name the
+    qualified #3885/#3832 owners of the PostgreSQL/Temporal/Docker boundaries
+    and disclaim hermetic unit suites as evidence of those boundaries, so a
+    future edit cannot silently drop the linkage. The comment itself is the
+    linkage evidence; this test is only its regression guard."""
+    source = (REPO_ROOT / "tools/select_test_suites.py").read_text()
+    # Qualified-infra owners are named explicitly.
+    assert "MoonLadderStudios/MoonMind#3885" in source
+    assert "MoonLadderStudios/MoonMind#3832" in source
+    assert "docs/Omnigent/ConcurrencyQualification.md" in source
+    assert ".github/workflows/omnigent-concurrency-qualification.yml" in source
+    assert "docs/Omnigent/SharedHostImage.md" in source
+    assert "moonmind/omnigent/harness_platform/shared_host_conformance.py" in source
+    # Hermetic lanes are disclaimed as infra evidence.
+    assert "are NOT evidence of the" in source
+    assert "PostgreSQL/Temporal/Docker" in source
+    # Referenced owners exist on disk.
+    for owned in (
+        "docs/Omnigent/ConcurrencyQualification.md",
+        ".github/workflows/omnigent-concurrency-qualification.yml",
+        "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py",
+        "tests/provider/omnigent/test_omnigent_concurrency.py",
+        "docs/Omnigent/SharedHostImage.md",
+        "moonmind/omnigent/harness_platform/shared_host_conformance.py",
+    ):
+        assert (REPO_ROOT / owned).exists(), owned

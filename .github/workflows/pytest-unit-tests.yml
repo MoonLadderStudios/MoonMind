@@ -836,6 +836,16 @@ jobs:
     # collected tests and evidence always resolve to this one required
     # result. The leaf frontend/contract jobs stay enforced through their
     # own aggregators; this job requires the aggregators themselves.
+    #
+    # Branch-protection linkage (MoonLadderStudios/MoonMind#3950 R8, observed
+    # 2026-09-13 via `gh api repos/MoonLadderStudios/MoonMind/branches/main/protection`):
+    # required status checks are `ci-required` + `migration-gate` (GitHub
+    # Actions, enforce_admins=true, strict=false, 1 approving review
+    # required). Repository rulesets 19518158 (disabled Copilot review) and
+    # 14312308 (active: deletion/non-fast-forward block + Copilot review)
+    # carry no required-check rules, so both required checks come from classic
+    # branch protection, not rulesets. Re-verify with the same API read if
+    # required checks stop blocking merges.
     needs:
       - select-test-suites
       - preflight-policy
