@@ -44,10 +44,22 @@ pytestmark = [
 ]
 
 
-@pytest.mark.parametrize("retained_only", [False, True])
+@pytest.mark.parametrize(
+    "record_source,versioning",
+    [
+        ("release", "auto"),
+        ("retained", "auto"),
+        ("serving", None),
+        ("serving", "auto"),
+    ],
+)
 async def test_background_owner_restores_authoritative_missing_image(
-    tmp_path, monkeypatch, retained_only
+    tmp_path, monkeypatch, record_source, versioning
 ):
+    retained_only = record_source == "retained"
+    replay = json.loads(
+        (Path(__file__).parent / "replays" / "serving-image-not-recorded" / "manifest.json").read_text()
+    )
     client = await connect()
     key = uuid4().hex
     deployment = f"availability-{key}"
@@ -121,12 +133,16 @@ async def test_background_owner_restores_authoritative_missing_image(
                 {
                     "services": {
                         "worker": {
-                            "image": "${MOONMIND_IMAGE}",
+                            "image": "${MOONMIND_IMAGE:-" + immutable + "}",
                             "environment": {
                                 "TEMPORAL_ADDRESS": "temporal:7233",
                                 "DEPLOYMENT": deployment,
                                 "QUEUES": json.dumps([queue, merge_queue]),
-                                "TEMPORAL_WORKER_VERSIONING_ENABLED": "auto",
+                                **(
+                                    {"TEMPORAL_WORKER_VERSIONING_ENABLED": versioning}
+                                    if versioning is not None
+                                    else {}
+                                ),
                             },
                             "networks": ["test"],
                         }
@@ -148,34 +164,42 @@ async def test_background_owner_restores_authoritative_missing_image(
             task_queues=(queue,),
         )
         await bootstrap_version_routing(client, spec)
-        release.write_record(
-            prior / "request.json",
-            {
-                "authored": {"owner": key, "inputs": {"sourceRevision": key}},
-                "image": immutable,
-                "imageId": image_info["Id"],
-                "deadline": 1,
-            },
-        )
-        release.write_record(
-            prior / "routing.json",
-            {
-                "deployment": deployment,
-                "candidate": digest,
-                "previous": "__unversioned__",
-            },
-        )
+        if record_source == "serving":
+            # Ordinary Compose startup has no authored update or receipt. The
+            # production supervisor must record its serving image before loss.
+            metadata = {}
+            background = asyncio.create_task(
+                availability.supervise_availability(client, spec, metadata)
+            )
+            for _ in range(300):
+                records = list(record_root.glob("*/retained.json"))
+                if records:
+                    break
+                await asyncio.sleep(0.1)
+            assert records, metadata
+            serving_record = json.loads(records[0].read_text())
+            assert serving_record["image"] == immutable
+            assert serving_record["version"] == f"{deployment}.{digest}"
+            assert not list(record_root.glob("*/request.json"))
+            assert not list(record_root.glob("*/deployment-result.json"))
+            assert not (
+                await release.docker(
+                    "ps", "-q", "--filter",
+                    f"label=moonmind.release.owner={serving_record['owner']}",
+                )
+            ).strip(), "Recording recovery authority must add no idle workers"
+            background.cancel()
+            await asyncio.gather(background, return_exceptions=True)
+        else:
+            record_update_receipt(
+                prior, key, immutable, image_info["Id"], deployment, digest
+            )
         receipt = {
             "owner": key,
             "result": {
-                "status": "COMPLETED",
-                "outputs": {
-                    "resolvedDigest": immutable,
-                },
+                "status": "COMPLETED", "outputs": {"resolvedDigest": immutable}
             },
         }
-        release.write_record(prior / "deployment-result.json", receipt)
-        release.write_record(prior / "result.json", receipt)
         removed = await runner._run_compose_command(
             ("docker", "compose", "down"), requested_image=immutable
         )
@@ -197,7 +221,7 @@ async def test_background_owner_restores_authoritative_missing_image(
         )[0]["Id"]
         compose.write_text(
             compose.read_text().replace(
-                "${MOONMIND_IMAGE}", "${MOONMIND_IMAGE:-" + replacement_id + "}"
+                immutable, replacement_id
             )
         )
         installed = await runner._run_compose_command(
@@ -298,7 +322,9 @@ async def test_background_owner_restores_authoritative_missing_image(
                     break
                 await asyncio.sleep(0.1)
             accepted = client.get_workflow_handle(actions[-1].action.workflow_id)
-        assert (await accepted.describe()).history_length == 2
+        assert (await accepted.describe()).history_length == replay[
+            "blockedHistoryLength"
+        ]
         metadata = {}
         # Enter the actual startup/periodic owner. The test never invokes a
         # restoration or promotion helper to make the stranded occurrence run.
@@ -310,10 +336,11 @@ async def test_background_owner_restores_authoritative_missing_image(
             "status": "verified",
         }
         assert lost_ack
-        assert any(
-            json.loads(path.read_text()).get("sourceReceipt") == key
-            for path in record_root.glob("*/retained.json")
-        )
+        if record_source != "serving":
+            assert any(
+                json.loads(path.read_text()).get("sourceReceipt") == key
+                for path in record_root.glob("*/retained.json")
+            )
         for _ in range(100):
             if metadata.get("releaseAvailability", {}).get("versions"):
                 break
@@ -366,3 +393,25 @@ async def test_background_owner_restores_authoritative_missing_image(
             await release.docker("image", "rm", "-f", image)
         if replacement_image is not None:
             await release.docker("image", "rm", "-f", replacement_image)
+
+
+def record_update_receipt(directory, owner, image, image_id, deployment, digest):
+    release.write_record(
+        directory / "request.json",
+        {
+            "authored": {"owner": owner, "inputs": {"sourceRevision": owner}},
+            "image": image,
+            "imageId": image_id,
+            "deadline": 1,
+        },
+    )
+    release.write_record(
+        directory / "routing.json",
+        {"deployment": deployment, "candidate": digest, "previous": "__unversioned__"},
+    )
+    receipt = {
+        "owner": owner,
+        "result": {"status": "COMPLETED", "outputs": {"resolvedDigest": image}},
+    }
+    release.write_record(directory / "deployment-result.json", receipt)
+    release.write_record(directory / "result.json", receipt)
