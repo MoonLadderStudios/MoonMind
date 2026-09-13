@@ -81,7 +81,10 @@ def _default_temporal_patch_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         merge_automation_module.workflow,
         "patched",
-        lambda _patch_id: True,
+        # Preserve these historical Activity sequences; the modern confirmation
+        # path is covered by test_resolver_merge_confirmation and its real journey.
+        lambda _patch_id: _patch_id
+        != merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH,
     )
     monkeypatch.setattr(
         merge_automation_module.workflow,
@@ -730,7 +733,10 @@ async def test_merge_automation_resolver_child_uses_try_cancel(
             merge_automation_module.workflow,
             "patched",
             lambda patch_id: patch_id
-            != MERGE_AUTOMATION_RESOLVER_ATTEMPT_TITLE_PATCH,
+            not in {
+                MERGE_AUTOMATION_RESOLVER_ATTEMPT_TITLE_PATCH,
+                merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH,
+            },
         )
 
     async def fake_execute_activity(

@@ -49,17 +49,14 @@ class CaptureResolverRequest:
         )
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-async def test_merge_workflow_delivers_verification_capability_and_replays(
-    legacy, monkeypatch
-):
+async def resolver_test_client():
+    """Connect and prepare only the isolated merge-workflow search attributes."""
     connected = await connect()
     client = Client(
         connected.service_client,
         namespace=connected.namespace,
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
     )
-    queue = "resolver-capability-" + uuid4().hex
     required_attributes = {
         "mm_state",
         "mm_entry",
@@ -94,6 +91,15 @@ async def test_merge_workflow_delivers_verification_capability_and_replays(
         await asyncio.sleep(1)
     else:
         pytest.fail("isolated Temporal search attributes did not become available")
+    return client
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_merge_workflow_delivers_verification_capability_and_replays(
+    legacy, monkeypatch
+):
+    client = await resolver_test_client()
+    queue = "resolver-capability-" + uuid4().hex
     monkeypatch.setattr(module, "INTEGRATIONS_TASK_QUEUE", queue)
     monkeypatch.setattr(module, "ARTIFACTS_TASK_QUEUE", queue)
     monkeypatch.setattr(

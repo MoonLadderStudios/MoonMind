@@ -103,6 +103,18 @@ creation and the scoped container submission boundary across all three supported
 native harnesses. This does not replace the broader executable verification
 ledger in story J.
 
+The 11:32:32 UTC occurrence subsequently merged PR #4295 after three repair
+commits. Its resolver returned a successful merged disposition with no head SHA;
+the parent still finalized against the initial publication head and failed with
+an exact-candidate mismatch. The bounded repair re-reads the same PR through the
+existing GitHub readiness Activity after either merged disposition and carries
+the remotely confirmed head into required finalization. It does not weaken
+identity or completion-target checks. The minimized incident fixture runs through
+a real Temporal child, production GitHub HTTP reads, and the production issue
+handoff validator. Old histories reproduce the mismatch; new histories accept
+the repaired merged head, and both replay with the production data converter.
+The original failed occurrence remains truthful historical evidence.
+
 1. Extend the existing image-owned release controller as the single promotion,
    installation, rollback, and routing-repair owner. Reuse its durable jobs,
    locks, canaries, CAS, retained cohorts, and cleanup reconciliation.
