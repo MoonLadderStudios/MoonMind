@@ -29,14 +29,23 @@ def validate_operator_url(base_url):
     return base_url
 
 
-def operator_urls(configuration):
+def operator_urls(configuration, *, declared_urls=None):
     """Resolve actual operator origins from preserved deployment authority."""
+    if declared_urls is not None and (
+        not isinstance(declared_urls, list)
+        or len(declared_urls) > 32
+        or any(not isinstance(url, str) or not url.strip() for url in declared_urls)
+    ):
+        raise ValueError("Operator URLs must be a bounded list of HTTP origins")
+    explicit = [validate_operator_url(url) for url in (declared_urls or [])]
     api = configuration.get("services", {}).get("api", {})
     declared = str(
         api.get("environment", {}).get("MOONMIND_PUBLIC_BASE_URL") or ""
     ).strip()
     if declared:
-        return [validate_operator_url(declared)]
+        return sorted(set([validate_operator_url(declared), *explicit]))
+    if explicit:
+        return sorted(set(explicit))
     urls = []
     for binding in api.get("ports", []):
         if (
@@ -48,7 +57,7 @@ def operator_urls(configuration):
         address = ipaddress.ip_address(host)
         if address.is_unspecified:
             raise ValueError(
-                "Wildcard API bindings require the existing operator URL in MOONMIND_PUBLIC_BASE_URL before release"
+                "Wildcard API bindings require an existing operator URL via --operator-url or MOONMIND_PUBLIC_BASE_URL before release"
             )
         port = str(binding.get("published") or "")
         if not port.isdecimal() or not 1 <= int(port) <= 65535:
