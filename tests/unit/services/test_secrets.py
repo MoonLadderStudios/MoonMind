@@ -16,8 +16,10 @@ def mock_db_session():
     # Mock commit, refresh, add to return awaitable objects
     async def mock_commit(): pass
     async def mock_refresh(instance): pass
+    async def mock_flush(): pass
     session.commit.side_effect = mock_commit
     session.refresh.side_effect = mock_refresh
+    session.flush.side_effect = mock_flush
     
     return session
 
@@ -31,9 +33,16 @@ async def test_create_secret(mock_db_session):
     assert secret.slug == slug
     assert secret.ciphertext == plaintext
     assert secret.status == SecretStatus.ACTIVE
-    assert secret.details == {"test": True}
-    
-    mock_db_session.add.assert_called_once_with(secret)
+    assert secret.details == {"test": True, "credential_revision": 1, "policy_revision": 1}
+    assert secret.details["credential_revision"] == 1
+
+    # One add for the row plus one for the durable redacted audit event.
+    assert mock_db_session.add.call_count == 2
+    assert mock_db_session.add.call_args_list[0].args[0] is secret
+    audit_event = mock_db_session.add.call_args_list[1].args[0]
+    assert audit_event.event_type == "secrets.created"
+    assert audit_event.redacted is True
+    assert plaintext not in repr(audit_event.new_value_json)
     mock_db_session.commit.assert_called_once()
     mock_db_session.refresh.assert_called_once_with(secret)
 
@@ -71,10 +80,24 @@ async def test_rotate_secret(mock_db_session):
         
     mock_db_session.execute.side_effect = mock_execute
     
+    from api_service.db.models import SettingsAuditEvent
+
     rotated = await SecretsService.rotate_secret(mock_db_session, slug, "new-value")
-    
+
     assert rotated.ciphertext == "new-value"
-    assert rotated.status == SecretStatus.ROTATED
+    # Rotation is an event/revision transition: the replacement stays ACTIVE
+    # under the resolution contract at the next credential revision.
+    assert rotated.status == SecretStatus.ACTIVE
+    assert rotated.details["credential_revision"] == 2
+    audit_events = [
+        call.args[0]
+        for call in mock_db_session.add.call_args_list
+        if isinstance(call.args[0], SettingsAuditEvent)
+    ]
+    assert audit_events, "Expected a durable secrets.rotated audit event"
+    assert audit_events[0].event_type == "secrets.rotated"
+    assert audit_events[0].redacted is True
+    assert "new-value" not in repr(audit_events[0].new_value_json)
 
 @pytest.mark.asyncio
 async def test_set_status_secret(mock_db_session):
@@ -132,7 +155,12 @@ async def test_set_status_records_audit_event(mock_db_session):
     assert event.workspace_id == workspace_id
     assert event.redacted is True
     assert event.old_value_json == {"status": "active"}
-    assert event.new_value_json == {"status": "disabled"}
+    # The durable record carries the revision/invalidation evidence alongside
+    # the status transition; it never carries secret material.
+    assert event.new_value_json["status"] == "disabled"
+    assert event.new_value_json["credential_revision"] == 1
+    assert event.new_value_json["policy_revision"] == 2
+    assert event.new_value_json["invalidated"] is True
     assert event.reason == "rotation cadence"
     assert event.key == f"secrets.{slug}"
 
@@ -157,7 +185,7 @@ async def test_get_secret(mock_db_session):
 async def test_validate_secret_ref_returns_redacted_active_diagnostic(mock_db_session):
     slug = "test-secret"
     mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = SecretStatus.ACTIVE
+    mock_result.one_or_none.return_value = (SecretStatus.ACTIVE, {})
 
     async def mock_execute(*args, **kwargs):
         return mock_result
@@ -177,7 +205,7 @@ async def test_validate_secret_ref_returns_redacted_active_diagnostic(mock_db_se
 @pytest.mark.asyncio
 async def test_validate_secret_ref_reports_missing_without_plaintext(mock_db_session):
     mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = None
+    mock_result.one_or_none.return_value = None
 
     async def mock_execute(*args, **kwargs):
         return mock_result
@@ -329,7 +357,8 @@ async def test_import_from_env(mock_db_session):
     count = await SecretsService.import_from_env(mock_db_session, env_dict)
 
     assert count == 2
-    assert mock_db_session.add.call_count == 2
+    # One row add plus one durable audit event per imported key.
+    assert mock_db_session.add.call_count == 4
     mock_db_session.commit.assert_called_once()
 
 @pytest.mark.asyncio
