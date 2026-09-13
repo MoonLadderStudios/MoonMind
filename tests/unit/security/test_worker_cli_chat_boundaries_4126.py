@@ -515,12 +515,16 @@ async def test_hermetic_user_client_to_api_renewal_and_logout_isolation():
 
     @app.get("/api/me")
     async def _me(authorization: str = Header(default="")):
+        from fastapi import HTTPException as _HTTPException
+
         scheme, _, presented = authorization.partition(" ")
         if scheme.lower() != "bearer" or not presented.strip():
-            from fastapi import HTTPException as _HTTPException
-
             raise _HTTPException(status_code=401, detail={"code": "auth_required"})
-        account = await _validated_user(presented.strip())
+        try:
+            account = await _validated_user(presented.strip())
+        except (qual.AuthInvalidError, qual.AuthRequiredError) as exc:
+            status_code, code = authority.http_status_for_error(exc)
+            raise _HTTPException(status_code=status_code, detail={"code": code})
         return {"user_id": str(account.user_id)}
 
     client = TestClient(app)
@@ -836,3 +840,242 @@ def test_credential_classification_matrix_is_recorded():
     # re-accepted or silently converted to broader authority.
     assert "legacy_login_jwt" not in matrix
     assert "legacy_worker_token" not in matrix
+
+
+# ---------------------------------------------------------------------------
+# acc-1: production-dispatch proof without browser cookies
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_production_dispatch_worker_artifact_and_container_job_without_cookies(
+    monkeypatch,
+):
+    """Cookie-less machine bearers authorize through production dispatch.
+
+    Production composition with local transports: the worker gate
+    (``api_service.api.routers.worker_auth._require_worker_auth``) fronts a
+    run/resource-bound artifact mutation, and the real MCP container router
+    (``api_service.api.routers.mcp_tools``) fronts container-job dispatch.
+    No browser cookies are sent anywhere. Authorized scoped bearers succeed
+    bounded to the exact run/resource; wrong-scope, expired, tampered, and
+    missing machine credentials fail closed.
+    """
+    from fastapi import Depends, FastAPI
+    from fastapi.testclient import TestClient
+
+    from api_service.auth_providers import get_current_user_optional
+
+    _set_production_mode(monkeypatch, "accounts")
+    _production_fanout_secret(monkeypatch)
+
+    worker_app = FastAPI()
+
+    @worker_app.post("/worker/artifacts", status_code=201)
+    async def _worker_create_artifact(
+        payload: dict,
+        auth=Depends(worker_auth_module._require_worker_auth),
+    ):
+        run_id = str((payload or {}).get("run_id") or "")
+        if run_id != (auth.agent_run_id or ""):
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "artifact_scope_mismatch"},
+            )
+        return {
+            "run_id": auth.agent_run_id,
+            "resource": (payload or {}).get("resource"),
+            "auth_source": auth.auth_source,
+        }
+
+    worker_app.dependency_overrides[get_current_user_optional()] = lambda: None
+    worker_client = TestClient(worker_app)
+
+    machine = _mint_fanout()
+    machine_headers = {
+        "X-MoonMind-Execution-Fanout": "v1",
+        "Authorization": f"Bearer {machine}",
+    }
+    ok = worker_client.post(
+        "/worker/artifacts",
+        headers=machine_headers,
+        json={"run_id": "run-4126", "resource": "artifact:run-4126/report"},
+    )
+    assert ok.status_code == 201
+    assert ok.json() == {
+        "run_id": "run-4126",
+        "resource": "artifact:run-4126/report",
+        "auth_source": "execution_fanout",
+    }
+
+    # The same bearer cannot touch another run/resource.
+    foreign = worker_client.post(
+        "/worker/artifacts",
+        headers=machine_headers,
+        json={"run_id": "run-other-4126", "resource": "artifact:run-other-4126/report"},
+    )
+    assert foreign.status_code == 403
+
+    # A bearer scoped to another run verifies but stays bounded to its run.
+    other_machine = _mint_fanout(agent_run_id="run-other-4126")
+    other_headers = {
+        "X-MoonMind-Execution-Fanout": "v1",
+        "Authorization": f"Bearer {other_machine}",
+    }
+    other_ok = worker_client.post(
+        "/worker/artifacts",
+        headers=other_headers,
+        json={"run_id": "run-other-4126", "resource": "artifact:run-other-4126/report"},
+    )
+    assert other_ok.status_code == 201
+    assert other_ok.json()["run_id"] == "run-other-4126"
+    cross = worker_client.post(
+        "/worker/artifacts",
+        headers=other_headers,
+        json={"run_id": "run-4126", "resource": "artifact:run-4126/report"},
+    )
+    assert cross.status_code == 403
+
+    # Expired, tampered, missing, and legacy machine credentials fail closed.
+    stale = _mint_fanout(now=1_000_000, lifetime=60)
+    assert (
+        worker_client.post(
+            "/worker/artifacts",
+            headers={
+                "X-MoonMind-Execution-Fanout": "v1",
+                "Authorization": f"Bearer {stale}",
+            },
+            json={"run_id": "run-4126"},
+        ).status_code
+        == 401
+    )
+    tampered = "X" + machine[1:]
+    assert (
+        worker_client.post(
+            "/worker/artifacts",
+            headers={
+                "X-MoonMind-Execution-Fanout": "v1",
+                "Authorization": f"Bearer {tampered}",
+            },
+            json={"run_id": "run-4126"},
+        ).status_code
+        == 401
+    )
+    assert (
+        worker_client.post("/worker/artifacts", json={"run_id": "run-4126"}).status_code
+        == 401
+    )
+    legacy = worker_client.post(
+        "/worker/artifacts",
+        headers={"X-MoonMind-Worker-Token": "legacy-token"},
+        json={"run_id": "run-4126"},
+    )
+    assert legacy.status_code == 410
+
+    # An authenticated browser principal alone still cannot satisfy the
+    # worker-only mutation through production dispatch.
+    worker_app.dependency_overrides[get_current_user_optional()] = lambda: (
+        SimpleNamespace(id=uuid.uuid4())
+    )
+    browser = worker_client.post("/worker/artifacts", json={"run_id": "run-4126"})
+    assert browser.status_code == 403
+    worker_app.dependency_overrides[get_current_user_optional()] = lambda: None
+
+    # Container-job operations dispatch through the real MCP router without
+    # cookies: the scoped capability authorizes and dispatches as its owner.
+    from api_service.api.routers import mcp_tools as mcp_tools_router
+
+    mcp_app = FastAPI()
+    mcp_app.include_router(mcp_tools_router.router)
+    mcp_app.dependency_overrides[mcp_tools_router.get_async_session] = (
+        lambda: SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        mcp_tools_router.settings.security, "JWT_SECRET_KEY", CONTAINER_SECRET
+    )
+    dispatched: dict = {}
+
+    async def _fake_dispatch(payload, owner, session):
+        dispatched.update(payload=payload, owner=owner)
+        return {"jobId": "container-job:" + "1" * 32, "state": "queued"}
+
+    monkeypatch.setattr(mcp_tools_router, "_dispatch_container_job_tool", _fake_dispatch)
+    mcp_client = TestClient(mcp_app)
+
+    def _submission(**overrides):
+        submission = {
+            "contractVersion": "v1",
+            "idempotencyKey": "container-run:run-4126:4126",
+            "source": {
+                "source": "managed_session",
+                "workflowId": "wf-4126",
+                "managedSessionId": "sess-4126",
+                "agentRunId": "run-4126",
+            },
+            "spec": {
+                "image": "alpine",
+                "workspaceRef": {
+                    "kind": "managed_runtime",
+                    "runtimeId": "runtime-4126",
+                    "agentRunId": "run-4126",
+                    "relativePath": "repo",
+                },
+                "command": ["true"],
+                "resources": {"cpuMillis": 100, "memoryMiB": 64},
+            },
+        }
+        submission.update(overrides)
+        return submission
+
+    capability_owner_id = str(uuid.uuid4())
+    capability = _mint_container(
+        owner=OwnerIdentity(principal_id=capability_owner_id, principal_type="user")
+    )
+    accepted = mcp_client.post(
+        "/mcp/container/tools/call",
+        headers={"Authorization": f"Bearer {capability}"},
+        json={"tool": "container.submit", "arguments": _submission()},
+    )
+    assert accepted.status_code == 200
+    assert dispatched["owner"].principal_id == capability_owner_id
+    assert dispatched["owner"].principal_type == "user"
+    assert dispatched["payload"].tool == "container.submit"
+    assert dispatched["payload"].arguments["source"]["agentRunId"] == "run-4126"
+
+    # A submission for another run exceeds the capability and is rejected.
+    scoped = _submission()
+    scoped["source"] = dict(scoped["source"], agentRunId="run-other-4126")
+    mismatch = mcp_client.post(
+        "/mcp/container/tools/call",
+        headers={"Authorization": f"Bearer {capability}"},
+        json={"tool": "container.submit", "arguments": scoped},
+    )
+    assert mismatch.status_code == 403
+    assert mismatch.json()["detail"]["code"] == "container_capability_scope_mismatch"
+
+    # Expired and missing container capabilities fail closed without cookies.
+    expired = container_caps.mint_container_job_session_capability(
+        secret=CONTAINER_SECRET,
+        owner=OwnerIdentity(principal_id=str(uuid.uuid4()), principal_type="user"),
+        agent_run_id="run-4126",
+        workflow_id="wf-4126",
+        session_id="sess-4126",
+        runtime_id="runtime-4126",
+        lifetime_seconds=60,
+        now=1_000_000,
+    )
+    assert (
+        mcp_client.post(
+            "/mcp/container/tools/call",
+            headers={"Authorization": f"Bearer {expired}"},
+            json={"tool": "container.submit", "arguments": _submission()},
+        ).status_code
+        == 401
+    )
+    assert (
+        mcp_client.post(
+            "/mcp/container/tools/call",
+            json={"tool": "container.submit", "arguments": _submission()},
+        ).status_code
+        == 401
+    )
