@@ -1,5 +1,6 @@
 # Temporal Platform Foundation
 
+**Document Class:** System / Feature Design View
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 **Project:** MoonMind
@@ -67,17 +68,20 @@ Temporal Server is logically composed of multiple services (Frontend/History/Mat
 
 ## 5. Core workflow catalog
 
-The following workflow types constitute the live Temporal application layer at the platform foundation level:
+The authoritative workflow-type inventory — exact Temporal type, module/class
+owner, and declared projection role for every current production registration —
+is the generated reference
+[`WorkflowTypeCatalogGenerated.md`](WorkflowTypeCatalogGenerated.md), produced
+mechanically from `moonmind/workflows/temporal/workflow_registry.py`
+(MoonLadderStudios/MoonMind#3959). Do not duplicate that enumeration here: a
+second handwritten list drifts and omits registered operator/excluded types.
 
-| Workflow type | Purpose |
-| --- | --- |
-| `MoonMind.UserWorkflow` | General root execution workflow for plan-driven orchestration |
-| `MoonMind.MergeAutomation` | Merge automation workflow |
-| `MoonMind.AgentRun` | Durable lifecycle wrapper for true agent execution (managed and external) |
-| `MoonMind.AgentSession` | Workflow-scoped managed-session workflow, currently Codex-backed |
-| `MoonMind.ManagedSessionReconcile` | Bounded support workflow for managed-session reconciliation and cleanup |
-| `MoonMind.ProviderProfileManager` | Long-running provider-profile coordination for managed runtimes |
-| `MoonMind.OAuthSession` | OAuth dance lifecycle |
+At the platform foundation level, the deployment-relevant grouping is:
+user-submitted roots (e.g. `MoonMind.UserWorkflow`), durable agent-execution
+wrappers (`MoonMind.AgentRun`, `MoonMind.AgentSession`), session coordination
+(`MoonMind.ManagedSessionReconcile`, `MoonMind.ProviderProfileManager`), and
+operational workflows (e.g. `MoonMind.OAuthSession`, `MoonMind.MergeAutomation`).
+The generated table is authoritative for which registered type sits in each group.
 
 All true agent execution steps are dispatched as `MoonMind.AgentRun` child workflows from `MoonMind.UserWorkflow`. They are not plain activity invocations. When a managed run uses a workflow-scoped session, `MoonMind.AgentSession` owns the session container and turn/control lifecycle separately from the step-scoped `MoonMind.AgentRun`.
 
