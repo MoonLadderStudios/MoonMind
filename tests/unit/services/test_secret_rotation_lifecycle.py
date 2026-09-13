@@ -60,6 +60,10 @@ async def _bad_validator(
     return SecretValidationResult(ok=False, reason_code="candidate_rejected")
 
 
+def _local_status_value(status):
+    return status.value if isinstance(status, SecretStatus) else status
+
+
 @pytest_asyncio.fixture()
 async def sessions(tmp_path: Path, monkeypatch):
     """Isolated SQLite sessions with independent transactions per checkout."""
@@ -359,6 +363,99 @@ async def test_deletion_blocked_by_every_consumer_type(sessions):
     events = await _audit_events(sessions, "github-pat", "secrets.deleted")
     assert len(events) == 1
     assert "pat-v1" not in repr(events[0].old_value_json)
+
+
+@pytest.mark.asyncio
+async def test_retried_import_with_stable_request_id_does_not_double_advance(
+    sessions,
+):
+    async with sessions() as session:
+        await SecretsService.create_secret(session, "legacy-env-key", "env-v1")
+        await SecretsService.set_status(
+            session, "legacy-env-key", SecretStatus.DISABLED
+        )
+
+    request_id = f"req-{uuid4().hex}"
+    async with sessions() as session:
+        count = await SecretsService.import_from_env(
+            session, {"legacy-env-key": "env-v2"}, request_id=request_id
+        )
+        assert count == 1
+
+    async with sessions() as session:
+        resolved = await SecretsService.resolve_secret(session, "legacy-env-key")
+    assert resolved is not None
+    first_revision = resolved["credential_revision"]
+    assert resolved["value"] == "env-v2"
+
+    # The row returns to a non-active state. Retrying the import with the
+    # same request id must reconcile against the prior secrets.imported
+    # audit event instead of advancing the credential revision twice.
+    async with sessions() as session:
+        await SecretsService.set_status(
+            session, "legacy-env-key", SecretStatus.DISABLED
+        )
+
+    async with sessions() as session:
+        await SecretsService.import_from_env(
+            session, {"legacy-env-key": "env-v2"}, request_id=request_id
+        )
+
+    async with sessions() as session:
+        result = await session.execute(
+            select(ManagedSecret).where(ManagedSecret.slug == "legacy-env-key")
+        )
+        row = result.scalar_one()
+        assert _credential_revision_of_row(row) == first_revision
+        assert _local_status_value(row.status) == SecretStatus.DISABLED.value
+
+    events = await _audit_events(sessions, "legacy-env-key", "secrets.imported")
+    assert len(events) == 1
+    assert events[0].redacted is True
+
+
+def _credential_revision_of_row(row):
+    return SecretsService.credential_revision(row)
+
+
+@pytest.mark.asyncio
+async def test_repair_rejects_concurrent_change_during_probe(sessions):
+    async with sessions() as session:
+        await SecretsService.create_secret(session, "race-pat", "pat-v1")
+        result = await session.execute(
+            select(ManagedSecret).where(ManagedSecret.slug == "race-pat")
+        )
+        row = result.scalar_one()
+        row.status = SecretStatus.ROTATED
+        await session.commit()
+
+    async def racing_validator(request, candidate):
+        # Concurrent writer commits while the repair probe is in flight.
+        async with sessions() as writer:
+            result = await writer.execute(
+                select(ManagedSecret).where(ManagedSecret.slug == "race-pat")
+            )
+            target = result.scalar_one()
+            target.status = SecretStatus.DISABLED
+            await writer.commit()
+        return SecretValidationResult(ok=True)
+
+    async with sessions() as session:
+        with pytest.raises(SecretFencedError):
+            await SecretsService.repair_rotated_secret(
+                session, "race-pat", "pat-v2", racing_validator
+            )
+        await session.rollback()
+
+    # The racing write won; no repair mutation was applied on top of it.
+    async with sessions() as session:
+        result = await session.execute(
+            select(ManagedSecret).where(ManagedSecret.slug == "race-pat")
+        )
+        row = result.scalar_one()
+        assert _local_status_value(row.status) != SecretStatus.ACTIVE.value or (
+            await SecretsService.get_secret(session, "race-pat")
+        ) != "pat-v2"
 
 
 @pytest.mark.asyncio
