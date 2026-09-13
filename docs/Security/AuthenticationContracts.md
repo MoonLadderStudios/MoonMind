@@ -6,7 +6,7 @@
 **Owners:** MoonMind Engineering  
 **Audience:** API, dashboard, runtime, security contributors and operators  
 **Authority:** Application authentication modes, identity mapping, session/revocation, CSRF/origin, error semantics, and background-work policy for MoonMind user authentication. Freezes the target contract inventoried in `[KeycloakRemovalInventory-4117.md](../tmp/KeycloakRemovalInventory-4117.md)` (MoonLadderStudios/MoonMind#4117, parent epic #4116).  
-**Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings` storage), `moonmind/security/auth_modes_4120.py` (selector owner, #4120), `api_service/db/models.py` (`User`)  
+**Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings` storage), `moonmind/security/auth_modes_4120.py` (selector owner, #4120), `moonmind/security/session_authority_4121.py` + `api_service/services/session_store.py` (session/revocation/CSRF owner, #4121), `moonmind/security/oidc_advanced_4124.py` + `trusted_proxy_4124.py` + `advanced_identity_4124.py` + `api_service/services/advanced_auth_service_4124.py` + `api_service/api/routers/auth_advanced_4124.py` (advanced identity owner, #4124), `api_service/db/models.py` (`User`)  
 **Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [SettingsSystem.md](./SettingsSystem.md), [KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) (predecessor proposal from #4102; starting evidence only, not the deliverable), [KeycloakRemovalResidual-4129.md](../tmp/KeycloakRemovalResidual-4129.md) (reviewed removal manifest for #4129)
 **Related Tooling:** [`tools/keycloak_cutover_rehearsal.py`](../../tools/keycloak_cutover_rehearsal.py) (hermetic K6 preflight/rehearsal gate for #4131; never mutates a live deployment)
 
@@ -230,12 +230,13 @@ semantics.
 ## 12. Support matrix and operator evidence
 
 This document is the single owner of target behavior. It is still
-**Draft**: the `accounts`, `oidc`, and `header` session and lifecycle
-semantics in §§5–8 describe the accepted contract, not a shipped and
-browser-verified implementation on this checkout. Do not read them as
-proof that the journeys in §12.1 pass. Until the pending implementation
-slices land, §7 (enrollment and administration) is contract text, not
-verified operator procedure.
+**Draft**: the session, revocation, CSRF/origin, OIDC/proxy, and cutover
+semantics in §§5–8 and §§12.4–12.5 are backed by hermetic implementation
+on this checkout (#4121 session authority, #4124 advanced identity, #4125
+API cutover — see the ledger), not by shipped and browser-verified product
+journeys. Do not read them as proof that the journeys in §12.1 pass.
+Until the pending implementation slices land, §7 (enrollment and
+administration) is contract text, not verified operator procedure.
 
 Point-in-time execution status — the landed-ticket list, pending backlog
 IDs, checkout-specific qualification results, and temporary plan lifecycle —
@@ -248,7 +249,8 @@ only the durable support, cutover, and compatibility contracts.
 | Combination | Status | Evidence owner |
 | --- | --- | --- |
 | `disabled` clean boot and seeding, no Keycloak DNS/connect attempt, retired selectors/tokens/routes rejected, rendered Compose without the bundled service | Supported and tested (hermetic unit tests plus the residual manifest §5 open gates) | #4120 tests, #4129 manifest |
-| `accounts` / `oidc` / `header` end-to-end browser journeys (two-user login, admin/worker negative matrix, stream expiry and revocation, restart and replica consistency) | Blocked: contract only, pending K3/K4 implementation and #4128 qualification | #4128 (product evidence) |
+| Session authority, revocation/CSRF bounds, OIDC/proxy identity, and API user-resolution cutover (cookie/bearer precedence, conflict rejection, §8 error mapping, legacy JWT refusal) | Supported and tested hermetically (unit + Postgres integration, route enumeration) | #4121, #4124, #4125 tests |
+| `accounts` / `oidc` / `header` end-to-end browser journeys (two-user login, admin/worker negative matrix, stream expiry and revocation, restart and replica consistency) | Blocked: hermetic implementation only, pending #4128 product qualification | #4128 (product evidence) |
 | Live external IdP and MFA qualification, deployment-owner protected inventory, coordinated release, retirement execution, retention disposition | Blocked by design: operator-gated steps requiring named-owner approval and separately authorized live checks | Deployment-cutover issue, #4131 rehearsal gate prerequisites |
 | `keycloak`, `default`, `google`, `local`, or unknown selectors; dual old/new credential issuance; whole shared PostgreSQL/Temporal restore as auth rollback; silent `disabled` fallback | Rejected, never a supported path | This contract §§2–4 plus §12.2 |
 
