@@ -459,6 +459,58 @@ async def test_repair_rejects_concurrent_change_during_probe(sessions):
 
 
 @pytest.mark.asyncio
+async def test_secret_lifecycle_audit_stays_backup_safe_metadata_only(sessions):
+    """ACC-07/REQ-08: audit + metadata surfaces keep a backup-safe shape.
+
+    Database backups must preserve the revision/invalidation evidence
+    without ever needing secret material. Secrets audit rows therefore
+    carry redacted metadata-only payloads pinned to an allowlisted key
+    set, and metadata listings never expose ciphertext in any serialized
+    form.
+    """
+    raw_first = "ghp_backup_shape_first"
+    raw_second = "ghp_backup_shape_next"
+    async with sessions() as session:
+        await SecretsService.create_secret(session, "backup-pat", raw_first)
+        await SecretsService.rotate_secret(session, "backup-pat", raw_second)
+
+    allowed_keys = {
+        "status",
+        "credential_revision",
+        "policy_revision",
+        "invalidated",
+    }
+    async with sessions() as session:
+        result = await session.execute(
+            select(SettingsAuditEvent).where(
+                SettingsAuditEvent.key == "secrets.backup-pat"
+            )
+        )
+        events = result.scalars().all()
+    assert len(events) == 2
+    for event in events:
+        assert event.redacted is True
+        for payload in (event.old_value_json, event.new_value_json):
+            if payload is None:
+                continue
+            assert set(payload) <= allowed_keys
+        blob = repr(event.old_value_json) + repr(event.new_value_json)
+        assert raw_first not in blob
+        assert raw_second not in blob
+    rotated = next(
+        event for event in events if event.event_type == "secrets.rotated"
+    )
+    assert rotated.new_value_json["credential_revision"] == 2
+    assert rotated.new_value_json["invalidated"] is True
+
+    async with sessions() as session:
+        metadata_rows = await SecretsService.list_metadata(session)
+    serialized = repr([tuple(row) for row in metadata_rows])
+    assert raw_first not in serialized
+    assert raw_second not in serialized
+
+
+@pytest.mark.asyncio
 async def test_post_commit_hooks_fire_only_after_commit(sessions):
     seen: list = []
     hook = seen.append
