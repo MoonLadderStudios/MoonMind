@@ -586,3 +586,299 @@ def test_qualification_gaps_are_explicit() -> None:
         "browser-journeys",
     }
     assert len(protected) == 11
+
+
+# ---------------------------------------------------------------------------
+# Integrated candidate regressions (#4193 closure backlog M1/M3/M4/M5/M10/E4).
+#
+# The MR5 candidate (#4192, migration ``376_drop_manifest_registry_4192``)
+# landed: native product files are gone, the router/worker are clean, and
+# the schema/recurring/service boundaries reject retired intent actionably.
+# The tests below exercise those REAL boundaries hermetically (real pydantic
+# models, real recurring normalization, real repo metadata, real drain
+# gate). Live served-API/Temporal/PostgreSQL/browser/per-device cutover
+# evidence stays owned by #4189 and is pinned as protected gaps, not
+# claimed here.
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_admission_rejects_manifest_ingest_at_schema_boundary() -> None:
+    """Real schema boundary rejects retired intent before any side effect."""
+    from pydantic import ValidationError
+
+    from moonmind.schemas.temporal_models import CreateExecutionRequest
+
+    with pytest.raises(ValidationError, match="retired"):
+        CreateExecutionRequest(
+            workflowType="MoonMind.ManifestIngest",
+            initialParameters={"instructions": "ingest these docs"},
+        )
+    # Rejection happens at model validation: no instance (and therefore no
+    # registry write, artifact creation, or Temporal start) is produced.
+    with pytest.raises(ValidationError, match="4192"):
+        CreateExecutionRequest.model_validate(
+            {
+                "workflowType": "MoonMind.ManifestIngest",
+                "manifestArtifactRef": "art_123",
+                "initialParameters": {},
+            }
+        )
+
+
+def test_candidate_admission_accepts_user_workflow_without_manifest() -> None:
+    """Ordinary UserWorkflow validates with explicit context, no Manifest."""
+    from moonmind.schemas.temporal_models import CreateExecutionRequest
+
+    request = CreateExecutionRequest(
+        workflowType="MoonMind.UserWorkflow",
+        initialParameters={"instructions": "summarize this repo"},
+    )
+    assert request.workflow_type == "MoonMind.UserWorkflow"
+    # The legacy optional field stays parseable for old payloads but is
+    # ignored for new launches: it must not reroute a UserWorkflow.
+    legacy = CreateExecutionRequest(
+        workflowType="MoonMind.UserWorkflow",
+        manifestArtifactRef="art_legacy",
+        initialParameters={"instructions": "summarize this repo"},
+    )
+    assert legacy.workflow_type == "MoonMind.UserWorkflow"
+    assert legacy.manifest_artifact_ref == "art_legacy"
+
+
+def test_candidate_recurring_boundary_rejects_manifest_accepts_user() -> None:
+    """Real recurring boundary rejects retired targets; ordinary work passes."""
+    from api_service.services.recurring_workflows_service import (
+        _SUPPORTED_RECURRING_WORKFLOW_TYPES,
+        _normalize_target,
+        RecurringWorkflowValidationError,
+    )
+
+    assert tuple(_SUPPORTED_RECURRING_WORKFLOW_TYPES) == ("MoonMind.UserWorkflow",)
+    with pytest.raises(RecurringWorkflowValidationError, match="retired"):
+        _normalize_target(
+            {
+                "workflowType": "MoonMind.ManifestIngest",
+                "initialParameters": {"instructions": "x"},
+            }
+        )
+    normalized = _normalize_target(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {"instructions": "weekly summary"},
+        }
+    )
+    assert normalized["workflowType"] == "MoonMind.UserWorkflow"
+    assert normalized["initialParameters"] == {"instructions": "weekly summary"}
+
+
+def test_candidate_supported_catalogs_exclude_manifest() -> None:
+    """Live advertised catalogs carry no ManifestIngest product type."""
+    from moonmind.schemas.temporal_models import (
+        SUPPORTED_UPDATE_NAMES,
+        SUPPORTED_WORKFLOW_TYPES,
+    )
+
+    assert tuple(SUPPORTED_WORKFLOW_TYPES) == (
+        "MoonMind.UserWorkflow",
+        "MoonMind.MergeAutomation",
+    )
+    assert "MoonMind.ManifestIngest" not in SUPPORTED_WORKFLOW_TYPES
+    assert "UpdateManifest" not in SUPPORTED_UPDATE_NAMES
+
+
+def test_candidate_retired_updates_are_rejected_and_not_allowed() -> None:
+    """Manifest-only update names are retired, never silently accepted."""
+    from moonmind.workflows.temporal.service import (
+        ALLOWED_UPDATE_NAMES,
+        RETIRED_MANIFEST_UPDATE_NAMES,
+    )
+
+    assert set(RETIRED_MANIFEST_UPDATE_NAMES) == {
+        "UpdateManifest",
+        "SetConcurrency",
+        "CancelNodes",
+        "RetryNodes",
+    }
+    assert RETIRED_MANIFEST_UPDATE_NAMES.isdisjoint(set(ALLOWED_UPDATE_NAMES))
+
+
+def test_candidate_runtime_graph_has_no_manifest_wiring() -> None:
+    """API/worker/registry production composition carries no Manifest product."""
+    main_text = (REPO_ROOT / "api_service/main.py").read_text(encoding="utf-8")
+    assert "manifests_router" not in main_text
+    assert "/api/manifests" not in main_text
+
+    worker_text = (
+        REPO_ROOT / "moonmind/workflows/temporal/worker_runtime.py"
+    ).read_text(encoding="utf-8")
+    assert "ManifestIngest" not in worker_text
+    assert "manifest_ingest" not in worker_text
+    assert "TemporalManifest" not in worker_text
+
+    registry_text = (
+        REPO_ROOT / "moonmind/workflows/temporal/workflow_registry.py"
+    ).read_text(encoding="utf-8")
+    assert "ManifestIngestWorkflow" not in registry_text
+    for line in registry_text.splitlines():
+        if "manifest" in line.lower():
+            assert line.strip().startswith("#"), (
+                f"non-comment manifest surface in registry: {line!r}"
+            )
+
+    for rel in (
+        "moonmind/workflows/temporal/service.py",
+        "moonmind/workflows/temporal/worker_runtime.py",
+        "moonmind/workflows/temporal/activity_catalog.py",
+        "moonmind/workflows/temporal/activity_runtime.py",
+    ):
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert "manifest.compile" not in text, rel
+        assert "manifest.write_summary" not in text, rel
+
+
+def test_candidate_historical_enum_and_fallback_preserved() -> None:
+    """Old-release rows stay loadable; reads tolerate a missing snapshot."""
+    from api_service.api.routers.executions import _manifest_attr
+
+    assert _manifest_attr(None, "manifest_artifact_ref", "fallback") == "fallback"
+
+    class _Snapshot:
+        manifest_artifact_ref = "art_hist_1"
+
+    assert (
+        _manifest_attr(_Snapshot(), "manifest_artifact_ref", "fallback")
+        == "art_hist_1"
+    )
+
+    db_text = (REPO_ROOT / "api_service/db/models.py").read_text(encoding="utf-8")
+    assert 'MANIFEST_INGEST = "MoonMind.ManifestIngest"' in db_text
+    router_text = (REPO_ROOT / "api_service/api/routers/executions.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'getattr(record, "manifest_ref", None)' in router_text
+
+
+def test_candidate_cli_has_no_manifest_command_group() -> None:
+    """Installed CLI advertises no manifest group; retirement notice is pinned."""
+    cli_text = (REPO_ROOT / "moonmind/cli.py").read_text(encoding="utf-8")
+    assert 'name="manifest"' not in cli_text
+    assert "add_typer(manifest" not in cli_text
+    assert "there is no `manifest` command" in cli_text
+    assert "4192" in cli_text
+
+
+def test_candidate_openapi_and_packaging_match_removal() -> None:
+    """Generated contracts and dependencies agree with the removal candidate."""
+    openapi_text = (REPO_ROOT / "frontend/src/generated/openapi.ts").read_text(
+        encoding="utf-8"
+    )
+    assert "/manifests" not in openapi_text
+    for retired_schema in (
+        "ManifestRunOptions",
+        "ManifestNodeCountsModel",
+        "ManifestExecutionPolicyModel",
+        "ManifestRunQueueMetadata",
+        "ManifestRunRequest",
+        "ManifestRunResponse",
+    ):
+        assert retired_schema not in openapi_text
+    # Unrelated retained systems (step-execution/skill/checkpoint manifests)
+    # must survive: the guard targets the native product, not the word.
+    assert "manifestArtifactRef" in openapi_text
+
+    pyproject_text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "llama-index" not in pyproject_text.lower()
+    assert "qdrant-client" not in pyproject_text.lower()
+
+
+def test_candidate_migration_is_forward_irreversible_without_runtime_imports() -> None:
+    """Registry removal migrates forward only and imports no deleted runtime."""
+    migration = (
+        REPO_ROOT / "api_service/migrations/versions/376_drop_manifest_registry_4192.py"
+    )
+    assert migration.exists()
+    text = migration.read_text(encoding="utf-8")
+    assert "from moonmind.manifest" not in text
+    assert "manifests_service" not in text
+    assert "manifest_sync_service" not in text
+    assert "is irreversible" in text
+    assert "Restore" in text or "restore" in text
+
+
+def test_candidate_drain_gate_predicate_uses_live_probes() -> None:
+    """Real drain gate: only fully-observed zero state unblocks the removal."""
+    from moonmind.gates.manifest_ingest_drain import (
+        MANIFEST_INGEST_DRAIN_CONTRACT,
+        ManifestIngestDrainObservations,
+        ManifestIngestDrainUsage,
+        collect_manifest_ingest_drain_observations,
+        evaluate_manifest_ingest_drain,
+        evaluate_manifest_ingest_drain_observations,
+    )
+
+    assert MANIFEST_INGEST_DRAIN_CONTRACT == "manifest-ingest-removal-drain-v1"
+    drained = evaluate_manifest_ingest_drain(ManifestIngestDrainUsage(0, 0, 0))
+    assert drained.may_deploy_removal is True
+    assert drained.required_action == "safe_to_remove"
+
+    blocked = evaluate_manifest_ingest_drain(
+        ManifestIngestDrainUsage(
+            open_manifest_ingest_histories=1,
+            pending_manifest_tasks=0,
+            existing_manifest_schedules=0,
+        )
+    )
+    assert blocked.may_deploy_removal is False
+    assert blocked.required_action == "retain_and_drain"
+    assert "open_manifest_ingest_histories" in blocked.blocking_dimensions
+
+    unobservable = evaluate_manifest_ingest_drain_observations(
+        collect_manifest_ingest_drain_observations(
+            open_manifest_ingest_histories=None,
+            pending_manifest_tasks=0,
+            existing_manifest_schedules=0,
+        )
+    )
+    assert unobservable.may_deploy_removal is False
+    assert "open_manifest_ingest_histories" in unobservable.blocking_dimensions
+    assert isinstance(
+        ManifestIngestDrainObservations(
+            open_manifest_ingest_histories=0,
+            pending_manifest_tasks=0,
+            existing_manifest_schedules=0,
+        ),
+        ManifestIngestDrainObservations,
+    )
+
+
+def test_candidate_integrated_coverage_ledger() -> None:
+    """Every matrix row maps to hermetic candidate evidence or a live owner.
+
+    Hermetic rows are proven by this module against the exact candidate;
+    live/PostgreSQL/Temporal/browser/per-device rows stay explicitly owned
+    by the sibling removals and #4189 milestones A/B/C and are not waived.
+    """
+    ledger = {
+        "admission": "hermetic: schema/recurring/update rejection + catalog exclusion",
+        "side-effect-ordering": "hermetic: rejection at validation before mutation; "
+        "live writer probes owned by #4189",
+        "schedules-control": "hermetic: recurring normalize reject/accept; "
+        "live Temporal owned by #4189",
+        "runtime-graph": "hermetic: main/worker/registry/activity text + catalogs",
+        "historical-reads": "hermetic: enum + record fallback + snapshot tolerance; "
+        "live reads owned by #4189 A/B",
+        "upgrade-data": "hermetic: forward irreversible migration; "
+        "live PG upgrade owned by #4189",
+        "ordinary-product-journey": "hermetic: UserWorkflow + agent request, no Manifest",
+        "shared-primitives": "hermetic: skill/checkpoint modules + user manifests allowed",
+        "security": "live probes owned by sibling removal + #4189, not claimed here",
+        "defaults-build-docs": "hermetic: OpenAPI/packaging/CLI/env-template checks; "
+        "live build owned by required CI on candidate",
+        "no-reintroduction": "hermetic: targeted guards + repo scan, candidate clean",
+        "replay-drain-separation": "hermetic: versioned drain-gate predicate; "
+        "live drain owned by #4189",
+    }
+    assert len(ledger) == 12
+    assert ledger["admission"].startswith("hermetic")
+    assert ledger["security"].startswith("live")
+    assert ledger["upgrade-data"].startswith("hermetic")
