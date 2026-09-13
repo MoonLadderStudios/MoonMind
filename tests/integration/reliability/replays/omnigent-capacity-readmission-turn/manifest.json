@@ -13,6 +13,12 @@
     "observedRetryFailure": "cleaned credential runtime authority cannot be reused",
     "requiredBoundary": "real credential materialization and durable cleanup ledger across both admissions"
   },
+  "retainedHostRegression": {
+    "observedFailure": "Workspace checkpoint was not captured",
+    "archiveFailure": "artifact expects multipart completion; use /complete with parts",
+    "requiredBoundary": "PostgreSQL and MinIO gateway upload, remote readback, then restoration after source workspace loss",
+    "regressionTest": "tests/integration/reliability/test_saved_workspace_journey.py::test_saved_candidate_is_readable_after_worker_and_workspace_loss[s3-True]"
+  },
   "recordedSession": {"providerSessionRef": null, "runtimeBindingRef": null, "cleanupState": "complete"},
   "expected": "Re-admission owns a distinct session, command, runtime binding and cleanup aggregate; same-epoch redelivery reuses terminal evidence."
 }
