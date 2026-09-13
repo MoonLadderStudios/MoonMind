@@ -41,6 +41,8 @@ Incident evidence is retained locally under
 release records live under deployment-owned `deploy/state/`. They contain no
 authority to change provider/model/source intent. Source traceability for the
 bounded claim fix is commit `c5118b0400562b7686827a68399201016b6fdc76`.
+The reviewed lock-boundary correction is commit
+`1a553a1a45bf09770f1f859b6884488ad994531d`.
 
 ## 2. Immediate recovery and completion evidence
 
@@ -69,10 +71,22 @@ bounded claim fix is commit `c5118b0400562b7686827a68399201016b6fdc76`.
   retained prior workers, qualified replacement workers/API, CAS promotion,
   and verified existing operator access. The immutable image digest begins
   `0bc4f5af`; the release manifest Build ID begins `a49f486b`.
-- Product verification remains open until a real occurrence completes its
-  intended work. Record its exact workflow/run, terminal outcome, relevant
-  issue/PR evidence, and the next scheduled occurrence. Do not substitute a
-  synthetic, skipped overlap, forced empty query, or marked-success override.
+- Final claim-lock submission `998820d3-4109-4f62-8427-bb8ca9ead071`
+  completed at 08:46:36 UTC with source revision `1a553a1a4` and immutable
+  image digest `sha256:0207269263b468ba2642604f1463808470ef79bb2692ac7ce2c0e1d6be1dc9c7`.
+  Operator dashboard/assets verification passed. The existing recurrence
+  continued through remediation and re-verification on its retained cohort.
+- PR #4289's required `ci-required` and `migration-gate` checks passed for
+  `1a553a1a4`, including the selected reliability and Temporal boundary jobs.
+  Those are the actual required contexts in the inspected main-branch
+  protection; the independent Code Quality upload failure and its server-error
+  retries are separate from those successful checks.
+- Product verification requires a real occurrence to complete its intended
+  work. The incident receipt in [PR #4289](https://github.com/MoonLadderStudios/MoonMind/pull/4289)
+  records the latest observation separately from release success: exact
+  workflow/run, terminal outcome, relevant issue/PR evidence, and the next
+  scheduled occurrence. A synthetic, skipped overlap, forced empty query, or
+  marked-success override cannot satisfy this requirement.
 
 ## 3. Durable architecture decisions
 
@@ -111,7 +125,7 @@ bounded claim fix is commit `c5118b0400562b7686827a68399201016b6fdc76`.
 **Implemented portion:** The committed preflight fix and escaped regression
 journeys described above. Preserve its HTTP/SQL tests in required CI.
 
-**Remaining acceptance:** The deployed recurring preset selects an eligible
+**Acceptance:** The deployed recurring preset selects an eligible
 issue after encountering a remote preparing attempt and completes normally.
 Add an explicit unreadable/malformed contender matrix if current adjacent tests
 do not establish complete fail-closed evidence. A known conflicting candidate
