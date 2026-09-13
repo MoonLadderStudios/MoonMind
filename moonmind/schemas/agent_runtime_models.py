@@ -1415,6 +1415,38 @@ class AgentRunStatus(BaseModel):
             self.observed_at = self.observed_at.replace(tzinfo=UTC)
         return self
 
+
+class AgentAdmissionRecovery(BaseModel):
+    """Cleanup-owner evidence allowing the same execution to be re-admitted.
+
+    Carried in result metadata so retained result decoders remain compatible.
+    This authorizes another admission, never objective task completion.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    schema_version: Literal["agent-admission-recovery/v1"] = Field(
+        "agent-admission-recovery/v1", alias="schemaVersion"
+    )
+    execution_plan_ref: str = Field(
+        alias="executionPlanRef", min_length=1, max_length=255
+    )
+    admission_epoch: int = Field(alias="admissionEpoch", ge=1, strict=True)
+    runtime_binding_ref: str = Field(
+        alias="runtimeBindingRef", min_length=1, max_length=255
+    )
+    cleanup_attestation_ref: str = Field(
+        alias="cleanupAttestationRef", min_length=1, max_length=1024
+    )
+
+    @field_validator(
+        "execution_plan_ref", "runtime_binding_ref", "cleanup_attestation_ref"
+    )
+    @classmethod
+    def _non_blank_reference(cls, value: str) -> str:
+        return require_non_blank(value, field_name="admissionRecovery reference")
+
+
 class AgentRunResult(BaseModel):
     """Canonical result envelope for completed agent execution."""
 

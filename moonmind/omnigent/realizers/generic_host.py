@@ -41,7 +41,11 @@ from moonmind.omnigent.runtime_bindings import (
     StableRuntimeBinding,
     stable_binding_id,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentAdmissionRecovery,
+    AgentExecutionRequest,
+    AgentRunResult,
+)
 from moonmind.schemas.temporal_activity_models import AcceptedRepositoryEvidence
 
 
@@ -371,6 +375,24 @@ class GenericOmnigentHostRealizer:
                         credential_handles=credential_handles,
                         acquired=acquired,
                     )
+                if (
+                    binding.state is RuntimeBindingState.host_allocating
+                    and not binding.omnigentSessionId
+                    and admission_epoch(request) > 0
+                ):
+                    # This phase precedes provider-session creation. Persist the
+                    # interrupted admission before cleanup so a lost cleanup
+                    # acknowledgement can recover the same control result.
+                    sink = RuntimeBindingSessionAuthoritySink(
+                        self._runtime_bindings, binding
+                    )
+                    await sink.record_phase(
+                        "interruptedAdmission",
+                        {
+                            "admissionEpoch": admission_epoch(request),
+                        },
+                    )
+                    binding = sink.binding
                 raise HarnessPlatformError(
                     "an interrupted generic host allocation requires fenced cleanup",
                     code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
@@ -641,6 +663,10 @@ class GenericOmnigentHostRealizer:
                 binding=binding,
             )
 
+        if primary_error is not None and cleanup_error is None and binding is not None:
+            recovery = await self._interrupted_admission_result(request, binding)
+            if recovery is not None:
+                return recovery
         if primary_error is not None:
             raise primary_error
         if result is None:
@@ -906,6 +932,9 @@ class GenericOmnigentHostRealizer:
         phases = binding.phaseResults or {}
         if binding.terminalResult is not None or "publication" in phases:
             return recorded_attempt_result(binding)
+        recovery = await self._interrupted_admission_result(request, binding)
+        if recovery is not None:
+            return recovery
         compute = phases.get("compute")
         workspace = phases.get("workspace")
         if workspace is None or (compute is None and not any(key.startswith("turn:") for key in phases)):
@@ -929,6 +958,48 @@ class GenericOmnigentHostRealizer:
             compute = result.model_dump(by_alias=True, mode="json", exclude_none=True)
             await sink.record_phase("compute", compute)
         return await self._finish_owned_execution(bound, sink, AgentRunResult.model_validate(compute))
+
+    async def _interrupted_admission_result(self, request, binding):
+        """Issue readmission authority only after fenced, pre-session cleanup."""
+        interrupted = (binding.phaseResults or {}).get("interruptedAdmission")
+        capacity = request.admitted_provider_capacity
+        cleanup_ref = binding.attestationRefs.get("cleanupAttestationRef")
+        if (
+            binding.state is not RuntimeBindingState.cleaned
+            or binding.omnigentSessionId
+            or binding.terminalResult is not None
+            or not isinstance(interrupted, dict)
+            or capacity is None
+            or capacity.admission_epoch < 1
+            or interrupted.get("admissionEpoch") != capacity.admission_epoch
+            or capacity.execution_plan_ref != binding.executionPlanRef
+            or not cleanup_ref
+        ):
+            return None
+        recovery = AgentAdmissionRecovery(
+            executionPlanRef=binding.executionPlanRef,
+            admissionEpoch=capacity.admission_epoch,
+            runtimeBindingRef=binding.bindingId,
+            cleanupAttestationRef=cleanup_ref,
+        )
+        result = AgentRunResult(
+            summary="Interrupted host allocation was cleaned before provider execution; the same execution can be re-admitted.",
+            failureClass="integration_error",
+            providerErrorCode=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED.value,
+            retryRecommendation="retry_same_execution",
+            metadata={
+                "admissionRecovery": recovery.model_dump(mode="json", by_alias=True)
+            },
+        )
+        await self._update_binding(
+            binding,
+            updates={
+                "terminalResult": result.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+            },
+        )
+        return result
 
     async def _finish_execution(self, request, sink, result):
         async with self._runtime_bindings.finalization(sink.binding.bindingId) as current:
@@ -967,13 +1038,21 @@ class GenericOmnigentHostRealizer:
                     if attempt < 2:
                         await asyncio.sleep(2 ** attempt)
             else:
-                result = result.model_copy(update={
-                    "failure_class": "integration_error",
-                    "provider_error_code": (sink.binding.phaseResults or {})["publication_failure:2"]["code"],
-                    "retry_recommendation": "do_not_retry",
-                    "summary": "Agent work is saved; repository publication exhausted its retry budget.",
-                    "metadata": {**(result.metadata or {}), "unfinishedPhase": "publication", "workPreserved": bool(saved)},
-                })
+                result = result.model_copy(
+                    update={
+                        "failure_class": "integration_error",
+                        "provider_error_code": (sink.binding.phaseResults or {})[
+                            "publication_failure:2"
+                        ]["code"],
+                        "retry_recommendation": "do_not_retry",
+                        "summary": "Agent work is saved; repository publication exhausted its retry budget.",
+                        "metadata": {
+                            **(result.metadata or {}),
+                            "unfinishedPhase": "publication",
+                            "workPreserved": bool(saved),
+                        },
+                    }
+                )
         await sink.record_phase("publication", result.model_dump(mode="json", by_alias=True, exclude_none=True))
         return result
 
