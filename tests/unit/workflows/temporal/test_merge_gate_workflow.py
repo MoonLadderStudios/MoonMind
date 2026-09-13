@@ -314,13 +314,30 @@ def test_build_resolver_run_request_pins_parent_provider_profile() -> None:
     initial_parameters = request["initial_parameters"]
     runtime = initial_parameters["task"]["runtime"]
     assert initial_parameters["targetRuntime"] == "codex_cli"
-    assert initial_parameters["requiredCapabilities"] == ["git", "gh"]
+    assert initial_parameters["requiredCapabilities"] == ["git", "gh", "docker"]
     assert runtime["mode"] == "codex_cli"
     assert runtime["executionProfileRef"] == "codex_default"
     assert runtime["model"] == "gpt-5.4"
     assert runtime["effort"] == "high"
     assert "profileId" not in runtime
     assert "providerProfile" not in runtime
+
+def test_resolver_legacy_replay_preserves_recorded_capability_payload() -> None:
+    for template in (None, {"requiredCapabilities": ["git", "gh"]}):
+        request = build_resolver_run_request(
+            parent_workflow_id="mm:parent",
+            pull_request=_pull_request(),
+            jira_issue_key=None,
+            merge_method="squash",
+            resolver_template=template,
+            legacy_capabilities=True,
+        )
+        parameters = request["initial_parameters"]
+        if template is None:
+            assert "requiredCapabilities" not in parameters
+        else:
+            assert parameters["requiredCapabilities"] == ["git", "gh"]
+
 
 def test_build_resolver_run_request_preserves_explicit_timeout_policy() -> None:
     request = build_resolver_run_request(

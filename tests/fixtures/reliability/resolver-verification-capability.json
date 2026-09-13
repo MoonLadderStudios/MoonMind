@@ -1,0 +1,9 @@
+{
+  "incident": "2026-09-13-recurring-merge-resolver",
+  "boundary": "MergeAutomation child request -> host capability -> container CLI",
+  "observedTemplate": {"requiredCapabilities": ["git", "gh"]},
+  "observedCommand": "moonmind container python-tests",
+  "observedFailure": "MOONMIND_RUNTIME_ID is required",
+  "capabilityCases": [null, [], ["git", "gh"], ["git", "gh", "docker"]],
+  "requiredModernCapabilities": ["git", "gh", "docker"]
+}

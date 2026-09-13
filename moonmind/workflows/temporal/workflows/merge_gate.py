@@ -317,6 +317,7 @@ def build_resolver_run_request(
     resolver_template: Mapping[str, Any] | None = None,
     review_loop: Mapping[str, Any] | MergeAutomationReviewLoopModel | None = None,
     finish_mode: str = FINISH_MODE_MERGE,
+    legacy_capabilities: bool = False,
 ) -> dict[str, Any]:
     pr = (
         pull_request
@@ -333,6 +334,16 @@ def build_resolver_run_request(
         for item in (template.get("requiredCapabilities") or [])
         if str(item).strip()
     ]
+    if not legacy_capabilities:
+        # A managed resolver can edit repository code and must be able to
+        # verify those edits. The Docker Backend owns test execution; declaring
+        # the requirement lets ordinary admission authorize its scoped token.
+        # The legacy branch exists only to replay previously recorded children.
+        required_capabilities = list(
+            dict.fromkeys(
+                [*(value.lower() for value in required_capabilities), "git", "gh", "docker"]
+            )
+        )
     normalized_finish_mode = (
         FINISH_MODE_FIX_ONLY
         if str(finish_mode or "").strip() == FINISH_MODE_FIX_ONLY
