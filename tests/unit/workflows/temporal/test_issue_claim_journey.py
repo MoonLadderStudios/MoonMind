@@ -3,7 +3,7 @@
 import asyncio
 import json
 import threading
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote
 
@@ -371,7 +371,9 @@ async def test_reselection_requires_proof_no_announcement_was_authorized(
         service=service,
     )
     if post_authorized:
-        await IssueClaimStore(sessions).start_announcement(owner, claim.attempt_id)
+        store = IssueClaimStore(sessions)
+        async with store.locked(owner) as row:
+            await store.start_announcement(row)
     # Crash after reservation, then an independent writer closes the issue.
     state["state"] = "closed"
     result = await tools.load_github_issue_preset_brief(
@@ -391,7 +393,7 @@ async def test_reselection_requires_proof_no_announcement_was_authorized(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("when", ["before_selection", "after_reservation"])
+@pytest.mark.parametrize("when", ["before_selection", "after_reservation", "before_locked_check"])
 @pytest.mark.parametrize("eligible_successor", [False, True])
 async def test_search_skips_remote_contender_before_authorizing_announcement(
     journey, monkeypatch, when, eligible_successor
@@ -413,7 +415,7 @@ async def test_search_skips_remote_contender_before_authorizing_announcement(
         state["extra_state"] = {"comments": [], "labels": []}
     if when == "before_selection":
         state["comments"] = [contender]
-    else:
+    elif when == "after_reservation":
         prepare = tools._prepare_github_issue_claim
 
         async def contender_after_reservation(**kwargs):
@@ -422,6 +424,16 @@ async def test_search_skips_remote_contender_before_authorizing_announcement(
             return receipt
 
         monkeypatch.setattr(tools, "_prepare_github_issue_claim", contender_after_reservation)
+    else:
+        locked = IssueClaimStore.locked
+
+        @asynccontextmanager
+        async def contender_at_locked_check(store, locked_owner):
+            async with locked(store, locked_owner) as row:
+                state["comments"] = [contender]
+                yield row
+
+        monkeypatch.setattr(IssueClaimStore, "locked", contender_at_locked_check)
     owner = "default/next-recurring-occurrence"
     result = await tools.load_github_issue_preset_brief(
         {"repository": "example/repo", "issueSearch": "", "includeAllAuthors": False},
@@ -494,7 +506,8 @@ async def test_failed_brief_reads_release_only_unannounced_reservations(
         )
         reservations.append(receipt)
         if post_authorized:
-            await store.start_announcement(owner, receipt.attempt_id)
+            async with store.locked(owner) as row:
+                await store.start_announcement(row)
         state["failed_read_path"] = paths[read]
     else:
         monkeypatch.setattr(tools, "_prepare_github_issue_claim", reserve_then_fail_read)

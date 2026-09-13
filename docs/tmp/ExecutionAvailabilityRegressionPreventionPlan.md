@@ -51,12 +51,15 @@ bounded claim fix is commit `c5118b0400562b7686827a68399201016b6fdc76`.
 - The stranded occurrence advanced from 2 to 379 history events, then failed
   at a separate capacity boundary. This was partial recovery, not completion.
 - The claim-selection fix checks authenticated live comments before candidate
-  reservation and again before authorizing an announcement. The existing
-  locked reread and post-mutation verification remain authoritative. Competing
+  reservation and under the claim lock before authorizing an announcement.
+  Serialization survives the durable intent commit and remote write; competing
   work is neither released nor stolen. Unreadable evidence remains a failure.
-- Two original-defect tests failed before the fix. The expanded suite passed
-  258 targeted unit/boundary tests and 14 real PostgreSQL/HTTP/Temporal tests,
-  including selecting a usable successor and preserving a remote contender.
+  Existing uncertain intents remain pinned. Review reproduced an additional
+  pre-POST race in two failing tests before this lock-boundary correction.
+- Two original-defect tests failed before the first fix. The expanded suite passed
+  260 targeted unit/boundary tests and 20 real PostgreSQL/HTTP/Temporal tests,
+  including selecting a usable successor, preserving a remote contender,
+  observing a retry blocked on the actual database lock, and canceled waiters.
 - A new image was derived from the exact installed image plus the committed
   production-file change, with a new source label and generated release
   manifest. The reproducible Dockerfile is retained with incident artifacts.
