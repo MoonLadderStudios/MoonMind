@@ -164,14 +164,31 @@ The plan never pretends to know an exact host or a leased credential generation 
 One immutable plan may govern multiple execution realizations. Each rerun, linked continuation, and recurring occurrence owns a distinct runtime-binding aggregate identified by `(planRef, executionScopeRef)`. Activity retries within that execution scope reconcile the same aggregate; they do not create a second live owner. The digest-addressed `runtimeBindingRef`, revision, and fencing generation advance when acquired or attested authority is replaced.
 
 Before creating a new runtime binding, admission verifies that the mutable
-Omnigent endpoint serves the major.minor series recorded in `omnigentVersion`.
+Omnigent endpoint serves the major.minor series recorded in the immutable
+catalog selected by `harnessCatalogRef`. New v1 plans do not duplicate that
+version in their payload, including as a null field, so retained readers can
+consume them independently of the writer's MoonMind revision.
 Patch versions and build digests may differ, while the selected host image,
-credentials, model, and plan remain unchanged. Historical plans without version
-evidence retain exact-build validation and their original canonical bytes.
+credentials, model, and plan remain unchanged. Previously persisted inline
+`omnigentVersion` evidence remains readable with its original canonical bytes
+and digest. Catalog lookup uses the admitted ref, endpoint and build authority;
+it never substitutes the latest catalog. Missing evidence waits for restoration;
+conflicting evidence rejects launch. Content integrity checks do not require
+matching source SHAs between services or matching server/host builds.
 A missing current identity is a recoverable readiness gap owned by the bootstrap
 reconciler and the bounded `MoonMind.AgentRun` wait, not incompatibility evidence.
 See [SharedHostImage.md](SharedHostImage.md#server-compatibility-and-deployment-readiness).
 Activity retries continue to reconcile the same owned runtime binding.
+
+Reader compatibility and runtime capability are separate contracts. A retained
+release that predates server patch interoperability can read a newly written v1
+plan and launch against its recorded deployment. Its original preflight still
+rejects server replacement before launch. Patch interoperability requires a
+consumer that implements the catalog-based compatibility contract; the immutable
+release controller qualifies and promotes those consumers. A source revision
+match is not a compatibility test, and plan serialization cannot expand the
+authority of an already-running historical binary. Exact reruns encountering a
+transient evidence gap return `nextAction=retry` and retain their original plan.
 
 ### 4.6 Plan digests are not self-referential
 
