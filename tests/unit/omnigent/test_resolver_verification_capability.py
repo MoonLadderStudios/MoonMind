@@ -11,9 +11,7 @@ from api_service.api.routers.mcp_tools import (
     _enforce_container_capability_scope,
 )
 from moonmind.container_job_cli import python_test_submission
-from moonmind.omnigent.harness_platform.execution_plan import (
-    create_execution_plan_envelope,
-)
+from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.host_classes import get_launch_policy
 from moonmind.omnigent.host_services.runtime_environment import (
     OmnigentRuntimeEnvironmentService,
@@ -23,7 +21,15 @@ from moonmind.security.container_job_capabilities import (
     verify_container_job_session_capability,
 )
 from moonmind.workflows.temporal.workflows.merge_gate import build_resolver_run_request
-from tests.unit.omnigent.test_generic_platform_production_services import _plan
+from tests.unit.omnigent.test_generic_plane_production_boundary_concurrency import (
+    _catalog,
+    _compile_kwargs,
+    _ready_opencode_image_pair,  # noqa: F401 - test-only image qualification fixture
+)
+from tests.unit.omnigent.test_plan_and_realizer_dispatch import (
+    _compile_claude_plan,
+    _compile_codex_plan,
+)
 
 _REPLAY = json.loads(
     (
@@ -34,11 +40,28 @@ _REPLAY = json.loads(
 
 
 @pytest.mark.parametrize(
-    "harness", ["opencode-native", "codex-native", "claude-code-native"]
+    "harness", ["opencode-native", "codex-native", "claude-native"]
 )
 @pytest.mark.parametrize("capabilities", _REPLAY["capabilityCases"])
-def test_resolver_request_reaches_scoped_container_submission(harness, capabilities):
-    template = {"targetRuntime": "omnigent", "executionProfileRef": "selected-profile"}
+def test_resolver_request_reaches_scoped_container_submission(
+    harness, capabilities, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "1")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "1")
+    factories = {
+        "opencode-native": lambda: compile_execution_plan(
+            **_compile_kwargs(_catalog(), "1")
+        ),
+        "codex-native": _compile_codex_plan,
+        "claude-native": _compile_claude_plan,
+    }
+    plan = factories[harness]()
+    assert plan.payload.harnessId == harness
+    assert plan.payload.executionRealizerRef == "generic-omnigent-host@1"
+    selected_profile = plan.payload.credentialBindings[
+        "primary-model"
+    ].providerProfileRef
+    template = {"targetRuntime": "omnigent", "executionProfileRef": selected_profile}
     if capabilities is not None:
         template["requiredCapabilities"] = capabilities
     child = build_resolver_run_request(
@@ -79,17 +102,13 @@ def test_resolver_request_reaches_scoped_container_submission(harness, capabilit
             },
         }
     )
-    plan = _plan("test/model")
-    plan = create_execution_plan_envelope(
-        {**plan.payload.model_dump(mode="json", by_alias=True), "harnessId": harness}
-    )
     environment = OmnigentRuntimeEnvironmentService(
         moonmind_url="http://api:8000", signing_secret="test-secret"
     ).build(
         request=request,
         plan=plan,
         host_lease_ref="resolver-lease",
-        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        launch_policy=get_launch_policy(plan.payload.launchPolicyRef),
         workspace_attachment={"accessMode": "read-write"},
     )
     submission = python_test_submission(["tests/unit/test_example.py"], env=environment)
@@ -102,7 +121,7 @@ def test_resolver_request_reaches_scoped_container_submission(harness, capabilit
     assert capability.session_id == "resolver-lease"
     assert (
         child["initial_parameters"]["task"]["runtime"]["executionProfileRef"]
-        == "selected-profile"
+        == selected_profile
     )
     assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in environment
     _enforce_container_capability_scope(
