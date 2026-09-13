@@ -1,8 +1,11 @@
 # Docker Compose Deployment Update System
 
-Status: Desired State  
-Owners: MoonMind Engineering  
-Last Updated: 2026-09-12
+**Document Class:** Canonical declarative
+**Viewpoint:** Module Architecture View
+**Status:** Desired State
+**Owner:** MoonMind Engineering
+**Authority:** Immutable Compose release qualification, promotion, execution availability, rollback, and recovery ownership.
+**Last Updated:** 2026-09-13
 Related: `docs/UI/SettingsTab.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Temporal/TemporalArchitecture.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`
 
 ---
@@ -803,6 +806,57 @@ The updater must use the verified target image digest and deployment-owned Docke
 
 The Operations UI must not normally ask the operator to choose the runner image because the runner has privileged Docker access.
 
+## 11.4 Execution availability and automatic recovery
+
+The release controller reconciles the recorded deployment intent, immutable
+installed images, Temporal routing, live queue/version pollers, and retained
+in-flight execution capability. Startup, normal updates, interrupted updates,
+and out-of-band replacement converge through this same owner. Detection does
+not confer permission to promote an arbitrary image or rewrite admitted work.
+
+The existing deployment-control service supplies a bounded supervisor that can
+reach Temporal's administrative API and the deployment-owned Docker Backend
+without first dispatching an application workflow. It invokes the portable
+release controller and resumes its durable record; it does not implement a
+second promotion algorithm. Its normal container restart policy restores this
+supervisor after process loss. Durable ownership, fencing and cumulative retry
+budgets survive restart. No additional permanently running container is needed.
+
+| Observed condition | Required disposition |
+| --- | --- |
+| A qualified update is interrupted | Resume its exact digest, expected prior route, canary identities, budget, and installation record. |
+| The current version loses its workers | Restore its recorded compatible cohort, or finish an already authorized, qualified replacement through the same controller. |
+| An installed candidate has no release receipt | Record drift and qualify under deployment-owned update policy. Local presence, `latest`, and timestamps cannot grant promotion authority. Restore the last verified capability when candidate promotion is not authorized. |
+| A pinned execution needs an older version | Retain or restore that exact cohort until Temporal confirms drainage. |
+| Temporal, Docker, or evidence storage is unreachable | Keep working pollers and records; report unknown evidence and retry within the existing budget. Unknown is never drained. |
+| Another release wins ownership/promotion | Observe and re-evaluate the winner; never overwrite its route or clean up its workers. |
+| Qualification or history compatibility fails | Preserve the last compatible serving capability and histories; expose the exact failure and recovery owner. |
+
+Availability recovery is active for omitted/default inputs and explicit `auto`.
+The default objective is to detect lost routability within 60 seconds and
+restore an available, already authorized compatible cohort within five minutes.
+Attempts and escalation are bounded and observable. Exhaustion leaves a visible
+degraded state and resumable record. Actual authorization or compatibility
+ambiguity retains its boundary; a time objective cannot override it.
+
+Liveness, candidate readiness, and product availability are separate facts.
+Candidates can execute pinned qualification before promotion without creating
+a readiness deadlock. Product availability uses fresh routing/poller evidence,
+queued-task age, last successful ordinary synthetic, and recovery ownership.
+Cached startup `awaiting_promotion` metadata cannot remain authoritative after
+routing changes. A healthy candidate is not crash-looped because it has not
+yet received ordinary traffic.
+
+Recovery resumes queued work under its existing identity. Skipped schedule
+ticks are not replayed as an unbounded burst. Control operations use Temporal's
+service boundary when workflow tasks cannot run; stale projections and
+secondary session cleanup cannot prevent forced termination.
+
+The rationale is preservation of service at the authority handoff: a correct
+new worker receiving no tasks is unavailable, and a repair that needs that
+same route cannot recover it. Disabling identity checks or changing runtime
+intent would hide the missing recovery owner instead of containing the fault.
+
 ---
 
 ## 12. Verification model
@@ -829,8 +883,10 @@ without changing the checkout. Failed qualification preserves current routing
 and normal services. Explicit specialized maintenance skips the API check only
 when its dependency closure and orphan removal cannot affect the API.
 
-Direct Docker Compose commands
-remain an explicit operator path and do not invoke this updater guard.
+Direct Docker Compose commands do not invoke this updater guard and cannot
+prove a completed release. Runtime reconciliation still detects and contains
+the resulting route/worker drift under section 11.4; supported startup must not
+silently strand existing work.
 
 The system verifies Compose state using:
 
@@ -891,11 +947,25 @@ Required checks include:
 - a read-only API request through the same ingress, with the configured auth
   flow when required
 
-Additional checks may include:
+Execution availability checks are also required:
 
-- Temporal worker registration or poller health
-- database connectivity, if applicable
-- basic workflow submission readiness, if safe
+- current/ramping routes and fresh matching pollers for every affected workflow
+  and Activity queue, including grouped worker roles;
+- candidate-pinned qualification and ordinary unpinned dispatch through the
+  installed route, with exact workflow/run identities and terminal results;
+- API-created and schedule-triggered credential-free work through production
+  workflow, Activity, artifact, and projection boundaries;
+- progress or safe retention of a representative prior-release execution,
+  cancellation while dispatch is unavailable, and database/schema compatibility
+  for the retained cohort and candidate;
+- recovery after updater restart, lost acknowledgement, and concurrent delivery.
+
+Qualification uses bounded synthetic work and isolated representative histories
+without external publication or provider charges. Agents run these checks;
+manual operator rehearsal is not a completion prerequisite. Receipts identify
+the exact source, image digest, route, queue coverage, and executed checks. A
+different commit's green CI or a separately rebuilt image cannot qualify the
+artifact promoted to the supported default release channel.
 
 ## 12.3 Verification failure rule
 

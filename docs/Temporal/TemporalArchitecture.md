@@ -5,7 +5,7 @@
 
 **Status:** Normative architecture hub (Temporal-native; compatibility projections and hardening work remain repo-visible)
 **Owner:** MoonMind Platform
-**Last updated:** 2026-05-06
+**Last updated:** 2026-09-13
 **Audience:** backend, infra, managed-runtime, integrations, dashboard, workflow authors, operators
 
 ---
@@ -931,17 +931,29 @@ Continue-As-New does not automatically mean user-visible rerun. Manual rerun, au
 
 Temporal workflow history is durable. Workflow changes must be replay-safe.
 
-Current repo-aligned rule:
+Immutable production releases use Temporal Worker Deployment routing. The
+installed release manifest supplies the worker Build ID; Temporal owns the
+effective current/ramping route. Starting a different worker image does not
+promote that route. The image-owned controller qualifies a candidate, promotes
+it with compare-and-set, verifies ordinary installed traffic, and retains
+previous pollers while Temporal still requires them. The
+[deployment update contract](../Steps/DockerComposeUpdateSystem.md)
+owns promotion, drainage, rollback, and durable recovery authority.
 
-- MoonMind does not currently rely on Temporal Worker Deployment routing as the runtime contract.
-- Replay-sensitive workflow changes must use patch gates, replay tests, or an explicit cutover plan.
-- Activity signature changes require a new Activity Type or a controlled compatibility cutover.
-- DTO/schema changes must remain backward compatible for in-flight payloads.
+Versioning preserves availability as well as identity. Process liveness and
+candidate registration cannot prove that ordinary work reaches a worker.
+Product readiness requires fresh server routing/poller evidence and observed
+unpinned execution. An unavailable route is a recoverable infrastructure
+condition with a durable owner; it cannot remain a healthy-looking deployment
+or become a user-input failure. The trusted release recovery owner remains
+reachable when application workflow dispatch is broken.
 
-Forward-compatible rule:
-
-- If MoonMind adopts Temporal Worker Versioning / Worker Deployment routing in the future, this document should be updated to make Build ID rollout, drain, rollback, and compatibility windows first-class.
-- Until then, do not write architecture text that assumes server-side Worker Versioning is available in MoonMind deployments.
+Build identity does not establish history compatibility. AUTO_UPGRADE executions
+require compatible workflow code and payload readers; pinned executions retain
+exact compatible workers until authoritative drainage. Candidate identity
+canaries, replay tests, and ordinary post-cutover journeys establish different
+facts. Required regression tests invoke production startup/update/recovery
+owners; a test that invokes promotion itself does not prove autonomous recovery.
 
 Required deployment integrity:
 
@@ -1004,6 +1016,16 @@ Artifacts are the large-data source of truth and require their own controls:
 ## 20. Workflow failure, retry, and dead-letter posture
 
 Activity retries are the default low-level recovery mechanism. Workflow Execution retries must be used sparingly and only when product semantics are explicit.
+
+Failure classification survives Activity, adapter, child-workflow, and parent
+boundaries. Temporary capacity and unavailable routing retain a typed
+infrastructure category, durable wait/continuation owner, and cumulative budget;
+wrapping a child result cannot turn them into non-retryable user errors.
+Admission still enforces resource limits. Recovery preserves selected provider,
+model, effort, credentials, source, publication intent, and work evidence.
+Exhaustion records the original cause and recovery disposition. The existing
+issue lifecycle owner settles claims and remote effects before successor writes;
+a new workflow ID never clears an unresolved predecessor.
 
 Rules:
 
