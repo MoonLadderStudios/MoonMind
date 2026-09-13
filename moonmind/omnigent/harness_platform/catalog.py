@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from moonmind.omnigent.compatibility import versions_compatible
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -230,8 +231,9 @@ def assert_catalog_refresh_attests(
     """Prove a fresh observation still matches immutable profile authority.
 
     Agent Profile versions remain bound to their original catalog snapshot.
-    A later synchronization supplies only freshness/liveness evidence and may
-    not silently replace the selected build or harness implementation.
+    A later synchronization can attest a compatible major.minor core release
+    with unchanged declared harness behavior. Plugin identity stays exact;
+    the original snapshot is retained rather than rewritten.
     """
 
     assert_catalog_fresh(observation)
@@ -240,10 +242,7 @@ def assert_catalog_refresh_attests(
             "fresh catalog observation is for a different endpoint",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
         )
-    if (
-        authority.omnigentVersion != observation.omnigentVersion
-        or authority.omnigentBuildDigest != observation.omnigentBuildDigest
-    ):
+    if not versions_compatible(authority.omnigentVersion, observation.omnigentVersion):
         raise HarnessPlatformError(
             "fresh catalog observation reports a different Omnigent build",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
@@ -262,8 +261,17 @@ def assert_catalog_refresh_attests(
     if (
         authority_harness.implementation.implementation_ref()
         != implementation_ref
-        or observation_harness.implementation.implementation_ref()
-        != implementation_ref
+        or not (
+            observation_harness.implementation.implementation_ref() == implementation_ref
+            or (
+                authority_harness.implementation.sourceKind == "core"
+                and observation_harness.implementation.sourceKind == "core"
+                and authority_harness.implementation.package
+                == observation_harness.implementation.package
+                and authority_harness.model_dump(exclude={"implementation"})
+                == observation_harness.model_dump(exclude={"implementation"})
+            )
+        )
     ):
         raise HarnessPlatformError(
             "fresh catalog observation reports a different harness implementation",

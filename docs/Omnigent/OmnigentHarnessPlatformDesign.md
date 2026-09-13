@@ -164,13 +164,14 @@ The plan never pretends to know an exact host or a leased credential generation 
 One immutable plan may govern multiple execution realizations. Each rerun, linked continuation, and recurring occurrence owns a distinct runtime-binding aggregate identified by `(planRef, executionScopeRef)`. Activity retries within that execution scope reconcile the same aggregate; they do not create a second live owner. The digest-addressed `runtimeBindingRef`, revision, and fencing generation advance when acquired or attested authority is replaced.
 
 Before creating a new runtime binding, admission verifies that the mutable
-Omnigent endpoint still exposes the exact server build recorded by the plan's
-support identity. A mismatch stops before provider leases or host launch; it
-never rewrites the plan or substitutes a host. Exact rerun admission applies
-the same check and returns an actionable `edit_for_rerun` adaptation so the
-ordinary authoring/compiler boundary can produce fresh runtime authority from
-reviewed task input. Activity retries inside an already-owned runtime binding
-continue to reconcile that binding rather than re-selecting deployment state.
+Omnigent endpoint serves the major.minor series recorded in `omnigentVersion`.
+Patch versions and build digests may differ, while the selected host image,
+credentials, model, and plan remain unchanged. Historical plans without version
+evidence retain exact-build validation and their original canonical bytes.
+A missing current identity is a recoverable readiness gap owned by the bootstrap
+reconciler and the bounded `MoonMind.AgentRun` wait, not incompatibility evidence.
+See [SharedHostImage.md](SharedHostImage.md#server-compatibility-and-deployment-readiness).
+Activity retries continue to reconcile the same owned runtime binding.
 
 ### 4.6 Plan digests are not self-referential
 

@@ -16,7 +16,13 @@ async def bootstrap_infrastructure() -> None:
     print(f"Resolved opencode host: {state.opencode_host_image_ref}")
     print(f"Build digest: {state.omnigent_build_digest}")
     save_resolved_state(state)
-    print("Infrastructure bootstrap complete. State written.")
+    if state.server_image_ref and state.omnigent_build_digest:
+        print("Infrastructure bootstrap complete. State written.")
+    else:
+        print(
+            "Infrastructure discovery complete; runtime readiness pending. "
+            "The bootstrap reconciler owns retry; executions must wait."
+        )
 
 
 if __name__ == "__main__":

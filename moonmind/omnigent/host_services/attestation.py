@@ -406,7 +406,9 @@ class DockerOmnigentHostAttestor:
             host_class.omnigentVersion,
             omnigent_version.strip()[:200],
         )
-        if host_class.omnigentVersion not in omnigent_version:
+        from moonmind.omnigent.compatibility import versions_compatible
+
+        if not versions_compatible(host_class.omnigentVersion, omnigent_version):
             raise HarnessPlatformError(
                 "host Omnigent version differs from the catalog build",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,

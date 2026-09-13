@@ -392,6 +392,19 @@ class OmnigentHostClassSelector:
                     )
                     continue
                 runtime_dependencies = runtime_dependencies_for_pack(pack)
+            host_build_digest = omnigent_build_digest
+            from moonmind.omnigent.bootstrap.store import load_resolved_state
+
+            resolved = load_resolved_state()
+            compatibility = (
+                resolved.details.get("opencodeHostCompatibility", {}) if resolved else {}
+            )
+            if (
+                compatibility.get("hostImageRef") == image_ref
+                and compatibility.get("status") == "ready"
+                and _DIGEST_RE.fullmatch(str(compatibility.get("hostBuildDigest") or ""))
+            ):
+                host_build_digest = compatibility["hostBuildDigest"]
             candidates.append(
                 HostClass.model_validate(
                     {
@@ -399,7 +412,7 @@ class OmnigentHostClassSelector:
                         "version": template.version,
                         "imageRef": image_ref,
                         "omnigentVersion": omnigent_version,
-                        "omnigentBuildDigest": omnigent_build_digest,
+                        "omnigentBuildDigest": host_build_digest,
                         "architectures": list(template.architectures),
                         "declaredHarnessImplementations": [
                             {

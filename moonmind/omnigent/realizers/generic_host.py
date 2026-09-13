@@ -232,6 +232,11 @@ class GenericOmnigentHostRealizer:
         )
         if prior is not None and prior.state is RuntimeBindingState.cleaned:
             return await self._reconcile_finalization(request, prior)
+        # Fresh allocation validates before acquiring credentials or mutating
+        # binding authority. An already owned host instead uses its recorded
+        # attestation and cleanup/reattachment contract below.
+        if prior is None or not prior.hostLeaseRef:
+            self._deployment_validator(plan.payload)
         workflow_id, step_execution_id = _execution_identity(request)
         acquired: tuple[Any, ...] = ()
         credential_handles: tuple[CredentialRuntimeHandle, ...] = ()
@@ -399,7 +404,6 @@ class GenericOmnigentHostRealizer:
                     code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
                 )
 
-            self._deployment_validator(plan.payload)
             host_started_at = time.monotonic()
             host_class, launch_policy = await self._resolve_host(plan)
             credential_handles = await self._credentials.materialize_all(
