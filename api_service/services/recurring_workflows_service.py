@@ -1335,6 +1335,32 @@ class RecurringWorkflowsService:
                 target=normalized_target,
             )
 
+        # MoonLadderStudios/MoonMind#4188: a stored retired ManifestIngest
+        # target must never be re-enabled or re-dispatched through an
+        # update. Reject before any field mutation or adapter side effect
+        # so a paused definition cannot restart retired work via
+        # unpause/resume or schedule edits. An explicit disable
+        # (enabled=False) still proceeds so operators can pause retired
+        # definitions, matching the reconcile cutover.
+        if enabled is not False:
+            effective_target = (
+                normalized_target
+                if normalized_target is not None
+                else definition.target
+            )
+            if isinstance(effective_target, Mapping):
+                effective_workflow_type = str(
+                    effective_target.get("workflowType")
+                    or effective_target.get("workflow_type")
+                    or ""
+                ).strip()
+                if effective_workflow_type == "MoonMind.ManifestIngest":
+                    raise RecurringWorkflowValidationError(
+                        "MoonMind.ManifestIngest was retired "
+                        "(MoonLadderStudios/MoonMind#4192): the new release does not "
+                        "register or launch manifest ingest workflows."
+                    )
+
         changed_schedule = False
         now = datetime.now(UTC)
 
@@ -1400,7 +1426,38 @@ class RecurringWorkflowsService:
 
         try:
             if enabled is False:
-                await self._adapter.pause_schedule(definition_id=definition.id)
+                try:
+                    await self._adapter.pause_schedule(definition_id=definition.id)
+                except ScheduleNotFoundError:
+                    logger.info(
+                        "Retired schedule already absent for %s; continuing disable",
+                        definition.id,
+                    )
+                # MoonLadderStudios/MoonMind#4188: explicit disable of a
+                # stored retired ManifestIngest definition must persist
+                # without rebuilding the retired workflow bundle. Pausing
+                # above stops new runs; skip update_schedule so the
+                # disable commits instead of raising.
+                try:
+                    _disable_target = (
+                        dict(definition.target)
+                        if isinstance(definition.target, Mapping)
+                        else {}
+                    )
+                    _disable_workflow_type = str(
+                        _disable_target.get("workflowType")
+                        or _disable_target.get("workflow_type")
+                        or ""
+                    ).strip()
+                except Exception:
+                    _disable_workflow_type = ""
+                if _disable_workflow_type == "MoonMind.ManifestIngest":
+                    definition.updated_at = now
+                    definition.version = int(definition.version or 0) + 1
+                    await self._session.flush()
+                    await self._session.refresh(definition)
+                    await self._session.commit()
+                    return definition
             elif enabled is True:
                 await self._adapter.unpause_schedule(definition_id=definition.id)
 
