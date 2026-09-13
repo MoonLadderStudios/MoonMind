@@ -11,8 +11,21 @@ import {
   parseTags,
   parsePriority,
   parseClearEnvKeys,
+  resolveCreationAction,
+  setupContinuationAvailableForCreate,
+  captureSubmittedProfileOperation,
+  saveResponseIdentityMatches,
+  submissionOwnsCurrentForm,
+  computeAdvancedPolicySummary,
+  collectAdvancedControlDeviations,
+  loadPersistedDefaultIntents,
+  persistDefaultIntents,
+  isLostSaveAcknowledgment,
+  PENDING_DEFAULT_INTENT_STORAGE_KEY,
+  ProviderProfileRequestError,
 } from './ProviderProfilesManager';
 import { renderWithClient } from '../../utils/test-utils';
+import { runtimeDefaultTierDraft } from '../../utils/providerProfileTiers';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -267,7 +280,8 @@ describe('backend creation presets', () => {
     expect(screen.getByText('Materialization mode: api_key_env')).toBeTruthy();
     expect(screen.queryByLabelText('Enabled')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() => {
       expect(
@@ -439,7 +453,8 @@ describe('backend creation presets', () => {
     fireEvent.change(screen.getByLabelText('Command behavior'), {
       target: { value: '{"auth_strategy":"manual"}' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: explicitly permitted manual creation.
+    fireEvent.click(screen.getByRole('button', { name: 'Save disabled profile' }));
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true);
@@ -578,7 +593,8 @@ describe('backend creation presets', () => {
     fireEvent.click(await screen.findByLabelText('API key'));
 
     await screen.findByText(/provider-profile-create-v1-old loaded/);
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await screen.findByText(/provider-profile-create-v1-current loaded/);
     expect(presetRequests).toBe(2);
@@ -1181,14 +1197,16 @@ describe('ProviderProfilesManager form controls', () => {
       target: { value: 'unknown-provider' },
     });
     await screen.findByText('No validated creation preset exists for this runtime and provider.');
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: missing valid choices disable the
+    // action with the specific reason instead of submitting.
+    const action = screen.getByRole('button', { name: 'Create profile' });
+    expect((action as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.getByText('Choose a supported authentication method to continue.'),
+    ).toBeTruthy();
+    fireEvent.click(action);
 
-    await waitFor(() => {
-      expect(onNotice).toHaveBeenCalledWith({
-        level: 'error',
-        text: 'Choose a supported authentication method.',
-      });
-    });
+    expect(onNotice).not.toHaveBeenCalled();
     expect(fetchSpy.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
   });
 
@@ -1687,10 +1705,13 @@ describe('ProviderProfilesManager form controls', () => {
     const payload = JSON.parse(String((requestInit as RequestInit).body));
     expect(payload).toEqual({ token: submittedToken });
 
+    // MoonLadderStudios/MoonMind#4002: bounded pending is shown only while the
+    // real request is outstanding, then the returned outcome — timed client
+    // animations after the commit are not presented as backend phases.
     expect(await screen.findByText('validating token')).toBeTruthy();
-    expect(screen.getByText('saving secret')).toBeTruthy();
-    expect(screen.getByText('updating profile')).toBeTruthy();
     expect(await screen.findByText('ready')).toBeTruthy();
+    expect(screen.queryByText('saving secret')).toBeNull();
+    expect(screen.queryByText('updating profile')).toBeNull();
     expect(screen.queryByDisplayValue(submittedToken)).toBeNull();
     expect(await screen.findByText('Anthropic API key ready')).toBeTruthy();
   });
@@ -2201,7 +2222,8 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
       await act(async () => finishOAuthPreset());
       expect(screen.queryByText('Superseded OAuth preset failed.')).toBeNull();
     }
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: action agrees with the guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     expect(
       await screen.findByRole('dialog', { name: 'OpenAI API key enrollment for codex-guided-key' }),
@@ -2257,7 +2279,8 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     fireEvent.change(screen.getByLabelText('OpenAI API key (required)'), {
       target: { value: 'db://OPENAI_API_KEY' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
     expect(
@@ -2334,7 +2357,8 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     });
     fireEvent.click(await screen.findByLabelText('OAuth'));
     await screen.findByText(/Backend preset provider-profile-creation-v1 loaded/);
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided OAuth continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1));
     expect(fetchSpy).toHaveBeenCalledTimes(5);
@@ -2769,7 +2793,8 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
     fireEvent.click(screen.getByLabelText('Runtime default'));
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     // Guided API-key setup opens automatically; the checked default intent
     // must survive creation (which stores is_default=false) and apply after
@@ -2917,5 +2942,443 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true);
     expect(screen.getByDisplayValue('db://custom-secret')).toBeTruthy();
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#4002 truthful creation actions', () => {
+  it('resolves the full action matrix from one snapshot', () => {
+    const base = {
+      isEditing: false,
+      isPending: false,
+      authenticationMethod: 'api_key' as const,
+      presetLoading: false,
+      presetSupported: true as boolean | null,
+      presetError: null,
+      presetDiagnostic: null,
+      manualCreationAllowed: false,
+      setupContinuationAvailable: true,
+      canWrite: true,
+    };
+    expect(resolveCreationAction(base)).toEqual({
+      label: 'Create and connect',
+      disabled: false,
+      reason: null,
+    });
+    expect(
+      resolveCreationAction({ ...base, setupContinuationAvailable: false }).label,
+    ).toBe('Create profile');
+    expect(
+      resolveCreationAction({ ...base, manualCreationAllowed: true }),
+    ).toEqual({ label: 'Save disabled profile', disabled: false, reason: null });
+    expect(resolveCreationAction({ ...base, isEditing: true })).toEqual({
+      label: 'Update provider profile',
+      disabled: false,
+      reason: null,
+    });
+    expect(resolveCreationAction({ ...base, isPending: true })).toEqual({
+      label: 'Saving…',
+      disabled: true,
+      reason: null,
+    });
+    const noMethod = resolveCreationAction({ ...base, authenticationMethod: '' });
+    expect(noMethod.disabled).toBe(true);
+    expect(noMethod.reason).toContain('authentication method');
+    const waiting = resolveCreationAction({ ...base, presetSupported: null });
+    expect(waiting.disabled).toBe(true);
+    expect(waiting.reason).toContain('Waiting for the backend creation preset');
+    const loading = resolveCreationAction({ ...base, presetLoading: true, presetSupported: null });
+    expect(loading.disabled).toBe(true);
+    const unsupported = resolveCreationAction({
+      ...base,
+      presetSupported: false,
+      presetDiagnostic: 'Use the authorized manual profile path.',
+    });
+    expect(unsupported.disabled).toBe(true);
+    expect(unsupported.reason).toBe('Use the authorized manual profile path.');
+    const noWrite = resolveCreationAction({ ...base, canWrite: false });
+    expect(noWrite.disabled).toBe(true);
+    expect(noWrite.reason).toContain('permission');
+  });
+
+  it('derives setup continuation from the backend-declared method, not the method name alone', () => {
+    expect(setupContinuationAvailableForCreate('oauth', 'oauth', true, false)).toBe(true);
+    // A validated imported-volume setup is already complete: no continuation.
+    expect(setupContinuationAvailableForCreate('oauth', 'oauth', true, true)).toBe(false);
+    expect(setupContinuationAvailableForCreate('api_key', 'api_key', true, false)).toBe(true);
+    // Declared method without a setup handler is not a continuation.
+    expect(setupContinuationAvailableForCreate('api_key', 'none', false, false)).toBe(false);
+    expect(setupContinuationAvailableForCreate('api_key', 'api_key', false, false)).toBe(false);
+    expect(setupContinuationAvailableForCreate('none', 'none', false, false)).toBe(false);
+    expect(setupContinuationAvailableForCreate('', 'oauth', true, false)).toBe(false);
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#4002 immutable submitted operation', () => {
+  function submissionFor(formOverrides = {}) {
+    const form = { ...defaultFormState('codex_cli'), profileId: 'op-a', ...formOverrides };
+    const tier = runtimeDefaultTierDraft();
+    return captureSubmittedProfileOperation({
+      form,
+      editingProfileId: null,
+      tierDrafts: [tier],
+      defaultTierClientId: tier.clientId,
+      tierBaseline: [{ ...tier }],
+      tierBaselineDefaultId: tier.clientId,
+      formBaseline: defaultFormState('codex_cli'),
+      presetVersion: 'v1',
+      presetSupported: true,
+      creationPresetSnapshot: null,
+      manualCreation: false,
+      setupAction: 'api_key',
+      launchReadyAfterSetup: true,
+      importedVolumeValidated: false,
+      importedVolumeRef: '',
+    });
+  }
+
+  it('captures the full operation and rejects mismatched response identities', () => {
+    const submission = submissionFor();
+    expect(submission.kind).toBe('create');
+    expect(submission.profileId).toBe('op-a');
+    expect(saveResponseIdentityMatches('op-a', submission)).toBe(true);
+    expect(saveResponseIdentityMatches('op-other', submission)).toBe(false);
+    expect(saveResponseIdentityMatches(undefined, submission)).toBe(false);
+  });
+
+  it('keeps ownership only while no other draft was opened or edited', () => {
+    const submission = submissionFor();
+    // Untouched draft: still owned.
+    expect(
+      submissionOwnsCurrentForm({ ...submission.formSnapshot }, null, submission),
+    ).toBe(true);
+    // Draft B edited while A was pending: A no longer owns the form.
+    const editedB = { ...submission.formSnapshot, accountLabel: 'B edits' };
+    expect(submissionOwnsCurrentForm(editedB, null, submission)).toBe(false);
+    // Another profile opened for editing: ownership lost and kind differs.
+    expect(submissionOwnsCurrentForm({ ...submission.formSnapshot }, 'op-b', submission)).toBe(
+      false,
+    );
+  });
+
+  it('classifies lost acknowledgments without swallowing server validation', () => {
+    expect(isLostSaveAcknowledgment(new TypeError('Failed to fetch'))).toBe(true);
+    expect(isLostSaveAcknowledgment(new Error('NetworkError when attempting to fetch resource.'))).toBe(
+      true,
+    );
+    expect(
+      isLostSaveAcknowledgment(
+        new ProviderProfileRequestError('Profile ID is required.', 'validation', null),
+      ),
+    ).toBe(false);
+    expect(isLostSaveAcknowledgment(new Error('Choose a supported authentication method.'))).toBe(
+      false,
+    );
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#4002 collapsed advanced summary', () => {
+  it('reports recommended, custom, attention, and unavailable states', () => {
+    const ready = {
+      presetState: 'ready' as const,
+      presetErrorText: null,
+      hasUnknownAuthenticationMethod: false,
+      presetUnsupportedWithoutManual: false,
+      unsupportedDetail: null,
+      tierPolicyChanged: false,
+      deviations: [] as string[],
+    };
+    expect(computeAdvancedPolicySummary(ready).tone).toBe('recommended');
+    const custom = computeAdvancedPolicySummary({
+      ...ready,
+      tierPolicyChanged: false,
+      deviations: ['rate limiting', 'routing tags'],
+    });
+    expect(custom.tone).toBe('custom');
+    expect(custom.text).toBe('Custom advanced policy · 2 overrides: rate limiting, routing tags');
+    expect(custom.overrideCount).toBe(2);
+    const attention = computeAdvancedPolicySummary({
+      ...ready,
+      hasUnknownAuthenticationMethod: true,
+    });
+    expect(attention.tone).toBe('attention');
+    expect(attention.text).toContain('Needs attention');
+    expect(attention.text).toContain('unknown authentication method');
+    // Attention takes precedence over reassurance even with deviations.
+    const attentionWithDeviations = computeAdvancedPolicySummary({
+      ...ready,
+      hasUnknownAuthenticationMethod: true,
+      deviations: ['priority'],
+    });
+    expect(attentionWithDeviations.tone).toBe('attention');
+    const unavailable = computeAdvancedPolicySummary({ ...ready, presetState: 'missing' });
+    expect(unavailable.tone).toBe('unavailable');
+    expect(unavailable.text).toContain('unavailable');
+  });
+
+  it('compares typed values with key-order invariance and excludes generated metadata', () => {
+    const baseline = defaultFormState('codex_cli');
+    const pristine = { ...baseline };
+    expect(collectAdvancedControlDeviations(pristine, baseline)).toEqual([]);
+    // JSON key order is not a change.
+    const reordered = {
+      ...baseline,
+      commandBehavior: '{"b":1,"a":2}',
+    };
+    const baselineOrdered = { ...baseline, commandBehavior: '{"a":2,"b":1}' };
+    expect(collectAdvancedControlDeviations(reordered, baselineOrdered)).toEqual([]);
+    // Generated OAuth/isolation metadata never counts as a user override.
+    const generatedOnly = { ...baseline, clearEnvKeysText: 'OPENAI_API_KEY' };
+    expect(collectAdvancedControlDeviations(generatedOnly, baseline)).toEqual([]);
+    // Real authoring counts each top-level control once with allowlisted labels.
+    const authored = {
+      ...baseline,
+      cooldownAfter429Seconds: '900',
+      tagsText: 'team, preferred',
+      volumeRef: '  ',
+      priority: '5',
+    };
+    const deviations = collectAdvancedControlDeviations(authored, baseline);
+    expect(deviations).toEqual(['rate limiting', 'routing tags', 'priority']);
+    const summary = computeAdvancedPolicySummary({
+      presetState: 'ready',
+      presetErrorText: null,
+      hasUnknownAuthenticationMethod: false,
+      presetUnsupportedWithoutManual: false,
+      unsupportedDetail: null,
+      tierPolicyChanged: false,
+      deviations,
+    });
+    expect(summary.text).not.toContain('db://');
+    expect(summary.text).not.toContain('OPENAI_API_KEY');
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#4002 deferred default intent storage', () => {
+  function memoryStorage() {
+    const store = new Map<string, string>();
+    return {
+      getItem: (key: string) => (store.has(key) ? store.get(key)! : null),
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+    };
+  }
+
+  it('round-trips pending intents and tolerates corrupt or missing storage', () => {
+    const storage = memoryStorage();
+    expect(loadPersistedDefaultIntents(storage)).toEqual([]);
+    persistDefaultIntents(['profile-a', 'profile-b', 'profile-a'], storage);
+    expect(loadPersistedDefaultIntents(storage)).toEqual(['profile-a', 'profile-b']);
+    expect(storage.getItem(PENDING_DEFAULT_INTENT_STORAGE_KEY)).not.toContain('secret');
+    storage.setItem(PENDING_DEFAULT_INTENT_STORAGE_KEY, 'not-json{{{');
+    expect(loadPersistedDefaultIntents(storage)).toEqual([]);
+    expect(loadPersistedDefaultIntents(null)).toEqual([]);
+    persistDefaultIntents(['x'], null);
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#4002 save reconciliation', () => {
+  function guidedMocks(savedProfile: ProviderProfile) {
+    const preset = {
+      version: 'provider-profile-create-v1-test',
+      supported: true,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      fields: {
+        credential_source: { value: 'secret_ref', source: 't', editable: false, lock_reason: null, required: false },
+        runtime_materialization_mode: { value: 'api_key_env', source: 't', editable: false, lock_reason: null, required: false },
+        secret_refs: { value: {}, source: 't', editable: true, lock_reason: null, required: false },
+        volume_ref: { value: null, source: 't', editable: false, lock_reason: null, required: false },
+        volume_mount_path: { value: null, source: 't', editable: false, lock_reason: null, required: false },
+        max_parallel_runs: { value: 1, source: 't', editable: true, lock_reason: null, required: false },
+        cooldown_after_429_seconds: { value: 300, source: 't', editable: true, lock_reason: null, required: false },
+        rate_limit_policy: { value: 'backoff', source: 't', editable: true, lock_reason: null, required: false },
+        enabled: { value: false, source: 't', editable: false, lock_reason: null, required: false },
+        is_default: { value: false, source: 't', editable: true, lock_reason: null, required: false },
+        command_behavior: { value: { auth_strategy: 'api_key_env' }, source: 't', editable: false, lock_reason: null, required: false },
+        user_tags: { value: [], source: 't', editable: true, lock_reason: null, required: false },
+        priority: { value: 100, source: 't', editable: true, lock_reason: null, required: false },
+        clear_env_keys: { value: [], source: 't', editable: false, lock_reason: null, required: false },
+      },
+      diagnostics: [],
+      manual_creation_allowed: false,
+      required_manual_fields: [],
+    };
+    return vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            version: 'tier-cap-v1-test',
+            profile_id: null,
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            evidence: { source: 't', credential_generation: null, image_ref: null, observed_at: null, stale: false },
+            tier_constraints: { min_count: 1, max_count: null },
+            model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [] },
+            effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [] },
+            diagnostics: [],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            version: preset.version,
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            supported: true,
+            authentication_methods: [
+              {
+                id: 'api_key',
+                label: 'API key',
+                setup_action: 'api_key',
+                launch_ready_after_setup: true,
+                fields: preset.fields,
+                secret_roles: [],
+                imported_volume: { supported: false, mount_path: null, source: 't', lock_reason: 'no' },
+              },
+            ],
+            diagnostics: [],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => preset } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && init?.method === 'POST') {
+        return { ok: true, json: async () => savedProfile } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url} ${String((init as RequestInit | undefined)?.method)}`);
+    });
+  }
+
+  const baseSaved: ProviderProfile = {
+    profile_id: 'identity-profile',
+    runtime_id: 'codex_cli',
+    provider_id: 'openai',
+    credential_source: 'secret_ref',
+    runtime_materialization_mode: 'api_key_env',
+    secret_refs: {},
+    max_parallel_runs: 1,
+    cooldown_after_429_seconds: 300,
+    rate_limit_policy: 'backoff',
+    enabled: false,
+    is_default: false,
+  };
+
+  it('rejects a mismatched save identity without starting setup for another profile', async () => {
+    const fetchSpy = guidedMocks({
+      ...baseSaved,
+      profile_id: 'different-profile',
+    });
+    const { onNotice } = renderProviderProfilesManager();
+    fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'identity-profile' } });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    fireEvent.click(await screen.findByLabelText('API key'));
+    await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'error',
+        text: expect.stringContaining('unexpected profile identity'),
+      });
+    });
+    // No setup continuation starts for another profile.
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/v1/oauth-sessions')).toBe(false);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('treats a lost create acknowledgment as ambiguous and keeps the draft', async () => {
+    const preset = {
+      version: 'provider-profile-create-v1-test',
+      supported: true,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      fields: {},
+      diagnostics: [],
+      manual_creation_allowed: false,
+      required_manual_fields: [],
+    };
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            version: 'tier-cap-v1-test',
+            profile_id: null,
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            evidence: { source: 't', credential_generation: null, image_ref: null, observed_at: null, stale: false },
+            tier_constraints: { min_count: 1, max_count: null },
+            model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [] },
+            effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [] },
+            diagnostics: [],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            version: preset.version,
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            supported: true,
+            authentication_methods: [
+              {
+                id: 'api_key',
+                label: 'API key',
+                setup_action: 'api_key',
+                launch_ready_after_setup: true,
+                fields: preset.fields,
+                secret_roles: [],
+                imported_volume: { supported: false, mount_path: null, source: 't', lock_reason: 'no' },
+              },
+            ],
+            diagnostics: [],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => preset } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        // The request may have reached the server; the ack is lost.
+        throw new TypeError('Failed to fetch');
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { onNotice } = renderProviderProfilesManager();
+    fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'ambiguous-profile' } });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    fireEvent.click(await screen.findByLabelText('API key'));
+    await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'error',
+        text: expect.stringContaining('did not confirm'),
+      });
+    });
+    // Ambiguous, not success and not an automatic retry: the draft is kept.
+    expect((screen.getByLabelText(/Profile ID/) as HTMLInputElement).value).toBe(
+      'ambiguous-profile',
+    );
+    expect(onNotice).not.toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'ok' }),
+    );
   });
 });

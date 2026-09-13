@@ -428,6 +428,469 @@ export function parseClearEnvKeys(text: string): string[] | null {
   return keys.length > 0 ? keys : null;
 }
 
+// ── MoonLadderStudios/MoonMind#4002: truthful creation actions ──
+// The primary action, the exact request, and the setup continuation are all
+// derived from one snapshot: the backend-declared authentication capability,
+// the backend creation preset, the permitted manual path, and edit state.
+// A method id alone never proves a setup handler exists.
+
+export interface CreationActionInput {
+  isEditing: boolean;
+  isPending: boolean;
+  authenticationMethod: AuthenticationMethod | '';
+  presetLoading: boolean;
+  /** Null while the preset has not resolved for the current selection. */
+  presetSupported: boolean | null;
+  presetError: string | null;
+  presetDiagnostic: string | null;
+  manualCreationAllowed: boolean;
+  setupContinuationAvailable: boolean;
+  canWrite: boolean;
+}
+
+export interface CreationAction {
+  label: string;
+  disabled: boolean;
+  reason: string | null;
+}
+
+export function resolveCreationAction(input: CreationActionInput): CreationAction {
+  if (input.isPending) {
+    return { label: 'Saving…', disabled: true, reason: null };
+  }
+  if (!input.canWrite) {
+    return {
+      label: 'Create profile',
+      disabled: true,
+      reason: 'Missing permission to manage provider profiles.',
+    };
+  }
+  if (input.isEditing) {
+    return { label: 'Update provider profile', disabled: false, reason: null };
+  }
+  if (!input.authenticationMethod) {
+    return {
+      label: 'Create profile',
+      disabled: true,
+      reason: 'Choose a supported authentication method to continue.',
+    };
+  }
+  if (input.manualCreationAllowed) {
+    return { label: 'Save disabled profile', disabled: false, reason: null };
+  }
+  if (input.presetLoading || input.presetSupported === null) {
+    return {
+      label: 'Create profile',
+      disabled: true,
+      reason: 'Waiting for the backend creation preset…',
+    };
+  }
+  if (input.presetError) {
+    return { label: 'Create profile', disabled: true, reason: input.presetError };
+  }
+  if (!input.presetSupported) {
+    return {
+      label: 'Create profile',
+      disabled: true,
+      reason:
+        input.presetDiagnostic ??
+        'This runtime, provider, and authentication combination is unsupported.',
+    };
+  }
+  if (input.setupContinuationAvailable) {
+    return { label: 'Create and connect', disabled: false, reason: null };
+  }
+  return { label: 'Create profile', disabled: false, reason: null };
+}
+
+/**
+ * Whether creating with the given backend-declared method starts a guided
+ * setup continuation. Takes the capability's declared setup action — never the
+ * bare method id — plus validated-import state that may already complete
+ * OAuth setup.
+ */
+export function setupContinuationAvailableForCreate(
+  authenticationMethod: AuthenticationMethod | '',
+  setupAction: string | null | undefined,
+  launchReadyAfterSetup: boolean,
+  importedVolumeValidated: boolean,
+): boolean {
+  if (authenticationMethod === 'oauth') {
+    return !importedVolumeValidated;
+  }
+  if (authenticationMethod === 'api_key') {
+    return setupAction === 'api_key' && launchReadyAfterSetup;
+  }
+  return false;
+}
+
+// ── MoonLadderStudios/MoonMind#4002: immutable submitted operation ──
+// `saveMutation` reads everything it needs from one immutable snapshot
+// captured before dispatch, so a delayed response reconciles the submitted
+// operation instead of whichever draft happens to be visible.
+
+export interface SubmittedProfileOperation {
+  kind: 'create' | 'update';
+  profileId: string;
+  editingProfileIdAtSubmit: string | null;
+  formSnapshot: ProviderProfileFormState;
+  tierDraftsSnapshot: ProviderProfileTierDraft[];
+  defaultTierClientIdSnapshot: string | null;
+  tierBaselineSnapshot: ProviderProfileTierDraft[] | null;
+  tierBaselineDefaultIdSnapshot: string | null;
+  formBaselineSnapshot: ProviderProfileFormState;
+  runtimeId: string;
+  providerId: string;
+  authenticationMethod: AuthenticationMethod | '';
+  presetVersion: string | null;
+  presetSupported: boolean;
+  creationPresetSnapshot: ProviderProfileCreationPreset | null;
+  manualCreation: boolean;
+  setupAction: string | null;
+  launchReadyAfterSetup: boolean;
+  defaultIntent: boolean;
+  importedVolumeValidated: boolean;
+  importedVolumeRef: string;
+}
+
+export function captureSubmittedProfileOperation(args: {
+  form: ProviderProfileFormState;
+  editingProfileId: string | null;
+  tierDrafts: ProviderProfileTierDraft[];
+  defaultTierClientId: string | null;
+  tierBaseline: ProviderProfileTierDraft[] | null;
+  tierBaselineDefaultId: string | null;
+  formBaseline: ProviderProfileFormState;
+  presetVersion: string | null;
+  presetSupported: boolean;
+  creationPresetSnapshot: ProviderProfileCreationPreset | null;
+  manualCreation: boolean;
+  setupAction: string | null;
+  launchReadyAfterSetup: boolean;
+  importedVolumeValidated: boolean;
+  importedVolumeRef: string;
+}): SubmittedProfileOperation {
+  return {
+    kind: args.editingProfileId === null ? 'create' : 'update',
+    profileId: args.form.profileId.trim(),
+    editingProfileIdAtSubmit: args.editingProfileId,
+    formSnapshot: { ...args.form },
+    tierDraftsSnapshot: cloneTierDrafts(args.tierDrafts),
+    defaultTierClientIdSnapshot: args.defaultTierClientId,
+    tierBaselineSnapshot: args.tierBaseline ? cloneTierDrafts(args.tierBaseline) : null,
+    tierBaselineDefaultIdSnapshot: args.tierBaselineDefaultId,
+    formBaselineSnapshot: { ...args.formBaseline },
+    runtimeId: args.form.runtimeId.trim(),
+    providerId: args.form.providerId.trim(),
+    authenticationMethod: args.form.authenticationMethod,
+    presetVersion: args.presetVersion,
+    presetSupported: args.presetSupported,
+    creationPresetSnapshot: args.creationPresetSnapshot,
+    manualCreation: args.manualCreation,
+    setupAction: args.setupAction,
+    launchReadyAfterSetup: args.launchReadyAfterSetup,
+    defaultIntent: args.form.isDefault,
+    importedVolumeValidated: args.importedVolumeValidated,
+    importedVolumeRef: args.importedVolumeRef,
+  };
+}
+
+/** A successful response for another profile must never reconcile this submit. */
+export function saveResponseIdentityMatches(
+  savedProfileId: string | null | undefined,
+  submission: SubmittedProfileOperation,
+): boolean {
+  return typeof savedProfileId === 'string' && savedProfileId === submission.profileId;
+}
+
+/**
+ * The completed submission still owns the visible form only when no other
+ * draft was opened or edited while the request was pending.
+ */
+export function submissionOwnsCurrentForm(
+  currentForm: ProviderProfileFormState,
+  currentEditingProfileId: string | null,
+  submission: SubmittedProfileOperation,
+): boolean {
+  return (
+    currentEditingProfileId === submission.editingProfileIdAtSubmit &&
+    valuesEqual(currentForm, submission.formSnapshot)
+  );
+}
+
+/**
+ * A create whose transport failed before any structured server answer is a
+ * lost acknowledgment: ambiguous, never success, and never permission to
+ * retry automatically. Structured server errors answered truthfully and stay
+ * on the normal validation path.
+ */
+export function isLostSaveAcknowledgment(error: Error): boolean {
+  if (error instanceof ProviderProfileRequestError) return false;
+  if (error instanceof TypeError) return true;
+  return /failed to fetch|network ?error|load failed|timeout|timed out|abort/i.test(
+    error.message ?? '',
+  );
+}
+
+/** Variables for the save mutation: the exact submitted operation travels along. */
+export interface SaveMutationVariables {
+  form: ProviderProfileFormState;
+  submission: SubmittedProfileOperation;
+}
+
+// ── MoonLadderStudios/MoonMind#4002: deferred runtime-default intent ──
+// Guided creation stores the profile non-default until credential validation,
+// so the intent outlives the save. It is persisted in page-local storage (an
+// existing owner, not a new framework) and is only cleared once the PATCH is
+// confirmed — never before dispatch. Reloads surface the ordinary Make
+// default action on the saved profile instead of implying durability.
+
+export const PENDING_DEFAULT_INTENT_STORAGE_KEY =
+  'moonmind:pending-provider-profile-default';
+
+type IntentStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+function intentStorage(): IntentStorage | null {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return window.localStorage;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export function loadPersistedDefaultIntents(
+  storage: IntentStorage | null = intentStorage(),
+): string[] {
+  if (!storage) return [];
+  try {
+    const raw = storage.getItem(PENDING_DEFAULT_INTENT_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (entry): entry is string =>
+        typeof entry === 'string' && entry.trim() !== '',
+    );
+  } catch {
+    return [];
+  }
+}
+
+export function persistDefaultIntents(
+  profileIds: ReadonlyArray<string>,
+  storage: IntentStorage | null = intentStorage(),
+): void {
+  if (!storage) return;
+  try {
+    const unique = [...new Set(profileIds.map((id) => id.trim()).filter(Boolean))];
+    if (unique.length === 0) {
+      storage.removeItem(PENDING_DEFAULT_INTENT_STORAGE_KEY);
+      return;
+    }
+    storage.setItem(PENDING_DEFAULT_INTENT_STORAGE_KEY, JSON.stringify(unique));
+  } catch {
+    // Page-local intent is best effort; the in-memory Set stays authoritative.
+  }
+}
+
+// ── MoonLadderStudios/MoonMind#4002: truthful collapsed advanced summary ──
+// One pure comparison over normalized draft vs baseline. Counts each
+// top-level control once, uses allowlisted labels only (never secret, volume,
+// command-JSON, or error-body values), and excludes backend-generated
+// OAuth/isolation metadata from user-override counts.
+
+export type AdvancedPolicySummaryTone =
+  | 'recommended'
+  | 'custom'
+  | 'attention'
+  | 'unavailable';
+
+export interface AdvancedPolicySummary {
+  tone: AdvancedPolicySummaryTone;
+  text: string;
+  overrideCount: number;
+  overrideLabels: string[];
+  attentionReasons: string[];
+}
+
+const ADVANCED_SUMMARY_MAX_LABELS = 5;
+
+function canonicalizeSummaryValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeSummaryValue);
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .map(([key, entry]) => [key, canonicalizeSummaryValue(entry)] as const)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
+function normalizeSummaryJson(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed === '') return '';
+  try {
+    // JSON key order is not a change; only real value differences count.
+    return JSON.stringify(canonicalizeSummaryValue(JSON.parse(trimmed)));
+  } catch {
+    return trimmed;
+  }
+}
+
+function normalizeSummaryList(text: string): string {
+  return text
+    .split(/[,\n]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .sort()
+    .join(',');
+}
+
+/**
+ * Allowlisted top-level advanced controls that differ between the visible
+ * draft and its baseline. Generated OAuth/isolation metadata
+ * (clear_env_keys) is excluded; credential/volume values are never exposed,
+ * only their control labels.
+ */
+export function collectAdvancedControlDeviations(
+  form: ProviderProfileFormState,
+  baseline: ProviderProfileFormState,
+): string[] {
+  const deviations: string[] = [];
+  const differs = (left: string, right: string) => left !== right;
+  if (differs(form.credentialSource.trim(), baseline.credentialSource.trim())) {
+    deviations.push('credential source');
+  }
+  if (
+    differs(
+      form.runtimeMaterializationMode.trim(),
+      baseline.runtimeMaterializationMode.trim(),
+    )
+  ) {
+    deviations.push('materialization mode');
+  }
+  if (
+    normalizeSummaryJson(form.secretRefsText) !==
+    normalizeSummaryJson(baseline.secretRefsText)
+  ) {
+    deviations.push('secret bindings');
+  }
+  if (
+    differs(form.volumeRef.trim(), baseline.volumeRef.trim()) ||
+    differs(form.volumeMountPath.trim(), baseline.volumeMountPath.trim())
+  ) {
+    deviations.push('credential volume');
+  }
+  if (
+    differs(form.maxParallelRuns.trim(), baseline.maxParallelRuns.trim()) ||
+    differs(
+      form.cooldownAfter429Seconds.trim(),
+      baseline.cooldownAfter429Seconds.trim(),
+    ) ||
+    differs(form.rateLimitPolicy.trim(), baseline.rateLimitPolicy.trim())
+  ) {
+    deviations.push('rate limiting');
+  }
+  if (
+    normalizeSummaryJson(form.commandBehavior) !==
+    normalizeSummaryJson(baseline.commandBehavior)
+  ) {
+    deviations.push('command behavior');
+  }
+  if (
+    normalizeSummaryList(form.tagsText) !== normalizeSummaryList(baseline.tagsText)
+  ) {
+    deviations.push('routing tags');
+  }
+  if (differs(form.priority.trim(), baseline.priority.trim())) {
+    deviations.push('priority');
+  }
+  if (differs(form.accountLabel.trim(), baseline.accountLabel.trim())) {
+    deviations.push('account label');
+  }
+  return deviations;
+}
+
+export function computeAdvancedPolicySummary(input: {
+  presetState: 'loading' | 'error' | 'missing' | 'ready';
+  presetErrorText?: string | null;
+  hasUnknownAuthenticationMethod: boolean;
+  presetUnsupportedWithoutManual: boolean;
+  unsupportedDetail?: string | null;
+  tierPolicyChanged: boolean;
+  deviations: ReadonlyArray<string>;
+  /** Overrides the default recommended copy (manual/edit fallbacks). */
+  recommendedText?: string;
+}): AdvancedPolicySummary {
+  const attentionReasons: string[] = [];
+  if (input.hasUnknownAuthenticationMethod) {
+    attentionReasons.push('unknown authentication method');
+  }
+  if (input.presetUnsupportedWithoutManual) {
+    attentionReasons.push(
+      input.unsupportedDetail ?? 'unsupported combination',
+    );
+  }
+  if (input.presetState === 'loading' || input.presetState === 'missing') {
+    return {
+      tone: 'unavailable',
+      text: 'Advanced summary unavailable — loading backend policy…',
+      overrideCount: 0,
+      overrideLabels: [],
+      attentionReasons,
+    };
+  }
+  if (input.presetState === 'error') {
+    return {
+      tone: 'unavailable',
+      text: `Advanced summary unavailable${input.presetErrorText ? ` — ${input.presetErrorText}` : ''}`,
+      overrideCount: 0,
+      overrideLabels: [],
+      attentionReasons,
+    };
+  }
+  if (attentionReasons.length > 0) {
+    return {
+      tone: 'attention',
+      text: `Needs attention: ${attentionReasons.join('; ')}`,
+      overrideCount: 0,
+      overrideLabels: [],
+      attentionReasons,
+    };
+  }
+  const overrideLabels = [...input.deviations];
+  if (input.tierPolicyChanged && !overrideLabels.includes('model tiers')) {
+    overrideLabels.push('model tiers');
+  }
+  if (overrideLabels.length === 0) {
+    return {
+      tone: 'recommended',
+      text: input.recommendedText ?? 'Using recommended launch settings',
+      overrideCount: 0,
+      overrideLabels: [],
+      attentionReasons,
+    };
+  }
+  const shown = overrideLabels.slice(0, ADVANCED_SUMMARY_MAX_LABELS);
+  const remainder = overrideLabels.length - shown.length;
+  const text =
+    remainder > 0
+      ? `Custom advanced policy · ${overrideLabels.length} overrides: ${shown.join(', ')} (+${remainder} more)`
+      : `Custom advanced policy · ${overrideLabels.length} override${overrideLabels.length === 1 ? '' : 's'}: ${shown.join(', ')}`;
+  return {
+    tone: 'custom',
+    text,
+    overrideCount: overrideLabels.length,
+    overrideLabels,
+    attentionReasons,
+  };
+}
+
 function readinessLabel(status: ProviderProfileReadiness['status']): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
@@ -535,19 +998,9 @@ const CLAUDE_ENROLLMENT_STEPS: ClaudeEnrollmentStep[] = [
   'awaiting_external_step',
   'awaiting_token_paste',
   'validating_token',
-  'saving_secret',
-  'updating_profile',
   'ready',
   'failed',
 ];
-
-const CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS = 350;
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
 
 function commandBehaviorValue(profile: ProviderProfile, key: string): unknown {
   const commandBehavior = profile.command_behavior;
@@ -686,7 +1139,7 @@ function extractErrorField(payload: unknown): string | null {
   return null;
 }
 
-class ProviderProfileRequestError extends Error {
+export class ProviderProfileRequestError extends Error {
   constructor(
     message: string,
     readonly code: string | null,
@@ -1185,10 +1638,48 @@ export function ProviderProfilesManager({
   // credential validation, so the intent is persisted here and applied once
   // the readiness-completing operation (OAuth finalize or API-key enrollment)
   // succeeds for that profile.
-  const pendingDefaultIntentRef = useRef<Set<string>>(new Set());
+  const pendingDefaultIntentRef = useRef<Set<string>>(
+    new Set(loadPersistedDefaultIntents()),
+  );
+  const rememberDefaultIntent = (profileId: string) => {
+    const trimmed = profileId.trim();
+    if (!trimmed) return;
+    pendingDefaultIntentRef.current.add(trimmed);
+    persistDefaultIntents([...pendingDefaultIntentRef.current]);
+  };
+  const clearDefaultIntent = (profileId: string) => {
+    pendingDefaultIntentRef.current.delete(profileId);
+    persistDefaultIntents([...pendingDefaultIntentRef.current]);
+  };
   const applyPendingDefaultIntent = async (profileId: string) => {
     if (!pendingDefaultIntentRef.current.has(profileId)) return;
-    pendingDefaultIntentRef.current.delete(profileId);
+    // A newer explicit operator choice wins: never silently override a
+    // different profile that is already the runtime default, and never
+    // re-apply an intent the server already honored.
+    const knownProfiles =
+      queryClient.getQueryData<ProviderProfile[]>(PROVIDER_PROFILE_QUERY_KEY) ??
+      profiles;
+    const target = knownProfiles.find((profile) => profile.profile_id === profileId);
+    if (target?.is_default) {
+      clearDefaultIntent(profileId);
+      return;
+    }
+    const currentDefault = target
+      ? knownProfiles.find(
+          (profile) =>
+            profile.runtime_id === target.runtime_id &&
+            profile.profile_id !== profileId &&
+            profile.is_default,
+        )
+      : undefined;
+    if (currentDefault) {
+      clearDefaultIntent(profileId);
+      onNotice({
+        level: 'error',
+        text: `Profile "${profileId}" was not made the runtime default because "${currentDefault.profile_id}" is now the default. Use Make default on the saved profile to change it.`,
+      });
+      return;
+    }
     try {
       const response = await fetch(
         `/api/v1/provider-profiles/${encodeURIComponent(profileId)}`,
@@ -1207,14 +1698,14 @@ export function ProviderProfilesManager({
           ),
         );
       }
+      // Only cleared once the PATCH is confirmed; failure keeps the intent.
+      clearDefaultIntent(profileId);
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({ level: 'ok', text: `Profile "${profileId}" is now the runtime default.` });
     } catch (error) {
       onNotice({
         level: 'error',
-        text: error instanceof Error
-          ? error.message
-          : `Failed to set "${profileId}" as the runtime default.`,
+        text: `${error instanceof Error ? error.message : `Failed to set "${profileId}" as the runtime default.`} The default was not applied — use Make default on the saved profile to retry.`,
       });
     }
   };
@@ -1643,6 +2134,21 @@ export function ProviderProfilesManager({
     };
   }, [queryClient]);
 
+  useEffect(() => {
+    // Prune deferred default intents the server already honored (for example
+    // applied from another tab) so a reload never re-applies stale intent.
+    let changed = false;
+    for (const profileId of pendingDefaultIntentRef.current) {
+      if (profiles.some((profile) => profile.profile_id === profileId && profile.is_default)) {
+        pendingDefaultIntentRef.current.delete(profileId);
+        changed = true;
+      }
+    }
+    if (changed) {
+      persistDefaultIntents([...pendingDefaultIntentRef.current]);
+    }
+  }, [profiles]);
+
   const resetForm = () => {
     setEditingProfileId(null);
     const nextForm = defaultFormState(createFormRuntimeSeed);
@@ -1737,6 +2243,65 @@ export function ProviderProfilesManager({
   }, [tierBaseline, tierBaselineDefaultId, tierDrafts, defaultTierClientId]);
 
   const hasTierDraft = tierDrafts.length > 0 || isTierRepair || invalidSavedDefaultIndex !== null;
+
+  // ── MoonLadderStudios/MoonMind#4002: truthful collapsed summary ──
+  // Draft vs recommended deviations use the same normalized semantics as the
+  // save payload (typed values, key-order-invariant JSON, generated metadata
+  // excluded). In create mode the recommendation is the baseline with the
+  // backend preset applied, so a pristine guided form reads Recommended and
+  // only real authoring reads Custom. Opening or collapsing the section never
+  // mutates the draft.
+  const summaryBaseline = useMemo(() => {
+    if (!isEditing && creationPreset?.supported) {
+      return applyCreationPresetToForm(formBaseline, creationPreset);
+    }
+    return formBaseline;
+  }, [isEditing, creationPreset, formBaseline]);
+  const advancedControlDeviations = useMemo(
+    () => collectAdvancedControlDeviations(form, summaryBaseline),
+    [form, summaryBaseline],
+  );
+  const advancedPolicySummary = useMemo(() => {
+    const presetReady = creationPreset !== null;
+    const presetState: 'loading' | 'error' | 'missing' | 'ready' = presetReady
+      ? 'ready'
+      : manualCreationAllowed || (isEditing && !creationPresetLoading && !creationPresetError)
+        ? 'ready'
+        : creationPresetLoading
+          ? 'loading'
+          : creationPresetError
+            ? 'error'
+            : 'missing';
+    const recommendedText =
+      manualCreationAllowed && !presetReady
+        ? 'Manual creation — profile will be saved disabled'
+        : !presetReady && isEditing
+          ? 'Preserving the existing launch contract'
+          : selectedAuthenticationCapability
+            ? `Using recommended ${selectedAuthenticationCapability.label} launch settings`
+            : 'Using recommended launch settings';
+    return computeAdvancedPolicySummary({
+      presetState,
+      presetErrorText: creationPresetError,
+      hasUnknownAuthenticationMethod: hasUnknownExistingAuthenticationMethod,
+      presetUnsupportedWithoutManual:
+        creationPreset?.supported === false && !manualCreationAllowed,
+      unsupportedDetail: creationPreset?.diagnostics[0]?.message ?? null,
+      tierPolicyChanged: tierDraftsChanged,
+      deviations: advancedControlDeviations,
+      recommendedText,
+    });
+  }, [
+    creationPreset,
+    manualCreationAllowed,
+    isEditing,
+    creationPresetLoading,
+    creationPresetError,
+    selectedAuthenticationCapability,
+    hasUnknownExistingAuthenticationMethod,
+    tierDraftsChanged,
+    advancedControlDeviations,
+  ]);
 
   // Server validation aimed at a collapsed advanced field reveals the region
   // and hands focus to that control. The region is keyed by the canonical
@@ -1954,19 +2519,13 @@ export function ProviderProfilesManager({
         failureReason: null,
       }));
     },
-    onSuccess: async (result, { profileId }) => {
-      updateClaudeEnrollmentForProfile(profileId, (current) => ({
-        ...current,
-        step: 'saving_secret',
-        token: '',
-      }));
-      await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
-      updateClaudeEnrollmentForProfile(profileId, (current) => ({
-        ...current,
-        step: 'updating_profile',
-        token: '',
-      }));
-      await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
+    onSuccess: (result, { profileId }) => {
+      // The combined API call already committed the credential: reconcile the
+      // saved-profile cache even if this drawer closed. Only visible drawer
+      // mutations and notices are fenced to the owning profile, so one
+      // enrollment can never rewrite another profile's panel.
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      void applyPendingDefaultIntent(profileId);
       if (claudeEnrollmentProfileIdRef.current !== profileId) {
         return;
       }
@@ -1978,12 +2537,10 @@ export function ProviderProfilesManager({
         statusLabel: formatStatusLabel(result.status_label ?? result.statusLabel ?? current.statusLabel, ''),
         readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
       }));
-      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({
         level: 'ok',
         text: `Anthropic API key enrollment completed for "${profileId}".`,
       });
-      void applyPendingDefaultIntent(profileId);
     },
     onError: (error, { profileId, submittedToken }) => {
       if (claudeEnrollmentProfileIdRef.current !== profileId) {
@@ -2116,20 +2673,12 @@ export function ProviderProfilesManager({
         failureReason: null,
       }));
     },
-    onSuccess: async (result, { profileId, profile }) => {
+    onSuccess: (result, { profileId, profile }) => {
       const copy = apiKeyEnrollmentCopy(profile);
-      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
-        ...current,
-        step: 'saving_secret',
-        token: '',
-      }));
-      await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
-      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
-        ...current,
-        step: 'updating_profile',
-        token: '',
-      }));
-      await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
+      // Committed enrollment reconciles the saved-profile cache even if this
+      // drawer closed; visible mutations stay fenced to the owning profile.
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      void applyPendingDefaultIntent(profileId);
       if (opencodeEnrollmentProfileIdRef.current !== profileId) {
         return;
       }
@@ -2141,12 +2690,10 @@ export function ProviderProfilesManager({
         statusLabel: formatStatusLabel(result.status_label ?? result.statusLabel ?? current.statusLabel, ''),
         readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
       }));
-      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({
         level: 'ok',
         text: `${copy.credentialLabel} enrollment completed for "${profileId}".`,
       });
-      void applyPendingDefaultIntent(profileId);
     },
     onError: (error, { profileId, submittedToken, profile }) => {
       const copy = apiKeyEnrollmentCopy(profile);
@@ -2241,29 +2788,64 @@ export function ProviderProfilesManager({
     },
   });
 
+  // ── MoonLadderStudios/MoonMind#4002: one immutable submission ──
+  // The button, the request, and the continuation all derive from this single
+  // snapshot captured before dispatch. Duplicate submits while pending are
+  // suppressed, and responses reconcile this operation — never the draft that
+  // happens to be visible when they arrive.
+  const submittedOperationRef = useRef<SubmittedProfileOperation | null>(null);
+  const handleSaveSubmit = () => {
+    if (saveMutation.isPending) return;
+    const selectedMethod =
+      creationCapabilities?.authentication_methods.find(
+        (method) => method.id === form.authenticationMethod,
+      ) ?? null;
+    const submission = captureSubmittedProfileOperation({
+      form,
+      editingProfileId,
+      tierDrafts,
+      defaultTierClientId,
+      tierBaseline,
+      tierBaselineDefaultId,
+      formBaseline,
+      presetVersion: creationPreset?.version ?? null,
+      presetSupported: creationPreset?.supported ?? false,
+      creationPresetSnapshot: creationPreset,
+      manualCreation: manualCreationAllowed,
+      setupAction: selectedMethod?.setup_action ?? null,
+      launchReadyAfterSetup: selectedMethod?.launch_ready_after_setup ?? false,
+      importedVolumeValidated,
+      importedVolumeRef,
+    });
+    submittedOperationRef.current = submission;
+    saveMutation.mutate({ form: { ...form }, submission });
+  };
+
   const saveMutation = useMutation({
-    mutationFn: async (formState: ProviderProfileFormState) => {
-      if (tierDrafts.length === 0) {
+    mutationFn: async (variables: SaveMutationVariables) => {
+      const { form: formState, submission } = variables;
+      if (submission.tierDraftsSnapshot.length === 0) {
         throw new Error('At least one tier is required.');
       }
-      if (!defaultTierClientId) {
+      if (!submission.defaultTierClientIdSnapshot) {
         throw new Error('Select a default tier.');
       }
       const payload = buildSavePayload(formState, {
-        isEditing,
-        formBaseline,
-        creationPreset,
-        importExistingCredentialVolume: importedVolumeValidated,
-        tierDrafts,
-        defaultTierClientId,
-        tierBaseline,
-        tierBaselineDefaultId,
+        isEditing: submission.kind === 'update',
+        formBaseline: submission.formBaselineSnapshot,
+        creationPreset: submission.creationPresetSnapshot,
+        importExistingCredentialVolume: submission.importedVolumeValidated,
+        tierDrafts: submission.tierDraftsSnapshot,
+        defaultTierClientId: submission.defaultTierClientIdSnapshot,
+        tierBaseline: submission.tierBaselineSnapshot,
+        tierBaselineDefaultId: submission.tierBaselineDefaultIdSnapshot,
       });
-      const endpoint = isEditing
-        ? `/api/v1/provider-profiles/${encodeURIComponent(payload.profile_id)}`
-        : '/api/v1/provider-profiles';
+      const endpoint =
+        submission.kind === 'update'
+          ? `/api/v1/provider-profiles/${encodeURIComponent(payload.profile_id)}`
+          : '/api/v1/provider-profiles';
       const response = await fetch(endpoint, {
-        method: isEditing ? 'PATCH' : 'POST',
+        method: submission.kind === 'update' ? 'PATCH' : 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
@@ -2274,7 +2856,7 @@ export function ProviderProfilesManager({
         const errorPayload = await response.json().catch(() => ({}));
         const detail = extractErrorMessage(
           errorPayload,
-          `Failed to ${isEditing ? 'update' : 'create'} provider profile.`,
+          `Failed to ${submission.kind === 'update' ? 'update' : 'create'} provider profile.`,
         );
         throw new ProviderProfileRequestError(
           detail,
@@ -2284,43 +2866,46 @@ export function ProviderProfilesManager({
       }
       return response.json() as Promise<ProviderProfile>;
     },
-    onSuccess: (savedProfile, submittedForm) => {
-      const createdProfile = !isEditing;
-      if (createdProfile && submittedForm.isDefault && !savedProfile.is_default) {
+    onSuccess: (savedProfile, variables) => {
+      const { submission } = variables;
+      // A confirmed creation establishes the saved profile — not connected,
+      // enabled, default, or launch-ready state. A mismatched identity is
+      // rejected: no save is declared and no setup starts for another profile.
+      if (!saveResponseIdentityMatches(savedProfile?.profile_id, submission)) {
+        queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+        onNotice({
+          level: 'error',
+          text: `Save returned an unexpected profile identity; expected "${submission.profileId}". No setup was started — check the profile list before retrying.`,
+        });
+        return;
+      }
+      const createdProfile = submission.kind === 'create';
+      if (createdProfile && submission.defaultIntent && !savedProfile.is_default) {
         // Creation stores the profile non-default until credential validation;
         // carry the checked intent forward to the readiness-completing step.
-        pendingDefaultIntentRef.current.add(savedProfile.profile_id);
+        rememberDefaultIntent(savedProfile.profile_id);
       }
+      const guidedApiKeySetupPending =
+        submission.setupAction === 'api_key' &&
+        submission.launchReadyAfterSetup &&
+        savedProfile.auth_state !== 'connected';
+      const startsApiKeyEnrollment =
+        createdProfile &&
+        submission.authenticationMethod === 'api_key' &&
+        guidedApiKeySetupPending;
+      const startsOAuth =
+        createdProfile &&
+        submission.authenticationMethod === 'oauth' &&
+        !submission.importedVolumeValidated;
+      const continuesSetup = startsApiKeyEnrollment || startsOAuth;
       onNotice({
         level: 'ok',
-        text: isEditing
-          ? `Profile "${editingProfileId}" updated.`
-          : `Profile "${submittedForm.profileId.trim()}" created.`,
+        text: !createdProfile
+          ? `Profile "${submission.profileId}" updated.`
+          : continuesSetup
+            ? `Profile "${submission.profileId}" saved. Continue setup to connect.`
+            : `Profile "${submission.profileId}" saved.`,
       });
-      setEditingProfileId(null);
-      const nextForm = defaultFormState(createFormRuntimeSeed);
-      setForm(nextForm);
-      setFormBaseline(nextForm);
-      {
-        // The editor closes after a successful save, so the tier draft must
-        // return to the clean create-form default. Keeping the saved profile's
-        // tiers with a null baseline would read as a dirty draft and keep
-        // warning about unsaved changes on navigation.
-        const initialTier = runtimeDefaultTierDraft();
-        setTierDrafts([initialTier]);
-        setDefaultTierClientId(initialTier.clientId);
-        setIsTierRepair(false);
-        setInvalidSavedDefaultIndex(null);
-        setTierBaseline(cloneTierDrafts([initialTier]));
-        setTierBaselineDefaultId(initialTier.clientId);
-        setTierFieldErrors({});
-        setTierUndo(null);
-        setTierRemoveDialog(null);
-      }
-      setShowAdvanced(false);
-      setShowImportedVolume(false);
-      setImportedVolumeRef('');
-      setImportedVolumeValidated(false);
       queryClient.setQueryData<ProviderProfile[]>(
         PROVIDER_PROFILE_QUERY_KEY,
         (currentProfiles = []) => {
@@ -2346,22 +2931,37 @@ export function ProviderProfilesManager({
         },
       );
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-      const submittedMethod =
-        savedProfile.creation_capabilities?.authentication_methods.find(
-          (method) => method.id === submittedForm.authenticationMethod,
-        ) ??
-        creationCapabilities?.authentication_methods.find(
-          (method) => method.id === submittedForm.authenticationMethod,
-        );
-      const guidedApiKeySetupPending =
-        submittedMethod?.setup_action === 'api_key' &&
-        submittedMethod.launch_ready_after_setup &&
-        savedProfile.auth_state !== 'connected';
-      if (
-        createdProfile &&
-        submittedForm.authenticationMethod === 'api_key' &&
-        guidedApiKeySetupPending
-      ) {
+      if (submissionOwnsCurrentForm(form, editingProfileId, submission)) {
+        // Only a form still owned by this submission is reset — a draft
+        // opened or edited while the request was pending is left untouched.
+        // The reset always targets a genuinely new default form with matching
+        // default tiers/baselines and cleared setup authority, never a mix of
+        // the new identity with the prior account's custom tiers.
+        setEditingProfileId(null);
+        const nextForm = defaultFormState(createFormRuntimeSeed);
+        setForm(nextForm);
+        setFormBaseline(nextForm);
+        {
+          const initialTier = runtimeDefaultTierDraft();
+          setTierDrafts([initialTier]);
+          setDefaultTierClientId(initialTier.clientId);
+          setIsTierRepair(false);
+          setInvalidSavedDefaultIndex(null);
+          setTierBaseline(cloneTierDrafts([initialTier]));
+          setTierBaselineDefaultId(initialTier.clientId);
+          setTierFieldErrors({});
+          setTierUndo(null);
+          setTierRemoveDialog(null);
+        }
+        setShowAdvanced(false);
+        setShowImportedVolume(false);
+        setImportedVolumeRef('');
+        setImportedVolumeValidated(false);
+      }
+      // Setup continuation targets the exact saved identity. Incomplete,
+      // canceled, or failed enrollment offers Connect/Retry for that saved
+      // profile — never a second POST of the original create draft.
+      if (startsApiKeyEnrollment) {
         if (
           savedProfile.runtime_id === 'claude_code' &&
           savedProfile.provider_id === 'anthropic'
@@ -2370,15 +2970,22 @@ export function ProviderProfilesManager({
         } else {
           openOpencodeEnrollment(savedProfile);
         }
-      } else if (
-        createdProfile &&
-        submittedForm.authenticationMethod === 'oauth' &&
-        !importedVolumeValidated
-      ) {
+      } else if (startsOAuth) {
         startOAuthFromCreationRef.current(savedProfile);
       }
     },
-    onError: (error: Error) => {
+    onError: (error: Error, variables) => {
+      const submission = variables?.submission ?? submittedOperationRef.current;
+      if (submission?.kind === 'create' && isLostSaveAcknowledgment(error)) {
+        // Ambiguous create: reconcile the list, keep the draft, and offer an
+        // actionable recovery path instead of success or an automatic retry.
+        queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+        onNotice({
+          level: 'error',
+          text: `Save for "${submission.profileId}" did not confirm. The profile may or may not exist — check the profile list before retrying. Your draft was kept.`,
+        });
+        return;
+      }
       setShowAdvanced(true);
       const targetField =
         error instanceof ProviderProfileRequestError ? error.field : null;
@@ -2391,7 +2998,7 @@ export function ProviderProfilesManager({
         }));
       }
       if (
-        !isEditing &&
+        submission?.kind === 'create' &&
         error instanceof ProviderProfileRequestError &&
         error.code === 'provider_profile_creation_preset_version_mismatch'
       ) {
@@ -2407,7 +3014,7 @@ export function ProviderProfilesManager({
       if (tierMatch) {
         const tierIndex = parseInt(tierMatch[1]!, 10);
         const field = tierMatch[2]!;
-        const tier = tierDrafts[tierIndex];
+        const tier = (submission?.tierDraftsSnapshot ?? tierDrafts)[tierIndex];
         if (tier) {
           setTierFieldErrors((prev) => ({ ...prev, [`${tier.clientId}.${field}`]: message }));
           tierSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -2417,6 +3024,27 @@ export function ProviderProfilesManager({
       }
       onNotice({ level: 'error', text: error.message });
     },
+  });
+
+  // ── MoonLadderStudios/MoonMind#4002: action from the same snapshot ──
+  // The button label, the request, and the continuation agree because they
+  // share the backend-declared method, preset, manual path, and edit state.
+  const creationAction = resolveCreationAction({
+    isEditing,
+    isPending: saveMutation.isPending,
+    authenticationMethod: form.authenticationMethod,
+    presetLoading: creationPresetLoading,
+    presetSupported: creationPreset ? creationPreset.supported : null,
+    presetError: creationPresetError,
+    presetDiagnostic: creationPreset?.diagnostics[0]?.message ?? null,
+    manualCreationAllowed,
+    setupContinuationAvailable: setupContinuationAvailableForCreate(
+      form.authenticationMethod,
+      selectedAuthenticationCapability?.setup_action ?? null,
+      selectedAuthenticationCapability?.launch_ready_after_setup ?? false,
+      importedVolumeValidated,
+    ),
+    canWrite: canWriteProviderProfiles,
   });
 
   const deleteMutation = useMutation({
@@ -3782,7 +4410,7 @@ export function ProviderProfilesManager({
           className="space-y-6"
           onSubmit={(event) => {
             event.preventDefault();
-            saveMutation.mutate(form);
+            handleSaveSubmit();
           }}
         >
           {/* ── 1. Identity (Profile ID, Runtime, Provider, Account label) ── */}
@@ -4265,9 +4893,7 @@ export function ProviderProfilesManager({
             </p>
             {!showAdvanced ? (
               <p className="text-xs font-medium text-slate-600 dark:text-slate-300">
-                {selectedAuthenticationCapability
-                  ? `Using recommended ${selectedAuthenticationCapability.label} launch settings`
-                  : 'Preserving the existing launch contract'}
+                {advancedPolicySummary.text}
               </p>
             ) : null}
           </div>
@@ -4660,18 +5286,18 @@ export function ProviderProfilesManager({
             </div>
           ) : null}
 
-          <div className="flex flex-wrap gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button
               type="submit"
               className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-5 py-2.5 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
-              disabled={saveMutation.isPending}
+              disabled={creationAction.disabled}
+              title={creationAction.reason ?? undefined}
             >
-              {saveMutation.isPending
-                ? 'Saving...'
-                : isEditing
-                  ? 'Update provider profile'
-                  : 'Create profile'}
+              {creationAction.label}
             </button>
+            {creationAction.reason && !saveMutation.isPending ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400">{creationAction.reason}</p>
+            ) : null}
             <button
               type="button"
               className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-5 py-2.5 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500 hover:text-slate-900 dark:hover:text-white"
