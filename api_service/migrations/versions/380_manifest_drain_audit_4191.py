@@ -1,6 +1,6 @@
 """Audit post-drop Manifest registry state (forward cutover for #4191).
 
-Revision ID: 380_manifest_registry_drain_audit_4191
+Revision ID: 380_manifest_drain_audit_4191
 Revises: 379_durable_issue_claims
 Create Date: 2026-09-13
 
@@ -26,7 +26,7 @@ from alembic import op
 
 __all__ = ["revision", "down_revision", "upgrade", "downgrade"]
 
-revision: str = "380_manifest_registry_drain_audit_4191"
+revision: str = "380_manifest_drain_audit_4191"
 down_revision: Union[str, None] = "379_durable_issue_claims"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
