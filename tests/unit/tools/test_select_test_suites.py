@@ -601,3 +601,79 @@ def test_profile_authoring_changes_run_renderer_and_admission_replay(path):
 )
 def test_recurring_availability_boundaries_require_the_real_recovery_journeys(path):
     assert _outputs([path])["reliability_journey"] == "true"
+
+
+def test_profile_execution_selection_test_change_runs_renderer_and_admission():
+    """MoonLadderStudios/MoonMind#3950 R3: the #4033 regression's second half
+    lives at tests/unit/api_service/ and must select the same renderer +
+    admission pair as the routers-half, not only the generic api_component."""
+    outputs = _outputs(["tests/unit/api_service/test_profile_execution_selection.py"])
+    assert outputs["unit_fast"] == "true"
+    assert outputs["api_component"] == "true"
+    assert outputs["frontend_static"] == "true"
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "moonmind/omnigent/compatibility.py",
+        "moonmind/omnigent/effective_capabilities.py",
+    ],
+)
+def test_native_capability_owners_select_browser_and_contract_gate(changed_path):
+    """MoonLadderStudios/MoonMind#3950 R5 journey B: the versioned network-
+    surface compatibility map and the capability inventory it gates own the
+    compiled native UI/facade behavior. A change must select the complete
+    Omnigent contract gate plus the compiled production browser suite."""
+    assert (REPO_ROOT / changed_path).exists(), changed_path
+    outputs = _outputs([changed_path])
+    for key in OMNIGENT_CONTRACT_GATE_KEYS:
+        assert outputs[key] == "true", (changed_path, key)
+    assert outputs["frontend_static"] == "true"
+    assert outputs["frontend_browser_chromium"] == "true"
+
+
+def test_unknown_and_empty_diffs_conservatively_select_full_verification():
+    """MoonLadderStudios/MoonMind#3950 R2: unknown/missing diffs select the
+    required full corpus — conservative means more verification, never
+    green-by-default."""
+    for paths in ([], ["Makefile"], ["some/new/tool.sh"]):
+        outputs = _outputs(paths)
+        assert outputs["full_backend"] == "true", paths
+        assert all(value == "true" for value in outputs.values()), paths
+    # A mixed known + unknown diff still fails open to the full corpus.
+    mixed = _outputs(["docs/Guide.md", "totally-unknown-path-xyz"])
+    assert all(value == "true" for value in mixed.values())
+
+
+def test_ci_required_aggregator_fails_on_bad_selected_results():
+    """MoonLadderStudios/MoonMind#3950 R2/R9: the ci-required aggregator must
+    fail when a selected gate fails, is canceled, is unexpectedly skipped, is
+    absent, or produces no required result — and must fail when an unselected
+    gate reports anything other than skipped. Asserted against the workflow
+    structure so a YAML edit cannot silently weaken the guard."""
+    workflow = (REPO_ROOT / ".github/workflows/pytest-unit-tests.yml").read_text()
+    # Selected gates fail on any non-success result.
+    assert "if [[ \"$result\" != \"success\" ]]; then" in workflow
+    assert "was selected but ended with result=" in workflow
+    # Unselected gates must report skipped; anything else fails.
+    assert "elif [[ \"$result\" != \"skipped\" ]]; then" in workflow
+    assert "was not selected but ended with result=" in workflow
+    # Always-required gates (selector itself, shard ownership, frontend and
+    # generated-contract aggregators) fail on any non-success.
+    assert '"select-test-suites"' in workflow
+    assert '"verify-test-shard-ownership"' in workflow
+    assert '"test-frontend"' in workflow
+    assert '"check-generated-contracts"' in workflow
+    # Every selected backend gate is aggregated through require_selected.
+    for gate in (
+        "unit-fast",
+        "unit-slow",
+        "api-component",
+        "temporal-boundary",
+        "integration-ci",
+        "reliability-journey-checkpoint-resume",
+        "omnigent-exact-artifact",
+        "omnigent-deterministic-conformance",
+    ):
+        assert f'require_selected "{gate}"' in workflow, gate
