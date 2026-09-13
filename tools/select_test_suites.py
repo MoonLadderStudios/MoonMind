@@ -232,6 +232,10 @@ PROFILE_AUTHORING_EXACT = {
     "api_service/services/omnigent_execution_plan_service.py",
     "moonmind/workflows/executions/runtime_target_selection.py",
     "tests/unit/api/routers/test_profile_first_authoring.py",
+    # MoonLadderStudios/MoonMind#3950 R3: the second #4033 regression half
+    # lives at tests/unit/api_service/ (not routers/). A change to it must
+    # select the same renderer+admission pair as the first half.
+    "tests/unit/api_service/test_profile_execution_selection.py",
     "frontend/src/runtime/fixtures/profile-first-authoring.json",
 }
 PROFILE_AUTHORING_PREFIXES = (
@@ -345,6 +349,13 @@ OMNIGENT_FACADE_EXACT = {
     "moonmind/omnigent/native_ui_compat.py",
     "moonmind/omnigent/workflow_chat_facade.py",
     "moonmind/omnigent/native_outbound_scan.py",
+    # MoonLadderStudios/MoonMind#3950 R5 journey B: the versioned network-
+    # surface compatibility map (compatibility.py) and the capability
+    # inventory it gates (effective_capabilities.py) own the compiled native
+    # UI/facade behavior alongside native_ui_compat.py. A change there must
+    # additionally exercise the compiled production browser suite.
+    "moonmind/omnigent/compatibility.py",
+    "moonmind/omnigent/effective_capabilities.py",
     "api_service/api/routers/omnigent_native_ui.py",
     "api_service/api/routers/omnigent_catalog.py",
     "frontend/src/entrypoints/WorkflowChatNative.tsx",
