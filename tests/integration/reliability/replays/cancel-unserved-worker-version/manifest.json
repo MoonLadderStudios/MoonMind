@@ -1,0 +1,12 @@
+{
+  "failureShapeId": "cancel-unserved-worker-version",
+  "incidentDate": "2026-09-13",
+  "failure": "A replacement worker version starts while Temporal still routes to the removed version. An awaiting-slot parent's cancellation remains queued on attempt 1, but the API prematurely records canceled.",
+  "test": "tests/integration/reliability/test_cancel_unserved_worker_version.py",
+  "requiredEvidence": [
+    "Cancellation is durably accepted with the parent still RUNNING on pending workflow task attempt 1.",
+    "The service preserves the live state, slot-wait metadata and missing terminal evidence without terminal dependency fan-out.",
+    "Qualified compare-and-set routing recovery delivers the original request and closes both parent and child as CANCELED.",
+    "The service records terminal state only after Temporal confirms it; both resulting histories replay."
+  ]
+}

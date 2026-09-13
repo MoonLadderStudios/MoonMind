@@ -453,9 +453,11 @@ class TemporalClientAdapter:
         handle = await self.get_workflow_handle(container_job_workflow_id(job_id))
         await handle.signal("cancel")
 
-    async def get_workflow_handle(self, workflow_id: str) -> Any:
+    async def get_workflow_handle(self, workflow_id: str, *, run_id: str | None = None) -> Any:
         """Get a handle to an existing workflow execution."""
         client = await self.get_client()
+        if run_id is not None:
+            return client.get_workflow_handle(workflow_id, run_id=run_id)
         return client.get_workflow_handle(workflow_id)
 
     async def cancel_workflow(self, workflow_id: str) -> None:
@@ -463,9 +465,11 @@ class TemporalClientAdapter:
         handle = await self.get_workflow_handle(workflow_id)
         await handle.cancel()
 
-    async def terminate_workflow(self, workflow_id: str, *, reason: str) -> None:
+    async def terminate_workflow(
+        self, workflow_id: str, *, reason: str, run_id: str | None = None
+    ) -> None:
         """Force terminate an existing workflow execution."""
-        handle = await self.get_workflow_handle(workflow_id)
+        handle = await self.get_workflow_handle(workflow_id, run_id=run_id)
         await handle.terminate(reason=reason)
 
     async def signal_workflow(
@@ -492,9 +496,11 @@ class TemporalClientAdapter:
             return await handle.execute_update(update_name, arg)
         return await handle.execute_update(update_name)
 
-    async def describe_workflow(self, workflow_id: str) -> WorkflowExecutionDescription:
+    async def describe_workflow(
+        self, workflow_id: str, *, run_id: str | None = None
+    ) -> WorkflowExecutionDescription:
         """Describe an existing workflow execution."""
-        handle = await self.get_workflow_handle(workflow_id)
+        handle = await self.get_workflow_handle(workflow_id, run_id=run_id)
         return await handle.describe()
 
     # --- Worker Pause: Temporal Visibility drain metrics (DOC-REQ-002) ---

@@ -58,10 +58,11 @@ async def test_exact_rerun_creates_fresh_execution_without_recovery_progress(
                 },
                 idempotency_key=None,
             )
-            await service.cancel_execution(
+            await service.record_terminal_state(
                 workflow_id=created.workflow_id,
-                reason="failed before retry",
-                graceful=True,
+                state="canceled",
+                close_status="canceled",
+                summary="stopped before retry",
             )
 
             response = await service.update_execution(

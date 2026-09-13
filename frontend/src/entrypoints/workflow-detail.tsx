@@ -1151,6 +1151,7 @@ const RemediationLifecycleArtifactSchema = z
 const RemediationOperatorControlsSchema = z
   .object({
     canCancel: z.boolean().default(false),
+    canForceCancel: z.boolean().default(false),
     canTakeOver: z.boolean().default(false),
     canResume: z.boolean().default(false),
     paused: z.boolean().default(false),
@@ -9282,7 +9283,16 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
       }
       return response.json();
     },
-    onSuccess: invalidate,
+    onSuccess: (result, { graceful = true }) => {
+      setActionNotice(
+        graceful
+          ? 'Cancellation requested.'
+          : result.closeStatus === 'terminated' || result.closeStatus === 'canceled'
+            ? 'Workflow force canceled.'
+            : 'Workflow was already closed; status refreshed.',
+      );
+      invalidate();
+    },
     onError: (error: Error) => setActionError(error.message),
   });
 
@@ -9791,6 +9801,7 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
         actions.canResume ||
         actions.canApprove ||
         actions.canCancel ||
+        actions.canForceCancel ||
         actions.canReject ||
         actions.canSendMessage ||
         (execution?.interventionAudit?.length ?? 0) > 0
