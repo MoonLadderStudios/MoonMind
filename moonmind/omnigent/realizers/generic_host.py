@@ -889,8 +889,8 @@ class GenericOmnigentHostRealizer:
         )
         push_status = str(publication.get("push_status") or "").strip().lower()
         # ``no_commits`` is a canonical terminal publication outcome, not a
-        # dispatch failure. The publisher already proved the workspace head is
-        # exactly the remote base head, so no repository work was lost, and the
+        # dispatch failure. The publisher already proved the unchanged workspace
+        # head is retained in the authored remote base, so no work was lost. The
         # durable workflow owns whether a step without commits satisfies its
         # publish contract -- exactly as it does for the managed-runtime push
         # boundary. Failing here instead strands workflow-owned side effects
