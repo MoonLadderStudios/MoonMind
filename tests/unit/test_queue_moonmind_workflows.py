@@ -475,7 +475,10 @@ def test_skill_example_references_registered_preset_via_task_template() -> None:
 
     assert '"skill": {"name": "github-issue-implement"}' not in skill_doc
     assert '"taskTemplate": {"slug": "github-issue-implement"' in skill_doc
-    assert "$MOONMIND_ACTIVE_SKILLS_DIR/queue-moonmind-workflows" in skill_doc
+    assert (
+        "queue-moonmind-workflows/scripts/queue_moonmind_workflows.py"
+        in skill_doc
+    )
 
     preset_path = (
         repo_root / "api_service" / "data" / "presets" / "github-issue-implement.yaml"
