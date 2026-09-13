@@ -115,6 +115,16 @@ handoff validator. Old histories reproduce the mismatch; new histories accept
 the repaired merged head, and both replay with the production data converter.
 The original failed occurrence remains truthful historical evidence.
 
+Operational recovery completed at 13:58:57 UTC: Temporal reset the failed parent
+to the workflow task immediately before its merge child was created. Recorded
+implementation, verification, and publication stayed intact. The canonical
+merge gate re-read the already-merged PR, confirmed its repaired head, completed
+GitHub issue finalization, and returned parent `success` / Temporal `COMPLETED`.
+The terminal receipt is retained as `recurring-terminal-success.json` in the
+incident directory. The next unchanged schedule occurrence had independently
+started at 13:50 UTC. This proves a recovered production occurrence; it does not
+claim the broader automatic recovery stories below are complete.
+
 1. Extend the existing image-owned release controller as the single promotion,
    installation, rollback, and routing-repair owner. Reuse its durable jobs,
    locks, canaries, CAS, retained cohorts, and cleanup reconciliation.
