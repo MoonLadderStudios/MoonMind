@@ -51,12 +51,12 @@ def test_manifest_run_target_raises_retired_error() -> None:
 def test_ordinary_targets_still_map_to_run() -> None:
     """Ordinary queue targets keep migrating; nothing is silently dropped."""
     ns = _load_target_mapping_namespace()
-    assert ns["_workflow_type_for_target"]({"kind": "queue_task"}) == "MoonMind.Run"
+    assert ns["_workflow_type_for_target"]({"kind": "queue_task"}) == "MoonMind.UserWorkflow"
     assert (
         ns["_workflow_type_for_target"]({"kind": "queue_task_template"})
-        == "MoonMind.Run"
+        == "MoonMind.UserWorkflow"
     )
-    assert ns["_workflow_type_for_target"]({"kind": "other"}) == "MoonMind.Run"
+    assert ns["_workflow_type_for_target"]({"kind": "other"}) == "MoonMind.UserWorkflow"
 
 
 def test_retired_definitions_skip_before_schedule_creation() -> None:

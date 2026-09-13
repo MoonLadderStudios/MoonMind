@@ -24,7 +24,7 @@ class RetiredManifestTargetError(ValueError):
 def _workflow_type_for_target(target: dict) -> str:
     kind = str(target.get("kind") or "")
     if kind in {"queue_task", "queue_task_template"}:
-        return "MoonMind.Run"
+        return "MoonMind.UserWorkflow"
     if kind == "manifest_run":
         # MoonLadderStudios/MoonMind#4188 (MR1): the native Manifest product
         # is retired. Never convert a retired definition into an ordinary
@@ -37,7 +37,7 @@ def _workflow_type_for_target(target: dict) -> str:
             "the new release does not register or launch manifest ingest "
             "workflows; skipping Temporal Schedule creation."
         )
-    return "MoonMind.Run"
+    return "MoonMind.UserWorkflow"
 
 
 async def migrate_definitions() -> None:
