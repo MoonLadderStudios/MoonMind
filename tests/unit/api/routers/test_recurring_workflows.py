@@ -383,7 +383,7 @@ async def test_run_recurring_workflow_now_returns_run_row() -> None:
     assert response.definition_id == definition.id
     assert response.outcome == "pending_dispatch"
     assert response.started_at is None
-    service.create_manual_run.assert_awaited_once_with(definition)
+    service.create_manual_run.assert_awaited_once_with(definition, request_id=None)
 
 @pytest.mark.asyncio
 async def test_delete_recurring_workflow_deletes_authorized_definition() -> None:

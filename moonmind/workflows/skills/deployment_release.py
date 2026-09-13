@@ -147,6 +147,106 @@ def state_root():
     return Path(path).parent / "release-jobs"
 
 
+async def launch_updater(runner, directory, request):
+    """One immutable launch path shared by submission and owner recovery."""
+    owner = request["authored"]["owner"]
+    name = f"moonmind-release-update-{directory.name}"
+    observed = await inspect_owned(name, owner)
+    if observed is None:
+        launched = await runner._run_compose_command(
+            (
+                "docker",
+                "compose",
+                "run",
+                "-d",
+                "--no-deps",
+                "--name",
+                name,
+                "--label",
+                f"moonmind.release.owner={owner}",
+                "--entrypoint",
+                "python",
+                CONTROL_SERVICE,
+                "-m",
+                "moonmind.workflows.skills.deployment_release",
+                str(directory / "request.json"),
+            ),
+            requested_image=request["image"],
+        )
+        observed = await inspect_owned(name, owner)
+        if observed is None:
+            _ensure_command_succeeded("launch updater", launched)
+            raise RuntimeError("Updater launch has no remotely verified owner")
+    if observed["Image"] != request["imageId"]:
+        raise ValueError("Updater container image differs from the pinned release")
+    await docker("update", "--restart=no", name)
+    return observed
+
+
+async def successful_release_image(root, version):
+    """Recover image authority from an exact successful immutable release.
+
+    A local image, a newer request, or a failed promotion grants no authority.
+    Validate the image's own manifest before reconstructing any worker cohort.
+    """
+    for path in sorted(root.glob("*/routing.json")):
+        routing = json.loads(path.read_text())
+        if f"{routing['deployment']}.{routing['candidate']}" != version:
+            continue
+        directory = path.parent
+        receipt_file = directory / "deployment-result.json"
+        request_file = directory / "request.json"
+        if not receipt_file.exists() or not request_file.exists():
+            continue
+        receipt = json.loads(receipt_file.read_text())
+        request = json.loads(request_file.read_text())
+        if receipt.get("owner") != request["authored"]["owner"]:
+            raise ValueError("Successful release receipt owner differs")
+        if receipt.get("result", {}).get("status") != "COMPLETED":
+            continue
+        digest = request["image"].partition("@")[2] or request["image"]
+        outputs = receipt["result"].get("outputs", {})
+        if not digest.startswith("sha256:") or outputs.get("resolvedDigest") != digest:
+            raise ValueError("Successful release receipt image differs")
+        image_ids = set((await docker("image", "ls", "-q", "--no-trunc")).split())
+        if request["imageId"] not in image_ids:
+            await docker("pull", request["image"])
+        image = json.loads(await docker("image", "inspect", request["imageId"]))[0]
+        if image["Id"] != request["imageId"]:
+            raise ValueError("Successful release image identity differs")
+        manifest = json.loads(
+            await docker(
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--entrypoint",
+                "python",
+                request["imageId"],
+                "-c",
+                "import json; from moonmind.release_identity import installed_release; "
+                "print(json.dumps(installed_release()))",
+            )
+        )
+        if (
+            not manifest
+            or manifest.get("digest") != routing["candidate"]
+            or (
+                manifest.get("sourceRevision")
+                != request["authored"]["inputs"]["sourceRevision"]
+            )
+        ):
+            raise ValueError(
+                "Successful release manifest differs from its source authority"
+            )
+        return {
+            "image": request["imageId"],
+            "sourceReceipt": directory.name,
+            "sourceRevision": manifest["sourceRevision"],
+        }
+    return None
+
+
 async def execute_detached(executor, inputs, context):
     """Launch once or reattach, without retaining self-recreation authority."""
     owner = str(context.get("idempotency_key") or context.get("workflow_id") or "")
@@ -217,38 +317,7 @@ async def execute_detached(executor, inputs, context):
             raise ValueError("Release identity is already bound to different inputs")
     if not result_file.exists():
         await require_coherent_images(executor.runner, record["image"])
-        existing = await inspect_owned(name, owner)
-        if existing is None:
-            launched = await executor.runner._run_compose_command(
-                (
-                    "docker",
-                    "compose",
-                    "run",
-                    "-d",
-                    "--no-deps",
-                    "--name",
-                    name,
-                    "--label",
-                    f"moonmind.release.owner={owner}",
-                    "--entrypoint",
-                    "python",
-                    CONTROL_SERVICE,
-                    "-m",
-                    "moonmind.workflows.skills.deployment_release",
-                    str(request_file),
-                ),
-                requested_image=record["image"],
-            )
-            # Reconcile the daemon even if Compose lost its acknowledgement.
-            existing = await inspect_owned(name, owner)
-            if existing is None:
-                _ensure_command_succeeded("launch updater", launched)
-                raise RuntimeError("Updater launch has no remotely verified owner")
-        if existing["Image"] != record["imageId"]:
-            raise ValueError("Updater container image differs from the pinned release")
-        # Compose services normally restart forever. The bounded job's terminal
-        # receipt owns completion, so the one-off must not inherit that policy.
-        await docker("update", "--restart=no", name)
+        await launch_updater(executor.runner, directory, record)
         while not result_file.exists():
             if time.time() >= record["deadline"]:
                 raise RuntimeError(
@@ -310,29 +379,33 @@ class ReleaseCohort:
             if retained["owner"] != self.owner or retained["version"] != previous:
                 raise ValueError("Retained release authority differs")
         else:
-            images = set()
-            for service in _FLEET_SERVICE_NAMES.values():
-                found = await self.runner._run_compose_command(
-                    ("docker", "compose", "ps", "-q", service)
-                )
-                _ensure_command_succeeded("inspect previous release", found)
-                identifiers = found["stdout"].split()
-                if len(identifiers) != 1 or not readiness_matches(
-                    await worker_readiness(identifiers[0]), expected_digest
-                ):
-                    raise ValueError(
-                        "Previous release has no coherent live worker owner"
+            evidence = await successful_release_image(self.directory.parent, previous)
+            if evidence is not None:
+                retained = {"owner": self.owner, "version": previous, **evidence}
+            else:
+                images = set()
+                for service in _FLEET_SERVICE_NAMES.values():
+                    found = await self.runner._run_compose_command(
+                        ("docker", "compose", "ps", "-q", service)
                     )
-                observed = json.loads(await docker("inspect", identifiers[0]))[0]
-                images.add(observed["Image"])
-            if len(images) != 1:
-                raise ValueError("Previous release spans different images")
-            retained = {
-                "owner": self.owner,
-                "version": previous,
-                "image": images.pop(),
-                "retired": [],
-            }
+                    _ensure_command_succeeded("inspect previous release", found)
+                    identifiers = found["stdout"].split()
+                    if len(identifiers) != 1 or not readiness_matches(
+                        await worker_readiness(identifiers[0]), expected_digest
+                    ):
+                        raise ValueError(
+                            "Previous release has no coherent live worker owner"
+                        )
+                    observed = json.loads(await docker("inspect", identifiers[0]))[0]
+                    images.add(observed["Image"])
+                if len(images) != 1:
+                    raise ValueError("Previous release spans different images")
+                retained = {
+                    "owner": self.owner,
+                    "version": previous,
+                    "image": images.pop(),
+                    "retired": [],
+                }
             write_record(record_file, retained)
         retained_runner = self.runner
         if self.runner.compose_file == "/app/release/docker-compose.yaml":
@@ -379,6 +452,8 @@ class ReleaseCohort:
                     )
             if existing["Image"] != retained["image"]:
                 raise ValueError("Retained worker image differs from previous release")
+            if not existing["State"]["Running"]:
+                await docker("start", name)
             for attempt in range(60):
                 try:
                     if readiness_matches(await worker_readiness(name), expected_digest):
@@ -450,6 +525,7 @@ class ReleaseCohort:
         )
         from moonmind.workflows.temporal.workers import (
             _FLEET_SERVICE_NAMES,
+            WORKFLOW_FLEET,
             build_all_worker_topologies,
         )
 
@@ -544,6 +620,12 @@ class ReleaseCohort:
                     build_id=release["digest"],
                     expected_current=previous,
                     task_queue=topologies[0].task_queues[0],
+                    workflow_queues=tuple(
+                        queue
+                        for item in topologies
+                        if item.fleet == WORKFLOW_FLEET
+                        for queue in item.task_queues
+                    ),
                     task_queues=tuple(
                         dict.fromkeys(
                             queue for item in topologies for queue in item.task_queues

@@ -101,6 +101,8 @@ class GenericOmnigentExecutionServices:
     machine_capacity: Any | None = None
     machine_backend_ref: str | None = None
     owned_container_inventory: Any | None = None
+    planned_host_resolver: Any | None = None
+    machine_budget_provider: Any | None = None
 
 
 # MoonLadderStudios/MoonMind#3878: the services graph is rebuilt per execution,
@@ -306,6 +308,11 @@ def build_generic_omnigent_execution_services(
         machine_budget_provider=machine_budget,
     )
     from moonmind.omnigent.activity_ownership import current_delivery_owner
+    planned_host_resolver = OmnigentPlannedHostResolver(
+        catalog_repository=catalogs,
+        host_class_selector=selector,
+        artifact_gateway=artifacts,
+    )
     realizer = GenericOmnigentHostRealizer(
         execution_owner=current_delivery_owner,
         runtime_binding_store=runtime_bindings,
@@ -316,14 +323,12 @@ def build_generic_omnigent_execution_services(
         credential_provisioning_service=credentials,
         host_lease_repository=host_leases,
         host_runtime=host_runtime,
-        planned_host_resolver=OmnigentPlannedHostResolver(
-            catalog_repository=catalogs,
-            host_class_selector=selector,
-            artifact_gateway=artifacts,
-        ),
+        planned_host_resolver=planned_host_resolver,
         session_driver=session_driver,
         session_cleanup_service=OmnigentSessionCleanupService(client),
-        workspace_publisher=OmnigentWorkspacePublicationService(workspace_root, artifact_gateway=artifacts),
+        workspace_publisher=OmnigentWorkspacePublicationService(
+            workspace_root, artifact_gateway=artifacts
+        ),
         artifact_gateway=artifacts,
         turn_command_service=CanonicalTurnCommandService(
             OmnigentControlPlaneStore(session_factory)
@@ -365,6 +370,8 @@ def build_generic_omnigent_execution_services(
         machine_capacity=host_capacity_admission.machine_capacity,
         machine_backend_ref=host_capacity_admission.backend_ref,
         owned_container_inventory=owned_container_inventory,
+        planned_host_resolver=planned_host_resolver,
+        machine_budget_provider=machine_budget,
         planning_service=planning,
         realizer_registry=registry,
         catalog_service=OmnigentHarnessCatalogService(

@@ -1001,10 +1001,28 @@ async def _initialize_oidc_provider(app: FastAPI):
     )
 
 
+async def _observe_manual_schedule_requests():
+    """API-owned read reconciliation survives unavailable workflow routing."""
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowsService,
+    )
+
+    while True:
+        try:
+            async with asyncio.timeout(25), get_async_session_context() as session:
+                await RecurringWorkflowsService(session).reconcile_manual_runs()
+        except Exception:
+            logger.warning("Manual schedule request observation deferred")
+        await asyncio.sleep(30)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup logic
     await startup_event()
+    app.state.manual_schedule_observer_task = asyncio.create_task(
+        _observe_manual_schedule_requests(), name="manual-schedule-observer"
+    )
     from moonmind.omnigent.settings import build_omnigent_gate
 
     if build_omnigent_gate().enabled:
@@ -1023,6 +1041,7 @@ async def lifespan(app: FastAPI):
             for name in (
                 "omnigent_bootstrap_reconciliation_task",
                 "omnigent_inventory_task",
+                "manual_schedule_observer_task",
             )
             if (task := getattr(app.state, name, None)) is not None
         ]

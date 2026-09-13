@@ -88,6 +88,17 @@ bounded observation; retrying a lost response cannot silently create another
 run. Overlap policy remains authoritative and is not silently changed by the
 Run-now button.
 
+Manual requests accept a UUID `Idempotency-Key`. The API persists the request
+before contacting Temporal and supplies its ID and exact authored `scheduled_time`
+to the schedule patch. The action's matching schedule time, workflow ID, and run
+ID prove the observed start; the latest action and lifetime skip count do not.
+For Skip, a positively observed running owner can answer "already running"
+without submitting another trigger. After an uncertain acknowledgement, the
+API-owned observer reads the recorded request every 30 seconds and after restart.
+It never resubmits a pending request. Uncorrelated or historical ambiguous rows
+remain pending; lack of an execution ID never proves a skip. Reusing an
+idempotency key returns the existing request, including after response loss.
+
 An occurrence waiting for an absent worker release reports infrastructure
 unavailability and points to the deployment recovery owner. Recurring
 occurrences retain the same authored-input and recovery evidence contract as

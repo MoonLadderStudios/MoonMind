@@ -683,10 +683,19 @@ class TestTriggerSchedule:
         handle = _mock_schedule_handle()
         mock_client = MagicMock()
         mock_client.get_schedule_handle = MagicMock(return_value=handle)
+        mock_client.namespace = "default"
+        mock_client.identity = "test-client"
+        handle.id = _SCHEDULE_ID
+        mock_client.workflow_service.patch_schedule = AsyncMock()
 
         adapter = _make_adapter(mock_client)
         await adapter.trigger_schedule(definition_id=_TEST_UUID)
-        handle.trigger.assert_awaited_once()
+        mock_client.workflow_service.patch_schedule.assert_awaited_once()
+        patch = mock_client.workflow_service.patch_schedule.call_args.args[0]
+        assert patch.schedule_id == _SCHEDULE_ID
+        assert patch.request_id
+        assert patch.patch.trigger_immediately.HasField("scheduled_time")
+        handle.trigger.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_returns_triggered_workflow_metadata_from_recent_action(self) -> None:
@@ -703,6 +712,7 @@ class TestTriggerSchedule:
                             start_workflow_result=SimpleNamespace(
                                 workflow_id="workflow-from-trigger",
                                 run_id="run-from-trigger",
+                                disposition="started",
                             ),
                         )
                     ]
@@ -711,15 +721,22 @@ class TestTriggerSchedule:
         ]
         mock_client = MagicMock()
         mock_client.get_schedule_handle = MagicMock(return_value=handle)
+        mock_client.namespace = "default"
+        mock_client.identity = "test-client"
+        handle.id = _SCHEDULE_ID
+        mock_client.workflow_service.patch_schedule = AsyncMock()
 
         adapter = _make_adapter(mock_client)
-        result = await adapter.trigger_schedule(definition_id=_TEST_UUID)
+        result = await adapter.trigger_schedule(
+            definition_id=_TEST_UUID, scheduled_at=scheduled_at
+        )
 
         assert result == ScheduleTriggerResult(
             scheduled_at=scheduled_at,
             started_at=scheduled_at,
             workflow_id="workflow-from-trigger",
             run_id="run-from-trigger",
+            disposition="started",
         )
 
     @pytest.mark.asyncio
@@ -745,6 +762,10 @@ class TestTriggerSchedule:
         ]
         mock_client = MagicMock()
         mock_client.get_schedule_handle = MagicMock(return_value=handle)
+        mock_client.namespace = "default"
+        mock_client.identity = "test-client"
+        handle.id = _SCHEDULE_ID
+        mock_client.workflow_service.patch_schedule = AsyncMock()
 
         adapter = _make_adapter(mock_client)
         result = await adapter.trigger_schedule(definition_id=_TEST_UUID)
@@ -786,10 +807,15 @@ class TestErrorWrapping:
     @pytest.mark.asyncio
     async def test_trigger_operation_error_wraps(self) -> None:
         handle = _mock_schedule_handle()
-        handle.trigger = AsyncMock(side_effect=RuntimeError("server unavailable"))
+        handle.id = _SCHEDULE_ID
 
         mock_client = MagicMock()
         mock_client.get_schedule_handle = MagicMock(return_value=handle)
+        mock_client.namespace = "default"
+        mock_client.identity = "test-client"
+        mock_client.workflow_service.patch_schedule = AsyncMock(
+            side_effect=RuntimeError("server unavailable")
+        )
 
         adapter = _make_adapter(mock_client)
         with pytest.raises(ScheduleOperationError, match="server unavailable"):

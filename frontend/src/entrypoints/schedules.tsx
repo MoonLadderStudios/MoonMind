@@ -225,6 +225,16 @@ const SchedulesBootDataSchema = z
   })
   .passthrough();
 
+function RunNowResult({ run }: { run: ScheduleRun }) {
+  const href = run.temporalWorkflowId
+    ? `/workflows/${encodeURIComponent(run.temporalWorkflowId)}?source=temporal`
+    : `/schedules/${encodeURIComponent(run.definitionId)}`;
+  const label = run.outcome === 'enqueued' ? 'Execution started'
+    : run.outcome === 'skipped' ? 'Already running; no new execution started'
+      : 'Waiting for execution evidence';
+  return <p role="status"><a href={href}>{label}</a></p>;
+}
+
 function scheduleBootData(payload: BootPayload) {
   const parsed = SchedulesBootDataSchema.safeParse(payload.initialData || {});
   return parsed.success ? parsed.data : undefined;
@@ -1052,6 +1062,7 @@ function ScheduleDetailPage({
 
   const runsQuery = useQuery({
     queryKey: ['schedule-runs', definitionId, runsEndpoint],
+    refetchInterval: (query) => query.state.data?.items.some((run) => run.outcome === 'pending_dispatch') ? 5000 : false,
     queryFn: async () => {
       const response = await fetch(runsEndpoint, { credentials: 'include' });
       if (!response.ok) {
@@ -1098,16 +1109,21 @@ function ScheduleDetailPage({
     },
   });
 
+  const runNowRequestId = useRef<string | null>(null);
   const runNowMutation = useMutation({
     mutationFn: async () => {
+      runNowRequestId.current ??= crypto.randomUUID();
       const response = await fetch(runNowEndpoint, {
         method: 'POST',
         credentials: 'include',
+        headers: { 'Idempotency-Key': runNowRequestId.current },
       });
       if (!response.ok) {
         throw new Error(await responseErrorMessage(response, 'Failed to run schedule'));
       }
-      return ScheduleRunSchema.parse(await response.json());
+      const run = ScheduleRunSchema.parse(await response.json());
+      runNowRequestId.current = null;
+      return run;
     },
     onSuccess: async () => {
       await refreshDetail();
@@ -1289,7 +1305,7 @@ function ScheduleDetailPage({
             disabled={runNowMutation.isPending || !actions?.canRun}
             title={!actions?.canRun ? actions?.runReason : undefined}
           >
-            {runNowMutation.isPending ? 'Running' : 'Run now'}
+            {runNowMutation.isPending ? 'Requesting' : 'Run now'}
           </button>
           {actions?.canDelete ? (
             <button
@@ -1350,6 +1366,7 @@ function ScheduleDetailPage({
           {errorMessage(updateMutation.error, 'Failed to update schedule')}
         </div>
       )}
+      {runNowMutation.data && <RunNowResult run={runs.find((run) => run.id === runNowMutation.data?.id) || runNowMutation.data} />}
       {runNowMutation.isError && (
         <div className="schedules-error" role="alert">
           {errorMessage(runNowMutation.error, 'Failed to run schedule')}
@@ -1818,13 +1835,17 @@ function ScheduleRowActions({
   const invalidateList = () =>
     queryClient.invalidateQueries({ queryKey: ['schedules'] });
 
+  const runNowRequestId = useRef<string | null>(null);
   const runNowMutation = useMutation({
     mutationFn: async () => {
+      runNowRequestId.current ??= crypto.randomUUID();
       const response = await fetch(runNowEndpoint, { method: 'POST', credentials: 'include' });
       if (!response.ok) {
         throw new Error(await responseErrorMessage(response, 'Failed to run schedule'));
       }
-      return ScheduleRunSchema.parse(await response.json());
+      const run = ScheduleRunSchema.parse(await response.json());
+      runNowRequestId.current = null;
+      return run;
     },
     onSuccess: () => invalidateList(),
   });
@@ -1854,6 +1875,7 @@ function ScheduleRowActions({
   // (docs/UI/RecurringSchedulesPage.md#s21) with confirmation + permission handling.
   return (
     <div className="schedules-row-actions">
+      {runNowMutation.data && <RunNowResult run={runNowMutation.data} />}
       <button
         type="button"
         className="secondary"
@@ -1866,7 +1888,7 @@ function ScheduleRowActions({
           : { title: availability.runReason })}
         aria-label={`Run ${schedule.name} now`}
       >
-        {runNowMutation.isPending ? 'Running' : 'Run now'}
+        {runNowMutation.isPending ? 'Requesting' : 'Run now'}
       </button>
       <button
         type="button"

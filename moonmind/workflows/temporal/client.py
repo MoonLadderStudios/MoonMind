@@ -163,6 +163,8 @@ class ScheduleTriggerResult:
     started_at: datetime | None = None
     workflow_id: str | None = None
     run_id: str | None = None
+    disposition: str = "pending"
+    message: str | None = None
 
 def _schedule_object_value(source: object, *keys: str) -> Any:
     if source is None:
@@ -196,10 +198,12 @@ def _schedule_datetime(value: object) -> datetime | None:
         return _schedule_datetime(parsed)
     return None
 
+
 def _latest_schedule_trigger_result(
     description: object,
     *,
     not_before: datetime | None = None,
+    scheduled_at: datetime | None = None,
 ) -> ScheduleTriggerResult:
     """Extract the latest start-workflow action from a schedule description."""
 
@@ -230,6 +234,7 @@ def _latest_schedule_trigger_result(
         )
 
     threshold = _schedule_datetime(not_before) if not_before is not None else None
+    requested_time = _schedule_datetime(scheduled_at)
     for action_result in sorted(action_results, key=_sort_key, reverse=True):
         scheduled_at = (
             _schedule_datetime(
@@ -247,6 +252,8 @@ def _latest_schedule_trigger_result(
                 _schedule_object_value(action_result, "started_at", "startedAt")
             )
         )
+        if requested_time is not None and scheduled_at != requested_time:
+            continue
         action_time = started_at or scheduled_at
         if (
             threshold is not None
@@ -274,8 +281,10 @@ def _latest_schedule_trigger_result(
                 started_at=started_at,
                 workflow_id=str(workflow_id) if workflow_id else None,
                 run_id=str(run_id) if run_id else None,
+                disposition="started" if workflow_id and run_id else "pending",
             )
     return ScheduleTriggerResult()
+
 
 async def get_temporal_client(address: str, namespace: str) -> Client:
     """Connect to and return a Temporal client."""
@@ -1364,35 +1373,78 @@ class TemporalClientAdapter:
                 f"Failed to unpause schedule: {exc}"
             ) from exc
 
-    async def trigger_schedule(self, *, definition_id: Any) -> ScheduleTriggerResult:
-        """Trigger an immediate run of the schedule.
+    async def observe_schedule_trigger(
+        self, *, definition_id: Any, scheduled_at: datetime
+    ) -> ScheduleTriggerResult:
+        """Read the action identified by the timestamp we explicitly authored.
 
-        Raises:
-            ScheduleNotFoundError: if the schedule does not exist.
-            ScheduleOperationError: on unexpected SDK failure.
+        Never substitute the latest action or infer a skip from a lifetime
+        counter. Reads can be repeated after response loss without triggering.
         """
-        from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
+        _, description = await self._get_schedule_handle(definition_id)
+        return _latest_schedule_trigger_result(description, scheduled_at=scheduled_at)
 
-        handle, _desc = await self._get_schedule_handle(definition_id)
+    async def trigger_schedule(
+        self,
+        *,
+        definition_id: Any,
+        request_id: str | None = None,
+        scheduled_at: datetime | None = None,
+    ) -> ScheduleTriggerResult:
+        from uuid import uuid4
+        from google.protobuf.timestamp_pb2 import Timestamp
+        from temporalio.api.schedule.v1 import SchedulePatch, TriggerImmediatelyRequest
+        from temporalio.api.workflowservice.v1 import PatchScheduleRequest
+        from temporalio.client import ScheduleOverlapPolicy, WorkflowExecutionStatus
+
+        handle, description = await self._get_schedule_handle(definition_id)
+        client = await self.get_client()
+        # A positive active-owner observation can answer Skip without sending
+        # an unobservable trigger. Temporal remains the overlap authority.
+        if description.schedule.policy.overlap == ScheduleOverlapPolicy.SKIP:
+            for running in description.info.running_actions:
+                owner = client.get_workflow_handle(
+                    running.workflow_id, run_id=running.first_execution_run_id
+                )
+                observed = await owner.describe()
+                if observed.status == WorkflowExecutionStatus.RUNNING:
+                    return ScheduleTriggerResult(
+                        workflow_id=running.workflow_id,
+                        run_id=running.first_execution_run_id,
+                        disposition="skipped",
+                        message="Already running; no new execution started.",
+                    )
+        scheduled_at = scheduled_at or datetime.now(timezone.utc)
+        timestamp = Timestamp()
+        timestamp.FromDatetime(scheduled_at)
+        # SDK trigger() invents both identities internally. Persisted callers
+        # supply them here, including the scheduled_time supported by Temporal.
         try:
-            triggered_after = datetime.now(timezone.utc)
-            await handle.trigger()
-        except Exception as exc:
-            raise ScheduleOperationError(
-                f"Failed to trigger schedule: {exc}"
-            ) from exc
-        try:
-            description = await handle.describe()
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "Failed to describe schedule after trigger",
-                exc_info=True,
+            await client.workflow_service.patch_schedule(
+                PatchScheduleRequest(
+                    namespace=client.namespace,
+                    schedule_id=handle.id,
+                    request_id=request_id or str(uuid4()),
+                    identity=client.identity,
+                    patch=SchedulePatch(
+                        trigger_immediately=TriggerImmediatelyRequest(
+                            scheduled_time=timestamp,
+                        )
+                    ),
+                )
             )
+        except Exception as exc:
+            from moonmind.workflows.temporal.schedule_errors import (
+                ScheduleOperationError,
+            )
+
+            raise ScheduleOperationError(f"Failed to trigger schedule: {exc}") from exc
+        try:
+            return await self.observe_schedule_trigger(
+                definition_id=definition_id, scheduled_at=scheduled_at
+            )
+        except Exception:
             return ScheduleTriggerResult()
-        return _latest_schedule_trigger_result(
-            description,
-            not_before=triggered_after,
-        )
 
     async def delete_schedule(self, *, definition_id: Any) -> None:
         """Delete a Temporal Schedule.
