@@ -386,7 +386,10 @@ class AcceptedRepositoryEvidence(BaseModel):
     candidate_contaminated: Literal[False] = Field(
         False, alias="candidateContaminated"
     )
-    remote_verified: Literal[True] = Field(..., alias="remoteVerified")
+    # Exact branch-tip proof, never mere saved-commit reachability. A trusted
+    # no_commits result may retain the saved revision after its base advances;
+    # older exact-head consumers already reject remoteVerified=False.
+    remote_verified: bool = Field(..., alias="remoteVerified")
     authority: Literal[
         "agent_runtime.fetch_result",
         "omnigent.profile_bound_execution",
@@ -405,6 +408,8 @@ class AcceptedRepositoryEvidence(BaseModel):
             raise ValueError("push status and repositoryChanged disagree")
         if expected_changed and self.commits_ahead_of_base < 1:
             raise ValueError("pushed repository evidence requires commits over base")
+        if expected_changed and not self.remote_verified:
+            raise ValueError("pushed repository evidence requires exact remote head")
         if not expected_changed and self.commits_ahead_of_base != 0:
             raise ValueError("no-commit repository evidence cannot be ahead of base")
         return self

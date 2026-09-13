@@ -174,6 +174,11 @@ publication or proof of completion on the current target. It cannot discover an
 unrelated PR from the shared base. Reusing an owned candidate and performing an
 actual publication retain exact remote-head checks; divergence is not ordinary
 base advancement.
+The accepted result keeps `remoteVerified` false for ancestor-only
+`no_commits` evidence. That distinction survives result serialization and
+prevents both current and retained exact-head remediation consumers from
+admitting a stale base as a write destination. It does not move the saved
+checkout or declare incomplete work complete.
 
 ## 5. Workflow and Batch Inheritance
 

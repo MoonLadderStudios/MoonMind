@@ -114,7 +114,7 @@ async def test_unchanged_candidate_retains_identity_without_publication_authorit
     assert evidence["push_status"] == "no_commits"
     assert evidence["push_head_sha"] == original
     assert evidence["push_commit_count"] == 0
-    assert evidence["remote_verified"] is True
+    assert evidence["remote_verified"] is (relation == "same")
     assert "pull_request_url" not in evidence
     resolve_pr.assert_not_awaited()
     assert git("rev-parse", "HEAD", cwd=workspace) == original
@@ -145,8 +145,18 @@ async def test_unchanged_candidate_retains_identity_without_publication_authorit
         request,
         AgentRunResult(summary="Prerequisite evidence remains outstanding."),
     )
+    result = AgentRunResult.model_validate_json(result.model_dump_json())
     accepted = result.metadata["acceptedRepositoryEvidence"]
     assert accepted["headSha"] == original and accepted["repositoryChanged"] is False
+    # This production consumer predates the repair. Reachability must not pass
+    # its exact-tip guard, including when a retained older workflow consumes it.
+    remediation = MoonMindRunWorkflow._verified_headless_remediation_workspace_spec(
+        node_inputs={"repository": "example/repository"}, outputs=result.metadata
+    )
+    if relation == "advanced":
+        assert remediation is None
+    else:
+        assert remediation["repositoryTarget"]["revision"]["commitSha"] == original
     feasibility = MoonMindRunWorkflow()._step_publication_feasibility(
         {"outputs": result.metadata}
     )
