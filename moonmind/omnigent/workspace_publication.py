@@ -210,8 +210,14 @@ class OmnigentWorkspacePublicationService:
         *,
         run_command: Any,
         base_branch: str,
+        allow_base_advance: bool = False,
     ) -> dict[str, Any]:
-        """Prove the unchanged local checkout is the exact remote base head."""
+        """Verify saved work against the remote branch without adopting its tip.
+
+        Owned candidate reuse requires exact equality. A no-change comparison
+        against the authored base may also prove the saved head is its ancestor;
+        this grants neither a new candidate nor completion-target authority.
+        """
 
         normalized_base = str(base_branch or "").strip()
         if not normalized_base:
@@ -231,10 +237,28 @@ class OmnigentWorkspacePublicationService:
             for line in str(remote_result.stdout or "").splitlines()
             if len(fields := line.split()) >= 2 and fields[1] == remote_ref
         }
+        verified = remote_heads == {head_sha}
+        if (
+            not verified
+            and allow_base_advance
+            and getattr(remote_result, "returncode", 1) == 0
+            and re.fullmatch(r"[0-9a-f]{40,64}", head_sha)
+            and len(remote_heads) == 1
+        ):
+            remote_head = next(iter(remote_heads))
+            if re.fullmatch(r"[0-9a-f]{40,64}", remote_head):
+                # Fetch the exact advertised object, not another mutable tip.
+                # Keep the admitted checkout and original candidate unchanged.
+                await run_command(["git", "fetch", "--no-tags", "origin", remote_head])
+                ancestry = await run_command(
+                    ["git", "merge-base", "--is-ancestor", head_sha, remote_head],
+                    check=False,
+                )
+                verified = getattr(ancestry, "returncode", 1) == 0
         if (
             getattr(remote_result, "returncode", 1) != 0
             or re.fullmatch(r"[0-9a-f]{40,64}", head_sha) is None
-            or remote_heads != {head_sha}
+            or not verified
         ):
             raise HarnessPlatformError(
                 "unchanged repository head did not match the exact remote base",
@@ -485,6 +509,7 @@ class OmnigentWorkspacePublicationService:
         if published.status == "skipped":
             result = await self._verified_no_commit_publication(
                 run_command=run_command,
+                allow_base_advance=True,
                 base_branch=(
                     str(published.base_branch or base_branch or "main").strip()
                     or "main"

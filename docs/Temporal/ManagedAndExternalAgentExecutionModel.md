@@ -554,6 +554,15 @@ head must still match the verified commit before its URL crosses the durable
 result boundary. Older requests without accepted publication authority retain
 no-commit evidence but cannot discover a PR from that base alone.
 
+For an unchanged checkout, ordinary advancement of the authored base does not
+lose the saved work. The workspace owner may prove that the exact saved commit
+is an ancestor of the advertised remote base by fetching that exact object and
+checking ancestry. It retains the original checkout and revision and emits
+`no_commits`, with zero commits to publish. That evidence does not claim the
+checkout equals the newer base or grant candidate, PR, or completion authority.
+Unchanged owned-candidate reuse still requires equality with its exact remote
+branch head. Diverged history and unreadable remote evidence remain failures.
+
 Before repository publication, the workspace owner fetches the authored base
 branch into its explicit remote-tracking ref using the same repository
 credential. A candidate-only clone must remain publishable without agent edits

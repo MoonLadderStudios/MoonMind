@@ -125,6 +125,17 @@ incident directory. The next unchanged schedule occurrence had independently
 started at 13:50 UTC. This proves a recovered production occurrence; it does not
 claim the broader automatic recovery stories below are complete.
 
+The 13:50 occurrence later produced a no-change remediation handoff while
+`main` advanced from its saved revision. The no-commit publisher demanded tip
+equality and exhausted retries even though the saved commit remained in the
+remote base's history. The bounded repair accepts proven ancestry only for
+zero-change base comparison, retains the saved revision, and leaves owned
+candidate reuse exact. Real Git fixtures cover same/advanced/diverged histories,
+omitted and explicit bases, both publish modes, unchanged remote refs and
+checkout, rejection of advanced owned candidates, and the parent classifying
+the result as having no publishable candidate. Unmet issue prerequisites remain
+unmet; this evidence does not turn the issue into a completed implementation.
+
 1. Extend the existing image-owned release controller as the single promotion,
    installation, rollback, and routing-repair owner. Reuse its durable jobs,
    locks, canaries, CAS, retained cohorts, and cleanup reconciliation.
