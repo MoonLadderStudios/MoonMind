@@ -666,7 +666,7 @@ async def verify_operator_access(image, urls, owner, *, expected_release=None):
     return {"status": "verified", "surfaces": surfaces}
 
 
-async def prepare_operator_access(runner, image, directory, owner):
+async def prepare_operator_access(runner, image, directory, owner, *, declared_urls=None):
     from moonmind.workflows.skills.deployment_surface import operator_urls
 
     path = directory / "operator-access-targets.json"
@@ -682,7 +682,7 @@ async def prepare_operator_access(runner, image, directory, owner):
             max_stdout_chars=None,
         )
         _ensure_command_succeeded("read operator access", rendered)
-        urls = operator_urls(json.loads(rendered["stdout"]))
+        urls = operator_urls(json.loads(rendered["stdout"]), declared_urls=declared_urls)
         recorded = reserve_record(path, {"owner": owner, "urls": urls})
         if recorded != {"owner": owner, "urls": urls}:
             raise ValueError("Operator access targets differ from the saved release")
@@ -762,7 +762,8 @@ async def _run_job_body(request_file):
             ] + [f"mm-candidate-{request_file.parent.name[:16]}-api"]
         else:
             operator_targets = await prepare_operator_access(
-                runner, record["image"], request_file.parent, owner
+                runner, record["image"], request_file.parent, owner,
+                declared_urls=context.get("deployment_operator_urls"),
             )
             async with get_async_session_context() as session:
                 executor = replace(

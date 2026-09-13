@@ -1,6 +1,7 @@
 """Real Compose interpolation preserves operator authority during image change."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -123,3 +124,44 @@ async def test_default_operator_origin_is_executable_after_real_compose_render(
     )
     assert result["exitCode"] == 0, result
     assert operator_urls(json.loads(result["stdout"])) == ["http://127.0.0.1:7000"]
+
+
+async def test_wildcard_operator_probe_preserves_real_compose_auth_startup(
+    tmp_path, monkeypatch
+):
+    """An update probe must not turn trusted HTTP access into cookie configuration."""
+    from fastapi import FastAPI
+    from api_service import main as api_main
+    from moonmind.security import auth_modes_4120 as auth_modes
+    from moonmind.workflows.skills.deployment_surface import operator_urls
+
+    original = (
+        "AUTH_PROVIDER=disabled\nMOONMIND_API_PUBLISH_HOST=0.0.0.0\n"
+        "MOONMIND_TRUSTED_INGRESS=1\nMOONMIND_PUBLIC_BASE_URL=\n"
+    )
+    (tmp_path / ".env").write_text(original)
+    for variable in ("AUTH_PROVIDER", "MOONMIND_API_PUBLISH_HOST", "MOONMIND_TRUSTED_INGRESS", "MOONMIND_PUBLIC_BASE_URL"):
+        monkeypatch.delenv(variable, raising=False)
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file=str(Path(__file__).resolve().parents[3] / "docker-compose.yaml"),
+        project_name="moonmind-test-operator-origin",
+    )
+    result = await runner._run_compose_command(
+        ("docker", "compose", "config", "--format", "json"), max_stdout_chars=None
+    )
+    assert result["exitCode"] == 0, result
+    configuration = json.loads(result["stdout"])
+    assert operator_urls(configuration, declared_urls=["http://vpn.example:7000"]) == ["http://vpn.example:7000"]
+    environment = configuration["services"]["api"]["environment"]
+    assert environment["MOONMIND_PUBLIC_BASE_URL"] == ""
+    assert (tmp_path / ".env").read_text() == original
+    for key in ("AUTH_PROVIDER", "MOONMIND_API_PUBLISH_HOST", "MOONMIND_TRUSTED_INGRESS", "MOONMIND_PUBLIC_BASE_URL"):
+        monkeypatch.setenv(key, environment[key])
+    monkeypatch.setenv("MOONMIND_SESSION_SECRET", "release-origin-test-key-32-bytes-long")
+    monkeypatch.delenv("MOONMIND_AUTH_MIGRATION_DECISION", raising=False)
+    monkeypatch.setattr(api_main.settings.oidc, "AUTH_PROVIDER", "disabled")
+    monkeypatch.setattr(auth_modes, "_ACTIVE_PRODUCTION_MODE", None)
+    app = FastAPI()
+    await api_main._initialize_oidc_provider(app)
+    assert app.state.auth_production_mode == "disabled"
