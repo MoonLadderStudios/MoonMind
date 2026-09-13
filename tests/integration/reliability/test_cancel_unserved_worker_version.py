@@ -125,6 +125,8 @@ async def test_cancel_preserves_live_state_until_worker_routing_recovers(
                 if await child.query("waiting"):
                     break
             except Exception:
+                # The child may not exist or serve queries until its first task;
+                # retry within the bounded readiness loop before failing the test.
                 pass
             await asyncio.sleep(0.05)
         else:

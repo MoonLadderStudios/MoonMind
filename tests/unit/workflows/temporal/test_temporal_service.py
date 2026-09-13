@@ -3465,6 +3465,9 @@ async def test_record_terminal_state_updates_projection_only_child_workflow(
 async def test_record_terminal_state_preserves_existing_terminal_summary(
     tmp_path, mock_client_adapter
 ):
+    mock_client_adapter.describe_workflow.return_value = SimpleNamespace(
+        status=WorkflowExecutionStatus.CANCELED
+    )
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
@@ -4361,10 +4364,11 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
             idempotency_key=None,
         )
 
-        await service.cancel_execution(
+        await service.record_terminal_state(
             workflow_id=created.workflow_id,
-            reason="done",
-            graceful=True,
+            state="canceled",
+            close_status="canceled",
+            summary="done",
         )
         service._client_adapter.update_workflow.reset_mock()
 
@@ -4432,10 +4436,11 @@ async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
             initial_parameters={"workflow": {"instructions": "Original task"}},
             idempotency_key=None,
         )
-        await service.cancel_execution(
+        await service.record_terminal_state(
             workflow_id=created.workflow_id,
-            reason="done",
-            graceful=True,
+            state="canceled",
+            close_status="canceled",
+            summary="done",
         )
 
         source_workflow_id = created.workflow_id
@@ -5592,10 +5597,11 @@ async def test_request_rerun_bounds_fresh_execution_idempotency_key(
             initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
-        await service.cancel_execution(
+        await service.record_terminal_state(
             workflow_id=created.workflow_id,
-            reason="done",
-            graceful=True,
+            state="canceled",
+            close_status="canceled",
+            summary="done",
         )
 
         long_idempotency_key = "k" * 128
@@ -7916,10 +7922,11 @@ async def test_mark_execution_succeeded_rejects_terminal_execution(
             idempotency_key=None,
         )
 
-        await service.cancel_execution(
+        await service.record_terminal_state(
             workflow_id=created.workflow_id,
-            reason="stop",
-            graceful=True,
+            state="canceled",
+            close_status="canceled",
+            summary="stop",
         )
 
         with pytest.raises(TemporalExecutionValidationError):
