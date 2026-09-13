@@ -24,7 +24,14 @@ from typing import Sequence, Union
 
 from alembic import op
 
-__all__ = ["revision", "down_revision", "upgrade", "downgrade"]
+__all__ = [
+    "revision",
+    "down_revision",
+    "branch_labels",
+    "depends_on",
+    "upgrade",
+    "downgrade",
+]
 
 revision: str = "380_manifest_drain_audit_4191"
 down_revision: Union[str, None] = "379_durable_issue_claims"
