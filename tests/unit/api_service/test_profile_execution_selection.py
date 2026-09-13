@@ -277,3 +277,92 @@ def test_configuration_expectation_rejects_changed_identity(changed):
     with pytest.raises(HTTPException) as error:
         validate_execution_configuration_expectation(expected, resolved)
     assert error.value.status_code == 409
+
+
+def test_mixed_harness_authored_pin_is_rejected() -> None:
+    """Bounded fault-injection for MoonLadderStudios/MoonMind#3950 R4.
+
+    An opencode Profile must not resolve through a codex-harness
+    configuration, even when the caller explicitly pins that foreign
+    identity. The mixed-harness label mutation must fail at the
+    selection boundary.
+    """
+    from api_service.services.profile_execution_selection import (
+        validate_execution_configuration_expectation,
+    )
+
+    opencode_provider = provider()
+    codex_row, codex_version = configuration("team-codex")
+    codex_version.document["providerRequirements"]["runtimeId"] = "codex_cli"
+    codex_version.document["providerRequirements"]["providerIds"] = ["openai"]
+    # Sanity: the foreign document is incompatible with the opencode Profile.
+    assert not configuration_accepts_profile(
+        codex_version.document, opencode_provider
+    )
+    with pytest.raises(HTTPException) as error:
+        select_execution_configuration(
+            provider(
+                execution_configuration={
+                    "profileId": "team-codex",
+                    "version": 1,
+                    "digest": "sha256:" + "a" * 64,
+                }
+            ),
+            [configuration(), (codex_row, codex_version)],
+        )
+    assert error.value.status_code == 409
+    assert (
+        error.value.detail["code"] == "profile_execution_configuration_required"
+    )
+    # The resolved opencode selection keeps its own harness; a swapped
+    # expectation naming the foreign profile must also be rejected.
+    resolved = select_execution_configuration(
+        opencode_provider, [configuration()]
+    )
+    with pytest.raises(HTTPException) as stale:
+        validate_execution_configuration_expectation(
+            {
+                "profileId": "team-codex",
+                "version": resolved["version"],
+                "digest": resolved["digest"],
+            },
+            resolved,
+        )
+    assert stale.value.status_code == 409
+
+
+def test_stale_target_after_profile_change_is_rejected() -> None:
+    """Stale execution-configuration expectation must fail after advancement."""
+    from api_service.services.profile_execution_selection import (
+        validate_execution_configuration_expectation,
+    )
+
+    resolved = select_execution_configuration(provider(), [configuration()])
+    stale_expectation = {
+        key: resolved[key] for key in ("profileId", "version", "digest")
+    }
+    advanced = dict(resolved)
+    advanced["version"] = resolved["version"] + 1
+    with pytest.raises(HTTPException) as error:
+        validate_execution_configuration_expectation(stale_expectation, advanced)
+    assert error.value.status_code == 409
+    assert (
+        error.value.detail["code"]
+        == "profile_execution_configuration_changed"
+    )
+
+
+def test_extra_execution_configuration_selector_field_is_rejected() -> None:
+    """Extra selector fields inside the immutable reference must fail closed."""
+    from api_service.services.profile_execution_selection import (
+        validate_execution_configuration_expectation,
+    )
+
+    resolved = select_execution_configuration(provider(), [configuration()])
+    mutated = {
+        **{key: resolved[key] for key in ("profileId", "version", "digest")},
+        "harnessId": "codex-native",
+    }
+    with pytest.raises(HTTPException) as error:
+        validate_execution_configuration_expectation(mutated, resolved)
+    assert error.value.status_code == 422
