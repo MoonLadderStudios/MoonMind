@@ -20,7 +20,7 @@ from moonmind.workflows.temporal.artifacts import (
     LocalTemporalArtifactStore, TemporalArtifactRepository, TemporalArtifactService,
 )
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.reliability_journey]
 
 
 @pytest.mark.parametrize('existing_workspace', [False, True])
