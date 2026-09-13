@@ -26,10 +26,12 @@ annotations:
     preset:github-issue-implement:
       github_issue: '{{ target.githubIssue }}'
       github_issue_ref: '{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}'
+      constraints: '{{ shared.constraints }}'
       run_verify: '{{ shared.run_verify }}'
     preset:github-issue-orchestrate:
       github_issue: '{{ target.githubIssue }}'
       github_issue_ref: '{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}'
+      constraints: '{{ shared.constraints }}'
       run_verify: '{{ shared.run_verify }}'
   inputSchema:
     type: object
@@ -56,6 +58,9 @@ annotations:
       max_workflows:
         type: string
         title: Max workflows
+      constraints:
+        type: string
+        title: Extra instructions / constraints
       run_verify:
         type: boolean
         title: Run verification
@@ -75,6 +80,9 @@ annotations:
       widget: select
     repository:
       advanced: true
+    constraints:
+      widget: textarea
+      advanced: true
     run_verify:
       widget: checkbox
     publish_mode:
@@ -83,6 +91,7 @@ annotations:
   defaults:
     run_ref: preset:github-issue-implement
     max_workflows: '25'
+    constraints: ''
     run_verify: true
     publish_mode: pr
 inputs:
@@ -109,6 +118,11 @@ inputs:
   type: text
   required: false
   default: '25'
+- name: constraints
+  label: Extra Instructions / Constraints
+  type: textarea
+  required: false
+  default: ''
 - name: run_verify
   label: Run Verification
   type: boolean
@@ -138,12 +152,14 @@ steps:
     context. Do not re-select provider, model, or effort: every child inherits the
     parent runtime via runtimeInheritance="caller".
 
-    This preset has no separate constraints input: this Instructions box is the
-    only batch-level guidance surface. Before invoking the helper, create the
-    artifacts directory and copy any operator-authored guidance added to this box
-    verbatim into artifacts/batch-workflows-constraints.txt so every child
-    workflow receives it as its constraints input. Copy only that added guidance,
-    never this template text. When the operator added none, leave the file absent
+    This preset carries batch-level operator guidance as a distinct
+    `constraints` input. The rendered `constraints` value is the only
+    operator-authored guidance surface: never infer operator intent from
+    template prose, and never forward this template text as a child
+    requirement. Materialize the `constraints` input value to
+    artifacts/batch-workflows-constraints.txt with a file write (never via
+    shell echo, redirection, or interpolation of the value into a shell
+    command). When the constraints input is empty, leave the file absent
     and the helper sends empty constraints.
 
     Resolve the range and queue each matched issue with "{{ inputs.run_ref }}" and
@@ -174,6 +190,7 @@ steps:
     target:
       runRef: '{{ inputs.run_ref }}'
     sharedInputs:
+      constraints: '{{ inputs.constraints }}'
       run_verify: '{{ inputs.run_verify }}'
     publish:
       mode: '{{ inputs.publish_mode }}'

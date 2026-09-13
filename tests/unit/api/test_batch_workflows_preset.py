@@ -409,3 +409,42 @@ async def test_batch_workflows_explicit_publish_override_wins_over_run_ref(tmp_p
             )
 
     assert expanded["steps"][0]["batchOrchestration"]["publish"]["mode"] == "none"
+
+
+async def test_batch_workflows_constraints_travel_via_file_not_shell(tmp_path):
+    """Arbitrary constraints must never be interpolated into a shell command.
+
+    The recipe passes only the fixed ``--constraints-file`` path; the value
+    itself travels as orchestration data and is materialized with a file
+    write (REQ-04).
+    """
+
+    adversarial = 'a"; $(touch /tmp/pwned) # `backtick` $HOME\nnewline ☃'
+    async with _catalog_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+
+            expanded = await service.expand_template(
+                slug="batch-workflows",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "jira_project_key": "MM",
+                    "jira_status": "In Progress",
+                    "run_ref": "preset:jira-implement",
+                    "constraints": adversarial,
+                },
+            )
+
+    step = expanded["steps"][0]
+    assert '--constraints "' not in step["instructions"]
+    assert (
+        "--constraints-file artifacts/batch-workflows-constraints.txt"
+        in step["instructions"]
+    )
+    # The fixed file path is on the command line; the arbitrary value is not.
+    assert adversarial not in step["instructions"]
+    assert (
+        step["batchOrchestration"]["sharedInputs"]["constraints"] == adversarial
+    )

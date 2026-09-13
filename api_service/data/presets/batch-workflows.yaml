@@ -226,8 +226,13 @@ steps:
     Step 2 - Queue one child workflow per resolved target running
     "{{ inputs.run_ref }}". Auto-bind the resolved issue target into the child
     capability's issue input and copy the shared constraints into every child.
-    Apply publish override "{{ inputs.publish_mode }}" once to every child. Run the
-    helper as a single command:
+    Apply publish override "{{ inputs.publish_mode }}" once to every child.
+    Materialize the shared `constraints` input value to
+    artifacts/batch-workflows-constraints.txt with a file write (never via
+    shell echo, redirection, or interpolation of the value into a shell
+    command); when empty, leave the file absent. Then run the helper as a
+    single command with the fixed file path only (the arbitrary constraints
+    value never appears on the shell command line):
     python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-workflows/bin/batch_workflows.py" \
     --targets artifacts/batch-workflows-targets.json \
     --run-ref "{{ inputs.run_ref }}" \
@@ -235,7 +240,7 @@ steps:
     --max-workflows "{{ inputs.max_workflows }}" \
     {% if inputs.run_verify %}--run-verify{% else %}--no-run-verify{% endif %} \
     {% if inputs.update_status %}--update-status{% else %}--no-update-status{% endif %} \
-    --constraints "{{ inputs.constraints }}"
+    --constraints-file artifacts/batch-workflows-constraints.txt
     The helper stamps runtimeInheritance="caller" plus a fallback copy of the parent
     runtime on each child and assigns a stable idempotency key per target kind,
     target slug, and resolved issue so reruns do not duplicate child workflows.

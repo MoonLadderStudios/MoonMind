@@ -57,7 +57,7 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
   --max-attempts 3 \
   --priority 0 \
   --merge-method squash \
-  --max-iterations 3 \
+  --max-iterations 5 \
   --runtime-mode <runtime_mode> \
   --runtime-model <model> \
   --runtime-effort <effort> \

@@ -1204,3 +1204,25 @@ def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp
     assert len(partial_evidence["errors"]) == 3
     assert "injected partial failure" in partial_evidence["errors"][0]["error"]
     assert partial_evidence["executionRef"] == "step-matrix"
+
+
+def test_read_constraints_file_delivers_adversarial_content_byte_identical(tmp_path):
+    """Operator constraints with shell metachars must pass through as data.
+
+    Constraints containing quotes, command substitutions, backticks,
+    newlines, and Unicode reach the child unchanged via --constraints-file
+    with no shell side effects (REQ-04).
+    """
+
+    import argparse
+
+    module = _load_module()
+    adversarial = 'say \"hi\"; $(touch /tmp/pwned) `id` $HOME\nnewline ☃ snowman'
+    constraints_file = tmp_path / "constraints.txt"
+    constraints_file.write_text(adversarial, encoding="utf-8")
+
+    args = argparse.Namespace(constraints=None, constraints_file=str(constraints_file))
+    assert module["_read_constraints"](args) == adversarial
+
+    marker = tmp_path / "pwned"
+    assert not marker.exists()
