@@ -201,6 +201,11 @@ async def test_typed_ramping_route_remains_in_recovery_set(tmp_path, monkeypatch
     (broken / "deployment-result.json").write_text("{broken")
     (broken / "request.json").write_text("{broken")
     (broken / "retained.json").write_text("{broken")
+    missing = tmp_path / "missing-authority"
+    missing.mkdir()
+    release.write_record(missing / "routing.json", {"deployment": "test"})
+    release.write_record(missing / "request.json", {"authored": {}})
+    release.write_record(missing / "retained.json", {})
     observed = []
 
     async def observe(_client, version, **_kwargs):
@@ -213,7 +218,10 @@ async def test_typed_ramping_route_remains_in_recovery_set(tmp_path, monkeypatch
     )
     assert observed == ["test.current", "test.ramping"]
     assert len(result["versions"]) == 2
-    assert len(result["discoveryErrors"]) == 2
+    assert len(result["discoveryErrors"]) == 3
+    assert {"record": "missing-authority", "errorCode": "ValueError"} in result[
+        "discoveryErrors"
+    ]
 
 
 @pytest.mark.asyncio
