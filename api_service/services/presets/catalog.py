@@ -103,6 +103,7 @@ _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS = frozenset(
         _JIRA_BREAKDOWN_SLUG,
         _JIRA_BREAKDOWN_ORCHESTRATE_SLUG,
         _JIRA_BREAKDOWN_IMPLEMENT_SLUG,
+        _STORY_BREAKDOWN_PUBLISH_SLUG,
     }
 )
 _JIRA_BREAKDOWN_PROJECT_INPUT = "jira_project_key"
@@ -115,6 +116,16 @@ _JIRA_BREAKDOWN_SOURCE_INPUTS = (
 _GITHUB_ISSUE_BREAKDOWN_SOURCE_INPUTS = (
     "source_design_path",
     "feature_request",
+)
+_STORY_BREAKDOWN_DECOMPOSE_SLUG = "story-breakdown-decompose"
+_STORY_BREAKDOWN_RECONCILE_SLUG = "story-breakdown-reconcile"
+_STORY_BREAKDOWN_PUBLISH_SLUG = "story-breakdown-publish"
+_STORY_BREAKDOWN_SHARED_SLUGS = frozenset(
+    {
+        _STORY_BREAKDOWN_DECOMPOSE_SLUG,
+        _STORY_BREAKDOWN_RECONCILE_SLUG,
+        _STORY_BREAKDOWN_PUBLISH_SLUG,
+    }
 )
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 _UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"{{\s*[^}]+\s*}}")
@@ -777,7 +788,20 @@ def _validate_breakdown_source_inputs(
     slug: str,
     inputs: Mapping[str, Any],
 ) -> None:
-    if slug in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
+    if slug == _STORY_BREAKDOWN_DECOMPOSE_SLUG:
+        provider_target = str(inputs.get("provider_target") or "jira").strip().lower()
+        if provider_target == "github":
+            source_inputs = _GITHUB_ISSUE_BREAKDOWN_SOURCE_INPUTS
+            provider_label = "GitHub issue"
+            source_message = "Provide a Source Document Path or Workflow Instructions."
+        else:
+            source_inputs = _JIRA_BREAKDOWN_SOURCE_INPUTS
+            provider_label = "Jira"
+            source_message = (
+                "Provide a Source Document Path, Source Jira Issue Key, "
+                "or Workflow Instructions."
+            )
+    elif slug in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
         source_inputs = _JIRA_BREAKDOWN_SOURCE_INPUTS
         provider_label = "Jira"
         source_message = (

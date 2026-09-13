@@ -34,10 +34,11 @@ If no readable story breakdown JSON path is available, stop with a clear blocker
 
 ## Classification Rules
 
-- Use `fully_implemented` only when every in-scope acceptance criterion and requirement has concrete repository evidence and the behavior is testable.
-- Use `partially_implemented` when at least one in-scope criterion is implemented and at least one remains missing or insufficiently validated.
+- Use `fully_implemented` only when every in-scope acceptance criterion and requirement has concrete repository evidence at the current revision and the behavior is proven by credible implementation and verification evidence (exercised production boundaries, tests, migrations, contracts, or configuration observed in this checkout). Mere existence of code or a statement that behavior is testable is insufficient.
+- Use `partially_implemented` when at least one in-scope criterion is implemented with credible evidence and at least one remains missing or insufficiently validated.
 - Use `not_implemented` when no meaningful in-scope implementation evidence exists.
-- Use `unverifiable` when the requirement is too ambiguous, depends on missing external context, or cannot be checked from the repository state available in this run.
+- Use `unverifiable` when the requirement is too ambiguous, depends on missing external context, or cannot be checked from the repository state available in this run. Do not create speculative implementation issues from missing context and do not silently discard an unverifiable story.
+- Reconcile at the actual revision. Preserve requirements already satisfied as regression constraints in remainingWork traceability; do not drop original scope, source references, coverage IDs, dependencies, assumptions, or non-goals when narrowing.
 - Be conservative. If evidence is weak, do not mark a story fully implemented.
 
 ## Story Output Contract
@@ -116,9 +117,12 @@ For an unverifiable story:
 }
 ```
 
-`issueCreation` is the canonical provider-neutral field. `jiraCreation` may be
-included only as a temporary compatibility alias when an existing Jira consumer
-requires it; new GitHub-facing handoffs must not rely on `jiraCreation`.
+`issueCreation` is the canonical provider-neutral field. New handoffs must consume
+`issueCreation` on both Jira and GitHub paths. `jiraCreation` is read only as a
+temporary historical decoder for proven persisted inputs with an explicit
+cutover condition (remove once persisted breakdowns have migrated); it must not
+appear in newly written stories and there is no permanent `jiraCreation` alias
+in new authoring.
 
 ## Markdown Report
 

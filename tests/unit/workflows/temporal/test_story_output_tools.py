@@ -1583,9 +1583,7 @@ async def test_create_jira_issues_accepts_provider_neutral_issue_creation():
     assert result.outputs["storyOutput"]["skippedStories"][0]["issueCreationAction"] == (
         "skip"
     )
-    assert result.outputs["storyOutput"]["skippedStories"][0]["jiraCreationAction"] == (
-        "skip"
-    )
+    assert "jiraCreationAction" not in result.outputs["storyOutput"]["skippedStories"][0]
     assert [request.summary for request in service.requests] == [
         "Create through neutral contract"
     ]
@@ -1870,7 +1868,6 @@ async def test_create_github_issues_prefers_provider_neutral_issue_creation():
             "summary": "Already complete through issueCreation",
             "implementationStatus": "fully_implemented",
             "issueCreationAction": "skip",
-            "jiraCreationAction": "skip",
             "reason": "Already implemented.",
         }
     ]

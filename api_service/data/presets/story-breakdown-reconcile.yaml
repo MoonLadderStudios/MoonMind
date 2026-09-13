@@ -1,0 +1,52 @@
+slug: story-breakdown-reconcile
+title: Story Breakdown Reconcile (shared)
+description: Shared portable story-to-implementation reconciliation used by breakdown composites. Always consumes issueCreation as the provider-neutral field.
+scope: global
+tags:
+  - moonspec
+  - breakdown
+  - reconcile
+  - shared
+requiredCapabilities:
+  - git
+annotations:
+  sourceSkill: story-reconcile-implementation
+  issueProvider: neutral
+  workflowPublish:
+    mode: none
+inputs:
+  - name: provider_target
+    label: Provider Target
+    type: enum
+    required: true
+    default: jira
+    options:
+      - jira
+      - github
+steps:
+  - title: Reconcile stories with current implementation
+    instructions: |-
+      Use story-reconcile-implementation to compare the generated MoonSpec story breakdown against the current repository implementation at the actual revision before any {% if inputs.provider_target == 'jira' %}Jira{% else %}GitHub{% endif %} issue creation occurs.
+
+      Read the runtime-provided story breakdown JSON path and rewrite that same JSON handoff with implementationStatus and issueCreation fields for every story. issueCreation is the canonical provider-neutral field for new handoffs; legacy provider-specific creation aliases must not appear in newly written stories (they are read only as a temporary historical decoder for proven persisted inputs).
+
+      Classification and evidence rules:
+      - Use fully_implemented only when every in-scope acceptance criterion and requirement has concrete repository evidence at the current revision and the behavior is proven by credible implementation and verification evidence (exercised production boundaries, tests, migrations, contracts, or configuration observed in this checkout). Mere existence of code or a statement that behavior is testable is insufficient.
+      - Use partially_implemented when at least one in-scope criterion is implemented with credible evidence and at least one remains missing or insufficiently validated.
+      - Use not_implemented when no meaningful in-scope implementation evidence exists.
+      - Use unverifiable when the requirement is too ambiguous, depends on missing external context, or cannot be checked from the repository state available in this run. Do not create speculative implementation issues from missing context and do not silently discard an unverifiable story.
+      - Be conservative. If evidence is weak, do not mark a story fully implemented.
+      - Reconcile at the actual revision. Preserve requirements already satisfied as regression constraints in remainingWork traceability; do not drop original requirements, non-goals, source references, coverage IDs, dependencies, or assumptions when narrowing.
+
+      Story dispositions (preserve fully implemented -> skip, partial -> remaining-work issue, not implemented -> issue, unverifiable -> non-mutating handoff):
+      - Mark fully implemented stories with issueCreation.action = "skip" so no {% if inputs.provider_target == 'jira' %}Jira{% else %}GitHub{% endif %} issue or downstream workflow execution is created for completed work.
+      - For partially implemented stories, preserve the original story scope and add remainingWork (summary, description, acceptanceCriteria, requirements covering only the unmet behavior) so the provider issue tracks only the remaining work while preserving original traceability.
+      - Mark unverifiable stories with issueCreation.action = "manual_review" so deterministic issue creation will not create implementation work automatically.
+      - For not implemented stories use issueCreation.action = "create_issue".
+      Write the reconciliation report to the runtime-provided markdown breakdown path when available.
+      Do not create {% if inputs.provider_target == 'jira' %}Jira{% else %}GitHub{% endif %} issues, do not create downstream workflow executions, and do not implement code in this reconciliation step.
+    skill:
+      id: story-reconcile-implementation
+      args: {}
+      requiredCapabilities:
+        - git

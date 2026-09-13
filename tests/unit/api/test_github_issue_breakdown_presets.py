@@ -44,6 +44,9 @@ def _seed_dir(tmp_path) -> Path:
     for filename in (
         "github-issue-breakdown-implement.yaml",
         "github-issue-breakdown-orchestrate.yaml",
+        "story-breakdown-decompose.yaml",
+        "story-breakdown-reconcile.yaml",
+        "story-breakdown-publish.yaml",
     ):
         shutil.copy(_PRESET_DIR / filename, seed_dir / filename)
     return seed_dir
@@ -88,64 +91,89 @@ async def test_github_issue_breakdown_seed_creates_issues_and_workflows(
 
             template = await _load_preset(session, slug)
 
-    assert template.title == title
-    assert sorted(template.required_capabilities) == ["gh", "git"]
-    assert "sourceReference" not in template.annotations
-    assert [item["name"] for item in template.inputs_schema] == [
-        "feature_request",
-        "source_design_path",
-        "github_repository",
-        "publish_mode",
-        "run_verify",
-        "source_issue_key",
+            assert template.title == title
+            assert sorted(template.required_capabilities) == ["gh", "git"]
+            assert "sourceReference" not in template.annotations
+            assert [item["name"] for item in template.inputs_schema] == [
+                "feature_request",
+                "source_design_path",
+                "github_repository",
+                "publish_mode",
+                "run_verify",
+                "source_issue_key",
+            ]
+            # Consolidated flow: callers compose shared components via includes with
+            # explicit provider/child bindings; expansion resolves them to skills.
+            assert [(step.get("kind") or "step", step.get("slug")) for step in template.steps] == [
+                ("include", "story-breakdown-decompose"),
+                ("include", "story-breakdown-reconcile"),
+                ("include", "story-breakdown-publish"),
+            ]
+            assert template.steps[0]["inputMapping"]["provider_target"] == "github"
+            assert template.steps[1]["inputMapping"]["provider_target"] == "github"
+            assert template.steps[2]["inputMapping"]["provider_target"] == "github"
+            expected_child = (
+                "github-issue-implement"
+                if slug == "github-issue-breakdown-implement"
+                else "github-issue-orchestrate"
+            )
+            assert template.steps[2]["inputMapping"]["child_preset"] == expected_child
+
+            expanded = await service.expand_template(
+                slug=slug,
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "feature_request": "Split MM-1063 work.",
+                    "source_design_path": "",
+                    "github_repository": "MoonLadderStudios/MoonMind",
+                    "publish_mode": "pr",
+                    "source_issue_key": "MM-1063",
+                },
+                context={"targetRuntime": "codex"},
+            )
+    expanded_skills = [
+        (step.get("skill") or step.get("tool"))["id"] for step in expanded["steps"]
     ]
-    assert [
-        (step.get("skill") or step.get("tool"))["id"]
-        for step in template.steps
-    ] == [
+    assert expanded_skills == [
         "moonspec-breakdown",
         "story-reconcile-implementation",
         "story.create_github_issues",
         workflow_skill,
     ]
-
-    create_step = template.steps[2]
     all_instructions = "\n".join(
-        step.get("instructions", "") for step in template.steps
+        step.get("instructions", "") for step in expanded["steps"]
     )
     assert "jiraCreation" not in all_instructions
     assert "issueCreation" in all_instructions
     assert "traceability-only" in all_instructions
-    assert "dependencyMode is intentionally none" in create_step["instructions"]
+    assert "dependencyMode is intentionally none" in expanded["steps"][2]["instructions"]
+    create_step = expanded["steps"][2]
     assert create_step["storyOutput"] == {
         "mode": "github",
         "fallback": "fail",
         "github": {
-            "repository": "{{ inputs.github_repository }}",
-            "sourceIssueKey": "{{ inputs.source_issue_key }}",
+            "repository": "MoonLadderStudios/MoonMind",
+            "sourceIssueKey": "MM-1063",
         },
     }
-    downstream_step = template.steps[3]
+    downstream_step = expanded["steps"][3]
     assert "workflow execution" in downstream_step["instructions"]
     assert "MoonMind task" not in downstream_step["instructions"]
     assert "breakdown task" not in downstream_step["instructions"]
     assert downstream_step["githubOrchestration"]["traceability"] == {
-        "sourceIssueKey": "{{ inputs.source_issue_key }}"
+        "sourceIssueKey": "MM-1063"
     }
-    expected_publish = {"mode": "{{ inputs.publish_mode }}"}
     if slug == "github-issue-breakdown-implement":
         expected_publish = {
-            "mode": (
-                "{{ 'pr' if inputs.publish_mode == 'pr_with_merge_automation' "
-                "else inputs.publish_mode }}"
-            ),
-            "mergeAutomation": {
-                "enabled": "{{ inputs.publish_mode == 'pr_with_merge_automation' }}"
-            },
+            "mode": "pr",
+            "mergeAutomation": {"enabled": False},
         }
+    else:
+        expected_publish = {"mode": "pr"}
     assert downstream_step["githubOrchestration"]["task"]["publish"] == expected_publish
     assert downstream_step["githubOrchestration"]["task"]["inputs"] == {
-        "run_verify": "{{ inputs.run_verify }}",
+        "run_verify": True,
     }
 
 

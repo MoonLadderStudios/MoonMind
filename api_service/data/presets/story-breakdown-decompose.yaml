@@ -1,0 +1,116 @@
+slug: story-breakdown-decompose
+title: Story Breakdown Decompose (shared)
+description: Shared portable source selection, classification, and MoonSpec story decomposition used by all breakdown presets. Provider differences are explicit provider_target bindings.
+scope: global
+tags:
+  - moonspec
+  - breakdown
+  - shared
+requiredCapabilities:
+  - git
+annotations:
+  sourceSkill: moonspec-breakdown
+  issueProvider: neutral
+  workflowPublish:
+    mode: none
+inputs:
+  - name: source_design_path
+    label: Source Document Path
+    type: repo_path
+    required: false
+    default: ""
+  - name: source_issue_key
+    label: Source Issue Key
+    type: text
+    required: false
+    default: ""
+  - name: feature_request
+    label: Workflow Instructions
+    type: markdown
+    required: false
+    default: ""
+  - name: provider_target
+    label: Provider Target
+    type: enum
+    required: true
+    default: jira
+    options:
+      - jira
+      - github
+  - name: brief_artifact_path
+    label: Brief Artifact Path
+    type: text
+    required: false
+    default: ""
+steps:
+  - title: Load trusted source issue brief
+    type: tool
+    enabled: "{{ inputs.provider_target == 'jira' and (inputs.source_issue_key or '') | trim != '' and (inputs.source_design_path or '') | trim == '' }}"
+    instructions: |-
+      Fetch source Jira issue {{ inputs.source_issue_key }} through the deterministic trusted Jira tool surface.
+
+      Build a compact source brief from the issue key, summary, description, and acceptance criteria. The following breakdown step may use this trusted Jira issue description only when no source document path is provided.
+    tool:
+      id: jira.load_preset_brief
+      requiredCapabilities:
+        - jira
+      args: {}
+      inputs:
+        issueKey: "{{ inputs.source_issue_key }}"
+        artifactPath: "{{ inputs.brief_artifact_path }}"
+  - title: Break down preferred source input
+    instructions: |-
+      Run moonspec-breakdown using this input preference chain (declared source selection policy) for provider {{ inputs.provider_target }}. Distinguish source selection from semantic story decomposition.
+
+      Source selection policy (input preference chain; apply in order, preserve original content/reference):
+      1. If Source document path ({{ inputs.source_design_path }}) is non-empty, read that repo path and use it as the source design. An explicit path wins; never silently downgrade a conflicting explicit source to convenient inline text.
+      {% if inputs.provider_target == 'jira' %}
+      2. Otherwise, if trusted Jira previous output from the prior step includes sourceResolution.status = "resolved" and resolvedSourceDesignPath is non-empty, read resolvedSourceDesignPath as the source design.
+      3. Otherwise, if trusted Jira previous output from the prior step is available, use its jiraPresetBrief as the source design.
+      4. Otherwise, use Workflow instructions as the source design.
+      {% else %}
+      2. Otherwise, use Workflow instructions as the source design. Source Issue Key ({{ inputs.source_issue_key }}) is traceability-only for this GitHub breakdown path; it does not load a trusted GitHub source issue brief. Provide Source Document Path or Workflow Instructions as the source content.
+      {% endif %}
+
+      If trusted source sourceResolution.status is "ambiguous", "invalid_candidates", or "invalid_explicit_path", fail fast with an actionable source-resolution error instead of decomposing a brief as inline text. Resolve real ambiguity through authorized evidence.
+
+      Source document path:
+      {{ inputs.source_design_path }}
+
+      Source issue key:
+      {{ inputs.source_issue_key }}
+
+      Workflow instructions:
+      {{ inputs.feature_request }}
+
+      Preserve source authority in the breakdown output:
+      - Explicit selected document: preserve its repo-relative path (or absolute path when provided) plus stable canonical claim IDs in every story's sourceReference.path and sourceReference.claimIds when the selected source is canonical-declarative.
+      {% if inputs.provider_target == 'jira' %}
+      - Trusted resolved issue source: when the selected source is a trusted Jira resolvedSourceDesignPath, treat it as a readable repo path selected through deterministic source resolution and preserve canonical claim IDs only when the resolved path is a canonical declarative source per docs/Workflows/MoonSpecDocumentModel.md.
+      - Trusted issue brief: when the selected source is the trusted Jira issue description, preserve the Jira issue key and summary as the source title, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
+      {% else %}
+      - Trusted issue-resolved file: when the selected source came from a trusted issue-resolved file, preserve its source role and identifiers; do not invent a document path.
+      {% endif %}
+      - Original inline request: when the selected source is workflow instructions without a readable path, preserve those instructions as inline source text, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
+      The canonical declarative document is the primary source of truth; the breakdown output is a temporary derived view (see docs/Workflows/MoonSpecDocumentModel.md).
+
+      Classify the selected input by meaning and owning conventions per docs/Workflows/MoonSpecDocumentModel.md, not merely by directory prefix:
+      - canonical-declarative: a durable desired-state document per the model (long-lived architecture, contracts, operator-visible behavior, target semantics). A readable repo path under docs/ is canonical only when it carries such durable desired-state content; a temporary plan under docs/tmp/ is never automatically canonical. AGENTS.md is canonical only when it carries durable desired-state content.
+      - declarative-text: pasted declarative design text, trusted issue description/brief, workflow instructions with declarative framing, or a file-backed declarative design outside the canonical set.
+      - imperative-input: a selected source whose primary framing is steps, phases, checkboxes, status, or migration sequencing.
+      A document is declarative when it describes what the system is or should be; it is imperative when its primary framing is steps, phases, checkboxes, or status. Mixed documents are classified by their primary framing.
+      Prefer declarative sources when one is selected or resolved. If the selected input is primarily framed as steps, phases, recommendations, checklist items, status, or a roadmap, record sourceDocumentClass as imperative-input and decompose the underlying actionable desired system behavior into {% if inputs.provider_target == 'jira' %}Jira-ready{% else %}GitHub-ready{% endif %} MoonSpec stories instead of failing solely because the source is imperative. For imperative-input, do not fabricate canonical claim IDs; use only run-local coverage IDs and preserve the selected source title/key and source path when one exists.
+      Record sourceDocumentClass in the breakdown output.
+
+      Preserve story identity and traceability:
+      - Preserve existing stable claim IDs and use bounded run-local coverage IDs (DESIGN-REQ-* or equivalent). Every in-scope source requirement, constraint, and non-goal has explicit ownership in story scope, acceptance criteria, requirements, or source design coverage.
+      - Prefer independently valuable vertical outcomes over one story per implementation layer. Do not split implementation layers unless each is independently useful and testable.
+      - Keep original story scope, source references, and dependencies when narrowing remaining work (narrowing itself happens in reconciliation; decomposition must emit complete traceability so reconciliation can narrow without loss).
+
+      Validate required coverage semantically, not by accepting a literal PASS sentence as proof. A coverage point or canonical claim passes only when at least one story explicitly owns it in story scope, acceptance criteria, requirements, or source design coverage with an ownership explanation a reasonable reader can verify. Implied coverage, future-work language, or the mere presence of a success sentence is insufficient. If any point is uncovered, weakly covered, spread so thinly that ownership is unclear, or covered only by future-work language, revise the stories and rerun the gate.
+      Write the coverage-checked story breakdown to the runtime-provided story breakdown paths. Preserve story order, dependencies, source issue, source document path, sourceReference, and traceability in the breakdown output.
+    skill:
+      id: moonspec-breakdown
+      args: {}
+      requiredCapabilities:
+        - git
