@@ -851,6 +851,14 @@ automation, and every Activity queue before recovery or promotion reports
 availability. Retained recovery workers retire only after installed workers take
 over that same version or Temporal certifies drainage.
 
+Current and ramping versions are read from Temporal's typed routing fields as
+well as its retained string representation. An older installation may have no
+successful release receipt of its own: the first updater's `retained.json`,
+bound to that job's owner and previous routing version, also authorizes recovery
+of its exact content-addressed image after manifest verification. Undrained
+versions in those records remain in the recovery set after promotion. Invalid
+unrelated records are reported separately and cannot suppress a valid cohort.
+
 `release-jobs/*/availability.json` records the current phase, attempts, original
 deadline, affected queues, pending age, next attempt, and ordinary-traffic proof.
 Observation errors preserve these records. The worker readiness projection

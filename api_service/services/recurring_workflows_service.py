@@ -1572,7 +1572,7 @@ class RecurringWorkflowsService:
         return run
 
     async def reconcile_manual_runs(self, *, limit: int = 100) -> int:
-        """Observe durable manual requests; this owner never dispatches work."""
+        """Observe requests within a bounded budget, without uncertain resubmission."""
         now = datetime.now(UTC)
         runs = (
             (
@@ -1620,6 +1620,19 @@ class RecurringWorkflowsService:
                 self._record_trigger_observation(run, observation)
             except Exception:
                 logger.warning("Manual trigger evidence unavailable for %s", run.id)
+            if (
+                run.outcome == RecurringWorkflowRunOutcome.PENDING_DISPATCH
+                and now >= _coerce_utc(run.created_at) + timedelta(minutes=5)
+            ):
+                # This is an unconfirmed request, not proof of workflow failure
+                # or permission to repeat a possibly accepted external effect.
+                run.outcome = RecurringWorkflowRunOutcome.DISPATCH_ERROR
+                run.message = (
+                    "Request acceptance could not be confirmed within five minutes. "
+                    "Check schedule history before retrying Run now."
+                )
+                run.dispatch_after = None
+                run.updated_at = now
             # Preserve each observation if the outer sweep budget expires.
             await self._session.commit()
         return len(runs)

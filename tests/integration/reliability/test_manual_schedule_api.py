@@ -1,7 +1,9 @@
 """Public HTTP manual requests retain identity across Temporal observation."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import httpx
@@ -10,6 +12,7 @@ from fastapi import FastAPI
 
 from api_service.api.routers import recurring_workflows as routes
 from api_service.services.recurring_workflows_service import RecurringWorkflowsService
+from api_service.services import recurring_workflows_service as service_module
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from tests.integration.reliability.test_resolver_verification_capability_journey import (
     resolver_test_client,
@@ -23,8 +26,11 @@ pytestmark = [
 ]
 
 
+@pytest.mark.parametrize("before_acceptance_failure", [False, True])
 async def test_run_now_http_retries_observe_one_execution_and_skip_active_overlap(
     tmp_path,
+    monkeypatch,
+    before_acceptance_failure,
 ):
     client = await resolver_test_client()
     adapter = TemporalClientAdapter(client=client)
@@ -76,6 +82,14 @@ async def test_run_now_http_retries_observe_one_execution_and_skip_active_overla
                 transport=httpx.ASGITransport(app=app), base_url="http://test"
             ) as http:
                 request_id = str(uuid4())
+                original_patch = client.workflow_service.patch_schedule
+                failed_patch = AsyncMock(
+                    side_effect=ConnectionError("transport unavailable")
+                )
+                if before_acceptance_failure:
+                    monkeypatch.setattr(
+                        client.workflow_service, "patch_schedule", failed_patch
+                    )
                 first = await http.post(
                     endpoint + "/run", headers={"Idempotency-Key": request_id}
                 )
@@ -85,6 +99,32 @@ async def test_run_now_http_retries_observe_one_execution_and_skip_active_overla
                     endpoint + "/run", headers={"Idempotency-Key": request_id}
                 )
                 assert repeated.json()["id"] == request_id
+                if before_acceptance_failure:
+                    failed_patch.assert_awaited_once()
+                    monkeypatch.setattr(
+                        client.workflow_service, "patch_schedule", original_patch
+                    )
+
+                    class Later(datetime):
+                        @classmethod
+                        def now(cls, tz=UTC):
+                            return datetime.now(tz) + timedelta(minutes=6)
+
+                    monkeypatch.setattr(service_module, "datetime", Later)
+                    async with sessions() as session:
+                        await RecurringWorkflowsService(
+                            session, temporal_client_adapter=adapter
+                        ).reconcile_manual_runs()
+                    unconfirmed = await http.post(
+                        endpoint + "/run", headers={"Idempotency-Key": request_id}
+                    )
+                    assert unconfirmed.json()["outcome"] == "dispatch_error"
+                    assert (
+                        "Check schedule history before retrying"
+                        in unconfirmed.json()["message"]
+                    )
+                    assert not (await schedule.describe()).info.recent_actions
+                    return
                 for _ in range(50):
                     if (await schedule.describe()).info.recent_actions:
                         break

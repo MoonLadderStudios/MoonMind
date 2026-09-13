@@ -183,6 +183,42 @@ async def launch_updater(runner, directory, request):
     return observed
 
 
+def retained_release_records(root, deployment, *, errors=None):
+    """Yield previous-image authority recorded by its original release job."""
+    for path in sorted(root.glob("*/retained.json")):
+        directory = path.parent
+        request_file = directory / "request.json"
+        routing_file = directory / "routing.json"
+        if not request_file.exists() or not routing_file.exists():
+            continue
+        try:
+            routing = json.loads(routing_file.read_text())
+            if routing.get("deployment") != deployment:
+                continue
+            request = json.loads(request_file.read_text())
+            retained = json.loads(path.read_text())
+            if (
+                not isinstance(retained.get("owner"), str)
+                or not retained["owner"]
+                or retained["owner"] != request["authored"]["owner"]
+                or not isinstance(retained.get("version"), str)
+                or not retained["version"].startswith(deployment + ".")
+                or retained["version"] != routing.get("previous")
+                or not isinstance(retained.get("image"), str)
+                or not retained["image"].startswith("sha256:")
+            ):
+                raise ValueError("Retained release receipt authority differs")
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            if errors is not None and len(errors) < 20:
+                errors.append(
+                    {"record": directory.name, "errorCode": type(exc).__name__}
+                )
+            # Invalid evidence grants no image authority. Its failure must not
+            # suppress valid current or retained cohorts from another job.
+            continue
+        yield directory, retained
+
+
 async def successful_release_image(root, version):
     """Recover image authority from an exact successful immutable release.
 
@@ -190,8 +226,12 @@ async def successful_release_image(root, version):
     Validate the image's own manifest before reconstructing any worker cohort.
     """
     for path in sorted(root.glob("*/routing.json")):
-        routing = json.loads(path.read_text())
-        if f"{routing['deployment']}.{routing['candidate']}" != version:
+        try:
+            routing = json.loads(path.read_text())
+            if f"{routing.get('deployment')}.{routing.get('candidate')}" != version:
+                continue
+        except (OSError, ValueError, TypeError, AttributeError):
+            # Malformed unrelated jobs cannot revoke a valid release receipt.
             continue
         directory = path.parent
         receipt_file = directory / "deployment-result.json"
@@ -244,6 +284,40 @@ async def successful_release_image(root, version):
             "sourceReceipt": directory.name,
             "sourceRevision": manifest["sourceRevision"],
         }
+    # An initial Compose installation may never have produced its own release
+    # receipt. The first updater records its proven previous image instead.
+    deployment, _, expected_digest = version.partition(".sha256:")
+    if expected_digest:
+        for directory, retained in retained_release_records(root, deployment):
+            if retained["version"] != version:
+                continue
+            image_id = retained["image"]
+            if not image_id.startswith("sha256:"):
+                raise ValueError("Retained release image is not content addressed")
+            image = json.loads(await docker("image", "inspect", image_id))[0]
+            if image["Id"] != image_id:
+                raise ValueError("Retained release image identity differs")
+            manifest = json.loads(
+                await docker(
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--entrypoint",
+                    "python",
+                    image_id,
+                    "-c",
+                    "import json; from moonmind.release_identity import installed_release; "
+                    "print(json.dumps(installed_release()))",
+                )
+            )
+            if not manifest or manifest.get("digest") != "sha256:" + expected_digest:
+                raise ValueError("Retained release manifest differs from its version")
+            return {
+                "image": image_id,
+                "sourceReceipt": directory.name,
+                "sourceRevision": manifest["sourceRevision"],
+            }
     return None
 
 

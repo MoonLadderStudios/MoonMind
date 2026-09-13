@@ -33,6 +33,14 @@ def current_version(snapshot) -> str:
     return f"{current.deployment_name}.{current.build_id}" if current.build_id else ""
 
 
+def ramping_version(snapshot) -> str:
+    routing = snapshot.worker_deployment_info.routing_config
+    if routing.ramping_version:
+        return routing.ramping_version
+    ramping = routing.ramping_deployment_version
+    return f"{ramping.deployment_name}.{ramping.build_id}" if ramping.build_id else ""
+
+
 async def version_availability(
     client, version: str, *, live_container_ids=None
 ) -> dict:

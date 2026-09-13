@@ -225,13 +225,24 @@ const SchedulesBootDataSchema = z
   })
   .passthrough();
 
+function newRunNowRequestId(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  // getRandomValues remains available on supported HTTP LAN/VPN origins.
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function RunNowResult({ run }: { run: ScheduleRun }) {
   const href = run.temporalWorkflowId
     ? `/workflows/${encodeURIComponent(run.temporalWorkflowId)}?source=temporal`
     : `/schedules/${encodeURIComponent(run.definitionId)}`;
   const label = run.outcome === 'enqueued' ? 'Execution started'
     : run.outcome === 'skipped' ? 'Already running; no new execution started'
-      : 'Waiting for execution evidence';
+      : run.outcome === 'dispatch_error' ? run.message || 'Request unconfirmed; check schedule history before retrying'
+        : 'Waiting for execution evidence';
   return <p role="status"><a href={href}>{label}</a></p>;
 }
 
@@ -1112,7 +1123,7 @@ function ScheduleDetailPage({
   const runNowRequestId = useRef<string | null>(null);
   const runNowMutation = useMutation({
     mutationFn: async () => {
-      runNowRequestId.current ??= crypto.randomUUID();
+      runNowRequestId.current ??= newRunNowRequestId();
       const response = await fetch(runNowEndpoint, {
         method: 'POST',
         credentials: 'include',
@@ -1838,8 +1849,11 @@ function ScheduleRowActions({
   const runNowRequestId = useRef<string | null>(null);
   const runNowMutation = useMutation({
     mutationFn: async () => {
-      runNowRequestId.current ??= crypto.randomUUID();
-      const response = await fetch(runNowEndpoint, { method: 'POST', credentials: 'include' });
+      runNowRequestId.current ??= newRunNowRequestId();
+      const response = await fetch(runNowEndpoint, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Idempotency-Key': runNowRequestId.current },
+      });
       if (!response.ok) {
         throw new Error(await responseErrorMessage(response, 'Failed to run schedule'));
       }
@@ -1847,8 +1861,30 @@ function ScheduleRowActions({
       runNowRequestId.current = null;
       return run;
     },
-    onSuccess: () => invalidateList(),
+    onSuccess: async () => {
+      await Promise.all([
+        invalidateList(),
+        queryClient.invalidateQueries({ queryKey: ['schedule-runs', schedule.id] }),
+      ]);
+    },
   });
+
+  const runsEndpoint = scheduleEndpoint(payload, 'runs', schedule.id);
+  const runsQuery = useQuery({
+    queryKey: ['schedule-runs', schedule.id, runsEndpoint],
+    enabled: runNowMutation.data?.outcome === 'pending_dispatch',
+    refetchInterval: (query) => {
+      const run = query.state.data?.items.find((item) => item.id === runNowMutation.data?.id);
+      return !run || run.outcome === 'pending_dispatch' ? 5000 : false;
+    },
+    queryFn: async () => {
+      const response = await fetch(runsEndpoint, { credentials: 'include' });
+      if (!response.ok) throw new Error('Failed to fetch schedule runs');
+      return ScheduleRunsResponseSchema.parse(await response.json());
+    },
+  });
+  const currentRun = runsQuery.data?.items.find((run) => run.id === runNowMutation.data?.id)
+    || runNowMutation.data;
 
   const pauseResumeMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
@@ -1875,7 +1911,7 @@ function ScheduleRowActions({
   // (docs/UI/RecurringSchedulesPage.md#s21) with confirmation + permission handling.
   return (
     <div className="schedules-row-actions">
-      {runNowMutation.data && <RunNowResult run={runNowMutation.data} />}
+      {currentRun && <RunNowResult run={currentRun} />}
       <button
         type="button"
         className="secondary"
