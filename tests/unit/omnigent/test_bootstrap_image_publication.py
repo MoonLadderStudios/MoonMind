@@ -307,10 +307,10 @@ async def test_publication_exports_resolved_digests_and_persists_state(
 
 
 @pytest.mark.asyncio
-async def test_default_resolution_requires_paired_build_identity_and_version(
+async def test_default_resolution_records_independent_build_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The default tag path must attest the shared build identity exactly."""
+    """The default tag path records the server and host identities separately."""
 
     from moonmind.omnigent.bootstrap import store
 
@@ -364,7 +364,10 @@ async def test_default_resolution_requires_paired_build_identity_and_version(
     assert resolved.omnigent_build_digest == BUILD_DIGEST
     assert resolved.details == {
         "serverImageDigest": server_image_digest,
-        "buildIdentitySource": "opencode-host-label",
+        "hostImageProvenance": {
+            HOST_REF: {"buildDigest": BUILD_DIGEST, "version": "0.12.0"}
+        },
+        "buildIdentitySource": "server-image-digest",
         "opencodeHostCompatibility": {
             "status": "ready",
             "failureCode": None,
@@ -425,8 +428,8 @@ async def test_resolution_quarantines_operator_and_host_build_identity_mismatch(
         {"OMNIGENT_BUILD_DIGEST": "sha256:" + "4" * 64}
     )
 
-    assert resolved.omnigent_build_digest == "sha256:" + "4" * 64
-    assert resolved.details["buildIdentitySource"] == "operator-quarantine"
+    assert resolved.omnigent_build_digest == BUILD_DIGEST
+    assert resolved.details["buildIdentitySource"] == "server-image-quarantine"
     assert resolved.details["opencodeHostCompatibility"] == {
         "status": "blocked",
         "failureCode": "omnigent_operator_host_build_mismatch",
@@ -481,8 +484,8 @@ async def test_resolution_accepts_an_explicit_independently_paired_build(
         {"OMNIGENT_BUILD_DIGEST": BUILD_DIGEST}
     )
 
-    assert resolved.omnigent_build_digest == BUILD_DIGEST
-    assert resolved.details["buildIdentitySource"] == "operator"
+    assert resolved.omnigent_build_digest == "sha256:" + "1" * 64
+    assert resolved.details["buildIdentitySource"] == "server-image-digest"
     assert resolved.details["opencodeHostCompatibility"]["status"] == "ready"
 
 
@@ -541,7 +544,7 @@ async def test_resolution_quarantines_server_and_host_build_drift(
     assert resolved.omnigent_build_digest == server_build
     assert resolved.details["opencodeHostCompatibility"] == {
         "status": "blocked",
-        "failureCode": "omnigent_server_host_build_mismatch",
+        "failureCode": "omnigent_server_host_version_mismatch",
         "serverImageRef": SERVER_REF,
         "hostImageRef": HOST_REF,
         "serverBuildDigest": server_build,
@@ -704,7 +707,7 @@ def test_selectors_reject_a_quarantined_server_host_pair(
         details={
             "opencodeHostCompatibility": {
                 "status": "blocked",
-                "failureCode": "omnigent_server_host_build_mismatch",
+                "failureCode": "omnigent_server_host_version_mismatch",
                 "serverImageRef": SERVER_REF,
                 "hostImageRef": HOST_REF,
             }
@@ -715,7 +718,7 @@ def test_selectors_reject_a_quarantined_server_host_pair(
 
     with pytest.raises(
         Exception,
-        match="OpenCode Host Class is quarantined.*server_host_build_mismatch",
+        match="OpenCode Host Class is quarantined.*server_host_version_mismatch",
     ):
         host_classes.get_opencode_host_image_ref()
 
@@ -767,7 +770,7 @@ async def test_publication_never_clears_an_operator_pinned_ref(
     "failure_code",
     [
         "omnigent_host_bootstrap_contract_missing",
-        "omnigent_server_host_build_mismatch",
+        "omnigent_server_host_build_mismatch",  # Persisted pre-compatibility quarantine.
         "omnigent_server_host_version_mismatch",
         "omnigent_server_host_version_probe_failed",
     ],
@@ -803,7 +806,6 @@ def test_host_selection_preserves_quarantine_reason(
         OmnigentHostClassSelector(environment=environment).select(
             harness=SimpleNamespace(id="opencode-native"),
             omnigent_version="0.12.0",
-            omnigent_build_digest=BUILD_DIGEST,
             integration_mode="native-server",
             materializer_refs=["opencode-auth-json@1"],
             requested_host_class_ref="omnigent-opencode@1",
@@ -841,7 +843,6 @@ def test_host_selection_preserves_adjacent_image_failures(
         ).select(
             harness=SimpleNamespace(id="opencode-native"),
             omnigent_version="0.12.0",
-            omnigent_build_digest=BUILD_DIGEST,
             integration_mode="native-server",
             materializer_refs=["opencode-auth-json@1"],
             requested_host_class_ref="omnigent-opencode@1",
@@ -971,7 +972,7 @@ async def test_newer_host_for_a_newer_server_keeps_the_admitted_compatible_host(
     # admitted digest: one paired runtime, not a mismatched Codex/Claude host.
     assert resolved.shared_host_image_ref == ADMITTED_HOST
     assert resolved.omnigent_build_digest == RUNNING_SERVER_BUILD
-    assert resolved.details["buildIdentitySource"] == "opencode-host-label"
+    assert resolved.details["buildIdentitySource"] == "server-image-digest"
     assert resolved.details["opencodeHostCompatibility"] == {
         "status": "ready",
         "failureCode": None,
@@ -985,7 +986,7 @@ async def test_newer_host_for_a_newer_server_keeps_the_admitted_compatible_host(
             "imageRef": NEWER_HOST,
             "buildDigest": NEWER_SERVER_BUILD,
             "version": "0.13.0",
-            "failureCode": "omnigent_server_host_build_mismatch",
+            "failureCode": "omnigent_server_host_version_mismatch",
         },
     }
     # Only the admitted host reached the bootstrap probe.
@@ -1041,7 +1042,7 @@ async def test_no_compatible_host_quarantines_the_fresh_candidate(
     assert resolved.details["buildIdentitySource"] == "server-image-quarantine"
     compatibility = resolved.details["opencodeHostCompatibility"]
     assert compatibility["status"] == "blocked"
-    assert compatibility["failureCode"] == "omnigent_server_host_build_mismatch"
+    assert compatibility["failureCode"] == "omnigent_server_host_version_mismatch"
     assert compatibility["hostImageRef"] == NEWER_HOST
     assert compatibility["hostBuildDigest"] == NEWER_SERVER_BUILD
     assert compatibility["pendingHost"] is None
@@ -1069,9 +1070,12 @@ async def test_explicit_operator_pin_is_quarantined_never_replaced(
     assert resolved.opencode_host_image_ref == NEWER_HOST
     compatibility = resolved.details["opencodeHostCompatibility"]
     assert compatibility["status"] == "blocked"
-    assert compatibility["failureCode"] == "omnigent_server_host_build_mismatch"
+    assert compatibility["failureCode"] == "omnigent_server_host_version_mismatch"
     assert compatibility["pendingHost"] is None
-    assert ADMITTED_HOST not in observed["version_probes"]
+    # The explicit OpenCode image is not substituted. The separately selected
+    # shared image still receives its own provenance probe.
+    assert ADMITTED_HOST not in observed["probes"]
+    assert ADMITTED_HOST in resolved.details["hostImageProvenance"]
 
 
 @pytest.mark.asyncio
@@ -1091,7 +1095,8 @@ async def test_previous_host_from_another_repository_is_not_a_candidate(
 
     assert resolved.opencode_host_image_ref == NEWER_HOST
     assert resolved.details["opencodeHostCompatibility"]["status"] == "blocked"
-    assert foreign_host not in observed["version_probes"]
+    assert foreign_host not in observed["probes"]
+    assert foreign_host in resolved.details["hostImageProvenance"]
 
 
 @pytest.mark.asyncio
@@ -1129,7 +1134,7 @@ def test_quarantine_error_names_the_judged_pair(
         details={
             "opencodeHostCompatibility": {
                 "status": "blocked",
-                "failureCode": "omnigent_server_host_build_mismatch",
+                "failureCode": "omnigent_server_host_version_mismatch",
                 "serverImageRef": SERVER_REF,
                 "hostImageRef": HOST_REF,
                 "serverBuildDigest": RUNNING_SERVER_BUILD,
@@ -1146,7 +1151,7 @@ def test_quarantine_error_names_the_judged_pair(
         host_classes.get_opencode_host_image_ref()
 
     message = str(caught.value)
-    assert "omnigent_server_host_build_mismatch" in message
+    assert "omnigent_server_host_version_mismatch" in message
     assert "server omnigent 0.12.0 build sha256:111111111111" in message
     assert "host omnigent 0.13.0 built for sha256:999999999999" in message
     assert "update the omnigent server image" in message
@@ -1190,7 +1195,7 @@ async def test_unavailable_server_evidence_retains_the_admitted_host(
 @pytest.mark.parametrize(
     "failure_code, expects_server_update",
     [
-        ("omnigent_server_host_build_mismatch", True),
+        ("omnigent_server_host_build_mismatch", True),  # Historical persisted state.
         ("omnigent_server_host_version_mismatch", True),
         ("omnigent_operator_host_build_mismatch", False),
         ("omnigent_host_build_identity_unavailable", False),

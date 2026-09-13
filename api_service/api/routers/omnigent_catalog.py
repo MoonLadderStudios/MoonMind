@@ -1855,7 +1855,6 @@ async def get_omnigent_execution_readiness(
                     selector.select(
                         harness=harness,
                         omnigent_version=catalog.snapshot.omnigentVersion,
-                        omnigent_build_digest=catalog.snapshot.omnigentBuildDigest,
                         integration_mode=harness.capabilities.integrationMode
                         or "native-server",
                         materializer_refs=[materializer],

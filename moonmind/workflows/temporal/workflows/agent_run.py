@@ -4272,6 +4272,7 @@ class MoonMindAgentRun:
 
         admitted_at: Any = None
         capacity_requeue_attempts = 0
+        readiness_wait_started = None
         recovering_interrupted_admission = False
         reconcile_admission = self._workflow_patch_enabled("omnigent-resume-owned-admission-v1")
         while True:
@@ -4364,6 +4365,58 @@ class MoonMindAgentRun:
                     ),
                 )
                 activity_returned = True
+            except Exception as exc:
+                cause = exc
+                while getattr(cause, "cause", None) is not None:
+                    cause = cause.cause
+                if (
+                    getattr(cause, "type", type(cause).__name__)
+                    != "OmnigentDeploymentNotReady"
+                    or not self._workflow_patch_enabled(
+                        "omnigent-deployment-readiness-wait-v1"
+                    )
+                    or not reconcile_admission
+                ):
+                    raise
+                # Discovery failed before this delivery acquired host/session authority.
+                # Retain any earlier admission for fenced reattachment. The API's
+                # bootstrap reconciler repairs discovery independently of this queue.
+                now = workflow.now()
+                if readiness_wait_started is None:
+                    readiness_wait_started = activity_started_at
+                stc_seconds -= (now - activity_started_at).total_seconds()
+                remaining = min(
+                    stc_seconds,
+                    _OMNIGENT_EXECUTION_HANDOFF_SECONDS
+                    - (now - readiness_wait_started).total_seconds(),
+                )
+                if remaining <= 0:
+                    raise ApplicationError(
+                        "Omnigent deployment readiness wait exhausted; bootstrap "
+                        "reconciliation did not restore server identity within the "
+                        "remaining execution budget. Preserved admission requires "
+                        "reconciliation.",
+                        type="OmnigentDeploymentReadinessTimeout",
+                        non_retryable=True,
+                    ) from exc
+                self.run_status = RunStatus.awaiting_callback
+                await self._signal_parent_child_state_changed(
+                    parent_info,
+                    "awaiting_callback",
+                    "Waiting for Omnigent deployment readiness; bootstrap "
+                    "reconciliation owns recovery. Preserving the admitted execution.",
+                )
+                delay = min(30.0, remaining)
+                await workflow.sleep(timedelta(seconds=delay))
+                stc_seconds -= delay
+                if stc_seconds <= 0 or delay >= remaining:
+                    raise ApplicationError(
+                        "Omnigent deployment readiness wait exhausted",
+                        type="OmnigentDeploymentReadinessTimeout",
+                        non_retryable=True,
+                    ) from exc
+                self.run_status = RunStatus.launching
+                continue
             finally:
                 # A heartbeat timeout or worker loss is not a cleanup receipt.
                 # Keep the admitted request and lease while reconciliation may
@@ -4467,7 +4520,12 @@ class MoonMindAgentRun:
             )
         except CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            cause = exc
+            while cause is not None:
+                if getattr(cause, "non_retryable", False):
+                    raise
+                cause = getattr(cause, "cause", None)
             elapsed = (workflow.now() - lane_start).total_seconds()
             retry_stc = profile_bound_retry_start_to_close_seconds(
                 first_stc_seconds=stc_seconds,

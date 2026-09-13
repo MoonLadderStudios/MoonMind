@@ -1559,7 +1559,6 @@ class BootstrapController:
             host_class = selector.select(
                 harness=harness,
                 omnigent_version=catalog.snapshot.omnigentVersion,
-                omnigent_build_digest=catalog.snapshot.omnigentBuildDigest,
                 integration_mode="native-server",
                 materializer_refs=[materializer_ref],
                 requested_host_mode="on-demand",

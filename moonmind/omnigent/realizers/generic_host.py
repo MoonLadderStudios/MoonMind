@@ -207,6 +207,13 @@ class GenericOmnigentHostRealizer:
         if completed is not None and completed.state is RuntimeBindingState.cleaned:
             return await self._reconcile_finalization(request, completed)
 
+        # Readiness is a no-side-effect precondition, before canonical command
+        # ownership. A failure inside delivery would park that command as
+        # delivery-unknown and prohibit a safe retry after discovery recovers.
+        # An owned host retains its recorded attestation/reattachment authority.
+        if completed is None or not completed.hostLeaseRef:
+            self._deployment_validator(plan.payload)
+
         return await deliver_canonical_turn(
             self._turn_commands,
             request=request,
@@ -399,7 +406,6 @@ class GenericOmnigentHostRealizer:
                     code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
                 )
 
-            self._deployment_validator(plan.payload)
             host_started_at = time.monotonic()
             host_class, launch_policy = await self._resolve_host(plan)
             credential_handles = await self._credentials.materialize_all(

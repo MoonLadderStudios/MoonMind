@@ -411,7 +411,6 @@ class OmnigentExecutionPlanningService:
             host_class = self._host_classes.select(
                 harness=harness,
                 omnigent_version=catalog_result.snapshot.omnigentVersion,
-                omnigent_build_digest=catalog_result.snapshot.omnigentBuildDigest,
                 integration_mode=integration_mode,
                 materializer_refs=[
                     item.materializerRef for item in binding_set.bindings.values()
@@ -915,7 +914,6 @@ class OmnigentPlannedHostResolver:
         host_class = self._selector.select(
             harness=harness,
             omnigent_version=catalog.snapshot.omnigentVersion,
-            omnigent_build_digest=catalog.snapshot.omnigentBuildDigest,
             integration_mode=harness.capabilities.integrationMode or "native-server",
             materializer_refs=[
                 item.materializerRef
@@ -924,6 +922,8 @@ class OmnigentPlannedHostResolver:
             architecture=plan.payload.hostArchitecture or self._architecture,
             requested_host_mode=policy.hostMode,
             requested_host_class_ref=plan.payload.hostClassRef,
+            host_image_ref=plan.payload.hostImageRef,
+            omnigent_host_build_digest=plan.payload.omnigentHostBuildDigest,
         )
         if plan.payload.hostImageRef is not None:
             host_class = self._resolve_exact_host(

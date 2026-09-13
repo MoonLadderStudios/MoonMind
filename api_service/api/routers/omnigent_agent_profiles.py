@@ -432,7 +432,6 @@ async def ensure_builtin_opencode_agent_profile(
         OmnigentHostClassSelector().select(
             harness=harness,
             omnigent_version=catalog.snapshot.omnigentVersion,
-            omnigent_build_digest=catalog.snapshot.omnigentBuildDigest,
             integration_mode=harness.capabilities.integrationMode or "native-server",
             materializer_refs=["opencode-auth-json@1", "none@1"],
             requested_host_mode="on-demand",
@@ -880,7 +879,6 @@ async def create_guided_profile(
         OmnigentHostClassSelector().select(
             harness=harness,
             omnigent_version=catalog.snapshot.omnigentVersion,
-            omnigent_build_digest=catalog.snapshot.omnigentBuildDigest,
             integration_mode=harness.capabilities.integrationMode or "native-server",
             materializer_refs=[str(preset["materializerRef"])],
             requested_host_mode=policy.hostMode,

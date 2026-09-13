@@ -93,7 +93,11 @@ def test_catalog_refresh_preserves_binding_when_only_live_inventory_changes():
     )
 
 
-def test_catalog_refresh_rejects_a_changed_omnigent_build():
+@pytest.mark.parametrize(
+    "observed_version,compatible",
+    [("1.2.4", True), ("1.2.0", True), ("1.3.0", False), ("2.2.3", False)],
+)
+def test_catalog_refresh_uses_major_minor_compatibility(observed_version, compatible):
     harnesses = [
         {
             "id": "opencode-native",
@@ -115,18 +119,20 @@ def test_catalog_refresh_rejects_a_changed_omnigent_build():
     )
     observation = create_catalog_snapshot(
         endpointRef="default",
-        omnigentVersion="1.2.4",
+        omnigentVersion=observed_version,
         omnigentBuildDigest="sha256:" + "5" * 64,
         sourceDigest="sha256:" + "4" * 64,
         harnesses=harnesses,
     )
 
-    assert not _catalog_refresh_preserves_builtin_binding(
+    actual = _catalog_refresh_preserves_builtin_binding(
         authority_payload=authority.model_dump(by_alias=True, mode="json"),
         observation=observation,
         harness_id="opencode-native",
         implementation_ref=authority.harnesses[0].implementation.implementation_ref(),
     )
+
+    assert actual is compatible
 
 
 @pytest.mark.asyncio

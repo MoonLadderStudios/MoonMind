@@ -1105,6 +1105,8 @@ services:
       - control-plane-network
       - docker-proxy-network
     depends_on:
+      omnigent:
+        condition: service_started
       docker-proxy:
         condition: service_started
     restart: "no"

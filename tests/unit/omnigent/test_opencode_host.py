@@ -71,6 +71,8 @@ def _ready_image_pair_evidence(monkeypatch):
                     "failureCode": None,
                     "serverImageRef": _SERVER_REF,
                     "hostImageRef": host_ref,
+                    "hostBuildDigest": "sha256:" + "b" * 64,
+                    "hostVersion": "1.0.0",
                 }
             },
         )
@@ -135,7 +137,6 @@ def _opencode_host_class(materializer_ref: str = "opencode-auth-json@1"):
     return OmnigentHostClassSelector().select(
         harness=harness,
         omnigent_version="1.0.0",
-        omnigent_build_digest="sha256:" + "b" * 64,
         integration_mode="native-server",
         materializer_refs=[materializer_ref],
     )

@@ -236,6 +236,8 @@ class OmnigentExecutionPlanPayload(BaseModel):
         default=None, alias="omnigentHostBuildDigest"
     )
     hostArchitecture: str | None = Field(default=None, alias="hostArchitecture")
+    # Absent in historical plans: preserve their exact identity and canonical bytes.
+    omnigentVersion: str | None = Field(default=None, alias="omnigentVersion")
     launchPolicyRef: str = Field(alias="launchPolicyRef")
     executionRealizerRef: str = Field(alias="executionRealizerRef")
     modelConfig: ModelConfig = Field(alias="model")
@@ -275,6 +277,11 @@ class OmnigentExecutionPlanPayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_no_forbidden(self) -> "OmnigentExecutionPlanPayload":
+        if self.omnigentVersion is not None:
+            from moonmind.omnigent.compatibility import compatibility_series
+
+            if compatibility_series(self.omnigentVersion) is None:
+                raise ValueError("omnigentVersion must identify a release series")
         if self.supportIdentity is not None:
             if (
                 compute_support_combination_key(self.supportIdentity)
@@ -338,6 +345,7 @@ def canonical_payload_bytes(
         "hostImageRef",
         "omnigentHostBuildDigest",
         "hostArchitecture",
+        "omnigentVersion",
         "policySnapshotDigest",
         "effectiveLaunchSnapshotRef",
         "effectiveLaunchSnapshotDigest",
