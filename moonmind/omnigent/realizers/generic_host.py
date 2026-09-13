@@ -1489,6 +1489,9 @@ class GenericOmnigentHostRealizer:
             "hostLeaseRef": binding.hostLeaseRef,
             "endpointRef": plan.payload.endpointRef,
             "omnigentHostId": host_id,
+            "materializedInputPaths": dict(
+                host_context.get("materializedInputPaths") or {}
+            ),
         }
         if primary_lease is not None:
             profile_authorization.update(

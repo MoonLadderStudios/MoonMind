@@ -226,7 +226,7 @@ def test_pull_request_head_match_fails_closed_on_missing_repo_metadata() -> None
 
 
 @pytest.mark.asyncio
-async def test_create_pr_continues_when_existing_pr_lookup_fails(monkeypatch):
+async def test_create_pr_retries_without_post_when_existing_pr_lookup_fails(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
 
     lookup_response = _mock_get_response(503, {"message": "try later"})
@@ -262,10 +262,11 @@ async def test_create_pr_continues_when_existing_pr_lookup_fails(monkeypatch):
             body="B",
         )
 
-    assert result.created is True
+    assert result.created is False
     assert result.adopted is False
-    assert result.url == "https://github.com/o/r/pull/43"
-    mock_client.post.assert_awaited_once()
+    assert result.url is None
+    assert result.retryable is True
+    mock_client.post.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_create_pr_missing_token(monkeypatch):

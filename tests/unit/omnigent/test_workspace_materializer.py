@@ -511,3 +511,57 @@ async def test_materializer_rejects_missing_authored_path_and_failed_clone(
             )
         )
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('separate_remaining_work', [False, True])
+async def test_historical_remediation_request_materializes_named_evidence_and_reuses_candidate(
+    tmp_path, separate_remaining_work,
+):
+    """Replay the recurring request: gate refs existed only in parameters."""
+    workspace = tmp_path / 'temporal_sandbox' / _workspace_id() / 'repo'
+    (workspace / '.git' / 'info').mkdir(parents=True)
+    (workspace / 'candidate.txt').write_text('uncommitted candidate')
+    payloads = {
+        'brief': b'issue brief',
+        'gate': b'{"verdict":"ADDITIONAL_WORK_NEEDED","remainingWork":["fix"]}',
+        'remaining': b'["fix"]',
+    }
+
+    class Artifacts:
+        async def get_metadata(self, *, artifact_id, principal):
+            assert principal == 'service:omnigent_workspace_attachment'
+            return (SimpleNamespace(size_bytes=len(payloads[artifact_id])),
+                    [SimpleNamespace(workflow_id='workflow-1')])
+
+        async def read_chunks(self, *, artifact_id, **kwargs):
+            return SimpleNamespace(), iter((payloads[artifact_id],))
+
+    async def no_clone(*args, **kwargs):
+        raise AssertionError('must preserve the existing candidate')
+
+    request = _request({
+        'workspaceLocator': {'kind': 'sandbox', 'workspaceId': _workspace_id(),
+                             'relativePath': 'repo'},
+        'repository': 'MoonLadderStudios/MoonMind', 'branch': 'main',
+    })
+    request.input_refs = ['artifact://brief']
+    request.parameters = {
+        'gateResultRef': 'artifact://gate',
+        'remainingWorkRef': 'artifact://remaining' if separate_remaining_work else 'artifact://gate',
+    }
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=no_clone, workspace_root=tmp_path, artifact_service=Artifacts(),
+    )
+    # A historical ready workspace may contain only the issue brief. Admission
+    # of the current evidence must not depend on replaying a new workflow patch.
+    historical = _request(request.workspace_spec)
+    historical.input_refs = request.input_refs
+    await materializer.materialize(historical, runtime_uid=os.getuid(), runtime_gid=os.getgid())
+    for _ in range(2):
+        attachment = await materializer.materialize(request, runtime_uid=os.getuid(), runtime_gid=os.getgid())
+        paths = attachment['materializedInputPaths']
+        assert (workspace / paths['gateResultPath']).read_bytes() == payloads['gate']
+        assert (workspace / paths['remainingWorkPath']).read_bytes() == payloads['remaining' if separate_remaining_work else 'gate']
+        assert (paths['gateResultPath'] != paths['remainingWorkPath']) is separate_remaining_work
+        assert (workspace / 'candidate.txt').read_text() == 'uncommitted candidate'

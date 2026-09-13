@@ -14,10 +14,25 @@ with the run rather than rewriting it after registry or credential changes.
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-09-07
+**Last updated:** 2026-09-13
 **Authority:** Unified Temporal lifecycle and ownership model for true agent execution, including profile-bound Codex execution through Omnigent hosts
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines durable product and runtime contracts.
+
+Declared recovery evidence is a host input contract. `gateResultRef` and
+`remainingWorkRef` must be materialized through the artifact owner before the
+agent consumes them, including historical requests that did not duplicate
+these fields in `inputRefs`. The host supplies `gateResultPath` and
+`remainingWorkPath` from successful materialization evidence; when both refs
+identify one artifact, both paths identify that same file. The host does not
+interpret verifier findings or replace the resolved Skill's decisions.
+
+A ready workspace establishes repository readiness, not delivery of the next
+step's evidence. Re-admission verifies current artifact ownership, integrity,
+size, and containment while preserving candidate edits. Input replacement is
+staged and verified before atomically replacing a prior read-only input.
+Missing, foreign, or unreadable evidence prevents launch; a path supplied by
+the caller is never proof that materialization succeeded.
 
 The normal Workflow Create compilation and acceptance journey for **Codex via Omnigent** is specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md); this execution model remains authoritative for the shared runtime lifecycle.
 

@@ -45,6 +45,15 @@ Examples:
 - optimistic race conditions
 - short-lived transport timeouts
 
+The `repo.create_pr` Activity preserves this classification across its service
+result: HTTP 5xx, HTTP 429, and transport failures produce a retryable
+`GitHubTransientError`, consumed by the existing bounded Temporal retry policy.
+Each attempt reads the exact repository/head/base before mutation and adopts a
+matching PR after a lost acknowledgment. An unavailable lookup is not evidence
+of absence and must not authorize a create call. Authentication and validation
+rejections retain their distinct non-transient result; no credential or publish
+intent substitution is a recovery strategy.
+
 ### 2.2 Do not retry invalid business input
 
 A failure is **non-retryable** when the request is malformed, unsupported, or structurally invalid.
