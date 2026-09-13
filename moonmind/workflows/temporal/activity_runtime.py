@@ -8360,10 +8360,26 @@ class TemporalAgentRuntimeActivities:
                     compact[key] = refs
                     break
 
-            validated_refs = _text_mapping(
+            validated_refs: dict[str, Any] = _text_mapping(
                 gate_payload.get("validatedRefs")
                 or gate_payload.get("validated_refs")
             )
+            # Acceptance is a typed record, not a string-valued annotation.
+            # Preserve the exact identity/scope/freshness binding through the
+            # serialized Activity -> workflow gate handoff. The full evidence
+            # already lives in this authorized artifact; reference it per
+            # requirement instead of copying arbitrarily large evidence text
+            # into history. This projects evidence, never reclassifies it.
+            from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
+
+            acceptance = acceptance_evidence(gate_payload)
+            if acceptance is not None:
+                acceptance_projection = acceptance.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                )
+                for evidence_row in acceptance_projection["evidence"]:
+                    evidence_row["evidenceRefs"] = [gate_result_ref]
+                validated_refs["acceptance"] = acceptance_projection
             if validated_refs:
                 compact["validatedRefs"] = validated_refs
 
