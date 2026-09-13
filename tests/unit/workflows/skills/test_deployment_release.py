@@ -165,3 +165,109 @@ async def test_foreign_container_is_never_adopted(monkeypatch):
     monkeypatch.setattr(release, "docker", daemon)
     with pytest.raises(ValueError, match="ownership differs"):
         await release.inspect_owned("owned-container", "execution")
+
+
+@pytest.mark.asyncio
+async def test_typed_ramping_route_remains_in_recovery_set(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from temporalio.api.deployment.v1 import (
+        RoutingConfig,
+        WorkerDeploymentInfo,
+        WorkerDeploymentVersion,
+    )
+    from temporalio.api.workflowservice.v1 import DescribeWorkerDeploymentResponse
+    from moonmind.workflows.skills import deployment_availability as availability
+
+    snapshot = DescribeWorkerDeploymentResponse(
+        worker_deployment_info=WorkerDeploymentInfo(
+            routing_config=RoutingConfig(
+                current_deployment_version=WorkerDeploymentVersion(
+                    deployment_name="test", build_id="current"
+                ),
+                ramping_deployment_version=WorkerDeploymentVersion(
+                    deployment_name="test", build_id="ramping"
+                ),
+                ramping_version_percentage=10,
+            )
+        )
+    )
+    monkeypatch.setattr(
+        availability, "routing_snapshot", AsyncMock(return_value=snapshot)
+    )
+    monkeypatch.setattr(availability, "docker", AsyncMock(return_value=""))
+    broken = tmp_path / "broken-unrelated"
+    broken.mkdir()
+    (broken / "routing.json").write_text("{broken")
+    (broken / "deployment-result.json").write_text("{broken")
+    (broken / "request.json").write_text("{broken")
+    (broken / "retained.json").write_text("{broken")
+    missing = tmp_path / "missing-authority"
+    missing.mkdir()
+    release.write_record(missing / "routing.json", {"deployment": "test"})
+    release.write_record(missing / "request.json", {"authored": {}})
+    release.write_record(missing / "retained.json", {})
+    observed = []
+
+    async def observe(_client, version, **_kwargs):
+        observed.append(version)
+        return {"version": version, "available": True, "queues": []}
+
+    monkeypatch.setattr(availability, "version_availability", observe)
+    result = await availability.reconcile_availability(
+        None, deployment="test", runner=None, root=tmp_path
+    )
+    assert observed == ["test.current", "test.ramping"]
+    assert len(result["versions"]) == 2
+    assert len(result["discoveryErrors"]) == 3
+    assert {"record": "missing-authority", "errorCode": "ValueError"} in result[
+        "discoveryErrors"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retained_only_receipt_requires_exact_owner_and_manifest(
+    tmp_path, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    deployment = "existing-install"
+    digest = "sha256:" + "a" * 64
+    image = "sha256:" + "b" * 64
+    version = deployment + "." + digest
+    directory = tmp_path / "upgrade"
+    directory.mkdir()
+    release.write_record(directory / "request.json", {"authored": {"owner": "upgrade"}})
+    release.write_record(
+        directory / "routing.json",
+        {"deployment": deployment, "candidate": "new", "previous": version},
+    )
+    release.write_record(
+        directory / "retained.json",
+        {"owner": "upgrade", "version": version, "image": image},
+    )
+    docker = AsyncMock(
+        side_effect=[
+            json.dumps([{"Id": image}]),
+            json.dumps({"digest": "wrong", "sourceRevision": "source"}),
+        ]
+    )
+    monkeypatch.setattr(release, "docker", docker)
+    with pytest.raises(ValueError, match="manifest differs"):
+        await release.successful_release_image(tmp_path, version)
+    release.write_record(
+        directory / "retained.json",
+        {"owner": "foreign", "version": version, "image": image},
+    )
+    errors = []
+    assert (
+        list(release.retained_release_records(tmp_path, deployment, errors=errors))
+        == []
+    )
+    assert errors == [{"record": "upgrade", "errorCode": "ValueError"}]
+    assert await release.successful_release_image(tmp_path, version) is None
+    release.write_record(
+        directory / "retained.json",
+        {"owner": "upgrade", "version": "foreign", "image": image},
+    )
+    assert list(release.retained_release_records(tmp_path, deployment)) == []
+    assert docker.await_count == 2

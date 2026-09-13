@@ -440,9 +440,11 @@ class OmnigentOAuthHostJanitor:
                         "action": "static_host_stopped",
                     }
                 )
-        leases = await self._repository.list_active_host_leases()
+        leases = await self._repository.list_active_host_leases(failures=actions)
         terminal_provider_leases = (
-            await self._repository.list_terminal_host_leases_with_active_provider_capacity()
+            await self._repository.list_terminal_host_leases_with_active_provider_capacity(
+                failures=actions
+            )
             if hasattr(
                 self._repository,
                 "list_terminal_host_leases_with_active_provider_capacity",
@@ -473,159 +475,189 @@ class OmnigentOAuthHostJanitor:
             lease.container_name: lease for lease in leases if lease.container_name
         }
         for lease in leases:
-            if profile_id and lease.provider_profile_id != profile_id:
-                continue
-            expired = lease.expires_at <= now
-            stale = lease.last_heartbeat_at <= now - self._heartbeat_timeout
-            terminal_cleanup = lease.lease_id in cleanup_required
-            terminal_provider_cleanup = (
-                lease.lease_id in terminal_provider_lease_refs
-            )
-            reconciliation_action = reconciliation_required.get(lease.lease_id)
-            missing = bool(
-                lease.container_name
-                and not await self._runtime.container_exists(lease.container_name)
-            )
-            # ``allocating`` and ``starting`` precede the container
-            # materialization authority handoff. A deterministic container name
-            # exists on the lease during that window, but the container is not
-            # required to exist yet. Absence alone is therefore not cleanup
-            # evidence until the coordinator crosses into ready/assigned. A
-            # stale/expired lease or an explicit durable reconciliation signal
-            # still permits cleanup of an abandoned launch.
-            missing_requires_cleanup = bool(
-                missing and lease.status not in {"allocating", "starting"}
-            )
-            if (
-                not force
-                and not expired
-                and not missing_requires_cleanup
-                and not stale
-                and not terminal_cleanup
-                and not terminal_provider_cleanup
-                and not reconciliation_action
-            ):
-                continue
-            # A fresh draining lease already has a cleanup owner. Let that owner
-            # finish; only a stale/expired pass may recover an abandoned drain.
-            if (
-                lease.status == "draining"
-                and not force
-                and not expired
-                and not stale
-            ):
-                continue
-            binding = await self._repository.validate_binding(lease.binding_ref)
-            runtime_binding_state = (
-                await self._runtime_binding_cleanup_authority(
-                    binding=binding, lease=lease
-                )
-            )
-            if lease.status in CLEANUP_CLAIMABLE_HOST_STATES:
-                claimed = await self._claim_cleanup(lease)
-                if claimed is None:
-                    # The coordinator advanced state or heartbeat authority
-                    # after this janitor pass observed it. Reconcile from the
-                    # next durable scan; never clean from the stale snapshot.
-                    continue
-                lease = claimed
-            if lease.omnigent_session_id:
-                try:
-                    await self._client.get_session(lease.omnigent_session_id)
-                    await self._client.interrupt(lease.omnigent_session_id)
-                    await self._client.stop_session(lease.omnigent_session_id)
-                except Exception as exc:
-                    actions.append(
-                        {
-                            "hostLeaseRef": lease.lease_id,
-                            "omnigentSessionRef": lease.omnigent_session_id,
-                            "action": "session_cleanup_failed",
-                            "errorCode": type(exc).__name__,
-                        }
-                    )
-            cleanup_evidence: dict[str, Any] = {}
             try:
-                cleanup_evidence = await self._stop_host_with_authority(
+                if profile_id and lease.provider_profile_id != profile_id:
+                    continue
+                expired = lease.expires_at <= now
+                stale = lease.last_heartbeat_at <= now - self._heartbeat_timeout
+                terminal_cleanup = lease.lease_id in cleanup_required
+                terminal_provider_cleanup = (
+                    lease.lease_id in terminal_provider_lease_refs
+                )
+                reconciliation_action = reconciliation_required.get(lease.lease_id)
+                missing = bool(
+                    lease.container_name
+                    and not await self._runtime.container_exists(lease.container_name)
+                )
+                # ``allocating`` and ``starting`` precede the container
+                # materialization authority handoff. A deterministic container name
+                # exists on the lease during that window, but the container is not
+                # required to exist yet. Absence alone is therefore not cleanup
+                # evidence until the coordinator crosses into ready/assigned. A
+                # stale/expired lease or an explicit durable reconciliation signal
+                # still permits cleanup of an abandoned launch.
+                missing_requires_cleanup = bool(
+                    missing and lease.status not in {"allocating", "starting"}
+                )
+                if (
+                    not force
+                    and not expired
+                    and not missing_requires_cleanup
+                    and not stale
+                    and not terminal_cleanup
+                    and not terminal_provider_cleanup
+                    and not reconciliation_action
+                ):
+                    continue
+                # A fresh draining lease already has a cleanup owner. Let that owner
+                # finish; only a stale/expired pass may recover an abandoned drain.
+                if (
+                    lease.status == "draining"
+                    and not force
+                    and not expired
+                    and not stale
+                ):
+                    continue
+                binding = await self._repository.validate_binding(lease.binding_ref)
+                runtime_binding_state = await self._runtime_binding_cleanup_authority(
                     binding=binding, lease=lease
                 )
-                stopped_lease = await self._repository.mark_host_lease_stopped(
-                    lease.lease_id
-                )
-                if stopped_lease is not None:
-                    lease = stopped_lease
-                provider_released = await self._release_provider_lease(
-                    binding=binding, lease=lease
-                )
-            except Exception as exc:
+                if lease.status in CLEANUP_CLAIMABLE_HOST_STATES:
+                    claimed = await self._claim_cleanup(lease)
+                    if claimed is None:
+                        # The coordinator advanced state or heartbeat authority
+                        # after this janitor pass observed it. Reconcile from the
+                        # next durable scan; never clean from the stale snapshot.
+                        continue
+                    lease = claimed
+                if lease.omnigent_session_id:
+                    try:
+                        await self._client.get_session(lease.omnigent_session_id)
+                        await self._client.interrupt(lease.omnigent_session_id)
+                        await self._client.stop_session(lease.omnigent_session_id)
+                    except Exception as exc:
+                        actions.append(
+                            {
+                                "hostLeaseRef": lease.lease_id,
+                                "omnigentSessionRef": lease.omnigent_session_id,
+                                "action": "session_cleanup_failed",
+                                "errorCode": type(exc).__name__,
+                            }
+                        )
+                cleanup_evidence: dict[str, Any] = {}
+                try:
+                    cleanup_evidence = await self._stop_host_with_authority(
+                        binding=binding, lease=lease
+                    )
+                    stopped_lease = await self._repository.mark_host_lease_stopped(
+                        lease.lease_id
+                    )
+                    if stopped_lease is not None:
+                        lease = stopped_lease
+                    provider_released = await self._release_provider_lease(
+                        binding=binding, lease=lease
+                    )
+                except Exception as exc:
+                    await self._record_terminal_cleanup(
+                        lease=lease,
+                        completed=False,
+                        cleanup_evidence=cleanup_evidence,
+                        error=exc,
+                        lease_released=False,
+                    )
+                    raise
                 await self._record_terminal_cleanup(
                     lease=lease,
-                    completed=False,
+                    completed=True,
                     cleanup_evidence=cleanup_evidence,
-                    error=exc,
-                    lease_released=False,
+                    lease_released=provider_released,
                 )
-                raise
-            await self._record_terminal_cleanup(
-                lease=lease,
-                completed=True,
-                cleanup_evidence=cleanup_evidence,
-                lease_released=provider_released,
-            )
-            await self._complete_runtime_binding_cleanup(
-                runtime_binding_state
-            )
-            actions.append(
-                {
-                    "hostLeaseRef": lease.lease_id,
-                    "action": "expired_cleanup"
-                    if expired
-                    else (
-                        "stale_heartbeat_cleanup"
-                        if stale
-                        else (
-                            "runner_exit_cleanup" if terminal_cleanup else (
-                                "provider_lease_reconciliation"
-                                if terminal_provider_cleanup
+                await self._complete_runtime_binding_cleanup(runtime_binding_state)
+                actions.append(
+                    {
+                        "hostLeaseRef": lease.lease_id,
+                        "action": (
+                            "expired_cleanup"
+                            if expired
+                            else (
+                                "stale_heartbeat_cleanup"
+                                if stale
                                 else (
-                                    reconciliation_action
-                                    or "missing_container_repair"
+                                    "runner_exit_cleanup"
+                                    if terminal_cleanup
+                                    else (
+                                        "provider_lease_reconciliation"
+                                        if terminal_provider_cleanup
+                                        else (
+                                            reconciliation_action
+                                            or "missing_container_repair"
+                                        )
+                                    )
                                 )
                             )
-                        )
-                    ),
-                    "providerLeaseReleased": provider_released,
-                    "egressEvidenceRef": cleanup_evidence.get("evidenceRef"),
-                    "egressLaunchEvidenceRef": cleanup_evidence.get(
-                        "launchEvidenceRef"
-                    ),
-                }
-            )
+                        ),
+                        "providerLeaseReleased": provider_released,
+                        "egressEvidenceRef": cleanup_evidence.get("evidenceRef"),
+                        "egressLaunchEvidenceRef": cleanup_evidence.get(
+                            "launchEvidenceRef"
+                        ),
+                    }
+                )
+            except Exception as exc:
+                # A historical authority mismatch remains fenced, but cannot
+                # prevent cleanup of leases with independent valid authority.
+                actions.append(
+                    {
+                        "hostLeaseRef": lease.lease_id,
+                        "action": "cleanup_failed",
+                        "errorCode": str(
+                            getattr(exc, "code", "") or type(exc).__name__
+                        ),
+                    }
+                )
         for container_name in await self._runtime.list_managed_containers():
-            if container_name in known_containers:
-                continue
-            host_lease_ref = await self._runtime.managed_container_host_lease_ref(
-                container_name
-            )
-            if host_lease_ref:
-                live_lease = await self._repository.get_host_lease(host_lease_ref)
-                if live_lease is not None:
-                    # The lease may have been created after the initial scan.
-                    # Leave every lease-owned container to the claimed cleanup
-                    # path on the next pass; raw orphan removal has no authority
-                    # to race a coordinator or cleanup owner.
+            try:
+                if container_name in known_containers:
                     continue
-            # No durable lease can resume or publish authority for a true orphan.
-            # The runtime revalidates the deployment ownership label before
-            # removing the credential-bearing resource.
-            await self._runtime.remove_container(container_name)
-            actions.append(
-                {
-                    "containerName": container_name,
-                    "action": "orphan_container_removed",
-                    "providerLeaseReleased": False,
-                }
-            )
-        return {"status": "completed", "actions": actions, "count": len(actions)}
+                host_lease_ref = await self._runtime.managed_container_host_lease_ref(
+                    container_name
+                )
+                if host_lease_ref:
+                    live_lease = await self._repository.get_host_lease(host_lease_ref)
+                    if live_lease is not None:
+                        # The lease may have been created after the initial scan.
+                        # Leave every lease-owned container to the claimed cleanup
+                        # path on the next pass; raw orphan removal has no authority
+                        # to race a coordinator or cleanup owner.
+                        continue
+                # No durable lease can resume or publish authority for a true orphan.
+                # The runtime revalidates the deployment ownership label before
+                # removing the credential-bearing resource.
+                await self._runtime.remove_container(container_name)
+                actions.append(
+                    {
+                        "containerName": container_name,
+                        "action": "orphan_container_removed",
+                        "providerLeaseReleased": False,
+                    }
+                )
+            except Exception as exc:
+                actions.append(
+                    {
+                        "containerName": container_name,
+                        "action": "cleanup_failed",
+                        "errorCode": type(exc).__name__,
+                    }
+                )
+        return {
+            "status": (
+                "degraded"
+                if any(item["action"].endswith("_failed") for item in actions)
+                else "completed"
+            ),
+            "actions": actions,
+            "count": len(actions),
+        }
 
 
 __all__ = ["OmnigentOAuthHostJanitor"]

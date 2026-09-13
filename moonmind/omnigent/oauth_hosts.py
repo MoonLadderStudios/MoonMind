@@ -667,7 +667,26 @@ class OmnigentOAuthHostRepository:
             ).scalars()
             return [self._lease_model(row) for row in rows]
 
-    async def list_active_host_leases(self) -> list[OmnigentHostLease]:
+    def _cleanup_lease_models(self, rows, failures):
+        leases = []
+        for row in rows:
+            try:
+                leases.append(self._lease_model(row))
+            except Exception as exc:
+                if failures is None:
+                    raise
+                failures.append(
+                    {
+                        "hostLeaseRef": row.lease_id,
+                        "action": "cleanup_failed",
+                        "errorCode": type(exc).__name__,
+                    }
+                )
+        return leases
+
+    async def list_active_host_leases(
+        self, *, failures=None
+    ) -> list[OmnigentHostLease]:
         async with self._session_factory() as session:
             rows = (
                 await session.execute(
@@ -676,10 +695,12 @@ class OmnigentOAuthHostRepository:
                     )
                 )
             ).scalars()
-            return [self._lease_model(row) for row in rows]
+            return self._cleanup_lease_models(rows, failures)
 
     async def list_terminal_host_leases_with_active_provider_capacity(
         self,
+        *,
+        failures=None,
     ) -> list[OmnigentHostLease]:
         """Find hosts already stopped while their manager slot is still leased."""
 
@@ -699,7 +720,7 @@ class OmnigentOAuthHostRepository:
                     )
                 )
             ).scalars()
-            return [self._lease_model(row) for row in rows]
+            return self._cleanup_lease_models(rows, failures)
 
     async def mark_generation_stale(
         self, *, profile_id: str, credential_generation: int

@@ -585,3 +585,19 @@ def test_profile_authoring_changes_run_renderer_and_admission_replay(path):
     assert outputs["frontend_static"] == "true"
     assert outputs["unit_fast"] == "true"
     assert outputs["api_component"] == "true"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "moonmind/workflows/skills/deployment_availability.py",
+        "moonmind/workflows/skills/deployment_release.py",
+        "moonmind/workflows/temporal/worker_runtime.py",
+        "api_service/services/recurring_workflows_service.py",
+        "api_service/api/routers/recurring_workflows.py",
+        "frontend/src/entrypoints/schedules.tsx",
+        "tests/fixtures/reliability/release_worker.py",
+    ],
+)
+def test_recurring_availability_boundaries_require_the_real_recovery_journeys(path):
+    assert _outputs([path])["reliability_journey"] == "true"

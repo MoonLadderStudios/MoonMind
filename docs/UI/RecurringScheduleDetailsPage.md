@@ -75,6 +75,15 @@ Minimal differences:
 | Runs tab | Schedule run history, linking each spawned run to workflow detail |
 | Workflow actions | Schedule actions: edit, pause/resume, run now, and delete when the backend delete contract is available |
 
+Run now acknowledges the request as "Requesting" while the API responds, then
+shows a link for "Execution started", "Already running; no new execution
+started", or "Waiting for execution evidence". Both detail and list row actions
+refresh pending messages from durable run observations. An exhausted observation
+shows the API's unconfirmed-acceptance message and schedule-history link before
+retry, without presenting the workflow itself as failed. A lost HTTP response
+retains the same idempotency key for retry; it is not a new launch request.
+UUID generation also supports the established plain-HTTP LAN/VPN dashboard.
+
 The page should not invent a completely separate visual language. Users should understand that a recurring schedule is a control plane object that repeatedly creates normal workflow executions.
 
 ---
