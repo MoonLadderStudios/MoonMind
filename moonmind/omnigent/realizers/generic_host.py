@@ -12,6 +12,7 @@ import json
 import logging
 import time
 from contextlib import suppress
+from dataclasses import replace
 from typing import Any, Awaitable, Callable
 
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
@@ -280,6 +281,22 @@ class GenericOmnigentHostRealizer:
                 slot: value.materializerRef
                 for slot, value in plan.payload.credentialBindings.items()
             }
+            # Resume already-persisted pre-cutover admissions using their
+            # immutable credential authority. New admissions use the epoch;
+            # cleaned bindings were handled above and cannot be resurrected.
+            if prior is not None:
+                acquired = tuple(
+                    replace(item, admission_epoch=0)
+                    if item.admission_epoch > 1
+                    and prior.providerLeases.get(item.slot, {}).get(
+                        "credentialRuntimeRef"
+                    )
+                    == credential_runtime_identity(
+                        replace(item, admission_epoch=0), materializers[item.slot]
+                    )[0]
+                    else item
+                    for item in acquired
+                )
             provider_authority = {
                 item.slot: {
                     **item.runtime_binding_value(
@@ -1182,7 +1199,10 @@ class GenericOmnigentHostRealizer:
         if request.workspace_spec.get("workspaceLocator") and "workspace" not in (sink.binding.phaseResults or {}):
             await sink.record_phase("workspace", request.model_dump(
                 by_alias=True, mode="json", exclude_none=True,
-                include={"agent_kind", "agent_id", "correlation_id", "idempotency_key", "step_execution"},
+                include={
+                    "agent_kind", "agent_id", "correlation_id", "idempotency_key",
+                    "step_execution", "omnigent_execution_plan",
+                },
             ) | {"workspaceSpec": {"workspaceLocator": request.workspace_spec["workspaceLocator"]}})
 
         async def heartbeat_loop() -> None:
@@ -1529,6 +1549,20 @@ class GenericOmnigentHostRealizer:
                 await self._session_cleanup.drain(binding.omnigentSessionId)
             saved_request = (binding.phaseResults or {}).get("workspace")
             if saved_request:
+                # Historical workspace receipts omitted the top-level copy of
+                # the Step Execution's plan. Recover only that proven omission
+                # from the immutable step/binding authority; conflicts still fail.
+                saved_request = dict(saved_request)
+                step_plan = (saved_request.get("stepExecution") or {}).get(
+                    "omnigentExecutionPlan"
+                )
+                if step_plan and step_plan.get("planRef") != binding.executionPlanRef:
+                    raise HarnessPlatformError(
+                        "saved workspace plan differs from its runtime binding",
+                        code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                    )
+                if step_plan and "omnigentExecutionPlan" not in saved_request:
+                    saved_request["omnigentExecutionPlan"] = step_plan
                 binding = await self._ensure_saved(AgentExecutionRequest.model_validate(saved_request), binding)
             claimed = await self._host_leases.claim_cleanup(
                 host_lease.leaseRef, expected_generation=host_lease.generation
