@@ -45,6 +45,9 @@ requirement evidence references point to that published report. A string-only
 metadata filter cannot discard nested acceptance. Projection does not invent a
 verdict, fill missing requirements, or remove expiry. Validation of the report
 and consumption of the serialized projection are one required boundary test.
+Initial publication and final size-triggered compaction use one projection.
+Gate evidence remains essential when auxiliary metadata or excess references
+must be discarded to satisfy the result-size budget.
 
 The normal Workflow Create compilation and acceptance journey for **Codex via Omnigent** is specified by [`docs/Omnigent/CodexCreateToHostContract.md`](../Omnigent/CodexCreateToHostContract.md); this execution model remains authoritative for the shared runtime lifecycle.
 

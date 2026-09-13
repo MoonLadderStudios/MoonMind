@@ -7,6 +7,12 @@ from collections.abc import Mapping
 from typing import Any
 
 from moonmind.schemas.temporal_payload_policy import MAX_TEMPORAL_METADATA_BYTES
+from moonmind.workflows.skills.acceptance_contract import acceptance_evidence
+
+_VERIFY_GATE_METADATA_KEYS = (
+    "moonSpecVerify", "moonspecVerify", "moonspec_verify",
+    "verificationResult", "verification_result",
+)
 
 
 def _compact_workflow_text(value: Any, *, max_chars: int = 700) -> str | None:
@@ -60,7 +66,7 @@ def _compact_workflow_text_mapping(value: Any) -> dict[str, str]:
     return compact
 
 
-def _compact_moonspec_verify_for_workflow_history(
+def compact_moonspec_verify_metadata(
     value: Mapping[str, Any],
 ) -> dict[str, Any]:
     compact: dict[str, Any] = {}
@@ -96,6 +102,8 @@ def _compact_moonspec_verify_for_workflow_history(
         "gate_result_ref",
         "artifactRef",
         "artifact_ref",
+        "rawRecommendedNextAction",
+        "raw_recommended_next_action",
     )
     for key in scalar_keys:
         field_value = _compact_workflow_scalar(value.get(key))
@@ -118,9 +126,21 @@ def _compact_moonspec_verify_for_workflow_history(
             compact[key] = refs
             break
 
-    validated_refs = _compact_workflow_text_mapping(
+    validated_refs: dict[str, Any] = _compact_workflow_text_mapping(
         value.get("validatedRefs") or value.get("validated_refs")
     )
+    # Both initial publication and size-triggered result compaction use this
+    # projection. Nested control evidence is not a string-valued annotation.
+    # Keep its exact identity/scope/freshness and reference the full published
+    # report for detailed evidence; never reinterpret the Skill's verdict.
+    acceptance = acceptance_evidence(value)
+    if acceptance is not None:
+        projected = acceptance.model_dump(mode="json", by_alias=True, exclude_none=True)
+        evidence_ref = value.get("gateResultRef")
+        if isinstance(evidence_ref, str) and evidence_ref.strip():
+            for row in projected["evidence"]:
+                row["evidenceRefs"] = [evidence_ref]
+        validated_refs["acceptance"] = projected
     if validated_refs:
         compact["validatedRefs"] = validated_refs
 
@@ -165,16 +185,10 @@ def compact_agent_run_result_payload_for_workflow_history(
         return compact_payload
 
     compact_metadata = dict(metadata)
-    for key in (
-        "moonSpecVerify",
-        "moonspecVerify",
-        "moonspec_verify",
-        "verificationResult",
-        "verification_result",
-    ):
+    for key in _VERIFY_GATE_METADATA_KEYS:
         value = compact_metadata.get(key)
         if isinstance(value, Mapping):
-            compact_metadata[key] = _compact_moonspec_verify_for_workflow_history(
+            compact_metadata[key] = compact_moonspec_verify_metadata(
                 value
             )
 
@@ -234,6 +248,7 @@ _INLINE_METADATA_BODIES = (
 
 _ESSENTIAL_PUBLISHED_METADATA_KEYS = frozenset(
     {
+        *_VERIFY_GATE_METADATA_KEYS,
         "agentId",
         "agentKind",
         "agentRunId",

@@ -341,6 +341,11 @@ Replay publication through actual artifact storage, the production worker
 binding, Temporal serialization, and the workflow gate; cover managed and
 Omnigent workspaces, large detailed evidence, historical omitted acceptance,
 malformed bindings, expiry, and deterministic replay. Never waive the gate.
+Use the same projection for initial publication and the final size-triggered
+compactor. Exercise near-limit incoming metadata and excess artifact references;
+discarding auxiliary annotations must not discard the gate itself. The review
+of the first repair exposed a second string-only filter at that final boundary,
+so both paths now share one implementation instead of accumulating fixes.
 
 **Further verification hardening:** The same verifier classified every source
 requirement as met while disclosing unexecuted PostgreSQL migration checks as
@@ -358,6 +363,18 @@ migration/restore evidence. This hardening is planned work, not a claim that
 typed artifact references prove semantic correctness. The first report was not
 accepted; the existing contract-repair attempt subsequently returned actionable
 implementation and verification gaps.
+
+The subsequent verifier also treated isolated database checks as production
+operations. The configured Python-test image successfully started a disposable
+PostgreSQL 15.19 instance during incident diagnosis; that demonstrates an
+available capability, not qualification of PostgreSQL 17 or of the migration.
+Require discovery at the actual test-job boundary and preserve any explicit
+version requirement. A separate 184-test job outlived the agent tool's wait
+limit and later succeeded. Expose its durable job identity before waiting,
+recover status/logs after caller interruption, and distinguish a client wait
+timeout from a terminal test failure. Cover lost callers with the existing
+container-job owner and stable request identity instead of launching duplicate
+jobs or declaring the environment unavailable.
 
 ## 5. Required verification matrix
 

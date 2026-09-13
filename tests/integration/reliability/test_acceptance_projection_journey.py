@@ -47,7 +47,8 @@ class AcceptanceProjectionJourney:
 
 
 @pytest.mark.parametrize("expired", [False, True])
-async def test_published_acceptance_remains_valid_and_replayable(tmp_path, monkeypatch, expired):
+@pytest.mark.parametrize("near_limit", [False, True])
+async def test_published_acceptance_remains_valid_and_replayable(tmp_path, monkeypatch, expired, near_limit):
     fixture = Path(__file__).resolve().parents[2] / "fixtures/reliability/acceptance-evidence-projection.json"
     payload = json.loads(fixture.read_text())["gatePayload"]
     acceptance = payload["validatedRefs"]["acceptance"]
@@ -91,9 +92,12 @@ async def test_published_acceptance_remains_valid_and_replayable(tmp_path, monke
                 client, task_queue=queue, workflows=[AcceptanceProjectionJourney],
                 activities=[binding.handler], workflow_runner=UnsandboxedWorkflowRunner(),
             ):
+                metadata = {"agentRunId": "verify-run", "verify_artifact_path": "artifacts/verify.json", "acceptanceContract": "acceptance/v1"}
+                if near_limit:
+                    metadata.update(diagnostic1="p" * 7800, diagnostic2="q" * 7600)
                 handle = await client.start_workflow(
                     AcceptanceProjectionJourney.run,
-                    {"metadata": {"agentRunId": "verify-run", "verify_artifact_path": "artifacts/verify.json", "acceptanceContract": "acceptance/v1"}},
+                    {"metadata": metadata},
                     id=queue, task_queue=queue, execution_timeout=timedelta(minutes=2),
                 )
                 result = await handle.result()

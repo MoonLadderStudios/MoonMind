@@ -126,6 +126,29 @@ def test_auto_publish_evidence_ref_survives_workflow_history_compaction() -> Non
     assert compacted["metadata"]["publishEvidence"] == "art-publish-evidence"
 
 
+@pytest.mark.parametrize("pressure", ["annotations", "durable_refs"])
+def test_acceptance_survives_final_result_compaction(pressure: str) -> None:
+    from moonmind.schemas.agent_runtime_models import AgentRunResult
+    from moonmind.workflows.skills.approval_policy import parse_step_gate_result
+
+    fixture = Path(__file__).resolve().parents[2] / "fixtures/reliability/acceptance-evidence-projection.json"
+    gate = json.loads(fixture.read_text())["gatePayload"]
+    gate["gateResultRef"] = "art-gate-result"
+    metadata = {"moonSpecVerify": gate, "outputAgentResultRef": "art-full-result"}
+    # Ref pressure reaches the final essential-field pass; annotations reach
+    # the ordinary size-based removal pass. Neither may discard gate authority.
+    for index in range(24):
+        key = f"auxiliary{index}Ref" if pressure == "durable_refs" else f"annotation{index}"
+        metadata[key] = "x" * 900
+    compacted = compact_published_agent_run_result_payload({"metadata": metadata})
+    result = AgentRunResult.model_validate(compacted)
+    projected = result.metadata["moonSpecVerify"]
+    assert parse_step_gate_result(projected, require_acceptance=True).verdict == "FULLY_IMPLEMENTED"
+    evidence = projected["validatedRefs"]["acceptance"]
+    assert evidence["scope"] == gate["validatedRefs"]["acceptance"]["scope"]
+    assert all(row["evidenceRefs"] == ["art-gate-result"] for row in evidence["evidence"])
+
+
 def _write(workspace: Path, *, status: str, requested: int, queued: list[dict]) -> None:
     targets = workspace / "artifacts/batch-workflows-targets.json"
     targets.parent.mkdir(parents=True, exist_ok=True)
