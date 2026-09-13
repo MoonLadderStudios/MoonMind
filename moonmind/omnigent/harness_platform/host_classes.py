@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from moonmind.omnigent.compatibility import versions_compatible
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -328,13 +329,28 @@ class OmnigentHostClassSelector:
         *,
         harness: Any,
         omnigent_version: str,
-        omnigent_build_digest: str,
         integration_mode: str,
         materializer_refs: list[str],
         architecture: str = "linux/amd64",
         requested_host_mode: str = "on-demand",
         requested_host_class_ref: str | None = None,
+        host_image_ref: str | None = None,
+        omnigent_host_build_digest: str | None = None,
     ) -> HostClass:
+        # An admitted plan can supply both immutable host identities after its
+        # launch artifact has been verified. Fresh admission instead resolves
+        # current deployment evidence below; a partial recorded pair is invalid.
+        recorded_host = (
+            host_image_ref is not None or omnigent_host_build_digest is not None
+        )
+        if recorded_host and (
+            not _IMAGE_RE.fullmatch(host_image_ref or "")
+            or not _DIGEST_RE.fullmatch(omnigent_host_build_digest or "")
+        ):
+            raise HarnessPlatformError(
+                "execution plan lacks exact host image and build authority",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
         candidates: list[HostClass] = []
         reasons: list[str] = []
         for template in sorted(self._templates, key=lambda item: item.ref):
@@ -343,9 +359,13 @@ class OmnigentHostClassSelector:
             if harness.id not in template.harness_ids:
                 continue
             try:
-                image_ref = _require_image_ref(self._environment, template.image_env)
+                image_ref = (
+                    host_image_ref
+                    if recorded_host
+                    else _require_image_ref(self._environment, template.image_env)
+                )
             except HarnessPlatformError as exc:
-                # Image validation also checks exact-pair compatibility and
+                # Image validation also checks release compatibility and
                 # bootstrap qualification. Preserve that actionable cause;
                 # a quarantined, valid digest is not a missing image pin.
                 reasons.append(f"{template.ref}: {exc}")
@@ -392,19 +412,47 @@ class OmnigentHostClassSelector:
                     )
                     continue
                 runtime_dependencies = runtime_dependencies_for_pack(pack)
-            host_build_digest = omnigent_build_digest
-            from moonmind.omnigent.bootstrap.store import load_resolved_state
+            if recorded_host:
+                host_build_digest = omnigent_host_build_digest
+            else:
+                from moonmind.omnigent.bootstrap.store import load_resolved_state
 
-            resolved = load_resolved_state()
-            compatibility = (
-                resolved.details.get("opencodeHostCompatibility", {}) if resolved else {}
-            )
-            if (
-                compatibility.get("hostImageRef") == image_ref
-                and compatibility.get("status") == "ready"
-                and _DIGEST_RE.fullmatch(str(compatibility.get("hostBuildDigest") or ""))
-            ):
-                host_build_digest = compatibility["hostBuildDigest"]
+                resolved = load_resolved_state()
+                details = resolved.details if resolved else {}
+                provenance = details.get("hostImageProvenance", {}).get(image_ref, {})
+                if not provenance:
+                    # Reader for already persisted discovery before per-image
+                    # provenance. Only the actually observed image may use it.
+                    compatibility = details.get("opencodeHostCompatibility", {})
+                    if (
+                        compatibility.get("hostImageRef") == image_ref
+                        and compatibility.get("status") == "ready"
+                    ):
+                        provenance = {
+                            "buildDigest": compatibility.get("hostBuildDigest"),
+                            "version": compatibility.get("hostVersion"),
+                        }
+                host_build_digest = str(provenance.get("buildDigest") or "")
+                if not _DIGEST_RE.fullmatch(host_build_digest):
+                    reasons.append(
+                        f"{template.ref}: bootstrap has not observed build provenance "
+                        f"for selected host image {image_ref}"
+                    )
+                    continue
+                host_build_pin = str(
+                    self._environment.get("OMNIGENT_BUILD_DIGEST") or ""
+                ).strip()
+                if host_build_pin and host_build_pin != host_build_digest:
+                    reasons.append(
+                        f"{template.ref}: selected host violates OMNIGENT_BUILD_DIGEST"
+                    )
+                    continue
+                if not versions_compatible(omnigent_version, provenance.get("version")):
+                    reasons.append(
+                        f"{template.ref}: selected host image lacks compatible "
+                        "Omnigent major.minor version evidence"
+                    )
+                    continue
             candidates.append(
                 HostClass.model_validate(
                     {

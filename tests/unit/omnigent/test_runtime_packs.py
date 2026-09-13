@@ -36,6 +36,19 @@ _OPENCODE_IMAGE_REF = (
 
 def _set_shared_image(monkeypatch, ref=_SHARED_IMAGE_REF) -> str:
     monkeypatch.setenv(OMNIGENT_SHARED_HOST_IMAGE_ENV, ref)
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: SimpleNamespace(
+            details={
+                "hostImageProvenance": {
+                    ref: {"buildDigest": "sha256:" + "b" * 64, "version": "1.0.0"}
+                }
+            }
+        ),
+    )
     return ref
 
 
@@ -165,14 +178,12 @@ def test_codex_and_claude_host_classes_use_the_shared_digest(monkeypatch):
     codex = selector.select(
         harness=_harness("codex-native"),
         omnigent_version="1.0.0",
-        omnigent_build_digest="sha256:" + "b" * 64,
         integration_mode="native-server",
         materializer_refs=["codex-oauth-home@1"],
     )
     claude = selector.select(
         harness=_harness("claude-native"),
         omnigent_version="1.0.0",
-        omnigent_build_digest="sha256:" + "b" * 64,
         integration_mode="native-server",
         materializer_refs=["claude-oauth-home@1"],
     )
@@ -214,7 +225,6 @@ def test_shared_host_class_rejects_cross_harness_materializers(
         selector.select(
             harness=_harness(harness_id),
             omnigent_version="1.0.0",
-            omnigent_build_digest="sha256:" + "b" * 64,
             integration_mode="native-server",
             materializer_refs=materializer_refs,
         )
@@ -254,7 +264,6 @@ def test_shared_host_class_rejects_another_harness_by_request(
         selector.select(
             harness=_harness("opencode-native"),
             omnigent_version="1.0.0",
-            omnigent_build_digest="sha256:" + "b" * 64,
             integration_mode="native-server",
             materializer_refs=["opencode-auth-json@1"],
             requested_host_class_ref="omnigent-codex@1",
@@ -272,7 +281,6 @@ def test_shared_host_class_requires_digest_pinned_env(monkeypatch):
         selector.select(
             harness=_harness("codex-native"),
             omnigent_version="1.0.0",
-            omnigent_build_digest="sha256:" + "b" * 64,
             integration_mode="native-server",
             materializer_refs=["codex-oauth-home@1"],
         )

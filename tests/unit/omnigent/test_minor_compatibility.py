@@ -8,6 +8,9 @@ from moonmind.omnigent import deployment_identity
 from moonmind.omnigent.bootstrap import image_resolution, store
 from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
 from moonmind.omnigent.compatibility import versions_compatible
+from tests.unit.omnigent.test_harness_platform import (  # noqa: F401 -- fixture for serialized admitted plans
+    _test_owned_host_classes,
+)
 
 
 @pytest.mark.parametrize(
@@ -158,6 +161,7 @@ def test_host_classes_keep_host_provenance_independent_of_server(
                 "status": "ready",
                 "hostImageRef": image,
                 "hostBuildDigest": host_digest,
+                "hostVersion": "0.12.9",
             }
         }
     )
@@ -177,9 +181,220 @@ def test_host_classes_keep_host_provenance_independent_of_server(
     host = selector.select(
         harness=catalog,
         omnigent_version="0.12.0",
-        omnigent_build_digest="sha256:" + "a" * 64,
         integration_mode="native-server",
         materializer_refs=["none@1"],
     )
     assert host.omnigentBuildDigest == host_digest
     assert host.imageRef == image
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "harness_id", ["opencode-native", "codex-native", "claude-native", "pi-native"]
+)
+async def test_bootstrap_selects_each_images_actual_provenance(
+    tmp_path, monkeypatch, harness_id
+):
+    from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
+    from moonmind.omnigent.harness_platform.host_classes import (
+        OmnigentHostClassSelector,
+    )
+    from moonmind.omnigent.host_services.attestation import _assert_exact_omnigent_build
+
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", str(tmp_path / "images.json")
+    )
+    refs = {
+        "OMNIGENT_IMAGE": "server@sha256:" + "a" * 64,
+        "OMNIGENT_OPENCODE_HOST_IMAGE": "opencode@sha256:" + "b" * 64,
+        "OMNIGENT_SHARED_HOST_IMAGE": "shared@sha256:" + "d" * 64,
+        "OMNIGENT_PI_HOST_IMAGE": "pi@sha256:" + "e" * 64,
+    }
+    builds = {
+        ref: "sha256:" + character * 64 for ref, character in zip(refs.values(), "1678")
+    }
+
+    async def resolve(image_env, *_args):
+        ref = refs[image_env]
+        return ref, "sha256:" + ref.rsplit(":", 1)[-1]
+
+    async def run(argv, **_kwargs):
+        import json
+
+        if argv[:3] == ["docker", "image", "inspect"]:
+            if argv[-1] == "{{json .Config.Labels}}":
+                return (
+                    0,
+                    json.dumps({"moonmind.omnigent.build_digest": builds[argv[3]]}),
+                    "",
+                )
+            return 0, "amd64", ""
+        if argv[:3] == ["docker", "run", "--rm"]:
+            return 0, "omnigent 0.12.9", ""
+        if argv[0] == "sh":
+            return 0, "", ""
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(image_resolution, "_resolve_image", resolve)
+    monkeypatch.setattr(image_resolution, "_run", run)
+    state = await image_resolution.resolve_omnigent_images({})
+    store.save_resolved_state(state)
+    catalog = _normalize_harness(
+        {"id": harness_id},
+        omnigent_version="0.12.0",
+        omnigent_build_digest="sha256:" + "a" * 64,
+    )
+    selector = OmnigentHostClassSelector(environment={})
+    host = selector.select(
+        harness=catalog,
+        omnigent_version="0.12.0",
+        integration_mode="native-server",
+        materializer_refs=["none@1"],
+        requested_host_class_ref=(
+            "omnigent-opencode@1" if harness_id == "opencode-native" else None
+        ),
+    )
+    expected = refs[
+        (
+            "OMNIGENT_PI_HOST_IMAGE"
+            if harness_id == "pi-native"
+            else (
+                "OMNIGENT_OPENCODE_HOST_IMAGE"
+                if harness_id == "opencode-native"
+                else "OMNIGENT_SHARED_HOST_IMAGE"
+            )
+        )
+    ]
+    assert host.imageRef == expected
+    assert host.omnigentBuildDigest == builds[expected]
+    _assert_exact_omnigent_build(
+        {"Config": {"Labels": {"moonmind.omnigent.build_digest": builds[expected]}}},
+        host.omnigentBuildDigest,
+    )
+    assert set(state.details["hostImageProvenance"]) == set(refs.values()) - {
+        refs["OMNIGENT_IMAGE"]
+    }
+
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+
+    with pytest.raises(HarnessPlatformError, match="violates OMNIGENT_BUILD_DIGEST"):
+        OmnigentHostClassSelector(
+            environment={"OMNIGENT_BUILD_DIGEST": "sha256:" + "9" * 64}
+        ).select(
+            harness=catalog,
+            omnigent_version="0.12.0",
+            integration_mode="native-server",
+            materializer_refs=["none@1"],
+            requested_host_class_ref=host.ref,
+        )
+
+    # Missing or foreign evidence must not substitute server provenance.
+    state.details["hostImageProvenance"][expected] = {
+        "buildDigest": None,
+        "version": "0.12.9",
+    }
+    store.save_resolved_state(state)
+    with pytest.raises(HarnessPlatformError, match="build provenance"):
+        selector.select(
+            harness=catalog,
+            omnigent_version="0.12.0",
+            integration_mode="native-server",
+            materializer_refs=["none@1"],
+            requested_host_class_ref=host.ref,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "replacement_version,compatible", [("1.0.99", True), ("1.1.0", False)]
+)
+async def test_host_override_never_masks_server_replacement(
+    tmp_path, monkeypatch, replacement_version, compatible
+):
+    import json
+    import os
+
+    from tests.unit.omnigent.test_harness_platform import _compile_opencode_plan
+
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", str(tmp_path / "images.json")
+    )
+    monkeypatch.setattr(image_resolution, "_operator_image_baseline", None)
+    for key in image_resolution._PUBLISHED_IMAGE_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("OMNIGENT_IMAGE", "server")
+    host_pin = "sha256:" + "e" * 64
+    monkeypatch.setenv("OMNIGENT_BUILD_DIGEST", host_pin)
+    # A host pin alone is not discovery of a server.
+    assert store.load_resolved_state() is None
+    with pytest.raises(deployment_identity.OmnigentDeploymentNotReady):
+        deployment_identity.resolve_deployed_server_build_digest()
+    original_digest = "sha256:" + "b" * 64
+    replacement_digest = "sha256:" + "d" * 64
+    observed = {"digest": original_digest, "version": "1.0.0"}
+    host_ref = "host@sha256:" + "f" * 64
+
+    async def running_server(*_args):
+        return "server@" + observed["digest"]
+
+    async def resolve(image_env, *_args):
+        return (
+            (host_ref, "sha256:" + "f" * 64)
+            if image_env == "OMNIGENT_OPENCODE_HOST_IMAGE"
+            else (None, None)
+        )
+
+    async def run(argv, **_kwargs):
+        if argv[:3] == ["docker", "image", "inspect"]:
+            if argv[-1] == "{{json .Config.Labels}}":
+                return 0, json.dumps({"moonmind.omnigent.build_digest": host_pin}), ""
+            return 0, "amd64", ""
+        if argv[:3] == ["docker", "run", "--rm"]:
+            return (
+                0,
+                "omnigent "
+                + (observed["version"] if argv[-2].startswith("server@") else "1.0.9"),
+                "",
+            )
+        if argv[0] == "sh":
+            return 0, "", ""
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(
+        image_resolution, "_resolve_running_server_image", running_server
+    )
+    monkeypatch.setattr(image_resolution, "_resolve_image", resolve)
+    monkeypatch.setattr(image_resolution, "_run", run)
+    first = await image_resolution.publish_resolved_omnigent_images()
+    assert first.omnigent_build_digest == original_digest
+    assert deployment_identity.resolve_deployed_server_build_digest() == original_digest
+    # A serialized admitted plan contains the actual catalog server identity.
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        OmnigentExecutionPlanEnvelope,
+    )
+
+    plan = _compile_opencode_plan()
+    plan = OmnigentExecutionPlanEnvelope.model_validate_json(
+        plan.model_dump_json(by_alias=True)
+    )
+    assert plan.payload.supportIdentity.omnigentServerBuildRef == original_digest
+    deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)
+
+    observed.update(digest=replacement_digest, version=replacement_version)
+    current = await image_resolution.publish_resolved_omnigent_images()
+    assert current.omnigent_build_digest == replacement_digest
+    assert image_resolution.resolved_build_digest(current) == replacement_digest
+    assert os.environ["OMNIGENT_BUILD_DIGEST"] == host_pin
+    # Historical persisted discovery can contain a host pin in this field; the
+    # server image remains authoritative when reading that old payload.
+    store.save_resolved_state(
+        current.model_copy(update={"omnigent_build_digest": host_pin})
+    )
+    assert (
+        deployment_identity.resolve_deployed_server_build_digest() == replacement_digest
+    )
+    if compatible:
+        deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)
+    else:
+        with pytest.raises(deployment_identity.OmnigentDeploymentIdentityConflict):
+            deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)

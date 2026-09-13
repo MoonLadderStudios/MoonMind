@@ -25,10 +25,19 @@ patch versions and build digests may differ. This rule also applies to `0.x`
 releases. Required capabilities, credential boundaries, runtime-pack checks,
 and the exact selected host image remain enforced. Server digests record
 observed deployment provenance; host build labels record the selected host's
-provenance independently.
+provenance independently. Bootstrap records build and executable-version
+observations keyed by each selected immutable host image, including independently
+built shared and Pi images. Host selection consumes that image's observation;
+missing evidence cannot borrow the catalog/server digest. `OMNIGENT_BUILD_DIGEST`
+is an optional exact host-build pin. It is never a substitute for the server
+image digest, and publication does not overwrite it with a discovered digest.
 
 New execution plans record `omnigentVersion`. A compatible server patch update
-can serve the unchanged plan and its original immutable host image. Historical
+can serve the unchanged plan and its original immutable host image. Rehydration
+verifies the recorded launch artifact and uses the admitted host image, build,
+architecture, and runtime settings even when current default-host discovery is
+missing or has moved to a different release series. Partial recorded host
+authority and mismatched launch artifacts remain rejected. Historical
 plans without version evidence preserve their canonical bytes and exact-build
 validation; an unknown historical version is never guessed. Core catalog
 refreshes may attest a patch update only when the declared harness contract is
@@ -37,6 +46,8 @@ unchanged. Plugin implementation identities remain exact.
 Compose infrastructure discovery starts after the Omnigent server container.
 Incomplete discovery is reported as pending readiness. The API bootstrap
 reconciler owns re-observation independently of the agent execution queue.
+Fresh allocations validate deployment readiness before claiming a canonical turn
+command or acquiring credentials, so a discovery gap leaves delivery unclaimed.
 An admitted one-Activity execution encountering `OmnigentDeploymentNotReady`
 waits durably in `MoonMind.AgentRun`, retaining its request, admission, workspace,
 profile, and cumulative execution budget. It retries every 30 seconds for at

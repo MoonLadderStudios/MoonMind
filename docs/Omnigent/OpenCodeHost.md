@@ -663,7 +663,7 @@ host coordinates resolve to the same image the OpenCode path judged, the
 shared ref follows the admitted digest so Codex and Claude Host Classes never
 launch a host from an incompatible major.minor series.
 
-`OMNIGENT_BUILD_DIGEST` remains optional operator authority only for an independently paired server and host build. An image manifest digest must not be substituted for the separate portable Omnigent build identity.
+`OMNIGENT_BUILD_DIGEST` optionally pins the host build label. Server catalog and plan provenance always use the resolved server image digest; the host pin never masks a server version change. Each selected host image retains its own observed build label and executable version.
 
 ## 14. Image release and compatibility
 

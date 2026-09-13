@@ -20,6 +20,9 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from moonmind.omnigent import deployment_identity
 from moonmind.omnigent.bootstrap import infrastructure
 from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
+from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+from moonmind.omnigent.control_plane.identities import canonical_omnigent_session_id
+from moonmind.omnigent.control_plane.turn_commands import CanonicalTurnCommandService
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
 )
@@ -27,9 +30,16 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRu
 from moonmind.workflows.temporal.activities.omnigent_activities import (
     omnigent_profile_bound_execute_activity,
 )
-from tests.unit.omnigent.test_harness_platform import (
+from tests.unit.omnigent.test_canonical_turn_routing import (  # noqa: F401
+    _engine,
+    session_factory,
+)
+from tests.unit.omnigent.test_generic_platform_production_services import (
+    _generic_publication_harness,
+)
+from tests.unit.omnigent.test_harness_platform import (  # noqa: F401 -- autouse fixture for immutable host authority
     _compile_opencode_plan,
-    _test_owned_host_classes,  # noqa: F401 -- autouse fixture for immutable host authority
+    _test_owned_host_classes,
 )
 from tests.unit.workflows.temporal.workflows.test_agent_run_omnigent_capacity_admission import (
     _admission,
@@ -39,7 +49,6 @@ from tests.unit.workflows.temporal.workflows.test_agent_run_omnigent_capacity_ad
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.integration_ci,
     pytest.mark.reliability_journey,
 ]
 
@@ -92,8 +101,13 @@ class ReadinessReplayRun(_RecordingRun):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("recover", [True, False])
+@pytest.mark.parametrize("cached_registry", [True, False])
 async def test_replacement_worker_waits_for_discovery_without_readmission(
-    tmp_path, monkeypatch, recover
+    tmp_path,
+    monkeypatch,
+    recover,
+    cached_registry,
+    session_factory,  # noqa: F811 -- imported fixture
 ):
     monkeypatch.setenv(
         "MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", str(tmp_path / "resolved.json")
@@ -108,17 +122,33 @@ async def test_replacement_worker_waits_for_discovery_without_readmission(
     starts = []
     budget = []
 
-    async def provider_execute(request, received_plan):
-        deployment_identity.assert_plan_matches_deployed_runtime(received_plan.payload)
+    canonical_store = OmnigentControlPlaneStore(session_factory)
+    harness = await _generic_publication_harness({})
+    harness.realizer._deployment_validator = (
+        deployment_identity.assert_plan_matches_deployed_runtime
+    )
+    harness.realizer._turn_commands = CanonicalTurnCommandService(canonical_store)
+
+    async def provider_execute(request, *, session_authority_sink):
         starts.append(request.idempotency_key)
-        return AgentRunResult(summary="Provider fixture completed one admitted turn")
+        await session_authority_sink.session_created("readiness-provider-session")
+        return AgentRunResult(
+            summary="Provider fixture completed one admitted turn",
+            metadata={"omnigentSessionId": "readiness-provider-session"},
+        )
+
+    async def drain(session_id):
+        return {"sessionId": session_id, "stopped": True}
+
+    harness.realizer._session_driver = provider_execute
+    harness.realizer._session_cleanup.drain = drain
 
     def registry():
-        # This is the same eager discovery boundary used by the real registry.
-        deployment_identity.resolve_deployed_server_build_digest()
-        return SimpleNamespace(
-            require=lambda _: SimpleNamespace(execute=provider_execute)
-        )
+        if not cached_registry:
+            # A fresh registry resolves deployment services eagerly. The cached
+            # case must reach the real realizer and canonical command owner.
+            deployment_identity.resolve_deployed_server_build_digest()
+        return SimpleNamespace(require=lambda _: harness.realizer)
 
     monkeypatch.setattr(
         "moonmind.omnigent.realizers.registry.get_default_registry", registry
@@ -174,7 +204,16 @@ async def test_replacement_worker_waits_for_discovery_without_readmission(
             assert failure.value.cause.type == "OmnigentDeploymentReadinessTimeout"
         history = await handle.fetch_history()
 
+    session_id = canonical_omnigent_session_id(
+        workflow_id=request.correlation_id,
+        step_execution_id=request.correlation_id,
+        agent_run_id=request.correlation_id,
+    )
+    async with canonical_store.transaction() as repositories:
+        commands = await repositories.commands.list_for_session(session_id)
+    assert len(commands) == (1 if recover else 0)
     if recover:
+        assert commands[0].status == "applied"
         assert result.failure_class is None
         assert len(starts) == 1
         assert len(attempts) == 3
