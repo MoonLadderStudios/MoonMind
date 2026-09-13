@@ -216,6 +216,44 @@ def test_parse_args_defaults_pr_resolver_max_iterations_to_five():
 
     assert args.max_iterations == 5
 
+
+def test_removed_fork_compat_options_are_rejected():
+    """Pre-release cleanup: includeForks/skipExistingOnly aliases are gone (REQ-01).
+
+    Consumer audit: no preset yaml, API module, or test references these flags
+    (grep: includeForks/skipExistingOnly only in the removed Skill prose and
+    helper). Fork PRs are skipped by default with a ``fork-pr`` reason and
+    there is no fork-inclusion option.
+    """
+
+    module = _load_module()
+
+    with patch(
+        "sys.argv",
+        ["batch_pr_resolver.py", "--repo", "o/r", "--skip-existing-only"],
+    ):
+        with pytest.raises(SystemExit):
+            module["_parse_args"]()
+
+    with patch(
+        "sys.argv",
+        ["batch_pr_resolver.py", "--repo", "o/r", "--include-forks"],
+    ):
+        with pytest.raises(SystemExit):
+            module["_parse_args"]()
+
+    skill_doc = (
+        Path(__file__).resolve().parents[2]
+        / ".agents"
+        / "skills"
+        / "batch-pr-resolver"
+        / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "includeForks" not in skill_doc
+    assert "skipExistingOnly" not in skill_doc
+    assert "--include-forks" not in skill_doc
+    assert "--skip-existing-only" not in skill_doc
+
 def test_build_queue_request_sets_none_publish_with_matching_branches():
     module = _load_module()
     build_queue_request = module["_build_queue_request"]

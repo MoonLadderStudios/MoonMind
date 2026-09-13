@@ -43,7 +43,10 @@ engine from the resolved active Skill snapshot.
 - `repository` (string, optional): repository override when workflow context
   cannot infer it.
 - `publish_mode` (string, optional): `none`, `branch`, `pr`, or
-  `pr_with_merge_automation`; default `none`.
+  `pr_with_merge_automation`. The omitted default is derived from the
+  selected run (`skill:jira-verify` -> `none`, implement presets -> `pr`)
+  via the preset `defaultFrom` policy; the batch parent itself publishes
+  nothing (`workflowPublish.mode: none`).
 
 ## Workflow
 
