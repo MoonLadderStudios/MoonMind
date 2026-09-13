@@ -61,6 +61,14 @@ DRAIN_APPROVAL_ENV_VAR = "MOONMIND_MANIFEST_REGISTRY_DRAIN_APPROVED"
 #: Exact approved value for :data:`DRAIN_APPROVAL_ENV_VAR`.
 DRAIN_APPROVAL_VALUE = "1"
 
+#: Operator-supplied verified export row count bound to the drain approval.
+#: ``require_registry_drop_approval`` refuses a bare ``approved=True`` for a
+#: populated or unobservable table unless this variable carries the verified
+#: export's row count and it matches the live pre-drop count, so a stale
+#: approval or rows inserted/changed after the snapshot cannot authorize the
+#: drop.
+DRAIN_EXPORT_ROW_COUNT_ENV_VAR = "MOONMIND_MANIFEST_REGISTRY_EXPORT_ROW_COUNT"
+
 #: Modules whose presence proves an old writer/callback is still active.
 #: Each was deleted with the retired product; any survivor blocks the drain.
 RETIRED_WRITER_MARKERS = (
@@ -380,6 +388,20 @@ def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def normalize_stored_content_hash(value: Any) -> Any:
+    """Normalize a stored ``content_hash`` for comparison.
+
+    Retired ``ManifestsService`` rows store ``content_hash`` as
+    ``sha256:<hex>`` while fixtures and recomputed digests use the bare
+    hexadecimal form. The original stored value is preserved verbatim in
+    the export envelope; only the comparison normalizes the known prefix
+    so real populated snapshots are not rejected.
+    """
+    if isinstance(value, str) and value.startswith("sha256:"):
+        return value[len("sha256:") :]
+    return value
+
+
 def export_row_envelope(row: dict[str, Any]) -> tuple[dict[str, Any], bytes]:
     """Build the protected-export envelope for one registry row.
 
@@ -387,8 +409,16 @@ def export_row_envelope(row: dict[str, Any]) -> tuple[dict[str, Any], bytes]:
     carries version/hash, incremental/state payloads, timestamps, and
     last-run links alongside a recomputed content digest. Raises
     ``ValueError`` when required preservation fields are missing so a
-    partial row can never produce a passing export.
+    partial row can never produce a passing export. Every column listed in
+    ``MANIFEST_TABLE_COLUMNS`` must be present as a key (nullable columns
+    may carry an explicit ``None``); a missing key is refused instead of
+    being silently encoded as ``null``.
     """
+    for column in MANIFEST_TABLE_COLUMNS:
+        if column not in row:
+            raise ValueError(
+                f"registry row missing preserved column for export: {column}"
+            )
     for required in ("id", "name", "content", "content_hash", "version"):
         if row.get(required) is None or (required != "id" and row.get(required) == ""):
             raise ValueError(f"registry row missing required field for export: {required}")
@@ -443,7 +473,7 @@ def verify_export_envelope(
             f"(envelope={envelope.get('content_sha256')!r} recomputed={digest!r})"
         )
     stored = envelope.get("stored_content_hash")
-    if stored not in (digest,):
+    if normalize_stored_content_hash(stored) != digest:
         # The stored content_hash is an operator-supplied hash that may use
         # a legacy algorithm; record the mismatch against digests only.
         problems.append(
@@ -522,6 +552,10 @@ def evaluate_registry_drain(inputs: RegistryDrainInputs) -> RegistryDrainDecisio
     snapshot, no incompatible old application code, and no competing
     migrator holding the migration lock. Anything else refuses with the
     blocking dimensions named; there is no silent partial completion.
+    A verified export with unobservable row counts (either count ``None``)
+    is refused: callers must prove the verified export matches the
+    pre-drop snapshot instead of treating unknown completeness as
+    sufficient.
     """
     blocking: list[str] = []
     if inputs.writers_present:
@@ -534,10 +568,12 @@ def evaluate_registry_drain(inputs: RegistryDrainInputs) -> RegistryDrainDecisio
         blocking.append("concurrent_migrator_holds_lock")
     if not inputs.export_verified:
         blocking.append("export_not_verified")
-    elif (
-        inputs.expected_row_count is not None
-        and inputs.export_row_count != inputs.expected_row_count
-    ):
+    elif inputs.export_row_count is None or inputs.expected_row_count is None:
+        blocking.append(
+            f"export_row_count_unobserved:export={inputs.export_row_count} "
+            f"expected={inputs.expected_row_count}"
+        )
+    elif inputs.export_row_count != inputs.expected_row_count:
         blocking.append(
             f"export_row_count_mismatch:export={inputs.export_row_count} "
             f"expected={inputs.expected_row_count}"
@@ -630,8 +666,11 @@ def render_operator_procedure() -> str:
             "   restore into an isolated database without touching newer work.",
             "   File creation alone is not verification.",
             "5. Apply 376_drop_manifest_registry_4192 only when",
-            "   evaluate_registry_drain reports may_apply_destructive; existing",
-            "   migration locking/versioning serializes concurrent migrators.",
+            "   evaluate_registry_drain reports may_apply_destructive with the",
+            "   verified export row count bound to MOONMIND_MANIFEST_REGISTRY_",
+            "   DRAIN_APPROVED=1 via MOONMIND_MANIFEST_REGISTRY_EXPORT_ROW_COUNT;",
+            "   existing migration locking/versioning plus the transaction-scoped",
+            "   advisory lock serializes concurrent migrators.",
             "6. After the boundary, rollback uses the matching compatible release",
             "   plus verified protected restoration or forward repair; schema",
             "   downgrade alone raises RuntimeError and stops actionably.",
@@ -678,6 +717,7 @@ def build_sanitized_supply_package() -> dict[str, Any]:
         "drop_parent_revision": DROP_PARENT_REVISION,
         "drop_child_revision": DROP_CHILD_REVISION,
         "drain_approval_env_var": DRAIN_APPROVAL_ENV_VAR,
+        "drain_export_row_count_env_var": DRAIN_EXPORT_ROW_COUNT_ENV_VAR,
         "operator_procedure": render_operator_procedure(),
     }
 
@@ -695,26 +735,81 @@ def is_drain_approved(environ: dict[str, str] | None = None) -> bool:
     return str(source.get(DRAIN_APPROVAL_ENV_VAR, "")).strip() == DRAIN_APPROVAL_VALUE
 
 
+def read_drain_export_row_count(
+    environ: dict[str, str] | None = None,
+) -> int | None:
+    """Read the verified export row count bound to the drain approval.
+
+    Returns the integer from :data:`DRAIN_EXPORT_ROW_COUNT_ENV_VAR`, or
+    ``None`` when missing/unparseable so callers fail closed instead of
+    treating an unbound approval as sufficient.
+    """
+    source = environ if environ is not None else os.environ
+    raw = str(source.get(DRAIN_EXPORT_ROW_COUNT_ENV_VAR, "")).strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value >= 0 else None
+
+
 def require_registry_drop_approval(
     *,
     manifest_row_count: int | None,
     approved: bool,
+    export_row_count: int | None = None,
+    export_verified: bool = False,
+    environ: dict[str, str] | None = None,
 ) -> None:
     """Enforce the migration-execution drain gate for the forward drop.
 
     This is the execution-time counterpart of :func:`evaluate_registry_drain`
     for the one caller that cannot pass full gate inputs: the Alembic
-    ``upgrade()`` itself. Fresh installs (zero rows, or an unknown count
-    that the caller resolves to zero only when the table is provably empty)
-    proceed without approval. A populated table without explicit operator
-    approval raises ``RuntimeError`` with the actionable recovery direction
-    instead of silently dropping registry evidence. A ``None`` row count
-    (table unreadable) fails closed and requires approval, so an
-    unobservable registry dimension is never treated as a clean drain.
+    ``upgrade()`` itself. Fresh installs (zero rows) proceed without
+    approval. A populated or unobservable table requires both explicit
+    operator approval AND the verified export evidence bound to that
+    approval: ``export_verified`` must be true and ``export_row_count``
+    must be present, matching the live ``manifest_row_count`` when the
+    live count is observable. A bare ``approved=True`` with no export
+    evidence, or with a count that disagrees with the live set, raises
+    ``RuntimeError`` instead of silently dropping unpreserved rows. When
+    ``export_row_count``/``export_verified`` are omitted, the approval
+    binding is read from the environment
+    (:data:`DRAIN_EXPORT_ROW_COUNT_ENV_VAR`; verified is implied by the
+    approval workflow only when an explicit count is bound).
     """
     if manifest_row_count is not None and manifest_row_count <= 0:
         return
+    bound_export_count = export_row_count
+    bound_verified = export_verified
+    if bound_export_count is None and environ is not None:
+        bound_export_count = read_drain_export_row_count(environ)
+        # An explicitly bound count implies the operator completed the
+        # verified-export workflow for this invocation; without a bound
+        # count there is no evidence to imply.
+        bound_verified = bound_verified or bound_export_count is not None
     if approved:
+        if not bound_verified or bound_export_count is None:
+            raise RuntimeError(
+                f"{DROP_REVISION} refused: drain approval is not bound to a "
+                "verified export; re-verify with "
+                "tools/manifest_registry_export_4191.py, confirm "
+                f"{MANIFEST_REGISTRY_MIGRATION_CONTRACT} drain reports "
+                "may_apply_destructive, then re-run with "
+                f"{DRAIN_APPROVAL_ENV_VAR}={DRAIN_APPROVAL_VALUE} and "
+                f"{DRAIN_EXPORT_ROW_COUNT_ENV_VAR}=<verified row count>. "
+                "A stale approval or rows changed after the snapshot must "
+                "never authorize the drop."
+            )
+        if manifest_row_count is not None and bound_export_count != manifest_row_count:
+            raise RuntimeError(
+                f"{DROP_REVISION} refused: live manifest row count "
+                f"({manifest_row_count}) disagrees with the verified export "
+                f"({bound_export_count}); re-snapshot consistently after "
+                "stopping writers, re-verify, and re-approve before dropping."
+            )
         return
     if manifest_row_count is None:
         raise RuntimeError(

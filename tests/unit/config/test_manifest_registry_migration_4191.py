@@ -51,7 +51,6 @@ from moonmind.gates.manifest_registry_migration_4191 import (
     registry_disposition_table,
     render_operator_procedure,
     require_registry_drop_approval,
-    sanitized_export_report,
     sha256_hex,
     stable_disposition_digest,
     verify_export_envelope,
@@ -173,11 +172,11 @@ def test_export_envelope_preserves_exact_bytes_and_links() -> None:
 def test_export_rows_round_trip_with_usable_restore(tmp_path: Path) -> None:
     rows = _fixture_rows()
     export_dir = tmp_path / "protected-export"
-    report = export_rows(rows, export_dir, expected_row_count=2)
+    report = export_rows(rows, export_dir, writers_present=(), expected_row_count=2)
     assert report["row_count"] == 2
     assert check_export_permissions(export_dir) == []
 
-    restored = verify_export_dir(export_dir)
+    restored = verify_export_dir(export_dir, expected_row_count=2)
     assert restored["row_count"] == 2
     by_name = {row["name"]: row for row in restored["rows"]}
     assert by_name["demo-a"]["content_sha256"] == hashlib.sha256(
@@ -191,7 +190,7 @@ def test_export_rows_round_trip_with_usable_restore(tmp_path: Path) -> None:
 def test_export_report_carries_no_sensitive_content(tmp_path: Path) -> None:
     rows = _fixture_rows()
     export_dir = tmp_path / "protected-export"
-    report = export_rows(rows, export_dir, expected_row_count=2)
+    report = export_rows(rows, export_dir, writers_present=(), expected_row_count=2)
     text = json.dumps(report)
     for row in rows:
         assert row["content"] not in text
@@ -211,7 +210,7 @@ def test_export_requires_required_fields() -> None:
 
 def test_tampered_export_fails_restore_not_silent(tmp_path: Path) -> None:
     export_dir = tmp_path / "protected-export"
-    export_rows(_fixture_rows(), export_dir, expected_row_count=2)
+    export_rows(_fixture_rows(), export_dir, writers_present=(), expected_row_count=2)
     (export_dir / "manifest_rows" / "1.yaml").write_bytes(b"tampered-bytes")
     with pytest.raises(RuntimeError, match="digest mismatch"):
         verify_export_dir(export_dir)
@@ -236,7 +235,12 @@ def test_live_writers_block_export_and_drain(tmp_path: Path) -> None:
 
 def test_partial_export_is_refused(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="partial export"):
-        export_rows(_fixture_rows(), tmp_path / "export", expected_row_count=5)
+        export_rows(
+            _fixture_rows(),
+            tmp_path / "export",
+            writers_present=(),
+            expected_row_count=5,
+        )
 
 
 def test_failed_verification_blocks_destructive_application() -> None:
@@ -259,7 +263,12 @@ def test_row_count_mismatch_blocks_destructive_application() -> None:
 
 def test_concurrent_migrator_blocks_destructive_application() -> None:
     decision = evaluate_registry_drain(
-        RegistryDrainInputs(export_verified=True, migrator_lock_held_by_other=True)
+        RegistryDrainInputs(
+            export_verified=True,
+            export_row_count=2,
+            expected_row_count=2,
+            migrator_lock_held_by_other=True,
+        )
     )
     assert not decision.may_apply_destructive
     assert "concurrent_migrator_holds_lock" in decision.blocking
@@ -269,6 +278,8 @@ def test_incompatible_old_code_blocks_destructive_application() -> None:
     decision = evaluate_registry_drain(
         RegistryDrainInputs(
             export_verified=True,
+            export_row_count=2,
+            expected_row_count=2,
             incompatible_code_present=("api_service/services/manifests_service.py",),
         )
     )
@@ -518,6 +529,9 @@ def test_drop_migration_enforces_drain_gate_at_execution() -> None:
     assert "is_drain_approved" in drop_text
     assert "SELECT COUNT(*) FROM manifest" in drop_text
     assert DRAIN_APPROVAL_ENV_VAR in drop_text
+    assert "read_drain_export_row_count" in drop_text
+    assert "MOONMIND_MANIFEST_REGISTRY_EXPORT_ROW_COUNT" in drop_text
+    assert "pg_advisory_xact_lock" in drop_text
     assert "manifest_registry_migration_4191" in drop_text
     # DDL + closed downgrade still present (no silent rewrite of outcomes).
     assert 'op.drop_table("manifest")' in drop_text or (
@@ -540,9 +554,37 @@ def test_registry_drop_approval_refuses_unobservable_without_approval() -> None:
         require_registry_drop_approval(manifest_row_count=None, approved=False)
 
 
-def test_registry_drop_approval_allows_populated_with_approval() -> None:
-    require_registry_drop_approval(manifest_row_count=3, approved=True)
-    require_registry_drop_approval(manifest_row_count=None, approved=True)
+def test_registry_drop_approval_refuses_bare_approval_without_export() -> None:
+    """A bare approved=True without bound export evidence must not drop."""
+    with pytest.raises(RuntimeError, match="not bound to a verified export"):
+        require_registry_drop_approval(manifest_row_count=3, approved=True)
+    with pytest.raises(RuntimeError, match="not bound to a verified export"):
+        require_registry_drop_approval(manifest_row_count=None, approved=True)
+
+
+def test_registry_drop_approval_allows_populated_with_bound_export() -> None:
+    require_registry_drop_approval(
+        manifest_row_count=3,
+        approved=True,
+        export_row_count=3,
+        export_verified=True,
+    )
+    require_registry_drop_approval(
+        manifest_row_count=None,
+        approved=True,
+        export_row_count=3,
+        export_verified=True,
+    )
+
+
+def test_registry_drop_approval_refuses_stale_export_count() -> None:
+    with pytest.raises(RuntimeError, match="disagrees with the verified export"):
+        require_registry_drop_approval(
+            manifest_row_count=4,
+            approved=True,
+            export_row_count=3,
+            export_verified=True,
+        )
 
 
 def test_drain_approval_env_parsing() -> None:
@@ -562,8 +604,32 @@ def test_verify_only_runs_without_rows_json(tmp_path: Path) -> None:
     from tools.manifest_registry_export_4191 import main
 
     export_dir = tmp_path / "protected-export"
-    export_rows(_fixture_rows(), export_dir, expected_row_count=2)
+    export_rows(_fixture_rows(), export_dir, writers_present=(), expected_row_count=2)
     assert main(["--export-dir", str(export_dir), "--verify-only"]) == 0
+    assert (
+        main(
+            [
+                "--export-dir",
+                str(export_dir),
+                "--verify-only",
+                "--expected-row-count",
+                "2",
+            ]
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "--export-dir",
+                str(export_dir),
+                "--verify-only",
+                "--expected-row-count",
+                "5",
+            ]
+        )
+        == 2
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -714,3 +780,62 @@ def test_registry_removal_owns_no_saved_work_evidence() -> None:
     assert retention.describe_artifact_availability(
         status="complete", deletion_started=True
     ) == "deleted"
+
+
+# ---------------------------------------------------------------------------
+# PR #4292 review remediation: stored hash format, column presence, writer
+# drainage, export binding, forward cutover.
+# ---------------------------------------------------------------------------
+
+
+def test_stored_sha256_prefixed_hash_verifies() -> None:
+    from moonmind.gates.manifest_registry_migration_4191 import (
+        normalize_stored_content_hash,
+        verify_export_envelope,
+    )
+
+    row = _fixture_rows()[0]
+    envelope, content_bytes = export_row_envelope(row)
+    assert normalize_stored_content_hash(f"sha256:{envelope['content_sha256']}") == (
+        envelope["content_sha256"]
+    )
+    prefixed = dict(envelope, stored_content_hash=f"sha256:{envelope['content_sha256']}")
+    assert verify_export_envelope(prefixed, content_bytes) == []
+
+
+def test_export_refuses_missing_preserved_column() -> None:
+    row = _fixture_rows()[0]
+    incomplete = dict(row)
+    del incomplete["state_json"]
+    with pytest.raises(ValueError, match="missing preserved column"):
+        export_row_envelope(incomplete)
+
+
+def test_export_refuses_unobserved_writers(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="unobserved"):
+        export_rows(_fixture_rows(), tmp_path / "export", expected_row_count=2)
+
+
+def test_drain_refuses_unobserved_row_counts() -> None:
+    decision = evaluate_registry_drain(RegistryDrainInputs(export_verified=True))
+    assert not decision.may_apply_destructive
+    assert any("unobserved" in blocking for blocking in decision.blocking)
+
+
+def test_verify_binds_expected_row_count(tmp_path: Path) -> None:
+    export_dir = tmp_path / "protected-export"
+    export_rows(_fixture_rows(), export_dir, writers_present=(), expected_row_count=2)
+    with pytest.raises(RuntimeError, match="disagrees with pre-drop snapshot"):
+        verify_export_dir(export_dir, expected_row_count=5)
+
+
+def test_forward_audit_migration_covers_applied_drops() -> None:
+    audit = (
+        REPO_ROOT
+        / "api_service/migrations/versions/380_manifest_registry_drain_audit_4191.py"
+    )
+    assert audit.exists()
+    text = audit.read_text(encoding="utf-8")
+    assert "379_durable_issue_claims" in text
+    assert "require_registry_drop_approval" in text
+    assert "already dropped" in text or "already applied" in text
