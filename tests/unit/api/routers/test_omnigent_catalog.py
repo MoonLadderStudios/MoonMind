@@ -33,6 +33,12 @@ def _set_ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
             server_image_ref=server_ref,
             opencode_host_image_ref=host_ref,
             details={
+                "hostImageProvenance": {
+                    host_ref: {
+                        "buildDigest": "sha256:" + "9" * 64,
+                        "version": "0.11.9",
+                    }
+                },
                 "opencodeHostCompatibility": {
                     "status": "ready",
                     "failureCode": None,

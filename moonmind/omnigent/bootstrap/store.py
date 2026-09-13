@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -82,9 +83,10 @@ def load_resolved_state() -> ResolvedOmnigentDeploymentState | None:
     # Try env fallback: if image refs already set in env, synthesize
     server_ref = os.getenv("OMNIGENT_IMAGE_REF", "").strip()
     host_ref = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()
-    build_digest = os.getenv("OMNIGENT_BUILD_DIGEST", "").strip()
+    server_digest = re.fullmatch(r".+@(sha256:[0-9a-f]{64})", server_ref)
+    build_digest = server_digest.group(1) if server_digest else ""
     shared_ref = os.getenv("OMNIGENT_SHARED_HOST_IMAGE_REF", "").strip()
-    if server_ref or host_ref or build_digest or shared_ref:
+    if server_ref or host_ref or shared_ref:
         try:
             return ResolvedOmnigentDeploymentState(
                 serverImageRef=server_ref or None,
