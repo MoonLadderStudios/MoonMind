@@ -6464,6 +6464,10 @@ async def _execute_brief_admission_claim(
     if stopped is not None:
         return stopped
     service = github_service_factory()
+    # Conflicting or unreadable evidence observed before POST authorization
+    # cannot justify retaining an announcement intent. The locked reread below
+    # still protects against a contender arriving after this preflight.
+    await verify_claim(receipt, service)
     await IssueClaimStore().start_announcement(receipt.owner, receipt.attempt_id)
     async with IssueClaimStore().locked(receipt.owner) as row:
         receipt = ClaimReceipt.from_row(row)
@@ -6516,9 +6520,15 @@ async def _prepare_github_issue_claim(*, inputs, context, repository, issue_numb
         inputs={**inputs, "attemptId": attempt_id, "workflowId": owner},
         context=context, pull_request_url="",
     )
-    return await IssueClaimStore().prepare(owner=owner, repository=repository,
+    values = dict(owner=owner, repository=repository,
         issue_number=issue_number, attempt_id=attempt_id, actor_id=actor["actorId"],
         comment_body=render_attempt_comment(handoff))
+    # Remote attempts survive deployment replacement and may have no local SQL
+    # receipt or in-progress label. Check the same authoritative comment rules
+    # before reserving this candidate so a search can continue without effects.
+    await verify_claim(ClaimReceipt(**values, comment_id=None, confirmed=False,
+        pending_comment_body=None, released=False), service)
+    return await IssueClaimStore().prepare(**values)
 
 
 async def _apply_brief_claim_labels(

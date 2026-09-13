@@ -17,6 +17,7 @@ from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # no
 from tests.unit.workflows.temporal.test_issue_claim_journey import (
     test_failed_brief_reads_release_only_unannounced_reservations as run_read_failure_journey,
     test_failed_finalization_releases_durable_claim_after_remote_confirmation as run_finalization_journey,
+    test_search_skips_remote_contender_before_authorizing_announcement as run_remote_contender_journey,
 )
 
 pytestmark = [
@@ -30,6 +31,15 @@ pytestmark = [
 @pytest.mark.parametrize("fault", ["lose_release_ack", "reject_release"])
 async def test_release_receipts_survive_unknown_github_effects(journey, fault):
     await run_finalization_journey(journey, fault)
+
+
+@pytest.mark.parametrize("journey", ["postgres"], indirect=True)
+@pytest.mark.parametrize("when", ["before_selection", "after_reservation"])
+@pytest.mark.parametrize("eligible_successor", [False, True])
+async def test_recurring_search_preserves_remote_owner_without_stranding_claim(
+    journey, monkeypatch, when, eligible_successor
+):
+    await run_remote_contender_journey(journey, monkeypatch, when, eligible_successor)
 
 
 @pytest.mark.parametrize("journey", ["postgres"], indirect=True)
