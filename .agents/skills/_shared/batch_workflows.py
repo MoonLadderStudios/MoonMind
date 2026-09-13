@@ -1152,7 +1152,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--run-ref", required=True)
-    parser.add_argument("--publish-mode", default="pr")
+    parser.add_argument(
+        "--publish-mode",
+        default="pr",
+        help=(
+            "Direct-CLI fallback only. Every preset recipe forwards its explicit "
+            "publish_mode value, whose effective default is derived at the "
+            "preset layer (skill:jira-verify->none, implement presets->pr, "
+            "GitHub presets->pr); the helper default never masks that "
+            "derivation. Explicit none/branch/pr/pr_with_merge_automation are "
+            "preserved verbatim."
+        ),
+    )
     parser.add_argument("--constraints", default=None)
     parser.add_argument("--constraints-file", default=None)
     parser.add_argument(
@@ -1168,7 +1179,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=False,
         help="For skill:jira-verify children, update Jira status only on PASS.",
     )
-    parser.add_argument("--max-workflows", type=int, default=25)
+    parser.add_argument(
+        "--max-workflows",
+        type=int,
+        default=25,
+        help=(
+            "Hard cap on queued children (default 25). The preset layer types "
+            "max_workflows as a string for Jinja/CLI interpolation (default "
+            "'25'); argparse coerces it to int here, so omitted, '25', and 25 "
+            "are equivalent."
+        ),
+    )
     parser.add_argument(
         "--preflight-error",
         default=None,

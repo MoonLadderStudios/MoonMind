@@ -27,8 +27,6 @@ on child publishing; do not infer one from the coordinator's local mode.
 
 - `repo` (string, required): Target repository in `owner/repo` form.
 - `state` (string, optional): PR state filter for discovery. Default is `open`. Using other states prints a warning.
-- `includeForks` (boolean, optional): Reserved for compatibility. Currently rejected because queued `pr-resolver` jobs cannot reliably check out fork-only head refs.
-- `skipExistingOnly` (boolean, optional): Legacy alias kept for compatibility. If set, skip PRs from fork repositories. **Note:** this name is counter-intuitive; `true` means forks are skipped.
 - `maxAttempts` (number, optional): Queue job `maxAttempts` for each created task. Default `3`.
 - `priority` (number, optional): Queue job priority. Default `0`.
 - `mergeMethod` (string, optional): Merge method passed to `pr-resolver`. Default `squash`.
@@ -50,14 +48,13 @@ Use the repository path below only outside MoonMind when no active path is set.
 1. Run the helper script:
 
 ```bash
-python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
+python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/batch-pr-resolver/bin/batch_pr_resolver.py" \
   --repo <owner/repo> \
   --state <open|merged|closed> \
-  --skip-existing-only \
   --max-attempts 3 \
   --priority 0 \
   --merge-method squash \
-  --max-iterations 3 \
+  --max-iterations 5 \
   --runtime-mode <runtime_mode> \
   --runtime-model <model> \
   --runtime-effort <effort> \
@@ -67,8 +64,6 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
 2. Map inputs to flags:
    - `repo` -> `--repo`
    - `state` -> `--state`
-   - `skipExistingOnly` -> `--skip-existing-only`
-   - `includeForks` -> `--include-forks` (currently rejected at runtime)
    - `maxAttempts` -> `--max-attempts`
    - `priority` -> `--priority`
    - `mergeMethod` -> `--merge-method`
@@ -109,6 +104,8 @@ python3 .agents/skills/batch-pr-resolver/bin/batch_pr_resolver.py \
 
 - Reject missing `repo` unless it can be inferred from `git remote origin` fallback.
 - Use `state=open` by default to avoid accidental non-open PR dispatch.
-- `--include-forks` is rejected to avoid unreliable fork-branch checkout behavior in queued jobs.
-- Skip fork PRs by default.
+- Skip fork PRs by default: PRs identified as cross-repository
+  (`isCrossRepository=true`) or whose head is not on `owner/repo` are recorded
+  as `fork-pr` skips. There is no fork-inclusion option; queued `pr-resolver`
+  jobs cannot reliably check out fork-only head refs.
 - Require `MOONMIND_URL` to reach the MoonMind API; the legacy direct-DB queue fallback is intentionally unsupported.

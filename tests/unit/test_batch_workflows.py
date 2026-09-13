@@ -1204,3 +1204,83 @@ def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp
     assert len(partial_evidence["errors"]) == 3
     assert "injected partial failure" in partial_evidence["errors"][0]["error"]
     assert partial_evidence["executionRef"] == "step-matrix"
+
+
+def test_read_constraints_file_delivers_adversarial_content_byte_identical(tmp_path):
+    """Operator constraints with shell metachars must pass through as data.
+
+    Constraints containing quotes, command substitutions, backticks,
+    newlines, and Unicode reach the child unchanged via --constraints-file
+    with no shell side effects (REQ-04).
+    """
+
+    import argparse
+
+    module = _load_module()
+    adversarial = 'say \"hi\"; $(touch /tmp/pwned) `id` $HOME\nnewline ☃ snowman'
+    constraints_file = tmp_path / "constraints.txt"
+    constraints_file.write_text(adversarial, encoding="utf-8")
+
+    args = argparse.Namespace(constraints=None, constraints_file=str(constraints_file))
+    assert module["_read_constraints"](args) == adversarial
+
+    marker = tmp_path / "pwned"
+    assert not marker.exists()
+
+
+def test_max_workflows_omitted_string_and_int_are_equivalent():
+    """Preset string '25', int 25, and omitted default coerce identically (REQ-01).
+
+    The preset layer types ``max_workflows`` as a string for Jinja/CLI
+    interpolation; the helper coerces via ``type=int``. All three spellings
+    must produce the same effective cap.
+    """
+
+    module = _load_module()
+    base = ["--run-ref", "skill:jira-verify"]
+    assert module["_parse_args"](base).max_workflows == 25
+    assert module["_parse_args"](base + ["--max-workflows", "25"]).max_workflows == 25
+    assert module["_parse_args"](base + ["--max-workflows", "10"]).max_workflows == 10
+
+
+def test_publish_mode_explicit_none_survives_helper_normalization():
+    """Explicit publish choices survive; the helper default is fallback only (REQ-01/02).
+
+    Preset recipes always forward their derived ``publish_mode`` value, so the
+    helper ``pr`` default only applies to direct CLI invocations without the
+    flag.
+    """
+
+    module = _load_module()
+    assert module["_parse_args"](["--run-ref", "skill:jira-verify"]).publish_mode == "pr"
+    assert module["_normalize_publish_mode"]("none") == "none"
+    assert module["_normalize_publish_mode"]("pr") == "pr"
+    assert module["_normalize_publish_mode"]("branch") == "branch"
+    assert module["_normalize_publish_mode"]("pr_with_merge_automation") == (
+        "pr_with_merge_automation"
+    )
+    assert module["_normalize_publish_mode"](None) == "pr"
+    assert module["_normalize_publish_mode"]("") == "pr"
+    assert module["_publish_payload_for_mode"]("none") == {"mode": "none"}
+
+
+def test_batch_skill_recipes_resolve_from_active_snapshot():
+    """Batch recipes use the resolved immutable bundle path (REQ-10)."""
+
+    repo_root = Path(__file__).resolve().parents[2]
+    for skill_id in ("batch-workflows", "batch-github-workflows"):
+        skill_doc = (
+            repo_root / ".agents" / "skills" / skill_id / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        assert f"$MOONMIND_ACTIVE_SKILLS_DIR/{skill_id}/bin/batch_workflows.py" in skill_doc
+    for skill_id, helper in (
+        ("batch-pr-resolver", "batch_pr_resolver.py"),
+        ("batch-dependabot-resolver", "batch_dependabot_resolver.py"),
+    ):
+        skill_doc = (
+            repo_root / ".agents" / "skills" / skill_id / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        assert (
+            f"${{MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}}/{skill_id}/bin/{helper}"
+            in skill_doc
+        )

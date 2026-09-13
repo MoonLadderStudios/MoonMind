@@ -218,6 +218,54 @@ def test_openapi_help_documents_auth_provider_modes_and_errors():
     assert "#4128" in text
 
 
+def test_retired_selector_inventory_names_local_everywhere():
+    # `local` is a retired selector per OIDCSettings.RETIRED_AUTH_PROVIDERS,
+    # so every user-facing retired inventory must name all four, not just
+    # keycloak/default/google.
+    from moonmind.config.settings import OIDCSettings
+    assert set(OIDCSettings.RETIRED_AUTH_PROVIDERS) == {
+        "keycloak", "default", "google", "local",
+    }
+    adapter = (REPO_ROOT / "docs/Security/OmnigentAuthAdapterContract.md").read_text(
+        encoding="utf-8"
+    )
+    assert "`keycloak`, `default`, `google`, `local`" in adapter
+    compose = (REPO_ROOT / "docker-compose.yaml").read_text(encoding="utf-8")
+    assert "`keycloak`/`default`/`google`/`local`" in compose
+
+
+def test_ledger_records_landed_session_identity_cutover_slices():
+    # The point-in-time ledger must reflect the landed #4121/#4124/#4125
+    # hermetic implementation, not the assessment-time "no merged
+    # implementation" state.
+    ledger = (REPO_ROOT / "docs/tmp/KeycloakRemovalStatus-4130.md").read_text(
+        encoding="utf-8"
+    )
+    assert "#4121" in ledger
+    assert "#4124" in ledger
+    assert "#4125" in ledger
+    assert "test_session_authority_4121" in ledger
+    assert "test_oidc_trusted_proxy_4124" in ledger
+    assert "test_auth_session_cutover_4125" in ledger
+    assert "#4122" in ledger
+    assert "#4128" in ledger
+
+
+def test_canonical_owning_surface_names_session_and_identity_owners():
+    # The canonical owning surface must name the #4121 session authority
+    # and #4124 advanced-identity modules, not just the #4120 selector.
+    text = _read(CANONICAL_DOC)
+    assert "session_authority_4121" in text
+    assert "oidc_advanced_4124" in text
+    assert "trusted_proxy_4124" in text
+    assert "advanced_auth_service_4124" in text
+    # The support matrix must distinguish hermetic implementation from
+    # browser-verified product behavior.
+    assert "hermetically" in text or "hermetic implementation" in text
+    assert "#4121" in text
+    assert "#4125" in text
+
+
 def test_api_composition_mounts_no_legacy_login_routes():
     # No /api/v1/auth/* application-login or /auth/jwt/* issuance route may
     # be mounted after #4129 removed the bundled Keycloak integration.
