@@ -2606,14 +2606,13 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert "jira_board_id" not in {
                 item["name"] for item in template.inputs_schema
             }
-            assert [
-                (step.get("skill") or step.get("tool"))["id"]
-                for step in template.steps
-            ] == [
-                "jira.load_preset_brief",
-                "moonspec-breakdown",
-                "story.create_jira_issues",
+            assert [(step.get("kind") or "step", step.get("slug")) for step in template.steps] == [
+                ("include", "story-breakdown-decompose"),
+                ("include", "story-breakdown-publish"),
             ]
+            assert template.steps[0]["inputMapping"]["provider_target"] == "jira"
+            assert template.steps[1]["inputMapping"]["provider_target"] == "jira"
+            assert template.steps[1]["inputMapping"]["child_preset"] == "none"
 
             expanded = await service.expand_template(
                 slug="jira-breakdown",
@@ -2638,6 +2637,7 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert "Source Document path" in expanded["steps"][1]["instructions"]
             assert expanded["steps"][1]["storyOutput"] == {
                 "mode": "jira",
+                "fallback": "fail",
                 "jira": {
                     "projectKey": "MM",
                     "issueTypeName": "Story",
@@ -4047,16 +4047,15 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
             assert template.annotations["output"] == (
                 "dependent-jira-orchestrate-workflows"
             )
-            assert [
-                (step.get("skill") or step.get("tool"))["id"]
-                for step in template.steps
-            ] == [
-                "jira.load_preset_brief",
-                "moonspec-breakdown",
-                "story-reconcile-implementation",
-                "story.create_jira_issues",
-                "story.create_jira_orchestrate_tasks",
+            assert [(step.get("kind") or "step", step.get("slug")) for step in template.steps] == [
+                ("include", "story-breakdown-decompose"),
+                ("include", "story-breakdown-reconcile"),
+                ("include", "story-breakdown-publish"),
             ]
+            assert template.steps[0]["inputMapping"]["provider_target"] == "jira"
+            assert template.steps[1]["inputMapping"]["provider_target"] == "jira"
+            assert template.steps[2]["inputMapping"]["provider_target"] == "jira"
+            assert template.steps[2]["inputMapping"]["child_preset"] == "jira-orchestrate"
 
             expanded = await service.expand_template(
                 slug="jira-breakdown-orchestrate",

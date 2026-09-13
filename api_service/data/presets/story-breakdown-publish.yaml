@@ -1,0 +1,357 @@
+slug: story-breakdown-publish
+title: Story Breakdown Publish (shared)
+description: Shared portable issue creation and child workflow dispatch used by all breakdown presets. Provider and child
+  differences are explicit input bindings.
+scope: global
+tags:
+- moonspec
+- breakdown
+- publish
+- shared
+requiredCapabilities:
+- git
+annotations:
+  sourceSkill: story-breakdown-publish
+  issueProvider: neutral
+  workflowPublish:
+    mode: none
+inputs:
+- name: provider_target
+  label: Provider Target
+  type: enum
+  required: true
+  default: jira
+  options:
+  - jira
+  - github
+- name: jira_project_key
+  label: Jira Project Key
+  type: text
+  required: false
+  default: MM
+- name: jira_issue_type
+  label: Jira Issue Type
+  type: text
+  required: false
+  default: Story
+- name: jira_dependency_mode
+  label: Jira Dependency Mode
+  type: enum
+  required: false
+  default: linear_blocker_chain
+  options:
+  - linear_blocker_chain
+  - none
+- name: github_repository
+  label: GitHub Repository
+  type: text
+  required: false
+  default: ''
+- name: source_issue_key
+  label: Source Issue Key
+  type: text
+  required: false
+  default: ''
+- name: child_preset
+  label: Child Preset
+  type: enum
+  required: true
+  default: none
+  options:
+  - none
+  - jira-implement
+  - jira-orchestrate
+  - github-issue-implement
+  - github-issue-orchestrate
+- name: publish_mode
+  label: Publish Mode
+  type: enum
+  required: false
+  default: pr
+  options:
+  - pr
+  - pr_with_merge_automation
+  - branch
+  - none
+- name: run_verify
+  label: Run Verification
+  type: boolean
+  required: false
+  default: true
+steps:
+- title: Create Jira issues
+  enabled: '{{ inputs.provider_target == ''jira'' }}'
+  instructions: 'Create one Jira {{ inputs.jira_issue_type }} issue in project {{ inputs.jira_project_key }} for each eligible
+    story from the reconciled MoonSpec breakdown.
+
+
+    Use the runtime-provided story breakdown JSON path.
+
+    Every Jira issue must include the Source Document path and canonical claim IDs from the story breakdown when present;
+    otherwise include the source title and Source Jira issue key when present.
+
+    Do not create Jira issues for stories where issueCreation.action is skip or manual_review.
+
+    For stories where issueCreation.action is create_remaining_work_issue, create the Jira issue from the story''s remainingWork
+    while preserving the original story traceability.
+
+    {% if inputs.source_issue_key %}Source Jira issue key: {{ inputs.source_issue_key }}.{% endif %}
+
+    {% if inputs.source_issue_key and inputs.jira_issue_type | lower in ["sub-task", "subtask", "sub task"] %}Create each
+    generated Jira issue as a sub-task of {{ inputs.source_issue_key }}.{% endif %}
+
+    Dependency mode: {{ inputs.jira_dependency_mode }}.
+
+    If dependency mode is linear_blocker_chain, create an ordered blocker chain so each story is blocked by the stories it
+    depends on, ordering prerequisites before the stories that depend on them. Retain actual dependency links when requested
+    and supported; do not remove dependency edges for prompt brevity.
+
+    If dependency mode is none, create the Jira issues without dependency links.
+
+    Validate lossless source handoffs through existing issue receipt owners; on partial issue creation followed by link failure,
+    resume only unfinished effects without duplicating created issues. Record created/reused/skipped/blocked/failed mappings
+    per stable story.
+
+    Return the created Jira issue keys, URLs, dependency mode, and created/reused/failed link results. Created issues alone
+    do not prove implementation or merge; the parent does not implement stories inline or claim child completion from successful
+    creation.'
+  storyOutput:
+    mode: jira
+    fallback: fail
+    jira:
+      projectKey: '{{ inputs.jira_project_key }}'
+      issueTypeName: '{{ inputs.jira_issue_type }}'
+      sourceIssueKey: '{{ inputs.source_issue_key }}'
+      dependencyMode: '{{ inputs.jira_dependency_mode }}'
+  skill:
+    id: story.create_jira_issues
+    requiredCapabilities:
+    - git
+    args: {}
+- title: Create GitHub issues
+  enabled: '{{ inputs.provider_target == ''github'' }}'
+  instructions: 'Create one GitHub issue in {{ inputs.github_repository }} for each eligible story from the reconciled MoonSpec
+    breakdown.
+
+
+    Use the runtime-provided story breakdown JSON path.
+
+    Every GitHub issue must include the Source Document path and canonical claim IDs from the story breakdown when present;
+    otherwise include the source title and Source issue key when present.
+
+    Do not create GitHub issues for stories where issueCreation.action is skip or manual_review.
+
+    For stories where issueCreation.action is create_remaining_work_issue, create the GitHub issue from the story''s remainingWork
+    while preserving the original story traceability.
+
+    GitHub issue dependencyMode is intentionally none; create no GitHub issue dependency relationships unless a future trusted
+    GitHub dependency API result establishes them. Do not invent GitHub relationships from prose.
+
+    Preserve story order in the returned issue mappings.
+
+    Validate lossless source handoffs through existing issue receipt owners; on partial issue creation failure, resume only
+    unfinished effects without duplicating created issues. Record created/reused/skipped/blocked/failed mappings per stable
+    story.
+
+    Return the created GitHub issue numbers, URLs, source traceability, skipped stories, and blocked stories. Created issues
+    alone do not prove implementation or merge; the parent does not implement stories inline or claim child completion from
+    successful creation.'
+  storyOutput:
+    mode: github
+    fallback: fail
+    github:
+      repository: '{{ inputs.github_repository }}'
+      sourceIssueKey: '{{ inputs.source_issue_key }}'
+  skill:
+    id: story.create_github_issues
+    requiredCapabilities:
+    - git
+    args: {}
+- title: Create dependent Jira Implement workflow executions
+  enabled: '{{ inputs.provider_target == ''jira'' and inputs.child_preset == ''jira-implement'' }}'
+  instructions: 'Create one Jira Implement workflow execution for each Jira issue created from the trusted Jira story output.
+
+
+    Use the ordered issue mappings returned by story.create_jira_issues. Preserve the generated story order when creating
+    downstream workflow executions.
+
+    Do not create downstream workflow executions for skipped fully implemented stories or manual-review stories that did not
+    produce Jira issue mappings.
+
+    Each downstream workflow execution must run Jira Implement on its corresponding Jira story issue and must not run implementation
+    inline inside this breakdown run.
+
+    Create workflow dependencies with dependsOn so each later generated workflow execution waits for the immediately earlier
+    generated workflow ID. Child workflow dependencies preserve the declared ordering; do not introduce parallel dispatch
+    that violates the existing serialized policy. A created PR alone is not evidence that dependent code landed.
+
+    Preserve source Jira issue {{ inputs.source_issue_key }} and the original source brief in downstream workflow instructions
+    and result traceability. Propagate exact source paths into downstream work and issue refs into work. Keep runtime/account/billing
+    intent and selected child publication/merge policy unchanged.
+
+    Validate lossless queue handoffs through existing queue receipt owners; on partial queue failure resume only unfinished
+    effects without duplicating children.
+
+    Report created workflow executions, skipped stories, dependency edges, partial failures, and no-downstream-workflow outcomes
+    honestly.'
+  jiraOrchestration:
+    task:
+      repository: '{{ context.repository }}'
+      runtime:
+        mode: '{{ context.targetRuntime }}'
+      inputs:
+        run_verify: '{{ inputs.run_verify }}'
+      publish:
+        mode: pr
+        mergeAutomation:
+          enabled: '{{ inputs.publish_mode == ''pr_with_merge_automation'' }}'
+    traceability:
+      sourceIssueKey: '{{ inputs.source_issue_key }}'
+  skill:
+    id: story.create_jira_implement_tasks
+    requiredCapabilities:
+    - git
+    args: {}
+- title: Create dependent Jira Orchestrate workflow executions
+  enabled: '{{ inputs.provider_target == ''jira'' and inputs.child_preset == ''jira-orchestrate'' }}'
+  instructions: 'Create one Jira Orchestrate workflow execution for each Jira issue created from the trusted Jira story output.
+
+
+    Use the ordered issue mappings returned by story.create_jira_issues. Preserve the generated story order when creating
+    downstream workflow executions.
+
+    Each downstream workflow execution must carry the story''s sourceReference.path as its source_design_path input when present
+    so the downstream Jira Orchestrate doc-reconciliation step knows the canonical source document. If the source path is
+    absent because the story came from a trusted Jira issue description or workflow instructions, preserve the source title
+    and source Jira issue traceability instead of inventing a document path.
+
+    Do not create downstream workflow executions for skipped fully implemented stories or manual-review stories that did not
+    produce Jira issue mappings.
+
+    Each downstream workflow execution must run Jira Orchestrate on its corresponding Jira story issue and must not run implementation
+    inline inside this breakdown run.
+
+    Create workflow dependencies with dependsOn so each later generated workflow execution waits for the immediately earlier
+    generated workflow ID. Child workflow dependencies preserve the declared ordering; do not introduce parallel dispatch
+    that violates the existing serialized policy. A created PR alone is not evidence that dependent code landed.
+
+    Preserve source Jira issue {{ inputs.source_issue_key }} and the original source brief in downstream workflow instructions
+    and result traceability. Keep runtime/account/billing intent and selected child publication/merge policy unchanged.
+
+    Validate lossless queue handoffs through existing queue receipt owners; on partial queue failure resume only unfinished
+    effects without duplicating children.
+
+    Report created workflow executions, skipped stories, dependency edges, partial failures, and no-downstream-workflow outcomes
+    honestly.'
+  jiraOrchestration:
+    task:
+      repository: '{{ context.repository }}'
+      runtime:
+        mode: '{{ context.targetRuntime }}'
+      inputs:
+        run_verify: '{{ inputs.run_verify }}'
+      publish:
+        mode: pr
+        mergeAutomation:
+          enabled: '{{ inputs.publish_mode == ''pr_with_merge_automation'' }}'
+    traceability:
+      sourceIssueKey: '{{ inputs.source_issue_key }}'
+  skill:
+    id: story.create_jira_orchestrate_tasks
+    requiredCapabilities:
+    - git
+    args: {}
+- title: Create dependent GitHub Issue Implement workflow executions
+  enabled: '{{ inputs.provider_target == ''github'' and inputs.child_preset == ''github-issue-implement'' }}'
+  instructions: 'Create one GitHub Issue Implement workflow execution for each GitHub issue created from the trusted GitHub
+    story output.
+
+
+    Use the ordered issue mappings returned by story.create_github_issues. Preserve the generated story order when creating
+    downstream workflow executions.
+
+    Do not create downstream workflow executions for skipped fully implemented stories or manual-review stories that did not
+    produce GitHub issue mappings.
+
+    Each downstream workflow execution must run GitHub Issue Implement on its corresponding GitHub issue and must not run
+    implementation inline inside this breakdown run.
+
+    Create workflow dependencies with dependsOn so each later generated workflow execution waits for the immediately earlier
+    generated workflow ID. Child workflow dependencies preserve the declared ordering; do not introduce parallel dispatch
+    that violates the existing serialized policy. A created PR alone is not evidence that dependent code landed.
+
+    Preserve source issue {{ inputs.source_issue_key }}, source document path, dependencies, and traceability in downstream
+    workflow inputs. Propagate exact source paths into downstream work and issue refs into work. Keep runtime/account/billing
+    intent and selected child publication/merge policy unchanged.
+
+    Validate lossless queue handoffs through existing queue receipt owners; on partial queue failure resume only unfinished
+    effects without duplicating children.
+
+    Report created workflow executions, skipped stories, dependency edges, partial failures, and no-downstream-workflow outcomes
+    honestly.'
+  githubOrchestration:
+    task:
+      repository: '{{ inputs.github_repository }}'
+      runtime:
+        mode: '{{ context.targetRuntime }}'
+      inputs:
+        run_verify: '{{ inputs.run_verify }}'
+      publish:
+        mode: '{{ ''pr'' if inputs.publish_mode == ''pr_with_merge_automation'' else inputs.publish_mode }}'
+        mergeAutomation:
+          enabled: '{{ inputs.publish_mode == ''pr_with_merge_automation'' }}'
+    traceability:
+      sourceIssueKey: '{{ inputs.source_issue_key }}'
+  skill:
+    id: story.create_github_issue_implement_workflows
+    requiredCapabilities:
+    - git
+    args: {}
+- title: Create dependent GitHub Issue Orchestrate workflow executions
+  enabled: '{{ inputs.provider_target == ''github'' and inputs.child_preset == ''github-issue-orchestrate'' }}'
+  instructions: 'Create one GitHub Issue Orchestrate workflow execution for each GitHub issue created from the trusted GitHub
+    story output.
+
+
+    Use the ordered issue mappings returned by story.create_github_issues. Preserve the generated story order when creating
+    downstream workflow executions.
+
+    Each downstream workflow execution must carry the story''s sourceReference.path as its source_design_path input when present
+    so the downstream GitHub Issue Orchestrate doc-reconciliation step knows the canonical source document. If the source
+    path is absent because the story came from workflow instructions, preserve the source title and source issue traceability
+    instead of inventing a document path.
+
+    Do not create downstream workflow executions for skipped fully implemented stories or manual-review stories that did not
+    produce GitHub issue mappings.
+
+    Each downstream workflow execution must run GitHub Issue Orchestrate on its corresponding GitHub issue and must not run
+    implementation inline inside this breakdown run.
+
+    Create workflow dependencies with dependsOn so each later generated workflow execution waits for the immediately earlier
+    generated workflow ID. Child workflow dependencies preserve the declared ordering; do not introduce parallel dispatch
+    that violates the existing serialized policy. A created PR alone is not evidence that dependent code landed.
+
+    Preserve source issue {{ inputs.source_issue_key }}, source document path, dependencies, and traceability in downstream
+    workflow inputs. Keep runtime/account/billing intent and selected child publication/merge policy unchanged.
+
+    Validate lossless queue handoffs through existing queue receipt owners; on partial queue failure resume only unfinished
+    effects without duplicating children.
+
+    Report created workflow executions, skipped stories, dependency edges, partial failures, and no-downstream-workflow outcomes
+    honestly.'
+  githubOrchestration:
+    task:
+      repository: '{{ inputs.github_repository }}'
+      runtime:
+        mode: '{{ context.targetRuntime }}'
+      inputs:
+        run_verify: '{{ inputs.run_verify }}'
+      publish:
+        mode: '{{ inputs.publish_mode }}'
+    traceability:
+      sourceIssueKey: '{{ inputs.source_issue_key }}'
+  skill:
+    id: story.create_github_issue_orchestrate_workflows
+    requiredCapabilities:
+    - git
+    args: {}

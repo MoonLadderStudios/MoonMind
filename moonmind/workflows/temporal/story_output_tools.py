@@ -714,6 +714,11 @@ def _normalized_story_token(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "_", _string(value).lower()).strip("_")
 
 def _story_issue_creation(story: Mapping[str, Any]) -> dict[str, Any]:
+    # Canonical provider-neutral field is `issueCreation`. `jiraCreation` is
+    # retained only as a temporary historical decoder for proven persisted
+    # breakdown inputs. Cutover: remove the jiraCreation branches once persisted
+    # breakdowns have migrated to issueCreation; new authoring must not emit
+    # jiraCreation.
     value = (
         story.get("issueCreation")
         or story.get("issue_creation")
@@ -731,6 +736,9 @@ def _story_implementation_status(story: Mapping[str, Any]) -> str:
 
 def _story_issue_creation_action(story: Mapping[str, Any]) -> str:
     issue_creation = _story_issue_creation(story)
+    # Historical decoder: flat jiraCreationAction aliases are honored only for
+    # proven persisted inputs (see _story_issue_creation cutover). New handoffs
+    # must use issueCreation.action.
     action = _normalized_story_token(
         issue_creation.get("action")
         or story.get("issueCreationAction")
@@ -751,6 +759,7 @@ def _story_issue_creation_action(story: Mapping[str, Any]) -> str:
 
 def _story_issue_creation_reason(story: Mapping[str, Any]) -> str:
     issue_creation = _story_issue_creation(story)
+    # Historical decoder for flat aliases (see cutover note above).
     return _string(
         issue_creation.get("reason")
         or story.get("issueCreationReason")
@@ -871,7 +880,6 @@ def _story_reconciliation_record(
         "summary": _story_summary(story, index=index),
         "implementationStatus": _story_implementation_status(story),
         "issueCreationAction": action,
-        "jiraCreationAction": action,
     }
     reason = _story_issue_creation_reason(story)
     if reason:

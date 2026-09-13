@@ -19,29 +19,31 @@ Good inputs include:
 - A pasted technical design.
 - A declarative design document.
 - A file path to a design artifact.
-- A trusted Jira issue brief or description when no source document path is provided.
+- A trusted issue brief or description (Jira or GitHub provider binding) when no source document path is provided.
 - A request to run or reproduce `/moonspec.breakdown`.
 
 Do not use this skill for a single natural-language feature request. Use `moonspec-specify` for one clearly scoped story.
 
 ## Inputs
 
-- Select breakdown input content using this preference chain:
-  1. Source document path: if an explicit source document path is provided, resolve it relative to the repo root unless it is absolute, then read it before extracting stories.
-  2. Jira issue description: if no source document path is provided and trusted Jira issue context is available from MoonMind previous outputs, use `jiraPresetBrief` or the Jira issue description/acceptance criteria from that trusted context.
-  3. Workflow instructions: if neither of the above is available, use the workflow instructions or user request text as the source design.
+- Select breakdown input content using this preference chain (provider binding is explicit in the caller preset via provider_target):
+  1. Source document path: if an explicit source document path is provided, resolve it relative to the repo root unless it is absolute, then read it before extracting stories. An explicit path wins; never silently downgrade a conflicting explicit source to convenient inline text.
+  2. Trusted resolved source: if no source document path is provided and trusted previous output includes sourceResolution.status = "resolved" with a non-empty resolvedSourceDesignPath, read resolvedSourceDesignPath as the source design.
+  3. Trusted issue brief: if no resolved path is available and trusted issue context is available from MoonMind previous outputs, use the trusted issue brief (jiraPresetBrief or GitHub issue brief) or the issue description/acceptance criteria from that trusted context.
+  4. Workflow instructions: if none of the above is available, use the workflow instructions or user request text as the source design.
+- If trusted sourceResolution.status is "ambiguous", "invalid_candidates", or "invalid_explicit_path", stop with an actionable source-resolution error instead of decomposing a brief as inline text.
 - If no selected input content is available after applying the preference chain, stop with: `ERROR "No technical design provided"`.
 - Preserve the original design text verbatim in the breakdown output so later `/moonspec.specify` output can keep it in `spec.md` `**Input**`.
-- Preserve the source document reference path whenever the selected source design came from a file. Use the repo-relative path when possible; otherwise use the absolute path provided by the user. If the selected source is trusted Jira context or workflow instructions, set source and story reference paths to `null` and preserve the source title/key instead.
+- Preserve the source document reference path whenever the selected source design came from a file. Use the repo-relative path when possible; otherwise use the absolute path provided by the user. If the selected source is trusted issue context or workflow instructions, set source and story reference paths to `null` and preserve the source title/key instead.
 - The canonical source document, not the breakdown output, remains the source of truth for desired state. Breakdown output is a temporary derived view (see `docs/Workflows/MoonSpecDocumentModel.md`).
 - Do not implement, plan, generate tasks, create Jira issues, create `spec.md`, or create directories under `specs/`.
 
 ## Input Classification
 
-Classify the source design before extracting coverage points, using the document classes in `docs/Workflows/MoonSpecDocumentModel.md`:
+Classify the selected input by meaning and owning conventions per `docs/Workflows/MoonSpecDocumentModel.md`, not merely by directory prefix:
 
-- `canonical-declarative`: a readable repo path under `docs/` describing desired state.
-- `declarative-text`: pasted declarative design text, trusted Jira issue description, workflow instructions, or a file-backed declarative design outside `docs/`.
+- `canonical-declarative`: a durable desired-state document per the model (long-lived architecture, contracts, operator-visible behavior, target semantics). A readable repo path under `docs/` is canonical only when it carries such durable desired-state content. A temporary plan under `docs/tmp/` is never automatically canonical. `AGENTS.md` is canonical only when it carries durable desired-state content.
+- `declarative-text`: pasted declarative design text, trusted issue description/brief, workflow instructions with declarative framing, or a file-backed declarative design outside the canonical set.
 - `imperative-input`: a selected source whose primary framing is steps, phases, checkboxes, status, or migration sequencing.
 
 A document is declarative when it describes what the system is or should be; it is imperative when its primary framing is steps, phases, checkboxes, or status. Mixed documents are classified by their primary framing.
@@ -57,15 +59,20 @@ because the source is imperative.
 
 Record the resulting class as `sourceDocumentClass` in the breakdown output.
 
+## Extension Hooks Contract
+
+Extension hook checks share one parsing, filtering, and condition contract (used by both pre- and post-breakdown hooks):
+
+- If `.specify/extensions.yml` exists, read it and look for the relevant hook key (`hooks.before_breakdown` or `hooks.after_breakdown`).
+- If the YAML cannot be parsed or is invalid, skip hook checking silently.
+- Ignore hooks where `enabled` is explicitly `false`; hooks without `enabled` are enabled.
+- Do not evaluate non-empty `condition` expressions. Treat hooks with no condition, null condition, or empty condition as executable. Skip hooks with non-empty conditions.
+- If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently.
+
 ## Pre-Breakdown Hooks
 
-Before extracting stories, check for extension hooks:
-
-1. If `.specify/extensions.yml` exists, read it and look for `hooks.before_breakdown`.
-2. If the YAML cannot be parsed or is invalid, skip hook checking silently.
-3. Ignore hooks where `enabled` is explicitly `false`; hooks without `enabled` are enabled.
-4. Do not evaluate non-empty `condition` expressions. Treat hooks with no condition, null condition, or empty condition as executable. Skip hooks with non-empty conditions.
-5. For each executable hook:
+Before extracting stories, check for extension hooks per the Extension Hooks Contract
+with key `hooks.before_breakdown`. For each executable hook:
    - Optional hook (`optional: true`): print:
 
 ```markdown
@@ -91,7 +98,7 @@ EXECUTE_COMMAND: {command}
 Wait for the result of the hook command before proceeding to the Outline.
 ```
 
-If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently.
+If no hooks are registered, skip silently per the Extension Hooks Contract.
 
 ## Breakdown Workflow
 
@@ -119,7 +126,7 @@ canonical claims before creating run-local coverage points:
 - Record each selected claim with `id`, `path`, `sections`, and a concise claim
   summary. The `path` must be the canonical repo-relative document path when
   the source came from a repo file.
-- For non-canonical file-backed sources, trusted Jira descriptions, pasted
+- For non-canonical file-backed sources, trusted issue descriptions/briefs, pasted
   workflow instructions, or `imperative-input`, do not fabricate canonical claim
   IDs. Use only run-local coverage IDs and preserve the selected source
   title/key and source path when one exists.
@@ -188,13 +195,16 @@ Create a coverage matrix from every selected canonical claim ID and every
 
 A coverage point or canonical claim passes only when at least one story
 explicitly owns it in story scope, acceptance criteria, requirements, or source
-design coverage. Implied coverage is not enough.
+design coverage with an ownership explanation a reasonable reader can verify.
+Implied coverage is not enough.
 
 A point is weakly owned if a reasonable reader cannot tell which story is responsible for implementing or enforcing it.
 
 If any coverage point is uncovered, weakly covered, spread so thinly that ownership is unclear, or covered only by future-work language, revise the stories and rerun the gate.
 
-Do not write specs until the gate result is exactly:
+Validate the gate semantically from the coverage matrix; do not accept a literal
+success sentence as proof. The serialized `coverageGate` value uses the exact
+text below only after semantic ownership is verified:
 
 ```text
 PASS - every major design point is owned by at least one story.
@@ -215,7 +225,7 @@ The JSON file must be an object with:
 
 - `source`: object containing `title`, `path`, `referencePath`, `sourceDocumentClass`, and the original design text. For file-backed designs, `path` and `referencePath` must both contain the original design document path. For trusted Jira issue descriptions or pasted workflow instructions without a file path, set paths to `null` and use a clear title such as the Jira issue key/summary or `inline workflow instructions`. `sourceDocumentClass` must be `canonical-declarative`, `declarative-text`, or `imperative-input` per the Input Classification section.
 - `extractedAt`: ISO-8601 timestamp.
-- `coverageGate`: exactly `PASS - every major design point is owned by at least one story.`
+- `coverageGate`: semantic pass serialized exactly as `PASS - every major design point is owned by at least one story.` (validators must check the coverage matrix semantically; the sentence alone is not proof).
 - `stories`: ordered list of story objects.
 - `coverageMatrix`: mapping from every selected canonical claim ID or
   `DESIGN-REQ-*` point to story IDs.
@@ -247,11 +257,14 @@ The markdown file must include the same substance for human review:
 - Out-of-scope items and rationale.
 - Coverage gate result.
 
-The gate result must be exactly:
+The gate result serializes exactly as:
 
 ```text
 PASS - every major design point is owned by at least one story.
 ```
+
+Validators must verify semantic ownership from the coverage matrix; the sentence
+alone never constitutes proof.
 
 ## Report
 
@@ -266,7 +279,8 @@ Report completion with:
 
 ## Post-Breakdown Hooks
 
-After reporting, check `.specify/extensions.yml` for `hooks.after_breakdown` using the same parsing, filtering, and condition rules as pre-breakdown hooks. For each executable hook:
+After reporting, check for extension hooks per the Extension Hooks Contract
+with key `hooks.after_breakdown`. For each executable hook:
 
 - Optional hook (`optional: true`): print:
 
@@ -291,7 +305,7 @@ Executing: `/{command}`
 EXECUTE_COMMAND: {command}
 ```
 
-If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently.
+If no hooks are registered, skip silently per the Extension Hooks Contract.
 
 ## Key Rules
 
