@@ -29,6 +29,8 @@ first boundary did not establish that the user's recurring work could finish.
 | Temporary capacity escaped as fatal input failure | The recovered occurrence reached dispatch, then ended with `OMNIGENT_HOST_CAPACITY_UNAVAILABLE`, `wait_for_host_capacity`, CPU pressure, and a non-retryable parent ValueError. | Successful dispatch still did not mean useful work could finish. The precise retry-budget/host-pressure cause requires its own replay. |
 | Remote issue attempts were checked too late | The 08:08:20 and 08:09:53 UTC occurrences selected issues 4269 and 4268. Other deployments' preparing comments existed; new SQL receipts had `announcement_started=true` with no own comment ID. | An ordinary conflicting candidate poisoned the occurrence instead of being skipped safely. |
 | Architectural authority contradicted production | Temporal architecture section 18 said Worker Deployment routing was not in use. | Agents reading the architecture could make changes against an obsolete deployment model. |
+| Remediation evidence was not a usable runtime input | The 08:21:51 occurrence's fourth remediation had `gateResultRef` and `remainingWorkRef` only in parameters; its host received only brief/assessment attachments. A later Continue-As-New activated attachment forwarding, but explicit local paths were still absent. | Old histories wasted remediation attempts without editing; patch activation was accidentally required for input delivery. |
+| A provider outage bypassed durable retry | The same occurrence failed at draft publication when GitHub returned HTTP 500. The adapter returned `created=false`; the workflow classified that result as `user_error`. | Temporal saw a completed Activity, so its configured retry policy never ran. |
 
 The repeated pattern is treating a local success as a completed authority
 handoff: process ready as dispatch ready, trigger accepted as enqueued, a
@@ -292,6 +294,34 @@ may mark recovery complete from a container check or a workflow merely starting.
 
 **Dependencies:** B/C for live recovery evidence. Canonical corrections and
 agent rules are authored with this incident and do not wait for all code.
+
+### I. Make recovery inputs and provider retry semantics executable — P0
+
+**Owner/files:** Generic host workspace materialization, artifact projection,
+first-message binding, GitHub adapter and `repo.create_pr` Activity.
+
+**Build:** Admit existing named verifier refs at the host boundary, independently
+of workflow patch activation. Project paths only after artifact authorization and
+verified file writes. Re-admit inputs on a ready workspace without replaying its
+checkpoint. Preserve transient GitHub failures as retryable Activity failures;
+lookup failure must stop creation, and a subsequent attempt must adopt a PR
+whose creation acknowledgment was lost.
+
+**Acceptance:** Replay the actual parameter-only request with shared/separate
+verifier artifacts through the real artifact service, workspace materializer,
+generic host binding, and first message. Cover fresh and already-ready
+workspaces, repeated admission of read-only files, wrong-owner evidence, and
+preservation of uncommitted work. Exercise HTTP 500/503/429 and transport loss
+through the production adapter and Activity; prove the failure is retryable and
+that retry observes/adopts the existing PR with exactly one create request.
+Retain source/request evidence and observe a real recurring terminal outcome
+before claiming the incident resolved. Draft preservation of an incomplete
+issue does not establish successful issue implementation.
+
+**Dependencies:** No workflow command-order change or new patch marker is
+required for the host and Activity fixes. Broader terminal recovery accounting
+and automatic replay remain owned by E/F; this bounded repair does not claim
+those stories are complete.
 
 ## 5. Required verification matrix
 

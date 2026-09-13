@@ -44,6 +44,7 @@ class CreatePRResult(BaseModel):
     adopted: bool = Field(False, alias="adopted")
     summary: str = Field(..., alias="summary")
     head_sha: Optional[str] = Field(None, alias="headSha")
+    retryable: bool = Field(False, alias="retryable")
 
 class MergePRResult(BaseModel):
     """Result from ``repo.merge_pr``."""
@@ -552,7 +553,9 @@ class GitHubService:
                 base,
                 exc.__class__.__name__,
             )
-            return None
+            # Unavailable readback is not evidence of absence. The create
+            # caller classifies the failure; no POST may follow this read.
+            raise
         data = response.json()
         if not isinstance(data, list):
             return None
@@ -915,6 +918,7 @@ class GitHubService:
                 )
                 return CreatePRResult(
                     created=False,
+                    retryable=status_code >= 500 or status_code == 429,
                     summary=(
                         f"GitHub create PR failed with HTTP {status_code}"
                         f" for {repo}."
@@ -933,6 +937,7 @@ class GitHubService:
                 )
                 return CreatePRResult(
                     created=False,
+                    retryable=True,
                     summary=(
                         f"GitHub create PR request failed:"
                         f" {exc.__class__.__name__}"
