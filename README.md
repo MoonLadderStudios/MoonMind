@@ -11,13 +11,23 @@ MoonMind is an open-source framework that gives AI coding agents stronger **secu
 
 For now, MoonMind is focused on software engineering use cases, but it can be used for other use cases as well. Support for workflows that do not require a Git repository will become easier over time.
 
+## Start here: the supported first path
+
+MoonMind coordinates provider-maintained coding agents with security, durable execution, and inspectable results. It is built for engineers who want to direct an agent (Codex, Claude Code, OpenCode, or a future approved harness) without handing it ambient credentials, the host Docker socket, or an unscoped network.
+
+The supported first path is local-first: `docker compose up -d`, open the dashboard at `http://localhost:7000`, add a provider credential to a Provider Profile, then create a workflow and submit it. The full steps are in [Quick Start](#quick-start), and the combined MoonMind plus Omnigent check is in [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md).
+
+Main controls per run: one Provider Profile (runtime, credential reference, model and policy), an authorized workspace, mounted Skills and tools, an enforced egress profile, and immutable artifacts carrying step evidence. See [Authentication Contracts](docs/Security/AuthenticationContracts.md), [Restricted egress](docs/Security/RestrictedEgress.md), and the [Secrets System](docs/Security/SecretsSystem.md).
+
+Important limitations up front: suspending or closing the laptop that hosts the MoonMind stack suspends execution with it — Temporal resumes the workflow when the infrastructure returns, it does not keep running while the host sleeps. High-security outbound secret scanning is opt-in (default off); see the [Secrets System](docs/Security/SecretsSystem.md). A binary or image being present does not make an exact runtime combination supported; support is per exact combination in the [Runtime-Provider Rollout Policy](docs/Omnigent/RuntimeProviderRollout.md). Each load-bearing claim below links its owner, evidence, and limits; the editorial checklist is in [README claim/evidence checklist](docs/READMEClaimEvidence.md).
+
 ## Runtime direction
 
 **Omnigent is to become MoonMind's primary runtime provider over time.** Codex, Claude Code, OpenCode, and future approved harnesses should converge on one generic Omnigent execution plane rather than accumulating separate MoonMind runtime architectures.
 
 MoonMind will continue to own Temporal orchestration, Provider Profiles, OAuth enrollment, secret references, workspaces, Skills, model and policy selection, publication, checkpoints, remediation, evidence, and cleanup. Omnigent will increasingly provide the host, runner, harness, provider-session, and live interaction substrate beneath those controls.
 
-The migration is deliberately evidence-gated. OpenCode is the first generic-host integration. Codex currently has both direct and profile-bound Omnigent compatibility paths. Claude Code has direct support and Omnigent substrate. These older paths remain truthfully labeled replay, rollback, migration, and historical-read compatibility until their exact generic Omnigent replacements pass conformance and retirement gates.
+The migration is deliberately evidence-gated. OpenCode is the first generic-host integration. Codex currently has both direct and profile-bound Omnigent compatibility paths. Claude Code has direct support and Omnigent substrate. These older paths are governed by the [Runtime-Provider Rollout Policy](docs/Omnigent/RuntimeProviderRollout.md): direct rows are `direct_compatibility_only` (explicit, labeled compatibility choice, never a new-work default), and the legacy profile-bound Codex row becomes `retired_for_new_work` once the generic Codex row is qualified — recorded work stays executable, new work follows the qualified default. Codex-specific cutover phases and support rows are owned by [Codex Support and Cutover](docs/Omnigent/CodexSupportAndCutover.md).
 
 The intended host direction is one digest-pinned MoonMind Omnigent image reused by Codex, Claude Code, and OpenCode wherever practical. Separate Host Classes, runtime-pack adapters, credential materializers, and support rows preserve strict runtime and credential isolation even when they share the same image digest.
 
@@ -121,7 +131,7 @@ Dedicated static hosts remain an optional advanced deployment choice during migr
 
 AI coding agents are remarkable, but long-running autonomous work needs more than a terminal process:
 
-- Can I close my laptop and trust the workflow to continue?
+- Can I submit work and pick it up from another device while MoonMind keeps it durable?
 - Can I inspect logs, diagnostics, artifacts, and step evidence after the fact?
 - Can I run build and test containers without handing the agent the host Docker socket?
 - Can I intervene, clear context, retry, or recover without losing the audit trail?
@@ -130,33 +140,33 @@ AI coding agents are remarkable, but long-running autonomous work needs more tha
 
 MoonMind exists to answer those questions. Progress against each promise below is tracked milestone by milestone in the [MoonMind Roadmap](docs/MoonMindRoadmap.md).
 
-### 🛡️ Security — boundaries the agent can't cross
+### 🛡️ Security — policy-enforced boundaries around each run
 
-An autonomous agent with your credentials and a shell creates a privileged attack surface unless something constrains it. MoonMind enforces those constraints in the execution substrate rather than depending on the agent to police its own authority:
+An autonomous agent with your credentials and a shell creates a privileged attack surface unless something constrains it. MoonMind constrains each run in the execution substrate rather than depending on the agent to police its own authority. What each boundary does and does not cover is stated below; the per-claim owner and evidence table is in the [README claim/evidence checklist](docs/READMEClaimEvidence.md):
 
 - **Provider Profiles as policy.** A profile binds runtime, provider, credential source, materialization, concurrency slots, cooldowns, and routing into one declared contract, so model and credential policy is explicit per run rather than ambient environment state.
-- **Sandboxed execution.** Managed runtime sessions and specialized workloads run in isolated Docker boundaries with strict capability routing. Containerized build and test jobs are submitted through MoonMind's API-owned Docker Backend Service. Agent runtimes never receive the host Docker socket. File allowlists restrict what a run may modify.
-- **Secrets stay out of the blast radius.** Durable contracts carry secret references, never raw values. Credentials are resolved only at controlled launch boundaries and are automatically redacted from logs, artifacts, and outbound text. A shared runtime image never receives every runtime's credentials.
-- **Outbound scanning.** A high-security mode adds deterministic secret scans at outbound boundaries before an agent posts a pull request comment, sends a message, pushes a commit, or publishes an artifact.
+- **Sandboxed execution.** Managed runtime sessions and specialized workloads run in isolated Docker boundaries with strict capability routing. Containerized build and test jobs are submitted through MoonMind's API-owned Docker Backend Service. Agent runtimes never receive the host Docker socket. File allowlists restrict what a run may modify. Network confinement holds only where the workload's immutable egress profile is attested — see [Restricted egress](docs/Security/RestrictedEgress.md); plain Docker `bridge` and local allowlists are non-enforcing development mechanisms, not enforced boundaries.
+- **Secrets stay out of durable state.** Durable contracts carry secret references, never raw values. Credentials are resolved only at controlled launch boundaries for the narrow scope the runtime or MoonMind-owned call path requires; a shared runtime image never receives every runtime's credentials. This does not guarantee that no raw secret ever exists in process memory, and generated runtime files with materialized credentials are ephemeral, not durable artifacts — see the [Secrets System](docs/Security/SecretsSystem.md).
+- **Outbound scanning (opt-in high-security mode).** When `MOONMIND_HIGH_SECURITY_MODE` is enabled (default `false`), MoonMind-owned outbound callers scan text payloads and push bundles before a PR comment, message, commit push, or artifact publication, and block on a secret-like finding. Binary attachments, terminal input, and browser automation are outside the native text-scan contract and are never claimed as scanned. With the mode disabled, the scan contract allows the payload through unchanged. Owner: [Secrets System §1.1](docs/Security/SecretsSystem.md).
 - **Fail fast, not fallback.** Missing or revoked credentials produce explicit, actionable failures. MoonMind never silently substitutes an alternate credential source, runtime, harness, realizer, or billing-relevant model value.
 
-Where this is headed: typed policy envelopes that declare per run what an agent may touch, governance telemetry that records every privileged action an agent took and why, and a complete audit trail for the secret lifecycle, including creation, rotation, reference, and every launch that resolved one. The goal is that granting an agent autonomy never means granting it trust.
+Where this is headed (planned): typed policy envelopes that declare per run what an agent may touch, governance telemetry that records every privileged action an agent took and why, and a complete audit trail for the secret lifecycle, including creation, rotation, reference, and every launch that resolved one. The goal is that granting an agent autonomy never means granting it trust.
 
-### 🔁 Resilience — fire and forget, literally
+### 🔁 Resilience — durable orchestration that resumes when infrastructure returns
 
-Submit a refactoring job, close your laptop, and let MoonMind handle the rest. Every run is backed by [Temporal](https://temporal.io/), so workflows survive container crashes, worker restarts, and host reboots:
+Submit a refactoring job from the dashboard, and Temporal-backed orchestration keeps its durable step ledger across container crashes, worker restarts, and host reboots — resuming when the infrastructure that runs the stack returns. Suspending or powering off the machine hosting the MoonMind stack suspends execution with it; submitting from another device while the stack runs is supported, continuing while the hosting laptop sleeps is not. Each guarantee below states its actual handoff; details are in [Managed and External Agent Execution Model §16](docs/Temporal/ManagedAndExternalAgentExecutionModel.md):
 
-- **Durable step ledger and step-boundary checkpoints.** Long workflows are decomposed into steps whose state, attempts, and outputs are persisted as immutable artifacts. When compatible workspace capture and restore evidence exists, a failed step can resume from the last good step boundary. Completed work is never re-bought.
+- **Durable step ledger and step-boundary checkpoints.** Long workflows are decomposed into steps whose state, attempts, and outputs are persisted as immutable artifacts. When compatible workspace capture and restore evidence exists, a failed step can resume from the last good step boundary. A verified objective is preserved across reporting failures without re-buying implementation (see `separate_objective_from_execution` in `moonmind/workflows/temporal/github_issue_finalization.py`); that is objective preservation, not a universal exactly-once guarantee for arbitrary external effects.
 - **Stuck detection and escalating intervention.** MoonMind detects looping or silently stalled agents and applies escalating responses before they burn through the API budget.
 - **Rate limits as a first-class citizen.** Runtime strategies recognize provider rate-limit signals in live output and respond with slot-based concurrency control and cooldowns instead of blind retry storms.
-- **Idempotent by design.** Externally visible side effects such as starting runs, publishing results, and posting to GitHub or Jira are retry-safe, so a crash mid-operation does not produce duplicates.
+- **Idempotent by design, reconciled on ambiguity.** Start-like side effects (starting runs, publishing results, posting to GitHub or Jira) carry an `idempotencyKey` or deterministic execution tuple, and a retry reuses the same key while inspecting durable run/provider/session/host state before creating side effects — so a crash mid-operation reuses rather than duplicates the recorded work. Ambiguous provider responses still require lane-specific reconciliation; no lane silently creates replacement authority while the original may still be active.
 - **Scheduled and recurring workflows.** Run heavy jobs overnight when tokens are cheaper, or put issue triage on a schedule and get alerted on failure.
 
-Where this is headed: self-healing remediation workflows where a dedicated supervisor can target a failed run, read its durable evidence, and execute typed recovery actions with privilege separation and a full audit trail. The aspiration is a system where a failed run at 3 a.m. is diagnosed, repaired, and resumed before you wake up.
+Where this is headed (planned): self-healing remediation workflows where a dedicated supervisor can target a failed run, read its durable evidence, and execute typed recovery actions with privilege separation and a full audit trail. The aspiration is a system where a failed run at 3 a.m. is diagnosed, repaired, and resumed before you wake up.
 
 ### 🔭 Observability — know what your agent actually did
 
-"It finished" is not an answer. MoonMind treats every run as an evidence-producing process:
+"It finished" is not an answer. MoonMind treats every run as an evidence-producing process. These views exist today:
 
 - **The dashboard.** Track run status in real time, inspect per-step progress, open step-scoped logs and diagnostics, browse generated artifacts, monitor intervention requests, and audit execution histories from a single UI.
 - **Live logs as a session-aware timeline.** Merged stdout, stderr, system, and session events stream over SSE into one ordered, run-global sequence with durable artifact-backed replay after the run ends. Session boundaries, resets, and epochs are explicit, observable events.
@@ -164,14 +174,16 @@ Where this is headed: self-healing remediation workflows where a dedicated super
 - **Correlated structured logs.** Every log line carries correlation IDs tying it to its workflow, run, activity, and trace. Questions about what happened can be answered without reading raw worker internals.
 - **Exact runtime provenance.** Omnigent-backed evidence identifies the host image, harness implementation, runtime pack, credential materializer, Host Class, launch policy, model configuration, and execution realizer that governed the run.
 
-Where this is headed: end-to-end OpenTelemetry tracing from API request through workflow, activity, and provider call, with token and cost attribution per step. The aspiration is that any question about a run, including what it changed, what it spent, why it failed, and which runtime authority it used, has a durable, queryable answer.
+The consolidated per-run governance report (one inspectable report per run built from existing authoritative evidence) is planned, not shipped: see [Per-Run Governance Reports](docs/Governance/RunGovernanceReports.md) (MoonMind#3969). Missing or partial evidence in any view must not be read as a complete audit of every privileged action. Optional model review of generated content is a quality aid, not a security guarantee.
+
+Where this is headed (planned): end-to-end OpenTelemetry tracing from API request through workflow, activity, and provider call, with token and cost attribution per step. The aspiration is that any question about a run, including what it changed, what it spent, why it failed, and which runtime authority it used, has a durable, queryable answer.
 
 ### 🛰️ Run CLI agents in MoonMind
 
 Other platforms make you rebuild agents in their SDK. MoonMind operates at a higher level of abstraction, placing provider-maintained CLI agents and Omnigent harnesses inside a durable operational envelope:
 
-- **Omnigent-backed agents.** The long-term normal path resolves an Omnigent Agent Profile, Provider Profile, runtime pack, Host Class, materializer, model, and policy into one immutable execution plan.
-- **Managed compatibility paths.** Direct Codex and Claude Code paths remain available during migration where policy and support status permit them.
+- **Omnigent-backed agents.** The long-term normal path resolves an Omnigent Agent Profile, Provider Profile, runtime pack, Host Class, materializer, model, and policy into one immutable execution plan. Which exact combinations are a new-work default, an explicit-only choice, a labeled compatibility path, or unavailable is decided per combination by the [Runtime-Provider Rollout Policy](docs/Omnigent/RuntimeProviderRollout.md); a binary, plugin, or image being present never makes a combination supported on its own.
+- **Compatibility paths during migration.** Direct Codex and Claude Code rows are `direct_compatibility_only` and the legacy profile-bound Codex row retires for new work once the generic row is qualified (recorded work stays executable). They remain explicit, labeled paths with in-flight Temporal-history and historical-read compatibility until retirement criteria pass — see the [Runtime-Provider Rollout Policy](docs/Omnigent/RuntimeProviderRollout.md) and [Codex Support and Cutover](docs/Omnigent/CodexSupportAndCutover.md).
 - **Step-based context management.** Agents perform better on small, focused tasks. MoonMind injects the right context into each step and clears it between steps to prevent context-window pollution.
 - **Personal-use friendly defaults.** A fresh local install boots with `docker compose up -d`. Enter a few secrets in the dashboard and begin without requiring enterprise secret infrastructure.
 
@@ -185,7 +197,7 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
 | **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, runtime supervision, external integrations, and durable container-job execution. |
 | **Omnigent Runtime Plane** | Target primary runtime-provider plane for Codex, Claude Code, OpenCode, and future approved harnesses. It uses immutable Agent Profiles, plans, runtime bindings, Host Classes, runtime packs, materializers, exact-host attestation, canonical sessions, and native Workflow Chat. |
-| **Managed Compatibility Plane** | Direct Codex and Claude Code and the retained legacy Codex profile-bound realizer. These remain explicit migration, rollback, replay, and historical-read paths until retirement criteria pass. |
+| **Managed Compatibility Plane** | Direct Codex and Claude Code (`direct_compatibility_only`) and the legacy Codex profile-bound realizer (`retired_for_new_work` once generic Codex is qualified). Explicit, labeled paths with in-flight and historical-read compatibility until retirement criteria pass. |
 | **Docker Backend Service** | Authenticated MCP and HTTP container-job surface that resolves workspaces, applies policy, dispatches bounded jobs through Temporal, and uses one deployment-selected Docker daemon whose image cache is reusable across workflows. |
 | **Dashboard** | Operational dashboard for managing workflows, reviewing per-step progress, and inspecting logs, diagnostics, artifacts, runtime provenance, and recovery state. |
 | **MinIO** | S3-compatible storage for immutable artifacts and large evidence. |
