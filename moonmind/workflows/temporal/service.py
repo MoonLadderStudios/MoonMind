@@ -2800,7 +2800,7 @@ class TemporalExecutionService:
                 code="exact_rerun_execution_plan_unavailable",
             )
         try:
-            assert_plan_matches_deployed_runtime(plan.payload)
+            await assert_plan_matches_deployed_runtime(plan.payload)
         except OmnigentDeploymentIdentityConflict as exc:
             raise TemporalExecutionRerunPlanError(
                 "Exact rerun preserves the original Omnigent execution plan, "

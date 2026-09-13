@@ -2127,14 +2127,15 @@ def test_plan_version_round_trip_preserves_historical_canonical_bytes():
         OmnigentExecutionPlanEnvelope, compute_plan_ref,
     )
     plan = _compile_opencode_plan()
-    assert plan.payload.omnigentVersion == "1.0.0"
+    assert plan.payload.omnigentVersion is None
+    assert "omnigentVersion" not in plan.model_dump(mode="json")["payload"]
     restored = OmnigentExecutionPlanEnvelope.model_validate_json(plan.model_dump_json(by_alias=True))
     assert restored.planRef == plan.planRef
     historical = plan.model_dump(mode="json", by_alias=True)
-    historical["payload"].pop("omnigentVersion")
+    historical["payload"]["omnigentVersion"] = "1.0.0"
     historical["planRef"] = compute_plan_ref(historical["payload"])
     restored = OmnigentExecutionPlanEnvelope.model_validate(historical)
-    assert restored.payload.omnigentVersion is None
+    assert restored.payload.omnigentVersion == "1.0.0"
     assert compute_plan_ref(restored.payload) == historical["planRef"]
 
 

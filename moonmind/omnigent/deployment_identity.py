@@ -79,11 +79,11 @@ def _resolve_deployed_host_image_ref(harness_id: str) -> str | None:
     return None
 
 
-def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
+async def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
     """Validate server compatibility without replacing immutable host authority.
 
-    New plans permit server patch releases within their recorded major.minor.
-    Historical plans without version evidence retain their exact-build reader.
+    The immutable catalog supplies the admitted major.minor independently of
+    MoonMind releases. Previously persisted inline version evidence is retained.
     The pinned host remains launchable when the default host image advances.
     """
 
@@ -101,7 +101,44 @@ def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
         )
     deployed = resolve_deployed_server_build_digest()
     version = getattr(plan_payload, "omnigentVersion", None)
+    catalog_ref = getattr(plan_payload, "harnessCatalogRef", None)
     if planned != deployed:
+        if version is None and catalog_ref:
+            from sqlalchemy.exc import SQLAlchemyError
+            from api_service.db.base import async_session_maker
+            from moonmind.omnigent.harness_platform.catalog_service import (
+                DbHarnessCatalogRepository,
+            )
+
+            try:
+                catalog = await DbHarnessCatalogRepository(async_session_maker).load(
+                    catalog_ref
+                )
+            except (SQLAlchemyError, OSError) as exc:
+                raise OmnigentDeploymentNotReady(
+                    "Waiting for the admitted Omnigent catalog store to recover",
+                    code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
+                ) from exc
+            except ValueError as exc:
+                raise OmnigentDeploymentIdentityConflict(
+                    "execution plan catalog failed immutable evidence validation"
+                ) from exc
+            if catalog is None:
+                raise OmnigentDeploymentNotReady(
+                    "The admitted Omnigent catalog is temporarily unavailable; "
+                    "restore the recorded catalog before retrying",
+                    code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
+                )
+            snapshot = catalog.snapshot
+            if (
+                snapshot.catalogRef != catalog_ref
+                or snapshot.endpointRef != plan_payload.endpointRef
+                or snapshot.omnigentBuildDigest != planned
+            ):
+                raise OmnigentDeploymentIdentityConflict(
+                    "execution plan catalog conflicts with admitted server authority"
+                )
+            version = snapshot.omnigentVersion
         from moonmind.omnigent.bootstrap.store import load_resolved_state
 
         state = load_resolved_state()
@@ -122,7 +159,7 @@ def assert_plan_matches_deployed_runtime(plan_payload: Any) -> None:
                 "deployed with compatible major.minor evidence; "
                 "the deployment owner must restore a compatible server"
             )
-    if version:
+    if version or catalog_ref:
         return
     harness_id = str(getattr(plan_payload, "harnessId", None) or "").strip()
     deployed_host = _resolve_deployed_host_image_ref(harness_id)
