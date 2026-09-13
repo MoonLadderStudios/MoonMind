@@ -32,14 +32,19 @@ missing evidence cannot borrow the catalog/server digest. `OMNIGENT_BUILD_DIGEST
 is an optional exact host-build pin. It is never a substitute for the server
 image digest, and publication does not overwrite it with a discovered digest.
 
-New execution plans record `omnigentVersion`. A compatible server patch update
+Execution plans obtain version evidence from the immutable `harnessCatalogRef`
+already in the v1 contract. New plans omit the redundant top-level
+`omnigentVersion`, even when null, so retained readers do not need to match the
+writer's MoonMind release. A compatible server patch update
 can serve the unchanged plan and its original immutable host image. Rehydration
 verifies the recorded launch artifact and uses the admitted host image, build,
 architecture, and runtime settings even when current default-host discovery is
 missing or has moved to a different release series. Partial recorded host
-authority and mismatched launch artifacts remain rejected. Historical
-plans without version evidence preserve their canonical bytes and exact-build
-validation; an unknown historical version is never guessed. Core catalog
+authority and mismatched launch artifacts remain rejected. Persisted plans
+that contain inline version evidence preserve that field and their canonical
+bytes. Catalog evidence is read by its admitted ref and checked against the
+recorded endpoint and build; missing evidence is retryable and a conflicting
+catalog cannot authorize launch. An unknown version is never guessed. Core catalog
 refreshes may attest a patch update only when the declared harness contract is
 unchanged. Plugin implementation identities remain exact.
 

@@ -944,7 +944,7 @@ class RecurringWorkflowsService:
             assert_plan_matches_deployed_runtime,
         )
 
-        assert_plan_matches_deployed_runtime(persisted_plan.envelope.payload)
+        await assert_plan_matches_deployed_runtime(persisted_plan.envelope.payload)
         if snapshot != previous_target.get("agentProfileSnapshot"):
             usage = await self._session.scalar(
                 select(OmnigentAgentProfileUsage).where(

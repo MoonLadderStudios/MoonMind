@@ -70,7 +70,7 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
     monkeypatch.setattr(deployment_identity, "resolve_deployed_server_build_digest", lambda: current_digest)
     monkeypatch.setattr(deployment_identity, "_resolve_deployed_host_image_ref", lambda _: current_host)
 
-    def dispatch_authority(snapshot):
+    async def dispatch_authority(snapshot):
         launch = _compile_persisted_effective_launch(
             session.policies[snapshot["launchPolicyRef"]],
             provider_profile_id=session.provider.profile_id,
@@ -83,17 +83,17 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
                 omnigentServerBuildRef="sha256:" + launch["serverImageRef"].rsplit(":", 1)[-1]
             ),
         )
-        deployment_identity.assert_plan_matches_deployed_runtime(payload)
+        await deployment_identity.assert_plan_matches_deployed_runtime(payload)
         plan_payloads.append(payload)
         return launch
 
     with pytest.raises(deployment_identity.OmnigentDeploymentIdentityConflict):
-        dispatch_authority(parameters["agentProfileSnapshot"])
+        await dispatch_authority(parameters["agentProfileSnapshot"])
 
     async def persist_plan(**kwargs):
         # Execute the real policy compiler and dispatch identity gate. The
         # artifact transport is replaced by a compact persisted binding here.
-        observed_launches.append(dispatch_authority(kwargs["agent_profile_snapshot"]))
+        observed_launches.append(await dispatch_authority(kwargs["agent_profile_snapshot"]))
         assert kwargs["task_input_snapshot_ref"] == binding.task_input_snapshot_ref
         assert kwargs["initial_parameters"]["model"] == historical_input["initialParameters"]["model"]
         # Reproduce a second deployment during artifact persistence, after
@@ -150,7 +150,7 @@ async def test_scheduled_image_update_reaches_dispatch_with_matching_authority(
     assert new_input["omnigentExecutionPlan"]["planDigest"] == current_digest
     assert new_input["effort"] == historical_input["initialParameters"]["effort"]
     assert new_input["profileId"] == historical_input["initialParameters"]["profileId"]
-    assert dispatch_authority(new_input["agentProfileSnapshot"])["hostImageRef"] == current_host
+    assert (await dispatch_authority(new_input["agentProfileSnapshot"]))["hostImageRef"] == current_host
     assert historical_input["initialParameters"]["agentProfileSnapshot"]["version"] == 1
     assert session.usage.version == 2
     assert definition.version == 2

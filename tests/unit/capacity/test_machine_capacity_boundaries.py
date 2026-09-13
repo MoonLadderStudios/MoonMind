@@ -568,7 +568,7 @@ def _realizer(admission):
         session_cleanup_service=object(),
         workspace_publisher=object(),
         host_capacity_admission=admission,
-        deployment_validator=lambda _payload: None,
+        deployment_validator=AsyncMock(return_value=None),
     )
 
 
@@ -2777,7 +2777,7 @@ def _cleanup_realizer(*, admission, host_leases, host_runtime, bindings):
         session_cleanup_service=AsyncMock(),
         workspace_publisher=object(),
         host_capacity_admission=admission,
-        deployment_validator=lambda _payload: None,
+        deployment_validator=AsyncMock(return_value=None),
     )
 
 
