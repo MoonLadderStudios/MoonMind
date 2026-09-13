@@ -12,7 +12,8 @@ import pytest
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.control_plane import OmnigentControlPlaneStore, TurnSource
 from moonmind.omnigent.control_plane.cleanup_authority import CanonicalCleanupAuthority
-from tests.unit.omnigent.test_canonical_turn_routing import (
+# Imports register pytest fixtures, including session_factory's _engine dependency.
+from tests.unit.omnigent.test_canonical_turn_routing import (  # noqa: F401
     _engine,
     session_factory,
     service,

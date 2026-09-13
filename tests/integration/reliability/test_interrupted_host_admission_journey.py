@@ -348,6 +348,7 @@ async def test_replacement_cleans_owned_docker_resources_before_readmission(
                     client, task_queue=queue + "-activity", activities=[binding.handler]
                 ):
                     result = await handle.result()
+                assert isinstance(result, AgentRunResult)
                 assert result.failure_class is None
                 assert len(launches) == 2
                 assert launches[0] != launches[1]
