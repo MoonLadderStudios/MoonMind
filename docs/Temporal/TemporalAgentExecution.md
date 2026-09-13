@@ -228,30 +228,25 @@ Serialized payload form (legacy accepted): `{ id, skill: { name }, inputs: {...}
 
 ### 3.3 Activity catalog
 
-| Activity Type | Fleet | Task Queue | Description |
-|---------------|-------|------------|-------------|
-| `plan.generate` | llm | `mm.activity.llm` | LLM-driven plan generation |
-| `plan.validate` | llm | `mm.activity.llm` | Plan validation against registry |
-| `agent_runtime.publish_artifacts` | agent_runtime | `mm.activity.agent_runtime` | Publish agent run outputs |
-| `agent_runtime.cancel` | agent_runtime | `mm.activity.agent_runtime` | Cancel managed/external agent run |
-| `integration.resolve_adapter_metadata`| integrations | `mm.activity.integrations` | Single-hop adapter validation and resolution |
-| `sandbox.run_command` | sandbox | `mm.activity.sandbox` | Shell command execution |
-| `sandbox.checkout_repo` | sandbox | `mm.activity.sandbox` | Git repo checkout |
-| `sandbox.apply_patch` | sandbox | `mm.activity.sandbox` | Patch application |
-| `sandbox.run_tests` | sandbox | `mm.activity.sandbox` | Test runner |
-| `artifact.*` | artifacts | `mm.activity.artifacts` | Artifact CRUD |
-| `integration.jules.*` | integrations | `mm.activity.integrations` | Jules integration |
+The authoritative Activity catalog — exact Activity type, owning fleet, task
+queue, and capability — lives in
+[`ActivityCatalogAndWorkerTopology.md`](ActivityCatalogAndWorkerTopology.md),
+built from `moonmind/workflows/temporal/activity_catalog.py`
+(`build_default_activity_catalog`) with worker bindings in
+`moonmind/workflows/temporal/activity_runtime.py`. Do not duplicate that
+enumeration here: a second handwritten table drifts (stale queue names, missing
+routes). The generated workflow-type reference
+[`WorkflowTypeCatalogGenerated.md`](WorkflowTypeCatalogGenerated.md) additionally
+lists Activity catalog routes mechanically (MoonLadderStudios/MoonMind#3959).
 
 ### 3.4 Worker fleet topology
 
-| Fleet | Task Queue | Capabilities | Scaling |
-|-------|------------|--------------|---------|
-| `workflow` | `mm.workflow` | workflow orchestration | Lightweight, no side effects |
-| `llm` | `mm.activity.llm` | LLM calls, plan generation | Rate-limited by provider |
-| `sandbox` | `mm.activity.sandbox` | Shell exec, git, builds | CPU/memory heavy |
-| `agent_runtime` | `mm.activity.agent_runtime` | Managed runtime supervision, provider profiles | Provider rate-limited |
-| `artifacts` | `mm.activity.artifacts` | Artifact storage IO | IO-bound |
-| `integrations` | `mm.activity.integrations` | Jules, webhooks | Rate-limited |
+The authoritative worker-fleet topology (fleet, task queue, capabilities,
+scaling) lives in
+[`ActivityCatalogAndWorkerTopology.md`](ActivityCatalogAndWorkerTopology.md)
+§5. The workflow fleet orchestrates without side effects; Activity fleets
+(llm, sandbox, agent_runtime, artifacts, integrations) perform bounded or
+heartbeat-aware work.
 
 ---
 
