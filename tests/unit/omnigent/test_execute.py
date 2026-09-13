@@ -56,6 +56,12 @@ from moonmind.omnigent.execute import PromptContextResolution
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
+def _captured_path(root, name):
+    paths = list(root.rglob(name))
+    assert len(paths) == 1, paths
+    return paths[0]
+
+
 def _request() -> AgentExecutionRequest:
     return AgentExecutionRequest(
         agentKind="external",
@@ -2521,7 +2527,7 @@ async def test_run_omnigent_execution_waits_for_terminal_result(
     result_payload = result.model_dump(by_alias=True, mode="json")
     assert large_provider_state not in json.dumps(result_payload)
     external_state = json.loads(
-        (tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json").read_text(
+        (_captured_path(tmp_path, "checkpoint.omnigent.external_state.json")).read_text(
             encoding="utf-8"
         )
     )
@@ -2686,7 +2692,7 @@ async def test_run_omnigent_execution_accepts_native_idle_turn_edge(
     assert indexed_events[-1].event_type == "session.final_snapshot"
     assert indexed_events[-1].normalized_status == "completed"
 
-    normalized_path = tmp_path / "corr-idle-edge" / "runtime.omnigent.sse.normalized.jsonl"
+    normalized_path = _captured_path(tmp_path, "runtime.omnigent.sse.normalized.jsonl")
     normalized_events = [
         json.loads(line)
         for line in normalized_path.read_text(encoding="utf-8").splitlines()
@@ -3290,7 +3296,7 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
     assert calls.index(("list_changed_files", "session-1")) < calls.index(
         ("delete_session", "session-1")
     )
-    manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
+    manifest_path = _captured_path(tmp_path, "output.omnigent.capture_manifest.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schemaVersion"] == "moonmind.omnigent.capture_manifest.v1"
     assert manifest["terminalStatus"] == "canceled"
@@ -3312,7 +3318,9 @@ async def test_run_omnigent_execution_harvests_before_delete_on_cancellation(
         "diagnostics",
         "manifests",
     ]
-    external_state_path = tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json"
+    external_state_path = _captured_path(
+        tmp_path, "checkpoint.omnigent.external_state.json"
+    )
     external_state = json.loads(external_state_path.read_text(encoding="utf-8"))
     assert external_state["endpointRef"] == "omnigent:endpoint:retry"
     assert external_state["retry"]["sessionResolution"] == "attached"
@@ -3457,8 +3465,9 @@ async def test_local_omnigent_artifact_gateway_rejects_traversal_refs(tmp_path) 
         link_type="output.omnigent.session_file",
     )
 
-    assert ref == "artifact://omnigent/corr-1/segment/session.log"
-    assert (tmp_path / "corr-1" / "segment" / "session.log").read_bytes() == b"evidence"
+    assert ref.startswith("artifact://omnigent/corr-1/")
+    assert ref.endswith("/segment/session.log")
+    assert await gateway.read_bytes(ref) == b"evidence"
     assert not (tmp_path.parent / "session.log").exists()
 
 
@@ -3932,11 +3941,7 @@ async def test_run_omnigent_execution_reconciles_idle_snapshot_from_heartbeat(
         "source": reconciliation_source,
         "status": "completed",
     }
-    normalized_path = (
-        tmp_path
-        / "corr-heartbeat-terminal-reconcile"
-        / "runtime.omnigent.sse.normalized.jsonl"
-    )
+    normalized_path = _captured_path(tmp_path, "runtime.omnigent.sse.normalized.jsonl")
     normalized_events = [
         json.loads(line)
         for line in normalized_path.read_text(encoding="utf-8").splitlines()
@@ -4800,7 +4805,7 @@ async def test_run_omnigent_execution_harvests_changed_and_session_files(
     assert result.metadata["workspaceFilesIndexRef"].startswith("artifact://omnigent/")
     assert result.metadata["sessionFilesIndexRef"].startswith("artifact://omnigent/")
     assert result.metadata["githubPrUrl"] == "https://github.example/org/repo/pull/1"
-    manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
+    manifest_path = _captured_path(tmp_path, "output.omnigent.capture_manifest.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["workspaceFiles"][0]["path"] == "README.md"
     assert manifest["workspaceFiles"][0]["contentType"] == "text/markdown"
@@ -4814,7 +4819,9 @@ async def test_run_omnigent_execution_harvests_changed_and_session_files(
     assert {resource["label"] for resource in manifest_resources} >= {
         "Changed-file index", "Workspace-file index", "Session-file index"
     }
-    external_state_path = tmp_path / "corr-1" / "checkpoint.omnigent.external_state.json"
+    external_state_path = _captured_path(
+        tmp_path, "checkpoint.omnigent.external_state.json"
+    )
     external_state = json.loads(external_state_path.read_text(encoding="utf-8"))
     assert external_state["patchEvidence"] == {
         "diffRefs": [
@@ -4896,7 +4903,7 @@ async def test_run_omnigent_execution_honors_workspace_files_capture_opt_out(
 
     assert result.failure_class is None
     assert "workspaceFilesIndexRef" not in result.metadata
-    manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
+    manifest_path = _captured_path(tmp_path, "output.omnigent.capture_manifest.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert "workspaceFilesIndexRef" not in manifest
     assert "workspaceFiles" not in manifest
@@ -5045,7 +5052,7 @@ async def test_run_omnigent_execution_records_missing_resource_harvest_and_child
 
     assert result.failure_class is None
     assert result.metadata["childSessionsRef"].startswith("artifact://omnigent/")
-    manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
+    manifest_path = _captured_path(tmp_path, "output.omnigent.capture_manifest.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["patchUnavailable"] is True
     assert manifest["childSessions"] == 1
@@ -5131,7 +5138,7 @@ async def test_run_omnigent_execution_escalates_harvest_failure_when_full_eviden
     # success snapshot summary ("done") and must describe the missing evidence.
     assert result.summary != "done"
     assert "evidence" in result.summary.lower()
-    manifest_path = tmp_path / "corr-1" / "output.omnigent.capture_manifest.json"
+    manifest_path = _captured_path(tmp_path, "output.omnigent.capture_manifest.json")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["optionalResourceHarvest"]["outcome"] == "required_evidence_missing"
     assert manifest["optionalResourceHarvest"]["failureClass"] == "system_error"
@@ -5499,11 +5506,11 @@ async def test_run_omnigent_execution_redacts_raw_events_before_persistence(
     )
 
     assert result.failure_class is None
-    raw_path = tmp_path / "corr-1" / "runtime.omnigent.sse.raw.jsonl"
+    raw_path = _captured_path(tmp_path, "runtime.omnigent.sse.raw.jsonl")
     raw_text = raw_path.read_text(encoding="utf-8")
     assert "sk-should-not-persist" not in raw_text
     assert "[REDACTED]" in raw_text
-    normalized_path = tmp_path / "corr-1" / "runtime.omnigent.sse.normalized.jsonl"
+    normalized_path = _captured_path(tmp_path, "runtime.omnigent.sse.normalized.jsonl")
     normalized_events = [
         json.loads(line)
         for line in normalized_path.read_text(encoding="utf-8").splitlines()

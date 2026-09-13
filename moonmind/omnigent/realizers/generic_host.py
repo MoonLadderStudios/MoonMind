@@ -12,10 +12,11 @@ import json
 import logging
 import time
 from contextlib import suppress
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import Any, Awaitable, Callable
 
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+from moonmind.omnigent.control_plane.cleanup_authority import CanonicalCleanupClaim
 from moonmind.omnigent.attempt_completion import complete_skill_turns
 from moonmind.omnigent.credential_materializers import (
     CredentialRuntimeHandle,
@@ -962,6 +963,7 @@ class GenericOmnigentHostRealizer:
     async def _interrupted_admission_result(self, request, binding):
         """Issue readmission authority only after fenced, pre-session cleanup."""
         interrupted = (binding.phaseResults or {}).get("interruptedAdmission")
+        settlement = (binding.phaseResults or {}).get("cleanupSettlement", {})
         capacity = request.admitted_provider_capacity
         cleanup_ref = binding.attestationRefs.get("cleanupAttestationRef")
         if (
@@ -969,6 +971,7 @@ class GenericOmnigentHostRealizer:
             or binding.omnigentSessionId
             or binding.terminalResult is not None
             or not isinstance(interrupted, dict)
+            or settlement.get("status") not in {"completed", "not_required"}
             or capacity is None
             or capacity.admission_epoch < 1
             or interrupted.get("admissionEpoch") != capacity.admission_epoch
@@ -1092,10 +1095,17 @@ class GenericOmnigentHostRealizer:
         if binding.state is RuntimeBindingState.cleaned:
             return binding, host_lease
 
-        cleanup_claim = await self._claim_canonical_cleanup(
-            await self._recovered_session_id(binding)
-            or await resolve_admission_session_id(self._turn_commands, request)
-        )
+        recorded_claim = (binding.phaseResults or {}).get("cleanupClaim")
+        if recorded_claim:
+            # Completion can commit before its acknowledgement is delivered.
+            # Reuse this exact persisted claim: complete() rechecks its fence
+            # and accepts an already-settled generation idempotently.
+            cleanup_claim = CanonicalCleanupClaim(**recorded_claim)
+        else:
+            cleanup_claim = await self._claim_canonical_cleanup(
+                await self._recovered_session_id(binding)
+                or await resolve_admission_session_id(self._turn_commands, request)
+            )
         if cleanup_claim is _CLEANUP_NOT_OWNED:
             # Another owner holds this session's cleanup, or an admitted turn
             # already completed it: releasing the host, credentials, or provider
@@ -1103,6 +1113,16 @@ class GenericOmnigentHostRealizer:
             raise HarnessPlatformError(
                 "canonical cleanup authority is owned by another janitor",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        if cleanup_claim is not None and not recorded_claim:
+            binding = await self._update_binding(
+                binding,
+                updates={
+                    "phaseResults": {
+                        **(binding.phaseResults or {}),
+                        "cleanupClaim": asdict(cleanup_claim),
+                    },
+                },
             )
         cleanup_evidence: dict[str, Any] = {}
         if binding.omnigentSessionId:
@@ -1152,6 +1172,8 @@ class GenericOmnigentHostRealizer:
             item.model_dump(by_alias=True, mode="json")
             for item in await self._credentials.cleanup_all(credential_handles)
         ]
+        settlement = await self._complete_canonical_cleanup(cleanup_claim)
+        cleanup_evidence["canonicalCleanup"] = settlement
         evidence_ref: str | None = None
         if self._artifacts is not None:
             evidence_ref = await self._artifacts.write_json(
@@ -1167,14 +1189,19 @@ class GenericOmnigentHostRealizer:
             )
         # Provider capacity releases after all credential-consuming state.
         await self._provider_leases.release_all(acquired)
-        await self._complete_canonical_cleanup(cleanup_claim)
         attestation_refs = dict(binding.attestationRefs)
         if evidence_ref:
             attestation_refs["cleanupAttestationRef"] = evidence_ref
         binding = await self._update_binding(
             binding,
             state=RuntimeBindingState.cleaned,
-            updates={"attestationRefs": attestation_refs},
+            updates={
+                "attestationRefs": attestation_refs,
+                "phaseResults": {
+                    **(binding.phaseResults or {}),
+                    "cleanupSettlement": settlement,
+                },
+            },
         )
         return binding, host_lease
 
@@ -1241,10 +1268,24 @@ class GenericOmnigentHostRealizer:
         )
         return claim if claim is not None else _CLEANUP_NOT_OWNED
 
-    async def _complete_canonical_cleanup(self, claim: Any) -> None:
-        if claim is None or self._cleanup_authority is None:
-            return
-        await self._cleanup_authority.complete(claim)
+    async def _complete_canonical_cleanup(self, claim: Any) -> dict[str, Any]:
+        if claim is None:
+            return {"status": "not_required"}
+        if self._cleanup_authority is None:
+            raise HarnessPlatformError(
+                "persisted cleanup claim requires its canonical authority",
+                code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
+            )
+        if not await self._cleanup_authority.complete(claim):
+            raise HarnessPlatformError(
+                "canonical cleanup settlement was fenced by newer authority",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        return {
+            "status": "completed",
+            "sessionId": claim.session_id,
+            "generation": claim.generation,
+        }
 
     async def _update_binding(
         self,
@@ -1667,8 +1708,8 @@ class GenericOmnigentHostRealizer:
             )
         await self._host_runtime.cleanup_authorities(binding.cleanupAuthorityRefs)
         await self._credentials.cleanup_all(cleanup_handles)
-        await self._provider_leases.release_from_binding(binding.providerLeases)
         await self._complete_canonical_cleanup(cleanup_claim)
+        await self._provider_leases.release_from_binding(binding.providerLeases)
         await self._runtime_bindings.update(
             binding.bindingId,
             expected_revision=binding.revision,
