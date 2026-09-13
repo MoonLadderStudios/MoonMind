@@ -832,10 +832,10 @@ def test_verify_binds_expected_row_count(tmp_path: Path) -> None:
 def test_forward_audit_migration_covers_applied_drops() -> None:
     audit = (
         REPO_ROOT
-        / "api_service/migrations/versions/380_manifest_drain_audit_4191.py"
+        / "api_service/migrations/versions/381_manifest_drain_audit_4191.py"
     )
     assert audit.exists()
     text = audit.read_text(encoding="utf-8")
-    assert "379_durable_issue_claims" in text
+    assert "380_account_lifecycle_4122" in text
     assert "require_registry_drop_approval" in text
     assert "already dropped" in text or "already applied" in text

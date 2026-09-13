@@ -1,7 +1,7 @@
 """Audit post-drop Manifest registry state (forward cutover for #4191).
 
-Revision ID: 380_manifest_drain_audit_4191
-Revises: 379_durable_issue_claims
+Revision ID: 381_manifest_drain_audit_4191
+Revises: 380_account_lifecycle_4122
 Create Date: 2026-09-13
 
 MoonLadderStudios/MoonMind#4191 (MR4): revision
@@ -33,8 +33,8 @@ __all__ = [
     "downgrade",
 ]
 
-revision: str = "380_manifest_drain_audit_4191"
-down_revision: Union[str, None] = "379_durable_issue_claims"
+revision: str = "381_manifest_drain_audit_4191"
+down_revision: Union[str, None] = "380_account_lifecycle_4122"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
