@@ -15,13 +15,29 @@ from moonmind.workflows.temporal.schedule_errors import (
 
 logger = logging.getLogger(__name__)
 
+
+class RetiredManifestTargetError(ValueError):
+    """Retired Manifest schedule target (MoonLadderStudios/MoonMind#4188)."""
+
+
 def _workflow_type_for_target(target: dict) -> str:
     kind = str(target.get("kind") or "")
     if kind in {"queue_task", "queue_task_template"}:
         return "MoonMind.Run"
     if kind == "manifest_run":
-        return "MoonMind.ManifestIngest"
+        # MoonLadderStudios/MoonMind#4188 (MR1): the native Manifest product
+        # is retired. Never convert a retired definition into an ordinary
+        # run and never create a Temporal Schedule for the retired
+        # MoonMind.ManifestIngest type. Callers skip these definitions so
+        # retirement (pause/remove with protected evidence) owns them.
+        raise RetiredManifestTargetError(
+            "manifest_run targets were retired "
+            "(MoonLadderStudios/MoonMind#4188/MoonLadderStudios/MoonMind#4192): "
+            "the new release does not register or launch manifest ingest "
+            "workflows; skipping Temporal Schedule creation."
+        )
     return "MoonMind.Run"
+
 
 async def migrate_definitions() -> None:
     logger.info("Starting migration to Temporal Schedules...")
@@ -57,7 +73,16 @@ async def migrate_definitions() -> None:
             jitter_seconds = max(0, jitter_seconds)
 
             target = dfn.target if isinstance(dfn.target, dict) else {}
-            workflow_type = _workflow_type_for_target(target)
+            try:
+                workflow_type = _workflow_type_for_target(target)
+            except RetiredManifestTargetError as exc:
+                logger.warning(
+                    "Skipping retired manifest_run definition %s (%s): %s",
+                    dfn.id,
+                    dfn.name,
+                    exc,
+                )
+                continue
 
             workflow_input = {
                 "title": dfn.name,
