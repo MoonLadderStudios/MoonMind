@@ -71,8 +71,8 @@ async def test_omnigent_execute_harvests_resources_with_fake_server(
     assert server.create_payloads[0]["labels"]["moonmind.issue"] == "MM-1059"
 
     manifest = json.loads(
-        (tmp_path / "corr-1" / "output.omnigent.capture_manifest.json").read_text(
-            encoding="utf-8"
+        await LocalOmnigentArtifactGateway(root=tmp_path).read_text(
+            result.metadata["captureManifestRef"]
         )
     )
     assert manifest["workspaceFiles"][0]["path"] == "README.md"
@@ -121,12 +121,12 @@ async def test_omnigent_execute_required_artifact_persistence_failure_is_termina
 
 
 @pytest.mark.parametrize("fake_omnigent_server", [True], indirect=True)
-async def test_omnigent_execute_terminal_capture_retry_is_idempotent(
+async def test_omnigent_execute_retry_preserves_each_terminal_capture(
     fake_omnigent_server,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    """A retried terminal capture converges on the same bounded artifact refs."""
+    """Changed retry provenance cannot overwrite an earlier terminal capture."""
 
     _server, server_url = fake_omnigent_server
     monkeypatch.setenv("OMNIGENT_ENABLED", "1")
@@ -148,19 +148,21 @@ async def test_omnigent_execute_terminal_capture_retry_is_idempotent(
 
     first = await run_omnigent_execution(request, artifact_gateway=gateway)
     first_manifest = json.loads(
-        (tmp_path / "corr-retry" / "output.omnigent.capture_manifest.json").read_text()
+        await gateway.read_text(first.metadata["captureManifestRef"])
     )
     second = await run_omnigent_execution(request, artifact_gateway=gateway)
     second_manifest = json.loads(
-        (tmp_path / "corr-retry" / "output.omnigent.capture_manifest.json").read_text()
+        await gateway.read_text(second.metadata["captureManifestRef"])
     )
 
     assert first.failure_class is None
     assert second.failure_class is None
-    assert first.metadata["captureManifestRef"] == second.metadata["captureManifestRef"]
-    assert first.output_refs == second.output_refs
-    # A whole execution retry may create a new provider session. Terminal
-    # capture identity is the MoonMind artifact set, not that provenance ID.
-    first_manifest.pop("omnigentSessionId")
-    second_manifest.pop("omnigentSessionId")
-    assert first_manifest == second_manifest
+    assert first.metadata["captureManifestRef"] != second.metadata["captureManifestRef"]
+    assert (
+        json.loads(await gateway.read_text(first.metadata["captureManifestRef"]))
+        == first_manifest
+    )
+    assert first_manifest["omnigentSessionId"] != second_manifest["omnigentSessionId"]
+    assert len(first.output_refs) == len(second.output_refs)
+    assert first_manifest["workspaceFiles"] == second_manifest["workspaceFiles"]
+    assert first_manifest["workspaceDiffs"] == second_manifest["workspaceDiffs"]

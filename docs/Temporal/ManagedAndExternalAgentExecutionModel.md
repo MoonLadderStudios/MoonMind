@@ -828,9 +828,15 @@ to stop it.
 
 An activity retry reuses the same canonical request and idempotency key. It inspects durable run/provider/session/host state before creating side effects.
 
+A revoked Activity delivery cannot settle its canonical turn command. It leaves
+the claim and runtime binding for the replacement delivery to reconcile. User
+cancellation and unknown provider responses retain their distinct cancellation
+and delivery-ambiguity handling.
+
 An interrupted generic host allocation that has not created a provider session
 retains its fenced cleanup owner. After cleanup reaches `cleaned` with a durable
-cleanup attestation, the owner may return `metadata.admissionRecovery`
+cleanup attestation and successful canonical cleanup settlement, the owner may
+return `metadata.admissionRecovery`
 (`agent-admission-recovery/v1`). This typed control receipt binds the execution
 plan, admission epoch, runtime binding, and cleanup attestation. The workflow
 validates those identities against its admitted request before using the existing
@@ -838,6 +844,14 @@ bounded capacity re-admission loop. The next epoch preserves the original
 request, workspace, provider and model; it cannot resurrect the cleaned binding.
 The receipt is persisted as the attempt result so a lost acknowledgement does
 not repeat cleanup. It does not represent provider execution or task success.
+The cleanup claim is persisted before teardown and reused after a lost
+acknowledgement; canonical completion rechecks the exact generation. A fenced
+completion leaves cleanup pending and releases no provider capacity or new
+admission. The settlement outcome is recorded with the cleanup evidence.
+Cleanup consumes the cumulative execution allowance: replacement Activities
+receive only the time still available, without a fresh minimum execution
+window. Exhaustion returns the failed attempt without another allocation.
+Durable capacity queueing remains outside the execution allowance.
 Missing, malformed, stale or cross-attempt receipts authorize no re-admission.
 An active provider session retains its existing reattachment path; incomplete
 cleanup retains its owner and cannot manufacture a fresh-host grant.

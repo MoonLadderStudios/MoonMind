@@ -255,10 +255,17 @@ creating a provider session. Its adapter returned `OMNIGENT_CLEANUP_DEFERRED`
 and the workflow failed despite the durable cleanup attestation. The bounded
 repair carries a typed, attempt-bound cleanup receipt through the existing
 Activity result and re-admission loop, preserving the original request and
-retry bounds. Required coverage replaces a real Temporal worker during
+retry and cumulative execution bounds. Cleanup time is debited before another
+Activity is scheduled. Canonical settlement must succeed before provider
+capacity is released; its persisted claim survives a lost acknowledgement. Revoked Activity delivery
+must also leave the canonical turn claim unchanged so a retry reaches runtime
+reconciliation; unknown provider responses remain parked. Local artifact refs
+must retain earlier cleanup evidence when replacement attempts use the same name.
+Required coverage enters the production AgentRun workflow, replaces a real Temporal worker during
 allocation, reconstructs PostgreSQL binding state, removes owned Docker
-resources through the production cleanup service, and passes the serialized
-receipt to the workflow consumer. Old hints, unproven cleanup and wrong-attempt
+resources through the production cleanup service, and proves release,
+reacquisition, a new admission epoch and replacement completion. Old hints,
+unproven or fenced cleanup, exhausted execution budgets and wrong-attempt
 receipts must not grant a new host. Broader interrupted-release preservation,
 pending-cleanup reconciliation and terminal claim settlement remain separate
 requirements in B/F; this repair does not claim those paths are complete.

@@ -4272,6 +4272,7 @@ class MoonMindAgentRun:
 
         admitted_at: Any = None
         capacity_requeue_attempts = 0
+        recovering_interrupted_admission = False
         reconcile_admission = self._workflow_patch_enabled("omnigent-resume-owned-admission-v1")
         while True:
             resuming = (
@@ -4331,6 +4332,7 @@ class MoonMindAgentRun:
                 # StartToClose from a server-side retry.
                 routed_overrides["retry_policy"] = retry_policy
             activity_returned = False
+            activity_started_at = workflow.now()
             try:
                 result_payload = await self._execute_routed_activity(
                     act_name,
@@ -4381,6 +4383,22 @@ class MoonMindAgentRun:
             )
             if requeue_reason is None:
                 return result_payload, admitted_at
+            metadata = (
+                result_payload.get("metadata", {})
+                if isinstance(result_payload, Mapping)
+                else getattr(result_payload, "metadata", {})
+            )
+            recovering_interrupted_admission = recovering_interrupted_admission or bool(
+                metadata.get("admissionRecovery")
+            )
+            if recovering_interrupted_admission:
+                # Only the new, validated cleanup receipt enters this branch;
+                # historical code-only capacity refusals keep their commands.
+                # Cleanup and Activity handoff consume the remaining execution
+                # allowance. Durable capacity queueing remains outside it.
+                stc_seconds -= (workflow.now() - activity_started_at).total_seconds()
+                if stc_seconds <= 0:
+                    return result_payload, admitted_at
             if (
                 capacity_requeue_attempts
                 >= _MAX_OMNIGENT_CAPACITY_REQUEUE_ATTEMPTS

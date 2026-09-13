@@ -51,6 +51,30 @@ def _step_request() -> AgentExecutionRequest:
     return AgentExecutionRequest.model_validate(payload)
 
 
+@pytest.mark.asyncio
+async def test_repeated_local_artifact_names_preserve_each_attempt(tmp_path):
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    refs = [
+        await gateway.write_json(
+            request=_request(),
+            name="generic-host-cleanup.json",
+            payload={"admissionEpoch": epoch},
+            link_type="evidence.cleanup",
+        )
+        for epoch in (1, 2, 1)
+    ]
+    # Existing persisted refs retain their original read path.
+    legacy = tmp_path / "corr-1" / "historical.json"
+    legacy.write_text('{"admissionEpoch": 0}')
+    assert json.loads(
+        await gateway.read_bytes("artifact://omnigent/corr-1/historical.json")
+    ) == {"admissionEpoch": 0}
+    assert refs[0] != refs[1]
+    assert refs[0] == refs[2]
+    assert json.loads(await gateway.read_bytes(refs[0])) == {"admissionEpoch": 1}
+    assert json.loads(await gateway.read_bytes(refs[1])) == {"admissionEpoch": 2}
+
+
 def test_provider_endpoint_provenance_is_accepted_but_credentials_are_redacted() -> (
     None
 ):
@@ -234,7 +258,7 @@ async def test_capture_redacts_credentials_from_provider_snapshots(tmp_path) -> 
         ],
     }
 
-    await _build_capture_bundle_impl(
+    bundle = await _build_capture_bundle_impl(
         client=None,
         artifact_gateway=gateway,
         request=_request(),
@@ -253,12 +277,8 @@ async def test_capture_redacts_credentials_from_provider_snapshots(tmp_path) -> 
         harvest_resources=False,
     )
 
-    initial = (
-        tmp_path / "corr-1" / "runtime.omnigent.snapshot.initial.json"
-    ).read_text(encoding="utf-8")
-    final = (
-        tmp_path / "corr-1" / "output.omnigent.snapshot.final.json"
-    ).read_text(encoding="utf-8")
+    initial = await gateway.read_text(bundle.metadata_refs["initialSnapshotRef"])
+    final = await gateway.read_text(bundle.metadata_refs["finalSnapshotRef"])
     assert fake_token not in initial
     assert fake_token not in final
     assert "[REDACTED]" in initial
@@ -315,9 +335,10 @@ async def test_resource_harvester_does_not_persist_content_over_byte_limit(
 async def test_bridge_resource_harvester_writes_section_12_artifacts(tmp_path) -> None:
     refs: dict[str, str] = {}
     manifest: dict[str, Any] = {"patchUnavailable": True, "artifactRefs": refs}
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
     harvester = BridgeResourceHarvester(
         client=FakeHarvestClient(),
-        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        artifact_gateway=gateway,
         request=_request(),
         session_id="session-1",
         manifest=manifest,
@@ -344,13 +365,9 @@ async def test_bridge_resource_harvester_writes_section_12_artifacts(tmp_path) -
     )
     assert refs["childSessionsRef"].endswith("/runtime.omnigent.child_sessions.jsonl")
 
-    diff = (
-        tmp_path / "corr-1" / "output.omnigent.workspace_diffs" / "src" / "app.py.diff"
-    )
-    assert diff.read_text(encoding="utf-8") == "diff --git a/src/app.py b/src/app.py\n"
+    diff = await gateway.read_text(manifest["workspaceDiffs"][0]["artifactRef"])
+    assert diff == "diff --git a/src/app.py b/src/app.py\n"
     child_snapshot = json.loads(
-        (
-            tmp_path / "corr-1" / "runtime.omnigent.child_sessions" / "child-1.json"
-        ).read_text(encoding="utf-8")
+        await gateway.read_text(refs["childSessionSnapshotRef:child-1"])
     )
     assert child_snapshot["id"] == "child-1"
