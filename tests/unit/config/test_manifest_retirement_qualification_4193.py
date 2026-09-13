@@ -882,3 +882,131 @@ def test_candidate_integrated_coverage_ledger() -> None:
     assert ledger["admission"].startswith("hermetic")
     assert ledger["security"].startswith("live")
     assert ledger["upgrade-data"].startswith("hermetic")
+
+
+# ---------------------------------------------------------------------------
+# Remediation slice (#4193 verifier remaining work, hermetic portion).
+#
+# Live served-API/Temporal/PostgreSQL/browser/per-device cutover evidence
+# stays owned by the sibling removals and #4189 milestones A/B/C and is not
+# claimed here. The tests below close only the hermetic part of the
+# remaining gaps using real production objects (registry, schema, router
+# text, generated catalog) instead of fixture-only scans.
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_registry_live_objects_exclude_manifest() -> None:
+    """Real workflow/activity registry carries no Manifest product object."""
+    from temporalio import activity as temporal_activity
+    from temporalio import workflow as temporal_workflow
+
+    from moonmind.workflows.temporal.workflow_registry import (
+        raw_workflow_registrations,
+        workflow_fleet_activity_handlers,
+        workflow_fleet_workflow_classes,
+        workflow_fleet_workflow_types,
+    )
+
+    for registration in raw_workflow_registrations():
+        assert "manifest" not in registration.module.lower()
+        assert "manifest" not in registration.class_name.lower()
+
+    workflow_names: list[str] = []
+    for workflow_class in workflow_fleet_workflow_classes():
+        name = temporal_workflow._Definition.must_from_class(workflow_class).name
+        workflow_names.append(name)
+    assert "MoonMind.ManifestIngest" not in workflow_names
+    assert not any("manifest" in name.lower() for name in workflow_names)
+
+    assert "MoonMind.ManifestIngest" not in workflow_fleet_workflow_types(
+        __import__(
+            "moonmind.config.settings", fromlist=["settings"]
+        ).settings.temporal
+    )
+
+    activity_names = [
+        temporal_activity._Definition.must_from_callable(handler).name
+        for handler in workflow_fleet_activity_handlers()
+    ]
+    assert not any("manifest.compile" in name for name in activity_names)
+    assert not any("manifest.write_summary" in name for name in activity_names)
+    assert not any("manifest" in name.lower() for name in activity_names)
+
+
+def test_candidate_admission_rejects_retired_forms_without_conversion() -> None:
+    """Retired intent in any authoring form rejects; UserWorkflow never converts."""
+    from pydantic import ValidationError
+
+    from moonmind.schemas.temporal_models import CreateExecutionRequest
+
+    retired_forms = [
+        # Inline manifest form.
+        {
+            "workflowType": "MoonMind.ManifestIngest",
+            "initialParameters": {
+                "instructions": "ingest",
+                "manifest": {"sources": ["docs"]},
+            },
+        },
+        # Registry manifestRef form (legacy snake/camel spellings).
+        {
+            "workflowType": "MoonMind.ManifestIngest",
+            "manifestArtifactRef": "art_stale_draft",
+            "initialParameters": {"instructions": "ingest"},
+        },
+        # Copied-history form carrying both legacy refs.
+        {
+            "workflowType": "MoonMind.ManifestIngest",
+            "manifestArtifactRef": "art_copied_history",
+            "initialParameters": {
+                "instructions": "ingest",
+                "manifest_ref": "art_old",
+            },
+        },
+        # Preset-like form with manifest-flavored parameters.
+        {
+            "workflowType": "MoonMind.ManifestIngest",
+            "initialParameters": {
+                "instructions": "ingest",
+                "preset": "manifest-daily",
+                "manifestArtifactRef": "art_preset",
+            },
+        },
+    ]
+    for form in retired_forms:
+        with pytest.raises(ValidationError, match="retired"):
+            CreateExecutionRequest.model_validate(dict(form))
+
+    # A legacy ref on an ordinary UserWorkflow parses but never reroutes it.
+    ordinary = CreateExecutionRequest.model_validate(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "manifestArtifactRef": "art_legacy_copied",
+            "initialParameters": {"instructions": "weekly summary"},
+        }
+    )
+    assert ordinary.workflow_type == "MoonMind.UserWorkflow"
+
+
+def test_candidate_historical_router_preserves_both_contracts_without_runtime() -> None:
+    """Both old history shapes stay readable with no manifest runtime import."""
+    router_text = (REPO_ROOT / "api_service/api/routers/executions.py").read_text(
+        encoding="utf-8"
+    )
+    assert "manifest_ref" in router_text
+    assert "manifestArtifactRef" in router_text
+    assert "from moonmind.manifest" not in router_text
+    assert "manifests_service" not in router_text
+    assert "manifest_sync_service" not in router_text
+    assert "manifest_ingest" not in router_text.lower()
+
+
+def test_candidate_generated_catalog_excludes_manifest_product() -> None:
+    """Shipped generated catalog advertises no ManifestIngest product type."""
+    catalog = REPO_ROOT / "docs/Temporal/WorkflowTypeCatalogGenerated.md"
+    assert catalog.exists()
+    text = catalog.read_text(encoding="utf-8")
+    assert "MoonMind.ManifestIngest" not in text
+    assert "manifest_ingest" not in text
+    assert "manifest.compile" not in text
+    assert "manifest.write_summary" not in text
