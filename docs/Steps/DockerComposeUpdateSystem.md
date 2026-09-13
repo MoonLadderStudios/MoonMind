@@ -859,6 +859,17 @@ of its exact content-addressed image after manifest verification. Undrained
 versions in those records remain in the recovery set after promotion. Invalid
 unrelated records are reported separately and cannot suppress a valid cohort.
 
+The availability owner also records the current serving image during healthy
+operation. It verifies ordinary traffic and a coherent installed worker cohort,
+then saves the same `retained.json` image receipt used by update recovery under
+the deterministic per-version owner directory. This applies to an ordinary
+Compose installation without an update job or deployment receipt. Recording
+adds no containers and never promotes a candidate. The receipt remains valid
+when mutable availability observations expire, retries exhaust, or the process
+restarts; image identity and the release manifest are revalidated on restoration.
+Capture precedes worker loss, so recovery does not depend on discovering an
+image from containers that have already been removed.
+
 `release-jobs/*/availability.json` records the current phase, attempts, original
 deadline, affected queues, pending age, next attempt, and ordinary-traffic proof.
 Observation errors preserve these records. The worker readiness projection
