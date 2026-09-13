@@ -249,6 +249,7 @@ _INLINE_METADATA_BODIES = (
 _ESSENTIAL_PUBLISHED_METADATA_KEYS = frozenset(
     {
         *_VERIFY_GATE_METADATA_KEYS,
+        "admissionRecovery",
         "agentId",
         "agentKind",
         "agentRunId",

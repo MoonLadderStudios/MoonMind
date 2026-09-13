@@ -828,6 +828,25 @@ to stop it.
 
 An activity retry reuses the same canonical request and idempotency key. It inspects durable run/provider/session/host state before creating side effects.
 
+An interrupted generic host allocation that has not created a provider session
+retains its fenced cleanup owner. After cleanup reaches `cleaned` with a durable
+cleanup attestation, the owner may return `metadata.admissionRecovery`
+(`agent-admission-recovery/v1`). This typed control receipt binds the execution
+plan, admission epoch, runtime binding, and cleanup attestation. The workflow
+validates those identities against its admitted request before using the existing
+bounded capacity re-admission loop. The next epoch preserves the original
+request, workspace, provider and model; it cannot resurrect the cleaned binding.
+The receipt is persisted as the attempt result so a lost acknowledgement does
+not repeat cleanup. It does not represent provider execution or task success.
+Missing, malformed, stale or cross-attempt receipts authorize no re-admission.
+An active provider session retains its existing reattachment path; incomplete
+cleanup retains its owner and cannot manufacture a fresh-host grant.
+
+Historical Activity results without this optional metadata retain their recorded
+behavior. The result envelope is unchanged; only newly recorded, validated
+cleanup evidence selects the new continuation, so replay does not reinterpret
+old cleanup hints or error strings as authority.
+
 Direct managed-session state is written through a monotonic revision compare-and-swap boundary. A provider turn is admitted while holding the state authority lock from the final locator/revision check through persistence of the provider's accepted turn identifier; concurrent control actions therefore cannot create an accepted but untracked turn. Longer provider observation remains outside the lock, and later publications succeed only when the persisted revision they read is still current. A concurrent clear, turn, or observer that advanced the revision makes a stale publication fail as a managed-session locator mismatch; the caller reloads the authoritative epoch, thread, and container locator before deciding whether to retry. An observer must never roll session state back to an older epoch or thread. When the controller deliberately replaces a missing, stale, or explicitly superseded container, it authorizes exactly that container transition while preserving the logical session, epoch, thread, workspace, and revision chain.
 
 ### 16.1.1 Terminal-contract continuation

@@ -249,6 +249,20 @@ reconciliation owner; the next tick does not repeatedly rediscover it as fresh.
 **Dependencies:** E for resuming old failed occurrences; ordinary wait behavior
 is independently testable. Do not raise resource thresholds to hide the defect.
 
+**Observed allocation interruption:** The 11:25 occurrence lost its Activity
+delivery during an update, then completed fenced host cleanup without ever
+creating a provider session. Its adapter returned `OMNIGENT_CLEANUP_DEFERRED`
+and the workflow failed despite the durable cleanup attestation. The bounded
+repair carries a typed, attempt-bound cleanup receipt through the existing
+Activity result and re-admission loop, preserving the original request and
+retry bounds. Required coverage replaces a real Temporal worker during
+allocation, reconstructs PostgreSQL binding state, removes owned Docker
+resources through the production cleanup service, and passes the serialized
+receipt to the workflow consumer. Old hints, unproven cleanup and wrong-attempt
+receipts must not grant a new host. Broader interrupted-release preservation,
+pending-cleanup reconciliation and terminal claim settlement remain separate
+requirements in B/F; this repair does not claim those paths are complete.
+
 ### G. Gate supported release artifacts on production journeys — P1
 
 **Owner/files:** `pytest-unit-tests.yml`, `docker-publish.yml`,
