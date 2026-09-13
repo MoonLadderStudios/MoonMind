@@ -15,6 +15,7 @@ from uuid import UUID
 import pytest
 from temporalio.client import ScheduleOverlapPolicy, ScheduleUpdate
 from temporalio.common import SearchAttributeKey
+from temporalio.service import RPCError, RPCStatusCode
 
 from moonmind.workflows.temporal.client import (
     MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID,
@@ -620,7 +621,11 @@ class TestDescribeSchedule:
     @pytest.mark.asyncio
     async def test_not_found_raises(self) -> None:
         handle = _mock_schedule_handle(
-            describe_side_effect=Exception("Schedule not found")
+            describe_side_effect=RPCError(
+                "workflow not found for ID: temporal-sys-scheduler:" + _SCHEDULE_ID,
+                RPCStatusCode.NOT_FOUND,
+                b"",
+            )
         )
         mock_client = MagicMock()
         mock_client.get_schedule_handle = MagicMock(return_value=handle)
@@ -628,6 +633,21 @@ class TestDescribeSchedule:
         adapter = _make_adapter(mock_client)
         with pytest.raises(ScheduleNotFoundError):
             await adapter.describe_schedule(definition_id=_TEST_UUID)
+
+    @pytest.mark.asyncio
+    async def test_unavailable_is_not_mistaken_for_an_absent_schedule(self) -> None:
+        handle = _mock_schedule_handle(
+            describe_side_effect=RPCError(
+                "schedule not found in unavailable service",
+                RPCStatusCode.UNAVAILABLE,
+                b"",
+            )
+        )
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle = MagicMock(return_value=handle)
+
+        with pytest.raises(ScheduleOperationError):
+            await _make_adapter(mock_client).describe_schedule(definition_id=_TEST_UUID)
 
 class TestPauseSchedule:
     """DOC-REQ-002: pause schedule."""
