@@ -259,17 +259,22 @@ async def _consume(coordinator, client, *profile_refs: str, admitted=None):
 
 
 @pytest.mark.asyncio
-async def test_admitted_capacity_is_consumed_without_any_acquisition():
+@pytest.mark.parametrize("epoch", [0, 1, 2, 3])
+async def test_admitted_capacity_is_consumed_without_any_acquisition(epoch):
     """Invariant 6 / #3880: inspection is the whole handoff — nothing is acquired."""
 
     client = _LeaseClient(inspection=_inspection())
     coordinator = _coordinator(client)
 
-    acquired = await _consume(coordinator, client)
+    acquired = await _consume(
+        coordinator, client,
+        admitted=_admitted().model_copy(update={"admission_epoch": epoch}),
+    )
 
     assert len(acquired) == 1
     assert acquired[0].owned_by_workflow is True
     assert acquired[0].credential_generation == 3
+    assert acquired[0].admission_epoch == epoch
     assert acquired[0].lease.owner_id == "agent-run-1"
     assert acquired[0].lease.purpose is CredentialLeasePurpose.EXECUTION_OMNIGENT
     # The acquiring client is never reached, so an expired or missing admission

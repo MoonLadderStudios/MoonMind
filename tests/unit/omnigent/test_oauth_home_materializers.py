@@ -97,6 +97,7 @@ def _acquired(generation: int = 4) -> SimpleNamespace:
         provider_profile_ref="provider-profile-codex",
         provider_lease_ref="lease-1",
         credential_generation=generation,
+        admission_epoch=0,
     )
 
 
@@ -381,3 +382,20 @@ def test_runtime_identity_remains_generation_bound():
     ref_a, _ = credential_runtime_identity(acquired_a, CODEX_REF)
     ref_b, _ = credential_runtime_identity(acquired_b, CODEX_REF)
     assert ref_a != ref_b
+
+
+@pytest.mark.parametrize("materializer", [
+    "opencode-auth-json@1", "omnigent-provider-config@1", CODEX_REF, CLAUDE_REF,
+    "none@1", "host-owned-auth@1",
+])
+def test_readmission_credential_identity_preserves_retry_and_historical_authority(materializer):
+    acquired = _acquired()
+    historical = credential_runtime_identity(acquired, materializer)
+    acquired.admission_epoch = 1
+    assert credential_runtime_identity(acquired, materializer) == historical
+    acquired.admission_epoch = 2
+    second = credential_runtime_identity(acquired, materializer)
+    assert second != historical
+    assert credential_runtime_identity(acquired, materializer) == second
+    acquired.admission_epoch = 3
+    assert credential_runtime_identity(acquired, materializer) not in (historical, second)

@@ -67,6 +67,9 @@ class AcquiredProviderLease:
     #: owns its release (MoonLadderStudios/MoonMind#3878 invariant 10). This
     #: Activity must never release a lease it does not own.
     owned_by_workflow: bool = False
+    # Re-admission creates a new credential lifecycle while preserving the
+    # workflow's provider-capacity owner and selected credential generation.
+    admission_epoch: int = 0
 
     def runtime_binding_value(
         self, *, credential_runtime_ref: str = "pending"
@@ -255,6 +258,9 @@ class OmnigentProviderLeaseCoordinator:
                         credential_generation=generation,
                         lease=lease,
                         owned_by_workflow=True,
+                        admission_epoch=int(
+                            getattr(admitted_capacity, "admission_epoch", 0)
+                        ),
                     )
                 )
         return tuple(acquired)

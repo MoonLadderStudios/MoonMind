@@ -220,6 +220,11 @@ def credential_runtime_identity(
             materializer_ref,
         )
     )
+    # Keep historical/first-admission identities stable. A later admitted
+    # attempt must not resurrect credential volumes or cleanup tombstones
+    # owned by the earlier attempt, even when the provider lease owner repeats.
+    if acquired.admission_epoch > 1:
+        canonical += f"\0admission:{acquired.admission_epoch}"
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return f"credential-runtime:sha256:{digest}", digest
 

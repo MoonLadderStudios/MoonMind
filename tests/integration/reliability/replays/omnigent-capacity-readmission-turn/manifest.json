@@ -8,6 +8,11 @@
     "message": "Waiting for machine resource capacity; missing_condition=machine_cpu; utilization_percent={'cpu': 89, 'memory': 73, 'processes': 11, 'temporaryStorage': 6}."
   },
   "observedRetryFailure": "canonical turn admission returned cold_restore",
+  "credentialCleanupRegression": {
+    "incidentWorkflowId": "mm:68d074f1-1e17-401d-8f03-1818f38ad17f-2026-09-13T00:05:25Z",
+    "observedRetryFailure": "cleaned credential runtime authority cannot be reused",
+    "requiredBoundary": "real credential materialization and durable cleanup ledger across both admissions"
+  },
   "recordedSession": {"providerSessionRef": null, "runtimeBindingRef": null, "cleanupState": "complete"},
   "expected": "Re-admission owns a distinct session, command, runtime binding and cleanup aggregate; same-epoch redelivery reuses terminal evidence."
 }
