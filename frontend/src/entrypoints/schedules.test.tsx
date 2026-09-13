@@ -1357,6 +1357,51 @@ describe("SchedulesPage", () => {
     expect(screen.getAllByText("schedule-alpha").length).toBeGreaterThanOrEqual(1);
   });
 
+  it.each([
+    ['enqueued', 'Execution started', 'workflow-new'],
+    ['skipped', 'Already running; no new execution started', 'workflow-active'],
+    ['pending_dispatch', 'Waiting for execution evidence', null],
+  ])('shows truthful %s Run now evidence and links', async (outcome, label, workflowId) => {
+    mockScheduleDetailFetch(fetchSpy);
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/run') && init?.method === 'POST') {
+        expect((init.headers as Record<string, string>)['Idempotency-Key']).toBeTruthy();
+        return { ok: true, json: async () => ({ ...detailRuns.items[0], id: 'observed-manual',
+          outcome, temporalWorkflowId: workflowId, trigger: 'manual' }) } as Response;
+      }
+      return fallback(input, init);
+    });
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+    await screen.findByRole('heading', { name: 'Nightly detail sweep' });
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+    const link = await screen.findByRole('link', { name: label! });
+    expect(link.getAttribute('href')).toBe(workflowId
+      ? `/workflows/${workflowId}?source=temporal` : '/schedules/schedule-alpha');
+  });
+
+  it('reuses the same request identity after an uncertain HTTP response', async () => {
+    mockScheduleDetailFetch(fetchSpy);
+    const fallback = fetchSpy.getMockImplementation()!;
+    const keys: string[] = [];
+    fetchSpy.mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/run') && init?.method === 'POST') {
+        const key = (init.headers as Record<string, string>)['Idempotency-Key'];
+        expect(key).toBeTruthy();
+        keys.push(key!);
+        if (keys.length === 1) throw new Error('response lost');
+      }
+      return fallback(input, init);
+    });
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+    await screen.findByRole('heading', { name: 'Nightly detail sweep' });
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+    await screen.findByText('response lost');
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+    await waitFor(() => expect(keys).toHaveLength(2));
+    expect(keys[0]).toBe(keys[1]);
+  });
+
   it("disables pause and resume while editing schedule configuration", async () => {
     mockScheduleDetailFetch(fetchSpy);
 

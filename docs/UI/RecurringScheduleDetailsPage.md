@@ -75,6 +75,12 @@ Minimal differences:
 | Runs tab | Schedule run history, linking each spawned run to workflow detail |
 | Workflow actions | Schedule actions: edit, pause/resume, run now, and delete when the backend delete contract is available |
 
+Run now acknowledges the request as "Requesting" while the API responds, then
+shows a link for "Execution started", "Already running; no new execution
+started", or "Waiting for execution evidence". The detail page refreshes that
+message from the durable run observation. A lost HTTP response retains the same
+idempotency key for retry; it is not a new launch request.
+
 The page should not invent a completely separate visual language. Users should understand that a recurring schedule is a control plane object that repeatedly creates normal workflow executions.
 
 ---

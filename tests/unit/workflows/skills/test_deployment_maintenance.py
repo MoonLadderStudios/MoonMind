@@ -155,3 +155,39 @@ def test_release_reconciliation_has_only_the_deployment_activity_owner():
     route = catalog.resolve_activity("release.reconcile")
     assert route.fleet == "deployment"
     assert route.capability_class == "deployment_control"
+
+
+@pytest.mark.asyncio
+async def test_missing_updater_resumes_immutable_request_without_resetting_budget(
+    tmp_path, monkeypatch
+):
+    from unittest.mock import AsyncMock
+    import time
+
+    directory = tmp_path / "job"
+    directory.mkdir()
+    request = {
+        "authored": {"owner": "exact-owner"},
+        "image": "image@sha256:b",
+        "imageId": "b",
+        "deadline": time.time() + 300,
+    }
+    release.write_record(directory / "request.json", request)
+    release.write_record(directory / "deliveries.json", {"count": 2})
+    monkeypatch.setattr(maintenance, "inspect_owned", AsyncMock(return_value=None))
+    launch = AsyncMock()
+    monkeypatch.setattr(maintenance, "launch_updater", launch)
+    result = await maintenance.reconcile_release(directory, "runner", None)
+    assert result["resumed"] is True
+    launch.assert_awaited_once_with("runner", directory, request)
+    assert json.loads((directory / "deliveries.json").read_text())["count"] == 3
+    assert json.loads((directory / "request.json").read_text()) == request
+    launch.reset_mock()
+    result = await maintenance.reconcile_release(directory, "runner", None)
+    assert result["pending"] == ["execution_budget_exhausted"]
+    launch.assert_not_awaited()
+    terminal = {"owner": "exact-owner", "error": "original terminal failure"}
+    release.write_record(directory / "result.json", terminal)
+    await maintenance.reconcile_release(directory, "runner", None)
+    launch.assert_not_awaited()
+    assert json.loads((directory / "result.json").read_text()) == terminal

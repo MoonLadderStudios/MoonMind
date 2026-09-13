@@ -176,6 +176,10 @@ INTEGRATION_CI_EXCLUDED_PREFIXES = ("tests/integration/reliability/",)
 UNIT_SLOW_PREFIXES = ("tests/unit/api/routers/test_agent_runs.py",)
 
 RELIABILITY_JOURNEY_EXACT = {
+    "api_service/main.py",
+    "api_service/services/recurring_workflows_service.py",
+    "api_service/api/routers/recurring_workflows.py",
+    "frontend/src/entrypoints/schedules.tsx",
     ".github/workflows/pytest-unit-tests.yml",
     "api_service/Dockerfile",
     "docker-compose.test.yaml",
@@ -188,6 +192,8 @@ RELIABILITY_JOURNEY_EXACT = {
 }
 
 RELIABILITY_JOURNEY_PREFIXES = (
+    "moonmind/workflows/skills/deployment_",
+    "tests/fixtures/reliability/",
     ".agents/skills/",
     "api_service/docker/",
     "api_service/api/routers/workflows",
@@ -670,7 +676,7 @@ def select_suites(
                 prefixes=RELIABILITY_JOURNEY_PREFIXES,
                 globs=RELIABILITY_JOURNEY_GLOBS,
             )
-            for path in backend_paths
+            for path in paths
         ),
         # Computed over every path (not just backend paths): dependency locks
         # and frontend Dockerfiles are non-backend but still change the

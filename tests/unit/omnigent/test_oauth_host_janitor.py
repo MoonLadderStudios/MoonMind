@@ -15,10 +15,12 @@ class _Repository:
         self.stopped: list[str] = []
         self.order: list[str] = []
 
-    async def list_active_host_leases(self):
+    async def list_active_host_leases(self, *, failures=None):
         return [self.lease]
 
-    async def list_terminal_host_leases_with_active_provider_capacity(self):
+    async def list_terminal_host_leases_with_active_provider_capacity(
+        self, *, failures=None
+    ):
         return []
 
     async def validate_binding(self, _binding_ref):
@@ -572,10 +574,10 @@ async def test_janitor_releases_capacity_left_on_already_stopped_host() -> None:
     repository = _Repository(lease)
     repository.list_active_host_leases = lambda: None
 
-    async def no_active_leases():
+    async def no_active_leases(*, failures=None):
         return []
 
-    async def terminal_provider_leases():
+    async def terminal_provider_leases(*, failures=None):
         return [lease]
 
     repository.list_active_host_leases = no_active_leases
@@ -816,7 +818,7 @@ async def test_credential_validator_with_bridge_session_requires_cleanup_authori
 async def test_forced_profile_drain_stops_idle_static_host_without_lease() -> None:
     repository = _Repository(_lease())
 
-    async def no_leases():
+    async def no_leases(*, failures=None):
         return []
 
     binding = SimpleNamespace(
@@ -918,3 +920,66 @@ async def test_stale_remediation_claim_conflict_prevents_cleanup() -> None:
 
     assert runtime.stopped == 0
     assert repository.stopped == []
+
+
+@pytest.mark.asyncio
+async def test_historical_generation_failure_does_not_block_an_independent_lease():
+    from unittest.mock import AsyncMock
+
+    stale = _lease(heartbeat_age=1000)
+    valid = _lease(heartbeat_age=1000)
+    stale.lease_id, stale.binding_ref = "historical", "historical-binding"
+    repository = _Repository(valid)
+    repository.list_active_host_leases = AsyncMock(return_value=[stale, valid])
+    validate = repository.validate_binding
+
+    async def validate_one(ref):
+        if ref == "historical-binding":
+            raise ValueError(
+                "host lease credential_generation must match binding and profile"
+            )
+        return await validate(ref)
+
+    repository.validate_binding = validate_one
+    runtime = _Runtime()
+    janitor = OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        lease_client=_LeaseClient(),
+    )
+    result = await janitor.run()
+    assert result["status"] == "degraded"
+    assert repository.stopped == [valid.lease_id]
+    assert stale.status == "ready"
+    assert any(
+        action.get("hostLeaseRef") == "historical"
+        and action["action"] == "cleanup_failed"
+        for action in result["actions"]
+    )
+
+
+def test_malformed_cleanup_lease_does_not_hide_independent_leases(monkeypatch):
+    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+
+    repository = object.__new__(OmnigentOAuthHostRepository)
+    malformed = SimpleNamespace(lease_id="malformed")
+    valid = SimpleNamespace(lease_id="valid")
+
+    def decode(row):
+        if row is malformed:
+            raise ValueError("historical authority cannot be decoded")
+        return row
+
+    monkeypatch.setattr(repository, "_lease_model", decode)
+    failures = []
+    assert repository._cleanup_lease_models([malformed, valid], failures) == [valid]
+    assert failures == [
+        {
+            "hostLeaseRef": "malformed",
+            "action": "cleanup_failed",
+            "errorCode": "ValueError",
+        }
+    ]
+    with pytest.raises(ValueError):
+        repository._cleanup_lease_models([malformed, valid], None)

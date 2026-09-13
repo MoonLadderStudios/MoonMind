@@ -832,6 +832,31 @@ budgets survive restart. No additional permanently running container is needed.
 | Another release wins ownership/promotion | Observe and re-evaluate the winner; never overwrite its route or clean up its workers. |
 | Qualification or history compatibility fails | Preserve the last compatible serving capability and histories; expose the exact failure and recovery owner. |
 
+The deployment-control worker starts the portable `deployment_availability`
+supervisor outside Activity dispatch. It observes routing every 30 seconds;
+bounded maintenance passes resume missing updater containers from their original
+request, delivery count, deadline, and owner. Qualification containers do not
+start another supervisor. Version recovery uses an owner lock and at most five
+restoration attempts within a five-minute incident budget; restarts retain that
+budget. A healthy observation closes the incident.
+
+An exact successful deployment receipt binds the retained image ID, immutable
+image reference, source revision, and release manifest. Restoration can use the
+recorded local content-addressed image without a registry round trip. Missing
+images are retrieved only through their recorded immutable reference. Docker
+inventory disproves stale Temporal pollers from removed containers; an unreadable
+daemon remains unknown. Per-version observation failures are isolated. Ordinary
+unpinned canaries qualify every registered workflow queue, including merge
+automation, and every Activity queue before recovery or promotion reports
+availability. Retained recovery workers retire only after installed workers take
+over that same version or Temporal certifies drainage.
+
+`release-jobs/*/availability.json` records the current phase, attempts, original
+deadline, affected queues, pending age, next attempt, and ordinary-traffic proof.
+Observation errors preserve these records. The worker readiness projection
+refreshes `releaseAvailability`; process readiness alone grants no routing or
+cleanup authority.
+
 Availability recovery is active for omitted/default inputs and explicit `auto`.
 The default objective is to detect lost routability within 60 seconds and
 restore an available, already authorized compatible cohort within five minutes.
