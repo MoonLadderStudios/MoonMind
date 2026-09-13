@@ -40,7 +40,13 @@ No new export database or secret system is created.
 `evaluate_registry_drain()` refuses destructive application while live
 writer markers remain, the export is unverified or partial, incompatible
 old code is present, or a competing migrator holds the migration lock
-(existing locking/versioning serializes migrators). Before the boundary,
+(existing locking/versioning serializes migrators). The forward migration
+`376_drop_manifest_registry_4192.upgrade()` enforces the same boundary at
+execution time via `require_registry_drop_approval()`: an empty `manifest`
+table (fresh install) proceeds without approval, while a populated or
+unreadable table requires `MOONMIND_MANIFEST_REGISTRY_DRAIN_APPROVED=1`
+after the protected export verifies and the drain gate reports
+`may_apply_destructive`. Before the boundary,
 rollback uses the matching compatible release; after it, schema downgrade
 alone raises `RuntimeError` and stops actionably — recovery requires
 verified protected restoration or forward repair without overwriting

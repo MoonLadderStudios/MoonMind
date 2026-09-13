@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -47,6 +48,18 @@ DROP_REVISION = "376_drop_manifest_registry_4192"
 #: Ancestry the drop migration must keep: merge head, drop, then follow-up.
 DROP_PARENT_REVISION = "376_merge_375_heads"
 DROP_CHILD_REVISION = "377_repository_connections_4005"
+
+#: Operator approval switch consulted by the forward drop migration at
+#: execution time. A populated ``manifest`` table refuses to drop unless this
+#: environment variable carries the approved value; an empty table (fresh
+#: install) proceeds without approval. The switch names the existing
+#: migration locking/versioning path — concurrent migrators stay serialized
+#: by Alembic's transactional DDL — and never imports removed runtime
+#: modules.
+DRAIN_APPROVAL_ENV_VAR = "MOONMIND_MANIFEST_REGISTRY_DRAIN_APPROVED"
+
+#: Exact approved value for :data:`DRAIN_APPROVAL_ENV_VAR`.
+DRAIN_APPROVAL_VALUE = "1"
 
 #: Modules whose presence proves an old writer/callback is still active.
 #: Each was deleted with the retired product; any survivor blocks the drain.
@@ -641,3 +654,60 @@ def stable_disposition_digest() -> str:
         sort_keys=True,
     )
     return sha256_hex(canonical.encode("utf-8"))
+
+
+def is_drain_approved(environ: dict[str, str] | None = None) -> bool:
+    """Return True when the operator approved destructive registry removal.
+
+    Approval is explicit and out-of-band: the operator exports and verifies
+    the protected snapshot, evaluates the drain gate to ``proceed``, then
+    sets :data:`DRAIN_APPROVAL_ENV_VAR` to :data:`DRAIN_APPROVAL_VALUE` for
+    the single migration invocation. Anything else (missing, blank, or any
+    other value) is not approval.
+    """
+    source = environ if environ is not None else os.environ
+    return str(source.get(DRAIN_APPROVAL_ENV_VAR, "")).strip() == DRAIN_APPROVAL_VALUE
+
+
+def require_registry_drop_approval(
+    *,
+    manifest_row_count: int | None,
+    approved: bool,
+) -> None:
+    """Enforce the migration-execution drain gate for the forward drop.
+
+    This is the execution-time counterpart of :func:`evaluate_registry_drain`
+    for the one caller that cannot pass full gate inputs: the Alembic
+    ``upgrade()`` itself. Fresh installs (zero rows, or an unknown count
+    that the caller resolves to zero only when the table is provably empty)
+    proceed without approval. A populated table without explicit operator
+    approval raises ``RuntimeError`` with the actionable recovery direction
+    instead of silently dropping registry evidence. A ``None`` row count
+    (table unreadable) fails closed and requires approval, so an
+    unobservable registry dimension is never treated as a clean drain.
+    """
+    if manifest_row_count is not None and manifest_row_count <= 0:
+        return
+    if approved:
+        return
+    if manifest_row_count is None:
+        raise RuntimeError(
+            f"{DROP_REVISION} refused: manifest registry row count is "
+            "unobservable; re-snapshot consistently after stopping writers, "
+            "verify with tools/manifest_registry_export_4191.py, confirm "
+            f"{MANIFEST_REGISTRY_MIGRATION_CONTRACT} drain reports "
+            "may_apply_destructive, then re-run with "
+            f"{DRAIN_APPROVAL_ENV_VAR}={DRAIN_APPROVAL_VALUE}. "
+            "Concurrent migrators stay serialized by existing migration "
+            "locking/versioning."
+        )
+    raise RuntimeError(
+        f"{DROP_REVISION} refused: manifest registry still holds "
+        f"{manifest_row_count} row(s); export and verify the protected "
+        "snapshot with tools/manifest_registry_export_4191.py, confirm "
+        f"{MANIFEST_REGISTRY_MIGRATION_CONTRACT} drain reports "
+        "may_apply_destructive, then re-run with "
+        f"{DRAIN_APPROVAL_ENV_VAR}={DRAIN_APPROVAL_VALUE}. "
+        "Concurrent migrators stay serialized by existing migration "
+        "locking/versioning."
+    )

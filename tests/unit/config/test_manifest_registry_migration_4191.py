@@ -30,6 +30,8 @@ from pathlib import Path
 import pytest
 
 from moonmind.gates.manifest_registry_migration_4191 import (
+    DRAIN_APPROVAL_ENV_VAR,
+    DRAIN_APPROVAL_VALUE,
     DROP_CHILD_REVISION,
     DROP_PARENT_REVISION,
     DROP_REVISION,
@@ -44,8 +46,10 @@ from moonmind.gates.manifest_registry_migration_4191 import (
     evaluate_registry_drain,
     export_row_envelope,
     find_live_writers,
+    is_drain_approved,
     registry_disposition_table,
     render_operator_procedure,
+    require_registry_drop_approval,
     sanitized_export_report,
     sha256_hex,
     stable_disposition_digest,
@@ -466,3 +470,219 @@ def test_required_ci_collects_this_migration_suite() -> None:
         ["tests/unit/config/test_manifest_registry_migration_4191.py"]
     )
     assert selection.unit_fast is True
+
+
+# ---------------------------------------------------------------------------
+# REQ-6, ACC-5: migration-execution wiring (no `alembic upgrade` bypass).
+# ---------------------------------------------------------------------------
+
+
+def test_drop_migration_enforces_drain_gate_at_execution() -> None:
+    """Pin the operator enforcement point: upgrade() must consult the gate.
+
+    Fails when the wiring is absent (plain unconditional DDL). The migration
+    counts live ``manifest`` rows at execution time, requires explicit
+    operator approval for populated/unreadable tables, and still drops the
+    registry plus fails closed on downgrade.
+    """
+    drop_text = DROP_MIGRATION.read_text(encoding="utf-8")
+    assert "require_registry_drop_approval" in drop_text
+    assert "is_drain_approved" in drop_text
+    assert "SELECT COUNT(*) FROM manifest" in drop_text
+    assert DRAIN_APPROVAL_ENV_VAR in drop_text
+    assert "manifest_registry_migration_4191" in drop_text
+    # DDL + closed downgrade still present (no silent rewrite of outcomes).
+    assert 'op.drop_table("manifest")' in drop_text or (
+        "op.drop_table('manifest')" in drop_text
+    )
+    assert "raise RuntimeError" in drop_text
+
+
+def test_registry_drop_approval_allows_empty_without_approval() -> None:
+    require_registry_drop_approval(manifest_row_count=0, approved=False)
+
+
+def test_registry_drop_approval_refuses_populated_without_approval() -> None:
+    with pytest.raises(RuntimeError, match="still holds 3 row"):
+        require_registry_drop_approval(manifest_row_count=3, approved=False)
+
+
+def test_registry_drop_approval_refuses_unobservable_without_approval() -> None:
+    with pytest.raises(RuntimeError, match="unobservable"):
+        require_registry_drop_approval(manifest_row_count=None, approved=False)
+
+
+def test_registry_drop_approval_allows_populated_with_approval() -> None:
+    require_registry_drop_approval(manifest_row_count=3, approved=True)
+    require_registry_drop_approval(manifest_row_count=None, approved=True)
+
+
+def test_drain_approval_env_parsing() -> None:
+    assert DRAIN_APPROVAL_VALUE == "1"
+    assert is_drain_approved({DRAIN_APPROVAL_ENV_VAR: "1"}) is True
+    assert is_drain_approved({}) is False
+    assert is_drain_approved({DRAIN_APPROVAL_ENV_VAR: ""}) is False
+    assert is_drain_approved({DRAIN_APPROVAL_ENV_VAR: "yes"}) is False
+
+
+# ---------------------------------------------------------------------------
+# REQ-2 polish: --verify-only runs without --rows-json.
+# ---------------------------------------------------------------------------
+
+
+def test_verify_only_runs_without_rows_json(tmp_path: Path) -> None:
+    from tools.manifest_registry_export_4191 import main
+
+    export_dir = tmp_path / "protected-export"
+    export_rows(_fixture_rows(), export_dir, expected_row_count=2)
+    assert main(["--export-dir", str(export_dir), "--verify-only"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# REQ-7, ACC-6: retention/authorization matrix after registry removal.
+# ---------------------------------------------------------------------------
+
+
+def _retention_artifact(**overrides):  # type: ignore[no-untyped-def]
+    from types import SimpleNamespace
+
+    from api_service.db.models import (
+        TemporalArtifactRedactionLevel,
+        TemporalArtifactStatus,
+    )
+
+    base = {
+        "artifact_id": "art_matrix_1",
+        "created_by_principal": "owner-1",
+        "redaction_level": TemporalArtifactRedactionLevel.NONE,
+        "metadata_json": {},
+        "status": TemporalArtifactStatus.COMPLETE,
+        "expires_at": None,
+        "deleted_at": None,
+        "hard_deleted_at": None,
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
+def test_retention_availability_matrix_stays_truthful() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from api_service.db.models import TemporalArtifactRedactionLevel
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactService
+
+    now = datetime.now(UTC)
+    # Clean evidence is the only available outcome.
+    assert (
+        TemporalArtifactService.saved_work_availability_of(
+            _retention_artifact(), now=now
+        )
+        == "available"
+    )
+    # Missing bytes, digest mismatch, quarantine, expiry, deletion each win
+    # over a bare COMPLETE row in that precedence order.
+    assert (
+        TemporalArtifactService.saved_work_availability_of(
+            _retention_artifact(), bytes_missing=True, now=now
+        )
+        == "incomplete"
+    )
+    assert (
+        TemporalArtifactService.saved_work_availability_of(
+            _retention_artifact(), digest_mismatch=True, now=now
+        )
+        == "corrupt"
+    )
+    assert (
+        TemporalArtifactService.saved_work_availability_of(
+            _retention_artifact(expires_at=now - timedelta(seconds=1)), now=now
+        )
+        == "expired"
+    )
+    assert (
+        TemporalArtifactService.saved_work_availability_of(
+            _retention_artifact(deleted_at=now), now=now
+        )
+        == "deleted"
+    )
+    assert (
+        TemporalArtifactService.saved_work_availability_of(
+            _retention_artifact(
+                metadata_json={"quarantine": "true"},
+                redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+            ),
+            now=now,
+        )
+        == "quarantined"
+    )
+    # A real expired timestamp (not just the flag) is expired, and a
+    # never-verified row is not reported as available.
+    assert (
+        TemporalArtifactService.saved_work_availability_of(
+            _retention_artifact(expires_at=now - timedelta(seconds=1)), now=now
+        )
+        == "expired"
+    )
+    assert (
+        TemporalArtifactService.saved_work_availability_of(
+            _retention_artifact(), never_verified_complete=True, now=now
+        )
+        == "locally_retained_but_unsaved"
+    )
+
+
+def test_retention_raw_authorization_matrix() -> None:
+    from api_service.db.models import TemporalArtifactRedactionLevel
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactService
+
+    service = TemporalArtifactService.__new__(TemporalArtifactService)
+    open_artifact = _retention_artifact(
+        redaction_level=TemporalArtifactRedactionLevel.NONE
+    )
+    assert service._raw_access_allowed(open_artifact, principal="anyone") is True
+    restricted = _retention_artifact(
+        redaction_level=TemporalArtifactRedactionLevel.RESTRICTED
+    )
+    # Owner reads restricted bytes; wrong-owner and bare service readers do not.
+    assert service._raw_access_allowed(restricted, principal="owner-1") is True
+    assert service._raw_access_allowed(restricted, principal="owner-2") is False
+    assert service._raw_access_allowed(restricted, principal="service:gc") is False
+    # An admitted owner scope restores service-to-service reads.
+    assert (
+        service._raw_access_allowed(
+            restricted, principal="service:gc", admitted_principal="owner-1"
+        )
+        is True
+    )
+    # Quarantine denies even the owner: a data-safety state, not auth.
+    quarantined = _retention_artifact(
+        redaction_level=TemporalArtifactRedactionLevel.RESTRICTED,
+        metadata_json={"quarantine": "true"},
+    )
+    assert service._raw_access_allowed(quarantined, principal="owner-1") is False
+
+
+def test_registry_removal_owns_no_saved_work_evidence() -> None:
+    """Deleting a registry entry cannot cascade into shared evidence.
+
+    The drop DDL touches only the ``manifest`` table (pinned above), and the
+    retention lifecycle owner keeps sole saved-work copies addressable by
+    artifact id — never by registry row — so registry deletion leaves the
+    artifact lifecycle tables and their authority untouched.
+    """
+    from moonmind.schemas import saved_work_retention as retention
+
+    drop_text = DROP_MIGRATION.read_text(encoding="utf-8")
+    assert "temporal_artifact" not in drop_text.lower()
+    assert "saved_work" not in drop_text.lower()
+    # The lifecycle contract still distinguishes the sole-copy states the
+    # registry must never overwrite: corrupt/expired/deleted stay terminal.
+    assert retention.describe_artifact_availability(
+        status="complete", digest_mismatch=True
+    ) == "corrupt"
+    assert retention.describe_artifact_availability(
+        status="complete", expires_at_expired=True
+    ) == "expired"
+    assert retention.describe_artifact_availability(
+        status="complete", deletion_started=True
+    ) == "deleted"
