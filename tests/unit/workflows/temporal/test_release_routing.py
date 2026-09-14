@@ -30,13 +30,11 @@ class _FakeServer:
         self.canaries_started = []
         self.on_canary_start = None
         self.canary_result = None
+        self.fail_ordinary_canaries = False
 
-    def add_version(self, build, *, age, queues=()):
+    def add_version(self, build, *, queues=()):
         version = f"{self.deployment}.{build}"
-        self.versions[version] = {
-            "create_time": datetime.now(timezone.utc) - age,
-            "queues": set(queues),
-        }
+        self.versions[version] = {"queues": set(queues)}
         return version
 
     def add_poller(
@@ -81,7 +79,6 @@ class _FakeServer:
         ]
         return SimpleNamespace(
             worker_deployment_version_info=SimpleNamespace(
-                create_time=state["create_time"],
                 task_queue_infos=infos,
                 deployment_version=SimpleNamespace(deployment_name=self.deployment),
                 deployment_name=self.deployment,
@@ -157,11 +154,14 @@ class _FakeClient:
 
     async def start_workflow(self, *args, **kwargs):
         server = self._server
-        server.canaries_started.append(kwargs.get("id"))
+        execution_id = kwargs.get("id")
+        server.canaries_started.append(execution_id)
         if server.on_canary_start is not None:
             server.on_canary_start()
         if server.canary_result is not None:
             return _FakeHandle(server.canary_result)
+        if server.fail_ordinary_canaries and "-ordinary-" in str(execution_id):
+            return _FakeHandle({"digest": "mismatch", "status": "rejected"})
         (name, arg) = args[:2]
         assert name == "MoonMind.ReleaseCanary"
         digest = arg["digest"] if isinstance(arg, dict) else arg
@@ -188,8 +188,8 @@ def _server_with_current_old_new():
         (queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW),
         (queue, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY),
     }
-    old = server.add_version("old", age=timedelta(hours=4), queues=registered)
-    new = server.add_version("new", age=timedelta(minutes=20), queues=registered)
+    old = server.add_version("old", queues=registered)
+    new = server.add_version("new", queues=registered)
     server.current = old
     return server, old, new
 
@@ -204,23 +204,40 @@ async def test_steward_promotes_abandoned_current(monkeypatch):
     assert server.set_current_calls == [new]
     # One qualification canary plus one ordinary-traffic canary per promotion.
     assert len(server.canaries_started) == 2
+    # Concurrent stewards and conflict retries reuse the same qualification
+    # run instead of spinning new canaries.
+    assert server.canaries_started[0] == (
+        "mm-steward-canary-moonmind-workflow-fleet.new"
+    )
+    assert server.canaries_started[1].startswith(
+        "mm-steward-canary-moonmind-workflow-fleet.new-ordinary-"
+    )
 
 
 @pytest.mark.asyncio
-async def test_steward_parks_when_current_is_newer(monkeypatch):
+async def test_steward_promotes_lone_stale_fleet_when_nothing_serves(monkeypatch):
+    """Registration timestamps never order releases.
+
+    A lone previously unseen image with nothing serving converges routing to
+    the release that is actually deployed rather than stalling forever. A
+    live route is never displaced whatever image backs it (see the
+    preserve-live-route tests); deliberate moves of a live route stay on the
+    managed update path.
+    """
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
     server, _old, new = _server_with_current_old_new()
     server.current = new
-    result = await bootstrap_version_routing(_FakeClient(server), _spec("old"))
-    assert result == {
-        "status": "awaiting_promotion",
-        "currentVersion": new,
-        "candidateVersion": f"{server.deployment}.old",
-        "recoveryOwner": "deployment-control",
-    }
-    assert server.canaries_started == []
-    assert server.set_current_calls == []
-    assert server.current == new
+    stale = server.add_version(
+        "stale",
+        queues={
+            ("mm.workflow.user.v2", TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW),
+            ("mm.workflow.user.v2", TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY),
+        },
+    )
+    result = await bootstrap_version_routing(_FakeClient(server), _spec("stale"))
+    assert result == {"status": "current", "currentVersion": stale}
+    assert server.current == stale
+    assert server.set_current_calls == [stale]
 
 
 @pytest.mark.asyncio
@@ -289,7 +306,14 @@ async def test_steward_promotes_after_restart_in_flight_dies(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_steward_parks_when_own_version_unregistered(monkeypatch):
+async def test_steward_fails_loud_when_own_version_never_registers(monkeypatch):
+    """An unregistered target must fail startup, never park silently.
+
+    If this worker's version never appears after its own polls, promotion
+    cannot be qualified; a loud startup error retries the process instead of
+    caching a parked result that nobody will revisit.
+    """
+
     async def _no_sleep(delay):
         return None
 
@@ -297,14 +321,9 @@ async def test_steward_parks_when_own_version_unregistered(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
     server, old, new = _server_with_current_old_new()
     del server.versions[new]
-    result = await bootstrap_version_routing(_FakeClient(server), _spec("new"))
-    assert result == {
-        "status": "awaiting_promotion",
-        "currentVersion": old,
-        "candidateVersion": new,
-        "recoveryOwner": "deployment-control",
-    }
-    assert server.canaries_started == []
+    with pytest.raises(RuntimeError, match="did not register"):
+        await bootstrap_version_routing(_FakeClient(server), _spec("new"))
+    assert server.current == old
     assert server.set_current_calls == []
 
 
@@ -314,7 +333,6 @@ async def test_steward_parks_on_lost_promotion_race(monkeypatch):
     server, _old, new = _server_with_current_old_new()
     rival = server.add_version(
         "rival",
-        age=timedelta(minutes=5),
         queues={
             ("mm.workflow.user.v2", TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW),
             ("mm.workflow.user.v2", TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY),
@@ -361,3 +379,92 @@ async def test_bootstrap_current_needs_no_stewardship(monkeypatch):
     }
     assert server.canaries_started == []
     assert server.set_current_calls == []
+
+
+@pytest.mark.asyncio
+async def test_steward_parks_on_partial_outage(monkeypatch):
+    """A degraded route is not an abandoned route.
+
+    When the current version still has live pollers on some queues while
+    others went quiet, startup must preserve the route for the authorized
+    release controller instead of promoting over the surviving workers.
+    """
+    from moonmind.workflows.temporal import release_routing
+
+    async def _no_sleep(delay):
+        return None
+
+    monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_TIMEOUT_SECONDS", 3)
+    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_POLL_SECONDS", 1)
+    server, old, new = _server_with_current_old_new()
+    queue = "mm.workflow.user.v2"
+    server.add_poller("old", queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW)
+    result = await bootstrap_version_routing(_FakeClient(server), _spec("new"))
+    assert result == {
+        "status": "awaiting_promotion",
+        "currentVersion": old,
+        "candidateVersion": new,
+        "recoveryOwner": "deployment-control",
+    }
+    assert server.canaries_started == []
+    assert server.set_current_calls == []
+    assert server.current == old
+
+
+@pytest.mark.asyncio
+async def test_steward_requires_every_served_queue(monkeypatch):
+    """Promotion qualifies the whole serving surface, not one queue.
+
+    When the current version served queues that the deployed release has
+    not registered -- a missing or late fleet -- stewardship must fail
+    loudly instead of promoting a release ordinary workflows cannot use.
+    """
+
+    async def _no_sleep(delay):
+        return None
+
+    monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    server = _FakeServer()
+    queue = "mm.workflow.user.v2"
+    other = "mm.activity.agent_runtime"
+    old = server.add_version(
+        "old",
+        queues={
+            (queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW),
+            (queue, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY),
+            (other, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY),
+        },
+    )
+    new = server.add_version(
+        "new",
+        queues={
+            (queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW),
+            (queue, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY),
+        },
+    )
+    server.current = old
+    with pytest.raises(RuntimeError, match="did not register"):
+        await bootstrap_version_routing(_FakeClient(server), _spec("new"))
+    assert server.current == old
+    assert server.set_current_calls == []
+
+
+@pytest.mark.asyncio
+async def test_steward_reraises_failed_ordinary_verification(monkeypatch):
+    """A failed ordinary-route check must not look like a handoff.
+
+    When the compare-and-set applies while ordinary verification fails, the
+    steward re-proves the converged route instead of reporting the target
+    as current; a still-failing route raises loudly even though routing
+    already moved.
+    """
+    monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
+    server, _old, new = _server_with_current_old_new()
+    server.fail_ordinary_canaries = True
+    with pytest.raises(ValueError, match="failed verification"):
+        await bootstrap_version_routing(_FakeClient(server), _spec("new"))
+    assert server.current == new
+    assert server.set_current_calls == [new]
