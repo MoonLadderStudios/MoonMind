@@ -1095,6 +1095,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "github_issue_finalize_failed_attempt",
     ),
+    "github_issue.renew_claim": ("integrations", "github_issue_renew_claim"),
     "github_issue.reconcile_handoffs": (
         "integrations",
         "github_issue_reconcile_handoffs",
@@ -5260,6 +5261,10 @@ class TemporalIntegrationActivities:
             "issueNumber": issue_number,
             **outputs,
         }
+
+    async def github_issue_renew_claim(self, payload, /):
+        from moonmind.workflows.temporal.github_issue_claim_lease import renew_execution_claim
+        return await renew_execution_claim(payload)
 
     async def github_issue_reconcile_handoffs(self, payload, /, **kwargs):
         """Reconcile interrupted issue handoffs through the bounded scan (durable entrypoint).

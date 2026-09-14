@@ -6711,6 +6711,23 @@ class MoonMindAgentRun:
 
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
+        lease = request.parameters.get("issueClaimLease")
+        if lease:
+            from moonmind.workflows.temporal.github_issue_lease_workflow import execute_with_issue_lease
+
+            async def renew(payload):
+                return await self._execute_routed_activity(
+                    "github_issue.renew_claim", payload,
+                    start_to_close_timeout=timedelta(seconds=25),
+                    schedule_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(maximum_attempts=1),
+                )
+
+            return await execute_with_issue_lease(lease=lease,
+                execute=lambda: self._run_under_claim(request), renew=renew)
+        return await self._run_under_claim(request)
+
+    async def _run_under_claim(self, request: AgentExecutionRequest) -> AgentRunResult:
         self.agent_kind = request.agent_kind
         # MoonLadderStudios/MoonMind#1088: establish the progress identity
         # before any progress can be emitted or accepted.
