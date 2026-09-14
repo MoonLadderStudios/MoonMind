@@ -19,6 +19,7 @@ def worker_count(*, cgroup: Path = Path("/sys/fs/cgroup")) -> int:
         if quota != "max":
             cpus = min(cpus, max(1, math.ceil(int(quota) / int(period))))
     except (OSError, ValueError, ZeroDivisionError):
+        # Hosts without readable cgroup v2 CPU metadata use process affinity.
         pass
     for path in (cgroup / "memory.max", cgroup / "memory/memory.limit_in_bytes"):
         try:
@@ -26,6 +27,7 @@ def worker_count(*, cgroup: Path = Path("/sys/fs/cgroup")) -> int:
             if value > 0:
                 memory = min(memory, value)
         except (OSError, ValueError):
+            # Absent limits and "max" add no bound; retain the readable limits.
             pass
     # Importing application fixtures is expensive. Leave room for pytest's
     # controller and allocate at most one worker per remaining GiB.

@@ -79,7 +79,8 @@ class DockerCpuPool:
             )
         return out.decode().strip()
 
-    async def _authority(self) -> tuple[str, str]:
+    async def authority(self) -> tuple[str, str]:
+        """Read the daemon and helper authority without allocating resources."""
         if self._driver is None:
             raw = await self._checked(
                 "info",
@@ -120,7 +121,7 @@ class DockerCpuPool:
         return self._helper_image, parent
 
     async def _helper(self, operation: str, cpu_millis: int | None = None) -> str:
-        image, parent = await self._authority()
+        image, parent = await self.authority()
         name = "mm-resource-helper-" + uuid4().hex
         command = [
             "run",
@@ -164,7 +165,7 @@ class DockerCpuPool:
         return name
 
     async def launch_args(self) -> list[str]:
-        _, parent = await self._authority()
+        _, parent = await self.authority()
         return ["--cgroup-parent", parent, "--cpu-shares", "1024"]
 
     async def verify(self, lease: CpuPoolLaunch) -> int:
@@ -192,7 +193,7 @@ class DockerCpuPool:
         from api_service.db.models import MachineCapacityReservation
         from moonmind.capacity.docker_inventory import probe_owned_containers
 
-        _, parent = await self._authority()
+        _, parent = await self.authority()
         await self.reconcile()
         await self.ledger.reconcile(
             backend_ref=self.backend_ref,

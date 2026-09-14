@@ -229,8 +229,12 @@ attempt. An existing owned lease reuses its reservation. The cumulative waiting
 budget survives capacity requeues, and an unsatisfiable demand is rejected rather
 than queued indefinitely. Atomic allocation remains the final admission fence.
 
-Bootstrap on-demand policies select shared CPU (`cpuMillis: 0`). The Docker
-resource owner enforces one machine-derived CPU cap across agents and new
+Bootstrap on-demand policies select shared CPU (`cpuMillis: 0`) only after the
+launch owner's read-only authority probe confirms a rootful cgroup-v2 Docker
+backend and an immutable helper image. Unsupported or temporarily unreadable
+backends retain the executable fixed stock limit (`cpuMillis: 2000`); each
+bootstrap reconciliation retries the probe before advancing stock defaults.
+The Docker resource owner enforces one machine-derived CPU cap across agents and new
 container jobs, allowing testing to use idle agent CPU. Memory remains a hard
 reservation; test jobs may authorize a minimum/preferred range. Existing
 immutable policies and recorded launch limits retain their authority, and

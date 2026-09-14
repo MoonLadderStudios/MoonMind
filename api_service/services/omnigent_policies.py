@@ -26,6 +26,8 @@ from api_service.db.models import (
     OmnigentPolicyEvent,
     OmnigentPolicyVersion,
 )
+from moonmind.capacity.cpu_pool import CpuPoolUnavailable, DockerCpuPool
+from moonmind.capacity.machine_reservations import MachineCapacityLedger
 from moonmind.config.container_backend_settings import (
     ContainerBackendConfigError,
     resolve_container_backend_settings,
@@ -817,6 +819,43 @@ async def resolve_bootstrap_image_refs(
     return server_image, host_image, opencode_host_image
 
 
+async def bootstrap_shared_cpu_supported() -> bool:
+    """Keep fixed stock limits until the launch owner's authority is available.
+
+    This read-only probe is repeated by each bootstrap reconciliation. A missing
+    daemon or unsupported cgroup authority must not make existing defaults
+    unlaunchable, and it must not permanently suppress a later supported cutover.
+    """
+
+    docker_binary = os.getenv("MOONMIND_DOCKER_BINARY", "docker").strip() or "docker"
+
+    async def runner(argv: tuple[str, ...]) -> tuple[int, bytes, bytes]:
+        return await run_runtime_command(
+            (docker_binary, *argv),
+            timeout_seconds=5,
+            output_limit_bytes=64_000,
+        )
+
+    try:
+        pool = DockerCpuPool(
+            runner=runner,
+            ledger=MachineCapacityLedger(),
+            backend_ref=resolve_container_backend_settings().default_backend_ref,
+        )
+        await pool.authority()
+    except (
+        CpuPoolUnavailable,
+        ContainerBackendConfigError,
+        OSError,
+        TimeoutError,
+    ) as exc:
+        logger.info(
+            "Shared CPU bootstrap deferred; retaining fixed stock limits: %s", exc
+        )
+        return False
+    return True
+
+
 # Every production remediation adapter registered by
 # ``moonmind.workflows.temporal.remediation_actions.build_remediation_action_executor``
 # dispatches by its canonical action identity, and ``resolve_action`` performs an
@@ -875,6 +914,7 @@ def bootstrap_document(
     harness: str = "codex-native",
     agent_identities: tuple[str, ...] = (CODEX_STOCK_AGENT_NAME,),
     compatible_providers: tuple[str, ...] = ("codex",),
+    shared_cpu: bool = False,
 ) -> PolicyDocument:
     """Project legacy built-ins into an explicit, reviewable bootstrap policy."""
 
@@ -893,7 +933,7 @@ def bootstrap_document(
                  "architectures": [architecture],
                  "serverImageRef": server_image_ref if _DIGEST_IMAGE.fullmatch(server_image_ref or "") else "image-ref:omnigent-server",
                  "hostImageRef": host_image_ref if _DIGEST_IMAGE.fullmatch(host_image_ref or "") else "image-ref:omnigent-codex-host"},
-        "resources": {"cpuMillis": 0 if host_mode == "on_demand_docker" else 2000, "memoryMiB": 4096, "processes": 256, "timeoutSeconds": 5400,
+        "resources": {"cpuMillis": 0 if shared_cpu and host_mode == "on_demand_docker" else 2000, "memoryMiB": 4096, "processes": 256, "timeoutSeconds": 5400,
                       "temporaryStorageMiB": 256, "concurrency": 1},
         "network": {
             "attachmentRef": OMNIGENT_EGRESS_PROFILE.network_ref,
@@ -1008,6 +1048,7 @@ async def _reconcile_bootstrap_authority(
     host_images: Mapping[str, str | None],
     definitions: tuple[_BootstrapPolicyDefinition, ...],
     live_server_image_resolver: LiveServerImageResolver,
+    shared_cpu: bool,
 ) -> list[str]:
     """Version bootstrap image and resource defaults without rewriting history."""
 
@@ -1039,6 +1080,7 @@ async def _reconcile_bootstrap_authority(
         stock_resources = bootstrap_document(
             host_mode=definition.host_mode,
             execution_profile_ref=definition.profile_ref,
+            shared_cpu=shared_cpu,
         ).resources.model_dump(by_alias=True)
         # Only the previous release's unmodified bootstrap limits migrate.
         # Custom limits and every already-recorded policy version retain authority.
@@ -1226,6 +1268,7 @@ async def seed_bootstrap_policies(
 
     service = OmnigentPolicyService(session)
     definitions = _bootstrap_policy_definitions(env)
+    shared_cpu = await bootstrap_shared_cpu_supported()
     reconciliation_required = False
     for definition in definitions:
         policy_id = definition.policy_id
@@ -1301,6 +1344,7 @@ async def seed_bootstrap_policies(
             host_images=host_images,
             definitions=definitions,
             live_server_image_resolver=live_server_image_resolver,
+            shared_cpu=shared_cpu,
         )
     if not reconciliation_required:
         return await _reconcile_bootstrap_authority(
@@ -1310,6 +1354,7 @@ async def seed_bootstrap_policies(
             host_images=host_images,
             definitions=definitions,
             live_server_image_resolver=live_server_image_resolver,
+            shared_cpu=shared_cpu,
         )
     for definition in resolvable_definitions:
         policy_id = definition.policy_id
@@ -1321,6 +1366,7 @@ async def seed_bootstrap_policies(
             harness=definition.harness,
             agent_identities=definition.agent_identities,
             compatible_providers=definition.compatible_providers,
+            shared_cpu=shared_cpu,
         )
         policy = await session.get(OmnigentPolicy, policy_id)
         if policy is None:
@@ -1466,6 +1512,7 @@ async def seed_bootstrap_policies(
         host_images=host_images,
         definitions=definitions,
         live_server_image_resolver=live_server_image_resolver,
+        shared_cpu=shared_cpu,
     )
     seeded.extend(item for item in defaults_reconciled if item not in seeded)
     return seeded

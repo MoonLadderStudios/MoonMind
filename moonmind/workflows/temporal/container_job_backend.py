@@ -2362,6 +2362,11 @@ class DockerContainerJobBackend:
                     if request.wait_for_capacity:
                         return ContainerJobActivityResult(capacityWait=str(exc)[:2048])
                     raise
+            elif self._cpu_pool is not None:
+                # A retained fixed-CPU job may follow the last shared consumer
+                # before the janitor runs. Reclaim only a kernel-proven empty
+                # pool before evaluating that historical fixed reservation.
+                await self._cpu_pool.reconcile()
             try:
                 reservation = await self._reserve_machine_capacity(
                     request, container_name=container_name
