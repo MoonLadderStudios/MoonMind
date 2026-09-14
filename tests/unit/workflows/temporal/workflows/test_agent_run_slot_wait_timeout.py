@@ -31,7 +31,7 @@ class TestSlotWaitRetryBehavior:
         a timeout so that a stuck manager triggers bounded recovery."""
         import ast
 
-        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun._run_under_claim))
         tree = ast.parse(source)
 
         # Find all calls to workflow.wait_condition where the lambda checks
@@ -77,7 +77,7 @@ class TestSlotWaitRetryBehavior:
     def test_overall_start_reset_after_slot_acquisition(self):
         """After the slot-wait ``wait_condition``, the code must reset
         ``overall_start`` so that execution timeout starts fresh."""
-        source = inspect.getsource(MoonMindAgentRun.run)
+        source = inspect.getsource(MoonMindAgentRun._run_under_claim)
         lines = source.splitlines()
 
         # Find the slot_assigned_event wait_condition region.
@@ -103,7 +103,7 @@ class TestSlotWaitRetryBehavior:
 
     def test_pause_gate_blocks_launch_after_slot_acquisition(self):
         """A paused AgentRun must not cross from slot assignment into launch."""
-        source = inspect.getsource(MoonMindAgentRun.run)
+        source = inspect.getsource(MoonMindAgentRun._run_under_claim)
         slot_wait_index = source.index("slot_assigned_event.is_set()")
         pause_gate_index = source.rindex(
             "await workflow.wait_condition(lambda: not self._paused)"
@@ -114,7 +114,7 @@ class TestSlotWaitRetryBehavior:
 
     def test_pause_gate_runs_before_slot_acquisition(self):
         """A paused AgentRun should not acquire a provider slot before resume."""
-        source = inspect.getsource(MoonMindAgentRun.run)
+        source = inspect.getsource(MoonMindAgentRun._run_under_claim)
         pre_slot_pause_index = source.index(
             "await workflow.wait_condition(lambda: not self._paused)"
         )
@@ -124,7 +124,7 @@ class TestSlotWaitRetryBehavior:
 
     def test_overall_start_reset_after_paused_slot_wait(self):
         """Paused time after slot assignment must not consume execution budget."""
-        source = inspect.getsource(MoonMindAgentRun.run)
+        source = inspect.getsource(MoonMindAgentRun._run_under_claim)
         pause_gate_index = source.rindex(
             "await workflow.wait_condition(lambda: not self._paused)"
         )
@@ -168,7 +168,7 @@ class TestSlotWaitRetryBehavior:
 
     def test_slot_timeout_inspects_manager_before_reset(self):
         """A responsive manager means the run is waiting on capacity, not a reset."""
-        source = inspect.getsource(MoonMindAgentRun.run)
+        source = inspect.getsource(MoonMindAgentRun._run_under_claim)
 
         assert "MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID" in source
         assert (
@@ -185,7 +185,7 @@ class TestSlotWaitRetryBehavior:
         assert "NON_DESTRUCTIVE_SLOT_WAIT_RECOVERY_PATCH_ID" in source
 
     def test_accurate_initial_wait_reason_is_replay_gated(self):
-        source = inspect.getsource(MoonMindAgentRun.run)
+        source = inspect.getsource(MoonMindAgentRun._run_under_claim)
 
         assert (
             ACCURATE_SLOT_WAIT_REASON_PATCH_ID
@@ -195,7 +195,7 @@ class TestSlotWaitRetryBehavior:
         assert "execution_profile_ref=request.execution_profile_ref" in source
 
     def test_runtime_selection_refreshes_wait_reason_after_inspection(self):
-        source = inspect.getsource(MoonMindAgentRun.run)
+        source = inspect.getsource(MoonMindAgentRun._run_under_claim)
 
         assert "refresh_waiting_reason = True" in source
         assert "not self.runtime_selection_updated_event.is_set()" in source
@@ -215,7 +215,7 @@ class TestSlotWaitRetryBehavior:
 
     def test_slot_timeout_probe_failure_preserves_durable_request(self):
         """Inspection ambiguity must not amplify load with ensure/re-request work."""
-        source = inspect.getsource(MoonMindAgentRun.run)
+        source = inspect.getsource(MoonMindAgentRun._run_under_claim)
 
         assert "except CancelledError:" in source
         assert (
@@ -233,7 +233,7 @@ class TestSlotWaitRetryBehavior:
 
     def test_healthy_manager_does_not_duplicate_pending_request(self):
         """If this workflow is already pending, timeout recovery must not re-signal."""
-        source = inspect.getsource(MoonMindAgentRun.run)
+        source = inspect.getsource(MoonMindAgentRun._run_under_claim)
         pending_index = source.index('manager_state.get("requester_pending") is True')
         rerequest_index = source.index("re-requesting without reset")
 

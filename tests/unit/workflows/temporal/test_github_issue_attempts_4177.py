@@ -481,7 +481,9 @@ async def test_activity_path_creates_bounded_handoff_comment(monkeypatch: pytest
     assert result.outputs["attemptHandoff"]["repository"] == "MoonLadderStudios/MoonMind"
     assert len(service.created_bodies) == 1
     body = service.created_bodies[0]
-    assert stable_attempt_marker(result.outputs["attemptId"]) in body
+    assert stable_attempt_marker(result.outputs["attemptId"], 2) in body
+    assert result.outputs["attemptHandoff"]["formatVersion"] == 2
+    assert result.outputs["attemptHandoff"]["leaseExpiresAt"]
     assert "```attempt-handoff-json" in body
     assert "inst-device-a" in body
 

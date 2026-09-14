@@ -424,6 +424,11 @@ async def _reconcile_one_issue(
             repository=repository, issue_number=issue_number)
     except ValueError:
         active_claims, expired_claims = [], []
+    if any(handoff.lease_expires_at and handoff.activity in {"preparing", "active", "awaiting-review"}
+           for _, handoff in active_claims):
+        outcome.update(action=recon.ACTION_NO_ACTION, reasonCode="claim_lease_active",
+            summary="A live GitHub claim lease retains ownership; no foreign runtime observation is required.")
+        return outcome
     if expired_claims and not active_claims:
         if not _spend(9):
             outcome.update(reasonCode="request_budget_exhausted")
@@ -435,6 +440,10 @@ async def _reconcile_one_issue(
                 summary="Expired GitHub claim no longer excludes assessment; prior comments and work references retained.",
                 expiredAttempts=expired_result["expiredAttempts"])
             return outcome
+        outcome.update(action=recon.ACTION_NO_ACTION,
+            reasonCode=expired_result.get("reasonCode", "claim_changed"),
+            summary="Current GitHub ownership or lifecycle state prevents lease reclamation.")
+        return outcome
     handoffs, malformed = _validated_handoffs(
         comments, repository=repository, issue_number=issue_number, service=service
     )
