@@ -1866,6 +1866,97 @@ async def test_writer_ref_still_fails_when_digest_pull_fails() -> None:
         == HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
     )
     assert "pull the selected Host Class image" in str(exc.value)
+    assert "pull access denied" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_writer_ref_converts_pull_timeout_to_materialization_failure() -> None:
+    class PullTimeoutBackend(_DockerBackend):
+        async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                return 1, b"", b"No such image"
+            if command[:2] == ["docker", "pull"]:
+                raise TimeoutError("timed out")
+            return await super().run(
+                argv, input_bytes=input_bytes, timeout_seconds=timeout_seconds
+            )
+
+    backend = PullTimeoutBackend()
+    materializer = DockerOpencodeAuthJsonMaterializer(backend)
+    ref = "ghcr.io/example/opencode@sha256:" + "f" * 64
+    with pytest.raises(HarnessPlatformError) as exc:
+        await materializer._resolve_writer_ref(ref)
+    assert (
+        exc.value.code
+        == HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+    )
+    assert "timed out" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_opencode_materialize_recovers_missing_writer_via_pull() -> None:
+    """Full materialize (production boundary) recovers a historic digest."""
+
+    class MissingThenPulledBackend(_DockerBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.image_present = False
+            self.pulls: list[list[str]] = []
+
+        async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                if self.image_present:
+                    return 0, b"sha256:abc\n", b""
+                return 1, b"", b"No such image"
+            if command[:2] == ["docker", "pull"]:
+                self.pulls.append(command)
+                self.image_present = True
+                return 0, b"Pulled\n", b""
+            return await super().run(
+                argv, input_bytes=input_bytes, timeout_seconds=timeout_seconds
+            )
+
+    backend = MissingThenPulledBackend()
+    artifacts = _Artifacts()
+    secret = "historic-digest-key"
+    lease = CredentialLease(
+        profile_id="opencode-primary",
+        runtime_id="opencode",
+        lease_id="lease-1",
+        owner_id="owner-1",
+        purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+    )
+    acquired = AcquiredProviderLease(
+        slot="primary-model",
+        provider_profile_ref="opencode-primary",
+        capacity_scope_ref="provider-profile:opencode-primary",
+        provider_lease_ref="provider-profile-lease:lease-1",
+        credential_generation=4,
+        lease=lease,
+    )
+    secrets = ScopedSecretBundle(
+        provider_profile_ref="opencode-primary",
+        credential_generation=4,
+        values={"opencode_api_key": secret},
+    )
+    materializer = DockerOpencodeAuthJsonMaterializer(backend)
+    handle = await materializer.materialize(
+        CredentialMaterializationContext(
+            request=_request(),
+            acquired=acquired,
+            secrets=secrets,
+            writer_image_ref="ghcr.io/example/opencode@sha256:" + "d" * 64,
+            artifact_gateway=artifacts,
+            provider_route_ref="opencode-go",
+        )
+    )
+    assert handle.materializerRef == "opencode-auth-json@1"
+    assert handle.attachments[0].accessMode == "read-only"
+    assert handle.cleanupRef.startswith("credential-cleanup:sha256:")
+    assert backend.pulls != []
+    assert secrets.values == {}
 
 
 @pytest.mark.asyncio

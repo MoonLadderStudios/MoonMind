@@ -155,20 +155,37 @@ class _DockerMaterializerBackendMixin:
         if code == 0:
             return ref
         if "@sha256:" in ref:
-            pull_code, _, _ = await self._backend.run(
-                ["docker", "pull", ref],
-                timeout_seconds=120.0,
-            )
-            if pull_code == 0:
-                retry_code, _, _ = await self._backend.run(
-                    ["docker", "image", "inspect", ref, "--format", "{{.Id}}"]
+            try:
+                pull_code, pull_out, pull_err = await self._backend.run(
+                    ["docker", "pull", ref],
+                    timeout_seconds=120.0,
                 )
-                if retry_code == 0:
-                    return ref
+            except TimeoutError as exc:
+                raise HarnessPlatformError(
+                    f"digest-pinned writer image pull timed out: {ref}; "
+                    "pull the selected Host Class image instead of substituting "
+                    "a mutable tag",
+                    code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                ) from exc
+            if pull_code != 0:
+                detail = (pull_err or pull_out).decode("utf-8", errors="replace")[
+                    :512
+                ]
+                raise HarnessPlatformError(
+                    f"digest-pinned writer image pull failed for {ref}: {detail}; "
+                    "pull the selected Host Class image instead of substituting "
+                    "a mutable tag",
+                    code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                )
+            retry_code, _, _ = await self._backend.run(
+                ["docker", "image", "inspect", ref, "--format", "{{.Id}}"]
+            )
+            if retry_code == 0:
+                return ref
             raise HarnessPlatformError(
-                f"digest-pinned writer image is not present locally: {ref}; "
-                "pull the selected Host Class image instead of substituting "
-                "a mutable tag",
+                f"digest-pinned writer image is not present locally after pull: "
+                f"{ref}; pull the selected Host Class image instead of "
+                "substituting a mutable tag",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
             )
         return ref
