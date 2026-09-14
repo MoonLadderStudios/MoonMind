@@ -8,7 +8,6 @@ from moonmind.schemas.temporal_signal_contracts import (
     CompletionSignal,
     ExternalEventSignal,
     FinalizeSessionSignal,
-    ProfileAssignedSignal,
     ReleaseSlotSignal,
     ReportCooldownSignal,
     RequestSlotSignal,
@@ -138,13 +137,6 @@ def test_child_state_changed_signal_valid():
     }
     model2 = ChildStateChangedSignal.model_validate(data_with_ref)
     assert model2.result_artifact_ref == "ref-789"
-
-def test_profile_assigned_signal_valid():
-    data = {
-        "profileId": "prof-1"
-    }
-    model = ProfileAssignedSignal.model_validate(data)
-    assert model.profile_id == "prof-1"
 
 def test_completion_signal_valid():
     data = {
