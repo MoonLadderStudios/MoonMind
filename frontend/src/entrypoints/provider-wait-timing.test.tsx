@@ -48,6 +48,24 @@ describe('provider wait timing labels (MoonLadderStudios/MoonMind#1130)', () => 
     expect(parseProviderCooldownUntil(null)).toBeNull();
   });
 
+  it('parses canonical cooldown fragments surfaced through the parent signal', () => {
+    const reason =
+      'provider_cooldown; queue_position=2; cooldown_until=2026-09-14T08:00:00+00:00';
+    expect(parseProviderQueuePosition(reason)).toBe(2);
+    expect(parseProviderCooldownUntil(reason)).toBe('2026-09-14T08:00:00+00:00');
+    const labels = formatProviderWaitTiming({
+      queuePosition: parseProviderQueuePosition(reason),
+      queueOrdered: true,
+      queueFresh: true,
+      cooldownUntil: parseProviderCooldownUntil(reason),
+      nextCheck: null,
+    });
+    expect(labels.queueLabel).toBe('Queue position 2 (ordered snapshot)');
+    expect(labels.cooldownLabel).toBe('Cooldown until 2026-09-14T08:00:00+00:00');
+    // A missing deadline never renders as immediate admission.
+    expect(parseProviderCooldownUntil('provider_cooldown')).toBeNull();
+  });
+
   it('surfaces structured cooldown/next-check/elapsed without implying an ETA', () => {
     expect(ProviderWaitDetails).toBeDefined();
     // Structured observation fields flow through the honest timing labels;
