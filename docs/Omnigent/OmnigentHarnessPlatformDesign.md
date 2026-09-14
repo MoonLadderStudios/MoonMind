@@ -1084,8 +1084,11 @@ ClassAdmissionDecision
 The result is a fenced `ExactHostCapabilityDecision` stored in the runtime binding. Missing, unknown, stale, or mismatched required evidence blocks runner and session creation.
 
 Model validation retains the exact host and credential lease while retrying a
-missing selected model or a typed model-catalog probe failure. The attestor makes
-at most three catalog reads, separated by one and two seconds, using the same
+missing selected model or a typed model-catalog probe failure. The catalog read
+boundary normalizes tunnel transport failures, HTTP 408/429, and server errors
+into that retry contract; authentication and invalid-request responses retain
+their original terminal errors. The attestor makes at most three catalog reads,
+separated by one and two seconds, using the same
 admitted model, image, credentials, workspace, and egress policy. A successful CLI
 exit alone does not prove model availability: OpenCode can return its bundled
 catalog when a refresh fails. Only an observation containing the exact selected
