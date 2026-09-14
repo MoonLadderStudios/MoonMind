@@ -65,7 +65,7 @@ See the [Omnigent module entrypoint](docs/Omnigent/README.md), the canonical [Om
 10. For repository-backed work, add source credentials for the work itself:
      - Add a GitHub personal access token.
      - Configure any other secrets or settings needed for the first workflow.
-11. Check model eligibility, then click Create, select the Runtime and Profile combination the Create page marks as the default for new work (see [Create Page](docs/UI/CreatePage.md)), and submit a workflow.
+11. Check model eligibility, then click Create, select the Runtime and Profile combination the Create page marks as the default for new work (see [Create Page](docs/UI/CreatePage.md)), enter task instructions or select an explicit Skill/Preset (plus repository and branch inputs for repository-backed work), and submit a workflow.
 12. Open the resulting Workflow Detail page (`/workflows/{workflowId}`) and inspect its outputs and artifacts, with logs and diagnostics alongside. That inspectable terminal evidence is the end of the first path: a loading dashboard or an accepted submission is not the result.
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch. The template's `AUTH_PROVIDER` comments describe the same selector, fresh-install, existing-database, and retired-selector behavior summarized above; the canonical contract remains [Authentication Contracts](docs/Security/AuthenticationContracts.md).
