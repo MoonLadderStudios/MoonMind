@@ -606,6 +606,30 @@ PATCH_CATALOG: tuple[PatchCatalogEntry, ...] = (
         deprecate_condition="audit reports safe_to_deprecate: healthy evidence, admission cutoff newer than every admitted execution that could predate 2026-03-27, no pre-patch workers, and a replay test pairing pre/post-change histories passes against the deprecate_patch call site",
         remove_condition="audit reports safe_to_remove for this id: no retained history carries the marker within retention and retained closed executions are no longer reset/replay eligible",
     ),
+    PatchCatalogEntry(
+        patch_id="provider-profile-manager-id-v1",
+        workflow_types=("MoonMindRunWorkflow._manager_workflow_id",),
+        command_boundary="signal routing: external workflow handle target for the provider-profile release_slot signal (no activity/child/timer shape change)",
+        old_behavior="addressed the manager as auth-profile-manager:{runtime_id} (legacy workflow id)",
+        new_behavior="addresses the manager as provider-profile-manager:{runtime_id} via workflow_id_for_runtime",
+        introduction_rev="9e526d4084bc769993754eec89b15c5fe3d35492",
+        fixture="none yet: deprecation requires a replay test pairing a pre-change history (marker recorded, legacy manager id signaled) with a post-change history, replayed against the changed call site",
+        classification=CLASSIFICATION_RETAINED_HISTORY,
+        deprecate_condition="audit reports safe_to_deprecate: healthy evidence, admission cutoff newer than every admitted execution that could predate 2026-03-29, no pre-patch workers, and a replay test pairing pre/post-change histories passes against the deprecate_patch call site",
+        remove_condition="audit reports safe_to_remove for this id: no retained history carries the marker within retention and retained closed executions are no longer reset/replay eligible",
+    ),
+    PatchCatalogEntry(
+        patch_id="run-workflow-child-task-queue-v2",
+        workflow_types=("MoonMindRunWorkflow._workflow_child_task_queue",),
+        command_boundary="child workflow task queue routing for runs started from the run workflow (start-child commands across every _workflow_child_task_queue call site)",
+        old_behavior="routed child workflows to WORKFLOW_TASK_QUEUE",
+        new_behavior="routes child workflows to settings.temporal.user_workflow_v2_task_queue",
+        introduction_rev="b2f4bab948e56ba810a8fac677e2fa268a1ed62c",
+        fixture="none yet: deprecation requires a replay test pairing a pre-change history (marker recorded, child started on the legacy queue) with a post-change history, replayed against the changed call site",
+        classification=CLASSIFICATION_RETAINED_HISTORY,
+        deprecate_condition="audit reports safe_to_deprecate: healthy evidence, admission cutoff newer than every admitted execution that could predate 2026-06-11, no pre-patch workers, and a replay test pairing pre/post-change histories passes against the deprecate_patch call site",
+        remove_condition="audit reports safe_to_remove for this id: no retained history carries the marker within retention and retained closed executions are no longer reset/replay eligible",
+    ),
 )
 
 

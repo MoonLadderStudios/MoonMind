@@ -100,7 +100,15 @@ record is persisted, forwards the evidence to `start_workflow` (which
 remains the authoritative enforcement point and never has the hold
 swallowed into a projection sync), and defaults to unchanged behavior;
 until the operator evidence pipeline supplies evidence, the current
-posture is mechanism-wired with manual review. New work always takes the new code path under worker
+posture is mechanism-wired with manual review. The default preserves
+behavior deliberately: holding admissions on `unknown` by default would
+wedge the executable default path on any Visibility/history outage,
+while new work always takes the new code path under worker versioning.
+Activation requires the operator evidence pipeline (deployment versions,
+admission cutoff, retained-marker queries) to supply `retirement_evidence`
+at admission; derived rerun/recovery admissions inherit the same default
+and carry evidence once their callers supply it. No API schema change is
+made for that pipeline in this pass. New work always takes the new code path under worker
 versioning, so healthy evidence with known consumers still allows
 admission while old workers serve only pinned old executions.
 
@@ -233,6 +241,41 @@ histories against the changed call site.
   - **Deprecate condition:** audit reports `safe_to_deprecate` with an
     admission cutoff newer than every admitted execution that could
     predate 2026-03-27, no pre-patch workers, and a pre/post-history
+    replay test passes against the `deprecate_patch` call site.
+  - **Remove condition:** audit reports `safe_to_remove`: no retained
+    history carries the marker within retention and retained closed
+    executions are no longer reset/replay eligible.
+- **Patch:** `provider-profile-manager-id-v1`
+  (`RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH`,
+  `MoonMindRunWorkflow._manager_workflow_id`).
+  - **Command boundary:** signal routing only: the external workflow
+    handle target for the provider-profile `release_slot` signal (no
+    activity/child/timer shape change).
+  - **Old/new behavior:** address the manager as
+    `auth-profile-manager:{runtime_id}` (legacy id) vs
+    `provider-profile-manager:{runtime_id}` via `workflow_id_for_runtime`.
+  - **Introduction:** `9e526d40` (2026-03-29).
+  - **Classification:** retained-history compatibility required.
+  - **Deprecate condition:** audit reports `safe_to_deprecate` with an
+    admission cutoff newer than every admitted execution that could
+    predate 2026-03-29, no pre-patch workers, and a pre/post-history
+    replay test passes against the `deprecate_patch` call site.
+  - **Remove condition:** audit reports `safe_to_remove`: no retained
+    history carries the marker within retention and retained closed
+    executions are no longer reset/replay eligible.
+- **Patch:** `run-workflow-child-task-queue-v2`
+  (`RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH`,
+  `MoonMindRunWorkflow._workflow_child_task_queue`).
+  - **Command boundary:** child workflow task queue routing for runs
+    started from the run workflow (start-child commands across every
+    `_workflow_child_task_queue` call site).
+  - **Old/new behavior:** route child workflows to `WORKFLOW_TASK_QUEUE`
+    vs `settings.temporal.user_workflow_v2_task_queue`.
+  - **Introduction:** `b2f4bab9` (2026-06-11).
+  - **Classification:** retained-history compatibility required.
+  - **Deprecate condition:** audit reports `safe_to_deprecate` with an
+    admission cutoff newer than every admitted execution that could
+    predate 2026-06-11, no pre-patch workers, and a pre/post-history
     replay test passes against the `deprecate_patch` call site.
   - **Remove condition:** audit reports `safe_to_remove`: no retained
     history carries the marker within retention and retained closed
