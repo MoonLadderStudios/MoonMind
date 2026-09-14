@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import re
@@ -36,6 +37,19 @@ from api_service.services.provider_profile_service import (
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 
 _OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
+
+# Only version-drift 409s may trigger catalog recovery. Incompatible,
+# contract-mismatch, capacity, and usage-conflict failures cannot be repaired
+# by synchronization, so they fail fast without upstream load.
+_DRIFT_RECOVERABLE_PREFIXES = (
+    "stable upstream identity is unavailable",
+    "stable upstream identity has not been synchronized",
+    "upstream inventory is stale",
+)
+# Admission-sized bound for the fallback sync (per-request client timeouts are
+# larger; without an aggregate deadline a degraded endpoint could hold an
+# ordinary submission for minutes).
+_DRIFT_RECOVERY_TIMEOUT_SECONDS = 30
 
 
 def default_launch_policy_ref(allowed_launch_policy_refs: Any) -> str:
@@ -696,14 +710,30 @@ async def resolve_default_agent_profile_snapshot(
         except HTTPException as exc:
             if exc.status_code != status.HTTP_409_CONFLICT or not _allow_drift_recovery:
                 raise
+            detail = str(getattr(exc, "detail", "") or "")
+            if not detail.startswith(_DRIFT_RECOVERABLE_PREFIXES):
+                raise
+            # Recovery runs in an independent session so catalog maintenance
+            # commits can never commit the caller's partially authored
+            # admission state. A losing concurrent sync still falls through
+            # to the single permitted retry, which then reads the winner's
+            # advanced default authority.
+            from api_service.db.base import async_session_maker
+
             try:
-                await synchronize_omnigent_harness_catalog(session)
+                async with asyncio.timeout(_DRIFT_RECOVERY_TIMEOUT_SECONDS):
+                    async with async_session_maker() as sync_session:
+                        await synchronize_omnigent_harness_catalog(sync_session)
             except Exception:
                 logging.getLogger(__name__).warning(
                     "Default profile drift recovery sync failed",
                     exc_info=True,
                 )
-                raise exc from None
+            if user is not None:
+                try:
+                    session.expunge(user)
+                except Exception:
+                    pass
             session.expire_all()
             return await resolve_default_agent_profile_snapshot(
                 session,
