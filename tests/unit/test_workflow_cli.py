@@ -58,7 +58,6 @@ def test_run_help_disambiguates_preset_skill_and_profiles() -> None:
     result = CliRunner().invoke(app, ["workflow", "run", "--help"])
     assert result.exit_code == 0
     body = unstyle(result.output)
-    lowered = body.lower()
     assert "--preset" in body and "--skill" in body
     assert "--agent-profile" in body and "--provider-profile" in body
     assert "--profile " not in body.replace("--agent-profile", "").replace(
@@ -80,9 +79,39 @@ def test_payload_keeps_server_owned_resolution() -> None:
     assert payload["idempotencyKey"] == "req-1"
     task = payload["initialParameters"]["task"]
     assert task["steps"] == [{"skill": {"name": "pr-resolver"}}]
-    assert task["agentProfile"] == {"ref": "agent-a"}
+    assert task["agentProfile"] == {"profileId": "agent-a"}
     assert task["providerProfileRef"] == "prov-b"
+    assert task["profileId"] == "prov-b"
+    assert task["providerProfile"] == "prov-b"
     assert task["publishMode"] == "pr"
+    assert task["publish"] == {"mode": "pr"}
+    params = payload["initialParameters"]
+    assert params["agentProfile"] == {"profileId": "agent-a"}
+    assert params["providerProfileRef"] == "prov-b"
+    assert params["publish"] == {"mode": "pr"}
+
+
+def test_preset_without_instructions_keeps_plan_source() -> None:
+    payload = build_execution_payload(preset="demo-preset", idempotency_key="req-p")
+    task = payload["initialParameters"]["task"]
+    assert task["taskTemplate"] == {"slug": "demo-preset", "scope": "global"}
+    assert task["instructions"].strip() != ""
+    assert task["goal"].strip() != ""
+
+
+def test_detail_url_strips_userinfo() -> None:
+    assert detail_url("https://user:pass@example.com", "wf-1") == (
+        "https://example.com/workflows/wf-1"
+    )
+
+
+def test_client_disables_env_proxies() -> None:
+    client = WorkflowApiClient(base_url="http://127.0.0.1:7000", bearer_token=None)
+    try:
+        assert client._client is not None
+        assert client._client.trust_env is False
+    finally:
+        client.close()
 
 
 def test_payload_rejects_preset_skill_ambiguity() -> None:

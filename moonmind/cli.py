@@ -311,6 +311,7 @@ def workflow_run(
 
     try:
         extras = parse_extra_params(param)
+        effective_request_id = (request_id or "").strip() or new_request_id()
         payload = build_execution_payload(
             instructions=instructions,
             preset=preset,
@@ -321,7 +322,7 @@ def workflow_run(
             provider_profile=provider_profile,
             publish_mode=publish_mode,
             extra_params=extras,
-            idempotency_key=(request_id or "").strip() or new_request_id(),
+            idempotency_key=effective_request_id,
         )
     except WorkflowCliError as exc:
         _workflow_fail(str(exc))
@@ -331,7 +332,12 @@ def workflow_run(
         try:
             admitted = client.submit_execution(payload)
         except WorkflowCliError as exc:
-            typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+            typer.secho(
+                f"Error: {exc} (requestId={payload.get('idempotencyKey', effective_request_id)}; "
+                "retry with the same --request-id to reconcile.)",
+                fg=typer.colors.RED,
+                err=True,
+            )
             raise typer.Exit(code=1) from exc
         summary = summarize_execution(admitted)
         url = detail_url(base, summary.workflow_id)
@@ -342,6 +348,7 @@ def workflow_run(
         else:
             typer.echo(f"workflow {summary.workflow_id}: {summary.status} (admitted)")
             typer.echo(f"details: {url}")
+            typer.echo(f"requestId: {payload['idempotencyKey']}")
             if summary.title:
                 typer.echo(f"title: {sanitize_terminal_text(summary.title, max_chars=500)}")
         if not wait:
