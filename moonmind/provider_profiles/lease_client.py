@@ -284,6 +284,25 @@ class ProviderProfileLeaseClient:
         # workflow-context ExternalWorkflowHandle cannot execute Updates; in
         # that case the stable owner really is the delegating workflow ID.
         safe_metadata["ownerIsWorkflow"] = owner_is_workflow
+        if not str(safe_metadata.get("runId") or "").strip():
+            # MoonLadderStudios/MoonMind#1089: bind activity-owned grants to
+            # the exact owning run when the acquisition runs inside a Temporal
+            # Activity; the logical workflow ID alone is insufficient across
+            # replacement runs, reset, or Continue-As-New. Outside an activity
+            # (or when the run is unknown) the hint stays absent and the
+            # manager treats a missing hint as reconciliation-needed, never as
+            # proof of no process.
+            try:
+                from temporalio import activity as _temporal_activity
+
+                _info = _temporal_activity.info()
+                _run_id = str(
+                    getattr(_info, "workflow_run_id", "") or ""
+                ).strip()
+            except Exception:
+                _run_id = ""
+            if _run_id:
+                safe_metadata["runId"] = _run_id
         result = await self._update_manager(
             runtime_id,
             (
@@ -501,6 +520,94 @@ class ProviderProfileLeaseClient:
                 {"lease_id": lease.lease_id, "owner_id": lease.owner_id},
             )
         )
+
+    async def report_cleanup_verified(
+        self,
+        lease: CredentialLease,
+        *,
+        teardown_evidence: Mapping[str, Any] | None = None,
+        verified_by: str = "omnigent-oauth-host-janitor",
+        run_id: str | None = None,
+        evidence_identity: str | None = None,
+    ) -> None:
+        """Complete one cleanup obligation from positive teardown evidence.
+
+        MoonLadderStudios/MoonMind#1089: the existing executing owner (AgentRun,
+        runtime realizer, janitor, or operator) calls this after it has stopped
+        the exact admitted consumer. The manager only frees a slot already in
+        the capacity-consuming ``cleanup_requested`` state, quoting the
+        acquired fence with ``consumer_stopped=True``. This never invents a new
+        cleanup engine; it is the client half of the manager's
+        ``report_cleanup_verified`` signal.
+        """
+
+        evidence: dict[str, Any] = dict(teardown_evidence or {})
+        evidence["consumer_stopped"] = True
+        if verified_by:
+            evidence.setdefault("verified_by", verified_by)
+        if run_id is not None:
+            evidence.setdefault("run_id", run_id)
+        resolved_identity = (
+            evidence_identity if evidence_identity is not None else lease.evidence_identity
+        )
+        if resolved_identity is not None:
+            evidence.setdefault("evidence_identity", resolved_identity)
+        payload: dict[str, Any] = {
+            "lease_id": lease.lease_id,
+            "profile_id": lease.profile_id,
+            "teardown_evidence": evidence,
+        }
+        if lease.fencing_generation is not None:
+            payload["fencing_generation"] = int(lease.fencing_generation)
+        await self._adapter.signal_workflow(
+            await self._ensure_manager(lease.runtime_id),
+            "report_cleanup_verified",
+            payload,
+        )
+
+    async def get_cleanup_obligations(
+        self, *, runtime_id: str
+    ) -> list[dict[str, Any]]:
+        """Return the manager's stable per-slot cleanup claims.
+
+        MoonLadderStudios/MoonMind#1089: each claim carries the stable
+        ``claim_id`` (lease ID + acquired fence), the admitted run/evidence
+        identity, and the delivery ``attempt``. The existing owner polls this
+        surface and completes each claim through
+        :meth:`report_cleanup_verified`.
+        """
+
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            workflow_id_for_runtime,
+        )
+
+        workflow_id = workflow_id_for_runtime(runtime_id)
+        handle: Any | None = None
+        getter = getattr(self._adapter, "get_workflow_handle", None)
+        if callable(getter):
+            handle = await getter(workflow_id)
+        else:
+            client = await self._adapter.get_client()
+            inner = getattr(client, "get_workflow_handle", None)
+            if callable(inner):
+                maybe_handle = inner(workflow_id)
+                handle = (
+                    await maybe_handle
+                    if hasattr(maybe_handle, "__await__")
+                    else maybe_handle
+                )
+        if handle is None:
+            manager = getattr(self._adapter, "manager", None)
+            if manager is not None and hasattr(manager, "get_state"):
+                state = manager.get_state()
+                claims = state.get("cleanup_obligations") if isinstance(state, dict) else []
+                return [dict(claim) for claim in (claims or []) if isinstance(claim, dict)]
+            return []
+        state = await handle.query("get_state")
+        if not isinstance(state, dict):
+            return []
+        claims = state.get("cleanup_obligations") or []
+        return [dict(claim) for claim in claims if isinstance(claim, dict)]
 
 
 __all__ = [

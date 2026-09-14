@@ -2447,6 +2447,12 @@ class TemporalExecutionService:
                 and start_run_id.strip()
                 and start_run_id != record.run_id
             ):
+                # Canonical admission correction (REQ-02): the Temporal start
+                # call is authoritative for the run identity of this canonical
+                # source row. This edits the canonical source only; the
+                # projection is reconciled through the shared mutator below
+                # via _sync_projection_best_effort, so no projection lifecycle
+                # field is written outside mutate_execution_projection.
                 record.run_id = start_run_id
                 if remediation_link is not None:
                     remediation_link.remediation_run_id = start_run_id
@@ -2482,9 +2488,39 @@ class TemporalExecutionService:
         if scheduled_for is not None and isinstance(
             synced_record, TemporalExecutionRecord
         ):
-            synced_record.scheduled_for = scheduled_for
-            await self._session.commit()
-            await self._session.refresh(synced_record)
+            # Admitted scheduling hint (REQ-02): projection-only field written
+            # through the shared canonical-owner mutator so field authority,
+            # versioning, and the caller-owned commit contract stay cohesive.
+            try:
+                from api_service.core.sync import mutate_execution_projection
+
+                canonical = await self._session.get(
+                    TemporalExecutionCanonicalRecord, record.workflow_id
+                )
+                payload = self._projection_payload_from_source(
+                    canonical if canonical is not None else record
+                )
+                payload["scheduled_for"] = scheduled_for
+                synced_record = await mutate_execution_projection(
+                    self._session,
+                    workflow_id=record.workflow_id,
+                    payload=payload,
+                    owner="canonical",
+                )
+                await self._session.commit()
+                await self._session.refresh(synced_record)
+            except Exception:
+                logger.exception(
+                    "Failed to record scheduled_for for execution %s",
+                    record.workflow_id,
+                )
+                try:
+                    await self._session.rollback()
+                except Exception:
+                    # Best-effort cleanup: the scheduled_for write already
+                    # failed, so a rollback failure must not mask it.
+                    pass
+                synced_record = await self._sync_projection_best_effort(record)
         return synced_record
 
     async def list_executions(
@@ -6350,6 +6386,12 @@ class TemporalExecutionService:
         *,
         sync_error: str,
     ) -> TemporalExecutionRecord | None:
+        # Repair-status fallback (REQ-02, justified bypass): reachable only
+        # after the shared mutator raised and the caller rolled back. It sets
+        # projection repair bookkeeping (sync_state/sync_error/source_mode)
+        # without touching lifecycle, identity, parameters, memo, or refs, so
+        # no lifecycle field is written outside mutate_execution_projection.
+        # Caller owns commit/rollback of this narrow status patch.
         try:
             projection = await self._load_projection_execution(
                 snapshot["workflow_id"],

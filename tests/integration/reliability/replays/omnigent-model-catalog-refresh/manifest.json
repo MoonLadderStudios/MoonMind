@@ -1,0 +1,15 @@
+{
+  "incidentWorkflowId": "mm:07161650-68db-4325-8583-c6711e2cb8bc-2026-09-14T07:25:00Z",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "entrypoint": "GenericOmnigentHostRuntime.realize",
+  "recoveryOwner": "DockerOmnigentHostAttestor.attest",
+  "hostVersion": "0.13.0",
+  "runtimeVersion": "opencode 1.18.11",
+  "hostImageRef": "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:d01a142153d3bb225c3ab0dabd22ffce1fce2b691054c19c5106daf55e95cd0b",
+  "selectedModel": "opencode-go/muse-spark-1.3-contributor",
+  "failureShape": "Two preceding steps used the selected model. The failing host's catalog CONNECT transferred zero bytes over 10.391 seconds. The same pinned image with network disabled exits zero and prints Models cache refreshed while returning its bundled catalog without the selected model. The failed run did not retain its model catalog, so its exact returned catalog is unknown.",
+  "events": ["launch", "catalog_missing_selected_model", "refresh_same_host", "catalog_contains_selected_model", "attestation_published"],
+  "workspaceArtifactManifest": {"mutation": "none", "preserveWorkspace": true},
+  "maxAttempts": 3,
+  "expectedInvariant": "Retry model validation before releasing host authority; never substitute model, credentials, workspace, or host. Retain bounded catalog evidence before cleanup on exhaustion."
+}

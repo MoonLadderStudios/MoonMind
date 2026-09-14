@@ -317,9 +317,11 @@ These signals coordinate profile-slot allocation and rate-limit recovery for man
 #### To parent `MoonMind.UserWorkflow`
 
 - `child_state_changed`
-- `profile_assigned`
 
-These signals provide parent-visible execution state without requiring polling.
+This signal provides parent-visible execution state without requiring polling.
+Slot release is owned by the ProviderProfileManager through verified consumer
+teardown (MoonLadderStudios/MoonMind#1089); AgentRun no longer sends
+`profile_assigned` and the parent keeps no defensive release fallback.
 
 Desired-state rule:
 
@@ -382,6 +384,34 @@ Canonical payload concepts:
 - `profile_id`
 - `cooldown_seconds`
 
+#### `report_cleanup_verified`
+
+Purpose:
+
+- release a cleanup-requested slot after the designated executing owner proves
+  the exact admitted consumer stopped (MoonLadderStudios/MoonMind#1089). This is
+  the only path besides the owner's own `release_slot` that may free a slot
+  whose cleanup was requested.
+
+Canonical payload concepts:
+
+- `lease_id` (also accepted as `requester_workflow_id`)
+- `profile_id`
+- `fencing_generation` (must equal the held generation; stale generations are ignored)
+- `teardown_evidence` with `consumer_stopped: true`, plus `verified_by`,
+  `run_id`, and `evidence_identity` matching the admitted lease metadata
+
+Required behavior:
+
+- ignore reports without lease/profile identity, with a malformed generation,
+  with a stale generation, without positive `consumer_stopped` evidence, or
+  whose `run_id`/`evidence_identity` mismatches the admitted consumer;
+- only release rows already in the capacity-consuming `cleanup_requested`
+  state, quoting the acquired fence;
+- keep the slot spent and record a retryable obligation on ledger failure;
+- a terminal workflow, a NOT_FOUND lookup, a database tombstone, an accepted
+  cancellation, or lease expiry never counts as teardown evidence on this path.
+
 #### `sync_profiles`
 
 Purpose:
@@ -411,6 +441,33 @@ Required behavior:
 - only emit after the lease is durably recorded,
 - duplicate emission for an already-owned lease is allowed as a reconnect aid,
 - assignment must remain tied to the same requester workflow ID.
+
+### Queries served
+
+#### `get_state` / `manager_state` `cleanup_obligations`
+
+Purpose:
+
+- publish one stable, non-secret claim per outstanding cleanup obligation so
+  the existing AgentRun, runtime realizer, janitor, or operator can complete it
+  through `report_cleanup_verified`. Direct in-workflow (`execution_direct`,
+  `workflow_owned`) obligations whose exact admitted run is terminal are
+  additionally completed by the manager's own direct reclamation with
+  exact-run teardown evidence; host-attached and run-unknown obligations stay
+  spent for their janitor, realizer, or operator.
+
+Canonical claim concepts:
+
+- `claim_id` (`lease_id` + acquired fence, stable across redeliveries)
+- `lease_id`, `profile_id`, `fencing_generation`
+- admitted consumer identity (`workflowId`, `runId`, `evidenceIdentity`)
+- `reason` (`lease_expired` vs `owner_terminal`) and delivery `attempt`
+
+Required behavior:
+
+- only `attempt` advances across redeliveries; the claim identity never rewrites
+  ledger metadata;
+- a missing claim is never proof that no consumer exists.
 
 ---
 

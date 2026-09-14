@@ -199,7 +199,11 @@ class TestSlotWaitRetryBehavior:
 
         assert "refresh_waiting_reason = True" in source
         assert "not self.runtime_selection_updated_event.is_set()" in source
-        assert "_inspected_provider_slot_waiting_reason" in source
+        # MoonLadderStudios/MoonMind#1130: structured wait observation
+        # (_inspected_provider_slot_wait) supersedes the string-only
+        # (_inspected_provider_slot_waiting_reason) path; either satisfies
+        # the refresh-after-inspection contract.
+        assert "_inspected_provider_slot_wait" in source
 
     def test_recover_and_request_slot_uses_ensure_signal_fallback(self):
         """Recovery must tolerate the fresh-manager signal race without reset."""
