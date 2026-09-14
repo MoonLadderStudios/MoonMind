@@ -2165,6 +2165,30 @@ class OmnigentOAuthHostRuntime:
                 container_name=container_name, lease_id=host_lease.lease_id
             )
             return
+        pool = None
+        if int(effective_launch["limits"]["cpuMillis"]) == 0:
+            from api_service.db.base import async_session_maker
+            from moonmind.capacity import (
+                MachineCapacityLedger,
+                machine_budget_from_runner,
+            )
+            from moonmind.capacity.cpu_pool import DockerCpuPool
+            from moonmind.config.container_backend_settings import (
+                resolve_container_backend_settings,
+            )
+
+            async def capacity_runner(command):
+                code, out, err = await self._run("docker", *command, check=False)
+                return code, out.encode(), err.encode()
+
+            pool = DockerCpuPool(
+                runner=capacity_runner,
+                ledger=MachineCapacityLedger(async_session_maker),
+                backend_ref=resolve_container_backend_settings().default_backend_ref,
+            )
+            cpu_args = await pool.launch_args()
+        else:
+            cpu_args = ["--cpus", str(int(effective_launch["limits"]["cpuMillis"]) / 1000)]
         mount = binding.credential_mount_ref
         adapter = self._runtime_adapter(binding)
         state_volume = f"{container_name}-state"
@@ -2271,8 +2295,6 @@ class OmnigentOAuthHostRuntime:
             "--network",
             str(effective_launch["networkRef"]),
             *structured_container_security_args(),
-            "--cpus",
-            str(int(effective_launch["limits"]["cpuMillis"]) / 1000),
             "--memory",
             f"{effective_launch['limits']['memoryMiB']}m",
             "--pids-limit",
@@ -2381,11 +2403,27 @@ class OmnigentOAuthHostRuntime:
         # Docker stops parsing run options at the image reference. Keep env's
         # ``-u`` flags after that boundary; before it, Docker interprets each
         # one as a container ``--user`` override.
+        args.extend(cpu_args)
         args.extend(["--entrypoint", "/usr/bin/env", host_image_ref])
         for key in _FORBIDDEN_ENV:
             args.extend(["-u", key])
         args.append(str(adapter["start_script"]))
-        await self._run(*args, env=child_env)
+        pool_lease = None
+        try:
+            if pool is not None:
+                pool_lease = await pool.prepare(
+                    await machine_budget_from_runner(capacity_runner)
+                )
+                await pool.verify(pool_lease)
+            await self._run(*args, env=child_env)
+            if pool_lease is not None:
+                await pool.finish_launch(pool_lease, container_name)
+        except BaseException:
+            await self._run("docker", "rm", "-f", container_name, check=False)
+            raise
+        finally:
+            if pool_lease is not None:
+                await self._run("docker", "rm", "-f", pool_lease.holder, check=False)
 
     def _container_job_environment(
         self,

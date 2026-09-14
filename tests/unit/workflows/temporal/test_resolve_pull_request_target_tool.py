@@ -138,7 +138,15 @@ async def test_unresolvable_selector_fails_without_guessing() -> None:
 
 
 async def test_missing_inputs_fail_fast() -> None:
-    result = await resolve_pull_request_target({"repository": _REPO})
+    result = await resolve_pull_request_target({})
 
     assert result.status == "FAILED"
     assert "requires a repository" in result.outputs["summary"]
+
+
+async def test_empty_selector_reports_successful_skip() -> None:
+    result = await resolve_pull_request_target({"repository": _REPO})
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["skipped"] is True
+    assert "skipped" in result.outputs["summary"].lower()

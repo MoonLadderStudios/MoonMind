@@ -133,9 +133,15 @@ def test_ui_help_suggests_no_vector_capability() -> None:
 
 
 def test_agent_guidance_records_retirement() -> None:
-    text = _read(AGENT_GUIDANCE)
-    assert "#4113" in text
-    assert "Do not restore retired policy fields" in text
+    # MoonLadderStudios/MoonMind#3942 removed tracked memory/ notes; the
+    # follow-up retrieval retirement lives in the canonical WorkflowRag doc.
+    assert not AGENT_GUIDANCE.exists(), (
+        f"Memory note {AGENT_GUIDANCE.name} must stay deleted per #3942 cleanup"
+    )
+    text = _read(WORKFLOW_RAG)
+    assert "retired" in text.lower()
+    assert "no vector behavior" in text
+    assert "actionable validation error" in text
 
 
 def test_residual_report_exists_with_delete_trigger() -> None:

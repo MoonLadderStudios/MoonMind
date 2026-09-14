@@ -62,7 +62,9 @@ def test_supported_first_path_names_terminal_evidence() -> None:
 def test_quick_start_keeps_required_setup_commands() -> None:
     readme = _read(README)
     quick_start = readme[readme.find("## Quick Start") :]
-    assert "git submodule update --init --recursive" in quick_start
+    assert "git submodule update --init --checkout -- moonspec omnigent" in quick_start
+    assert "--recursive" not in quick_start
+    assert "--remote" not in quick_start
     assert "docker compose up -d" in quick_start
     assert "http://localhost:7000" in quick_start
     assert "/healthz" in quick_start

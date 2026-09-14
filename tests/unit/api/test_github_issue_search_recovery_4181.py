@@ -283,7 +283,13 @@ async def test_omitted_blank_and_nonblank_inputs_traverse_compiled_path(
 ):
     seeds = tmp_path / "seeds"
     seeds.mkdir()
-    shutil.copy(SEED, seeds / SEED.name)
+    preset_dir = SEED.parent
+    for filename in (
+        SEED.name,
+        "issue-implement-assessment.yaml",
+        "issue-implement-work-pr.yaml",
+    ):
+        shutil.copy(preset_dir / filename, seeds / filename)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/catalog.db")
     try:
         async with engine.begin() as connection:

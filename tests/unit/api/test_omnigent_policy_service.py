@@ -843,7 +843,7 @@ async def test_bootstrap_advances_image_authority_when_mutable_inputs_move(
         event_types = set(
             (await session.execute(select(OmnigentPolicyEvent.event_type))).scalars()
         )
-        assert "bootstrap_image_authority_cutover" in event_types
+        assert "bootstrap_authority_cutover" in event_types
 
 
 @pytest.mark.asyncio

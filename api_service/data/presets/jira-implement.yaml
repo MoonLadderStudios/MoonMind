@@ -145,7 +145,7 @@ steps:
 - title: Check Jira blockers before implementation
   type: tool
   instructions: |-
-    Read artifacts/jira-implement-assessment.json (or the recorded verdict from the assess step) before deciding how to apply blocker results.
+    Use the carried assessmentVerdict ref from the assess step; reread artifacts/jira-implement-assessment.json only when identity or freshness requires it before deciding how to apply blocker results.
 
     Check Jira issue {{ inputs.jira_issue_key }} through the deterministic trusted Jira blocker preflight before any new implementation work starts.
 
