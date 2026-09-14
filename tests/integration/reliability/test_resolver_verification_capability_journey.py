@@ -60,7 +60,7 @@ class CaptureResolverRequest:
         )
 
 
-async def resolver_test_client():
+async def resolver_test_client(*, additional_search_attributes=None):
     """Connect and prepare only the isolated merge-workflow search attributes."""
     connected = await connect()
     client = Client(
@@ -69,18 +69,16 @@ async def resolver_test_client():
         data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
     )
     required_attributes = {
-        "mm_state",
-        "mm_entry",
-        "mm_owner_type",
-        "mm_owner_id",
-        "mm_repo",
+        name: IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD
+        for name in ("mm_state", "mm_entry", "mm_owner_type", "mm_owner_id", "mm_repo")
     }
+    required_attributes.update(additional_search_attributes or {})
     for attempt in range(30):
         try:
             attributes = await client.operator_service.list_search_attributes(
                 ListSearchAttributesRequest(namespace=client.namespace)
             )
-            missing = required_attributes - set(attributes.custom_attributes)
+            missing = required_attributes.keys() - set(attributes.custom_attributes)
             if not missing:
                 break
             try:
@@ -88,7 +86,7 @@ async def resolver_test_client():
                     AddSearchAttributesRequest(
                         namespace=client.namespace,
                         search_attributes={
-                            name: IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD
+                            name: required_attributes[name]
                             for name in missing
                         },
                     )
@@ -117,10 +115,8 @@ async def resolver_test_client():
                         task_queue=probe,
                         typed_search_attributes=TypedSearchAttributes(
                             [
-                                SearchAttributePair(
-                                    SearchAttributeKey.for_keyword(name), "test"
-                                )
-                                for name in sorted(required_attributes)
+                                _search_attribute_probe_pair(name, kind)
+                                for name, kind in sorted(required_attributes.items())
                             ]
                         ),
                     ),
@@ -139,6 +135,19 @@ async def resolver_test_client():
             await handle.delete()
             break
     return client
+
+
+def _search_attribute_probe_pair(name, kind):
+    if kind == IndexedValueType.INDEXED_VALUE_TYPE_DATETIME:
+        from datetime import datetime, timezone
+
+        return SearchAttributePair(
+            SearchAttributeKey.for_datetime(name), datetime.now(timezone.utc)
+        )
+    if kind == IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST:
+        return SearchAttributePair(SearchAttributeKey.for_keyword_list(name), ["test"])
+    assert kind == IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD
+    return SearchAttributePair(SearchAttributeKey.for_keyword(name), "test")
 
 
 @pytest.mark.parametrize("legacy", [False, True])

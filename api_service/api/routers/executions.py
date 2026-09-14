@@ -108,6 +108,7 @@ from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
     normalize_no_commit_finish_summary,
 )
+from moonmind.statuses.workflow import TERMINAL_WORKFLOW_STATES
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.report_output import normalize_report_output_primary_path
 from moonmind.workflows.executions.preset_expansion import (
@@ -16801,7 +16802,7 @@ async def resolve_workflow_chat_binding(
 # authored from a terminal source (issue §7: "source is not terminal" fails
 # closed) — a still-idle or still-reachable session is never inferred writeable.
 _CONTINUATION_TERMINAL_STATES: frozenset[str] = frozenset(
-    {"completed", "failed", "canceled"}
+    state.value for state in TERMINAL_WORKFLOW_STATES
 )
 
 
@@ -17493,103 +17494,6 @@ async def continue_in_new_workflow(
     # (§5, §7 "create submission fails after relationship reservation").
     await session.commit()
 
-    # Author the destination through the ordinary create path. Inherit the
-    # source's authored choices (sanitized like a rerun), layer operator-authored
-    # overrides, then pin the source lineage so both Workflows present the linked
-    # relationship. Fresh authority (runtime/profile/credential/policy) is
-    # resolved by ``create_execution`` — nothing is silently inherited stale.
-    initial_params = service._full_rerun_parameters(canonical.parameters or {})
-    if not _workflow_payload_from_parameters(initial_params):
-        _, source_task = await _snapshot_source_payload_from_parameters_and_artifact(
-            session=session,
-            user=user,
-            record=canonical,
-            parameters=initial_params,
-        )
-        initial_params["workflow"] = source_task
-    if payload.initial_parameters:
-        initial_params.update(payload.initial_parameters)
-    source_plan_payload = (canonical.parameters or {}).get(
-        "omnigentExecutionPlan"
-    )
-    candidate_plan_payload = initial_params.get("omnigentExecutionPlan")
-    if isinstance(source_plan_payload, Mapping):
-        try:
-            source_plan = OmnigentExecutionPlanBinding.model_validate(
-                source_plan_payload
-            )
-            candidate_plan = OmnigentExecutionPlanBinding.model_validate(
-                candidate_plan_payload
-            )
-        except ValidationError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "continuation_execution_plan_conflict",
-                    "message": (
-                        "The linked continuation must reuse the source "
-                        "Workflow's immutable Omnigent execution plan."
-                    ),
-                },
-            ) from exc
-        if candidate_plan != source_plan:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "continuation_execution_plan_conflict",
-                    "message": (
-                        "The linked continuation must reuse the source "
-                        "Workflow's immutable Omnigent execution plan."
-                    ),
-                },
-            )
-    elif isinstance(candidate_plan_payload, Mapping):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "continuation_execution_plan_conflict",
-                "message": (
-                    "A linked continuation cannot introduce authored "
-                    "Omnigent execution-plan authority."
-                ),
-            },
-        )
-    # Canonicalize the retained task payload even when instructions are omitted.
-    # Copy before layering attachments/instructions so the source stays immutable.
-    initial_params["workflow"] = _workflow_payload_from_parameters(initial_params)
-    initial_params.pop("task", None)
-    if payload.instructions:
-        initial_params["workflow"]["instructions"] = payload.instructions
-    initial_params["continuationSource"] = pinned
-
-    # Materialize the authorized selected source evidence into durable input
-    # attachments so the destination agent can actually read it. Storing the refs
-    # only under ``continuationSource`` is not enough — no runtime consumer reads
-    # that key, and the prepared-input boundary materializes only durable
-    # Temporal artifacts linked to the destination workflow. Attach them under the
-    # ``workflow`` payload's ``inputAttachments`` (the same shape the ordinary
-    # create path uses) and link them to the destination workflow after it is
-    # created (#3641 §6).
-    source_attachments = await _materialize_continuation_source_attachments(
-        session=session,
-        user=user,
-        refs=payload.selected_source_artifact_refs,
-    )
-    if source_attachments:
-        workflow_payload = initial_params.get("workflow")
-        if not isinstance(workflow_payload, dict):
-            workflow_payload = {}
-        existing_attachments = workflow_payload.get("inputAttachments")
-        merged_attachments = (
-            list(existing_attachments)
-            if isinstance(existing_attachments, list)
-            else []
-        )
-        merged_attachments.extend(source_attachments)
-        workflow_payload["inputAttachments"] = merged_attachments
-        initial_params["workflow"] = workflow_payload
-        initial_params.pop("task", None)
-
     reserved_workflow_id = reservation.destination_workflow_id
     # Scope the ordinary create idempotency key to the same authority boundary as
     # the relationship reservation — (source_workflow_id, source_run_id,
@@ -17606,6 +17510,144 @@ async def continue_in_new_workflow(
             "idempotencyKey": payload.idempotency_key,
         }
     )
+    # The ordinary create may have committed the destination and started Temporal
+    # before its acknowledgement was lost. Reuse that admission before copying
+    # evidence again; the reserved record owns the inputs and their attachment IDs.
+    admitted = await session.get(TemporalExecutionCanonicalRecord, reserved_workflow_id)
+    if admitted is not None:
+        if (
+            admitted.create_idempotency_key != create_idempotency_key
+            or admitted.owner_id != str(canonical.owner_id or user.id)
+            or admitted.owner_type != canonical.owner_type
+            or admitted.workflow_type != canonical.workflow_type
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_destination_conflict",
+                    "message": "The reserved destination does not match this continuation admission.",
+                },
+            )
+        initial_params = dict(admitted.parameters or {})
+        source_attachments = list(
+            _workflow_payload_from_parameters(initial_params).get("inputAttachments")
+            or []
+        )
+    else:
+        # Author the destination through the ordinary create path. Inherit the
+        # source's authored choices (sanitized like a rerun), layer operator-authored
+        # overrides, then pin the source lineage so both Workflows present the linked
+        # relationship. Fresh authority (runtime/profile/credential/policy) is
+        # resolved by ``create_execution`` — nothing is silently inherited stale.
+        source_payload, source_task = (
+            await _snapshot_source_payload_from_parameters_and_artifact(
+                session=session,
+                user=user,
+                record=canonical,
+                parameters=canonical.parameters or {},
+            )
+        )
+        # The artifact can own instructions, steps, and top-level settings even
+        # when the retained parameters contain a partial task. Hydrate both layers
+        # before sanitizing rerun-only state and applying the new authored turn.
+        initial_params = service._full_rerun_parameters(
+            {
+                **(canonical.parameters or {}),
+                **{
+                    key: value
+                    for key, value in source_payload.items()
+                    if value not in (None, [], "")
+                },
+                "workflow": source_task,
+            }
+        )
+        initial_params.pop("task", None)
+        if payload.initial_parameters:
+            authored_workflow = _workflow_payload_from_parameters(
+                payload.initial_parameters
+            )
+            retained_workflow = _workflow_payload_from_parameters(initial_params)
+            initial_params.update(payload.initial_parameters)
+            initial_params["workflow"] = {**retained_workflow, **authored_workflow}
+        source_plan_payload = (canonical.parameters or {}).get("omnigentExecutionPlan")
+        candidate_plan_payload = initial_params.get("omnigentExecutionPlan")
+        if isinstance(source_plan_payload, Mapping):
+            try:
+                source_plan = OmnigentExecutionPlanBinding.model_validate(
+                    source_plan_payload
+                )
+                candidate_plan = OmnigentExecutionPlanBinding.model_validate(
+                    candidate_plan_payload
+                )
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "continuation_execution_plan_conflict",
+                        "message": (
+                            "The linked continuation must reuse the source "
+                            "Workflow's immutable Omnigent execution plan."
+                        ),
+                    },
+                ) from exc
+            if candidate_plan != source_plan:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "continuation_execution_plan_conflict",
+                        "message": (
+                            "The linked continuation must reuse the source "
+                            "Workflow's immutable Omnigent execution plan."
+                        ),
+                    },
+                )
+        elif isinstance(candidate_plan_payload, Mapping):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_execution_plan_conflict",
+                    "message": (
+                        "A linked continuation cannot introduce authored "
+                        "Omnigent execution-plan authority."
+                    ),
+                },
+            )
+        # Canonicalize the retained task payload even when instructions are omitted.
+        # Copy before layering attachments/instructions so the source stays immutable.
+        initial_params["workflow"] = _workflow_payload_from_parameters(initial_params)
+        initial_params.pop("task", None)
+        if payload.instructions:
+            initial_params["workflow"]["instructions"] = payload.instructions
+        initial_params["continuationSource"] = pinned
+
+        # Materialize the authorized selected source evidence into durable input
+        # attachments so the destination agent can actually read it. Storing the refs
+        # only under ``continuationSource`` is not enough — no runtime consumer reads
+        # that key, and the prepared-input boundary materializes only durable
+        # Temporal artifacts linked to the destination workflow. Attach them under the
+        # ``workflow`` payload's ``inputAttachments`` (the same shape the ordinary
+        # create path uses) and link them to the destination workflow after it is
+        # created (#3641 §6).
+        source_attachments = await _materialize_continuation_source_attachments(
+            session=session,
+            user=user,
+            refs=payload.selected_source_artifact_refs,
+        )
+        if source_attachments:
+            workflow_payload = initial_params.get("workflow")
+            if not isinstance(workflow_payload, dict):
+                workflow_payload = {}
+            existing_attachments = workflow_payload.get("inputAttachments")
+            merged_attachments = (
+                list(existing_attachments)
+                if isinstance(existing_attachments, list)
+                else []
+            )
+            merged_attachments.extend(source_attachments)
+            workflow_payload["inputAttachments"] = merged_attachments
+            initial_params["workflow"] = workflow_payload
+            initial_params.pop("task", None)
+
     try:
         record = await service.create_execution(
             workflow_type=canonical.workflow_type.value,
