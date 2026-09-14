@@ -34,7 +34,12 @@ FEEDBACK_MAX_CHARS = 4_000
 ISSUES_MAX_COUNT = 20
 ISSUE_DESCRIPTION_MAX_CHARS = 2_000
 REVIEW_TIMEOUT_MIN_SECONDS = 1
-REVIEW_TIMEOUT_MAX_SECONDS = 600
+# Aligned with the production `step.review` Temporal route
+# (activity_catalog.py: `TemporalActivityTimeouts(120, 300)`): the activity
+# execution must finish within the 120s start-to-close timeout, so a longer
+# review timeout could never complete and would risk duplicate provider
+# requests. Keep this ceiling at or below the route's start-to-close budget.
+REVIEW_TIMEOUT_MAX_SECONDS = 120
 
 _SECRET_KEY_PATTERN = re.compile(
     r"(api[_-]?key|apikey|token|secret|password|passwd|authorization|cookie|session)",
@@ -120,6 +125,8 @@ def _resolve_route(reviewer: Any, model: str) -> dict[str, str]:
                     "model": str(route.get("model") or model or "default"),
                 }
         except Exception:
+            # Best-effort route introspection only: fall through to the
+            # config-based resolution below when the reviewer probe fails.
             pass
     config = getattr(reviewer, "_config", None)
     if config is not None:
@@ -214,21 +221,22 @@ def _early_provenance(
 
 # Smallest committed-review record for MoonLadderStudios/MoonMind#3945 (R5).
 #
-# The run.py scheduler persists every gate-result artifact plus step-ledger
-# checks before acknowledging completion; that artifact is the durable owner.
-# This registry is the Activity-side reuse key for duplicate delivery and
-# lost-acknowledgment retries within the worker: a completed verified verdict
-# (FULLY_IMPLEMENTED / ADDITIONAL_WORK_NEEDED) is committed under its immutable
-# review-attempt identity, and a retried request may reuse only the same
-# committed decision. Unavailable results (NO_DETERMINATION) are never
-# committed: a timeout after provider execution is an ambiguous inference
-# outcome, not exactly-once proof, and an unavailable reviewer must never
-# rerun a successfully completed business step. Changed evidence or an
-# explicitly different route yields a different identity and is therefore a
-# new review attempt, never a reuse. The default store is an in-process
-# fallback; callers may inject a shared mapping for cross-delivery reuse and
-# tests. No credentials are stored: records carry verdict, bounded feedback,
-# codes, policy and digests only.
+# Durability model: the workflow's persisted gate-result artifact plus the
+# step-ledger check (run.py `_committed_review_gates`) is the durable owner
+# of a committed decision. This module's mapping is a per-worker
+# duplicate-delivery hint only: `TemporalReviewActivities.step_review`
+# (activity_runtime.py) invokes this activity without an injected
+# `committed_store`, so commitments land in the in-process fallback and do
+# not survive worker death or cross-process retries. A lost acknowledgement
+# before the first result reaches the workflow therefore re-invokes the
+# provider under the same immutable review-attempt identity; the workflow
+# persists the first completed delivery and reuses it for later duplicate
+# deliveries via `resolve_committed_gate_reuse`, discarding divergent or
+# unavailable redeliveries. Deployments needing cross-worker reuse before
+# first workflow receipt must inject a shared mapping via `committed_store`.
+# Records carry the complete bounded canonical gate payload (verdict,
+# confidence, feedback, issues, refs, routing, policy and digests only) so a
+# reused record never changes the committed decision. No credentials stored.
 _COMMITTED_REVIEW_VERDICTS = frozenset({"FULLY_IMPLEMENTED", "ADDITIONAL_WORK_NEEDED"})
 
 _committed_reviews: dict[str, dict[str, Any]] = {}
@@ -265,20 +273,45 @@ def record_committed_review(
         provenance = result_payload.get("reviewProvenance")
         if not isinstance(provenance, Mapping):
             return None
+        issues = [
+            dict(issue)
+            for issue in (result_payload.get("issues") or [])
+            if isinstance(issue, Mapping)
+        ][:ISSUES_MAX_COUNT]
         record = {
             "verdict": str(result_payload.get("verdict")),
             "confidence": result_payload.get("confidence", 0.0),
             "feedback": result_payload.get("feedback"),
-            "issues": [
-                dict(issue)
-                for issue in (result_payload.get("issues") or [])
-                if isinstance(issue, Mapping)
-            ][:ISSUES_MAX_COUNT],
+            "issues": issues,
             "reviewProvenance": dict(provenance),
             "recommendedNextAction": result_payload.get("recommendedNextAction"),
             "recoverableInCurrentRuntime": bool(
                 result_payload.get("recoverableInCurrentRuntime", False)
             ),
+            # Preserve the complete bounded canonical gate payload so a
+            # same-worker retry returns the identical committed decision:
+            # dropping these fields would turn an ADDITIONAL_WORK_NEEDED
+            # result into one without routing/remaining-work evidence, or a
+            # passing result into one without validated references.
+            "validatedRefs": dict(result_payload.get("validatedRefs") or {})
+            if isinstance(result_payload.get("validatedRefs"), Mapping)
+            else {},
+            "invalidatedRefs": list(result_payload.get("invalidatedRefs") or [])
+            if isinstance(result_payload.get("invalidatedRefs"), list)
+            else [],
+            "remainingWorkRef": result_payload.get("remainingWorkRef"),
+            "blockingEvidenceRefs": list(
+                result_payload.get("blockingEvidenceRefs") or []
+            )
+            if isinstance(result_payload.get("blockingEvidenceRefs"), list)
+            else [],
+            "targetLogicalStepId": result_payload.get("targetLogicalStepId"),
+            "workspacePolicyRecommendation": result_payload.get(
+                "workspacePolicyRecommendation"
+            ),
+            "invalid": bool(result_payload.get("invalid", False)),
+            "degraded": bool(result_payload.get("degraded", False)),
+            "downgradeReason": result_payload.get("downgradeReason"),
         }
         target = store if isinstance(store, dict) else _committed_reviews
         target[str(attempt_identity)] = record
@@ -296,6 +329,8 @@ def clear_committed_reviews(*, store: Any | None = None) -> None:
         target = store if isinstance(store, dict) else _committed_reviews
         target.clear()
     except Exception:
+        # Clearing is best-effort test/recovery hygiene; a failing clear
+        # must not mask the caller's outcome.
         pass
 
 
@@ -330,7 +365,10 @@ def _validate_decoded_sizes(decoded: Mapping[str, Any]) -> str | None:
                 return "reviewer_truncated"
     confidence = decoded.get("confidence")
     if isinstance(confidence, bool):
-        pass
+        # Booleans are not numeric confidence: `float(True) == 1.0` would
+        # otherwise authorize advancement on malformed provider evidence.
+        # Reject explicitly so the caller returns `reviewer_malformed`.
+        return "reviewer_malformed"
     elif isinstance(confidence, (int, float)):
         if not math.isfinite(float(confidence)):
             return "reviewer_malformed"

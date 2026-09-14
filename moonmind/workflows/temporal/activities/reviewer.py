@@ -23,11 +23,24 @@ class ReviewerUnavailable(ValueError):
 
 # Deployment-owned ceilings for the configured reviewer (MoonMind#3945).
 # These bound resource use before unbounded provider I/O or JSON parsing.
+# The timeout ceiling matches the production `step.review` Temporal route
+# (activity_catalog.py: `TemporalActivityTimeouts(120, 300)`): the activity
+# must finish within the 120s start-to-close budget.
 REVIEW_RESPONSE_MAX_BYTES = 64_000
 REVIEW_TIMEOUT_MIN_SECONDS = 1
-REVIEW_TIMEOUT_MAX_SECONDS = 600
+REVIEW_TIMEOUT_MAX_SECONDS = 120
 REVIEW_MAX_OUTPUT_TOKENS = 4096
 REVIEW_ANTHROPIC_MAX_TOKENS = 4096
+
+
+def _is_o_series_model(model: str) -> bool:
+    """Return True for OpenAI o-series reasoning models.
+
+    o-series Chat Completions models reject the legacy `max_tokens` field
+    and require `max_completion_tokens`.
+    """
+    name = str(model or "").strip().lower()
+    return name.startswith("o1") or name.startswith("o3") or name.startswith("o4")
 
 
 class ConfiguredStepReviewer:
@@ -116,8 +129,13 @@ class ConfiguredStepReviewer:
                 "model": selected_model,
                 "messages": [{"role": "user", "content": prompt}],
                 "response_format": {"type": "json_object"},
-                "max_tokens": REVIEW_MAX_OUTPUT_TOKENS,
             }
+            # o-series models require `max_completion_tokens`; other models
+            # use the legacy `max_tokens` field.
+            if _is_o_series_model(str(selected_model)):
+                body["max_completion_tokens"] = REVIEW_MAX_OUTPUT_TOKENS
+            else:
+                body["max_tokens"] = REVIEW_MAX_OUTPUT_TOKENS
         else:
             url = "https://api.anthropic.com/v1/messages"
             headers.update({
