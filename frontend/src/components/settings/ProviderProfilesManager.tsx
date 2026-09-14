@@ -2801,7 +2801,7 @@ export function ProviderProfilesManager({
         failureReason: null,
       }));
     },
-    onSuccess: (result, { profileId, profile }) => {
+    onSuccess: async (result, { profileId, profile }) => {
       const copy = apiKeyEnrollmentCopy(profile);
       // Committed enrollment reconciles the saved-profile cache even if this
       // drawer closed; visible mutations stay fenced to the owning profile.
