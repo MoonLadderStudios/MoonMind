@@ -80,3 +80,12 @@ def test_harness_references_compose_boundary_services() -> None:
     for service in ("api", "postgres", "temporal", "omnigent"):
         assert service in compose
         assert service in harness
+
+
+def test_cli_parity_is_explicitly_owned_by_sibling_3939() -> None:
+    """REQ-07: this harness claims README Quick Start parity only; CLI-example
+    parity is recorded as owned by sibling #3939, not silently asserted."""
+    harness = _read(HARNESS)
+    assert "#3939" in harness
+    assert "CLI" in harness
+    assert "owns" in harness.lower() or "owned by #3939" in harness
