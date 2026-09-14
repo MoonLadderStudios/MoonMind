@@ -336,6 +336,9 @@ class OmnigentOAuthHostJanitor:
                         lease_released=False,
                     )
                 except Exception:
+                    # Best-effort terminal audit record; the original cleanup
+                    # failure is already reported via cleanup_claim_failed below,
+                    # so a secondary recording failure must not mask it.
                     pass
                 actions.append(
                     {
