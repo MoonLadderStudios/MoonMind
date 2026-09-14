@@ -41,6 +41,16 @@ The four canonical open-issue status labels are:
 
 Ordinary labels such as bug, feature, priority, or component are independent of this state machine. Existing dependency and blocker rules continue to apply. An issue without a status label can still be blocked by its prerequisites or outside the user's requested scope.
 
+Search results distinguish an empty candidate set from candidates excluded by lifecycle,
+dependencies, author scope, or unresolved attempt ownership. `searchEvidence` retains
+aggregate rejection counts and at most 20 candidate examples, prioritizing ownership
+conflicts. Each conflict includes up to 10 recorded attempt/comment identities or its
+local claim owner; truncation is explicit. These identities are diagnostic references,
+not proof of current writer status. A scan blocked by attempt ownership reports
+`unresolved_issue_attempts` and explains the stop/preservation evidence needed before
+retrying. Removing a status label alone never releases an attempt. `selectedIssueAuthor`
+is present only after the candidate reservation succeeds.
+
 The existing configured `status: done` label may accompany verified completed closure. It is terminal presentation, not another open-work admission state. A closed issue with a not-planned disposition is not reported as successfully implemented. An open issue carrying `status: done` is inconsistent and is not silently treated as available.
 
 ### 2.1 State interpretation
@@ -163,6 +173,42 @@ Terminal finalization belongs to the durable execution boundary, not an optional
 The owning deployment quiesces all associated writers, evaluates outstanding mutations, preserves available work under the existing checkpoint/publication policy, and records a terminal handoff. Only then can it release in-progress status to the appropriate next state.
 
 A failed child or internal remediation iteration does not release an issue while the controlling attempt remains active. A required verification failure does not become code review solely because a PR exists. Conversely, a reporting failure does not invalidate verified implementation evidence.
+
+API startup registers `MoonMind.GitHubIssueReconcile` every five minutes, enabled
+by default. The existing API schedule observer retries a failed registration
+every 30 seconds without depending on the workflow queue it is registering.
+Its empty-input maintenance route discovers repositories from local
+durable claim receipts and rotates through at most 25 claims per sweep, including
+claims whose advisory labels are missing. A failed controlling execution and all
+of its descendants must have been closed for at least five minutes before release
+is considered. For a small backlog with healthy services, verified no-work claims
+therefore become retryable on the next sweep after that grace period (normally
+five to ten minutes after terminal closure and runtime cleanup).
+Each claim has a 30-second observation/finalization budget; the sweep stops
+starting claims after four minutes and preserves its rotation cursor. Slow owners
+therefore cannot indefinitely starve later claims. Portable comment lineage
+retains the existing retry allowance across fresh workflow IDs; exhaustion
+produces an attention disposition instead of an unlimited retry loop.
+
+The owner reads complete, bounded Temporal histories rather than inferring death
+from comment age or an execution projection. Started agent children must have
+matching, digest-validated runtime bindings with completed fenced cleanup. The
+workspace owner binds a clean-worktree observation, including untracked files,
+to the preserved checkpoint's archive digest and exact revision. The reconciler
+then verifies through GitHub that this revision is still reachable from the
+recorded source branch. The comparison grants no branch-write, PR, or completion
+authority. Remote read failures defer to a subsequent sweep without another agent
+turn. A run that never started an agent can release its unused reservation or
+confirmed announcement after the same terminal checks.
+
+Automatic release uses the existing finalizer and per-attempt comment receipt:
+publish the terminal proposal, observe targeted label changes, and confirm the
+released comment before freeing the database reservation. An already-removed
+in-progress label does not bypass the stopped-writer and no-work checks. Lost
+acknowledgements resume the recorded finalization plan. Holds, active descendants,
+unknown mutation outcomes, unique commits, modified workspaces, missing historical
+preservation evidence, and foreign deployment claims remain explicit recovery
+dispositions. They are not converted into fresh issue implementations by age.
 
 ### 6.2 Unresponsive deployment
 

@@ -4840,14 +4840,11 @@ async def _load_github_issue_preset_brief(
     async def reserve_candidate(issue_number: int) -> bool:
         if issue_number in (_context or {}).get("rejected_claim_candidates", ()):
             return False
-        try:
-            await _prepare_github_issue_claim(
-                inputs=inputs, context=_context, repository=repository,
-                issue_number=issue_number, service=github_service_factory(),
-            )
-            return True
-        except ActiveIssueClaimConflict:
-            return False
+        await _prepare_github_issue_claim(
+            inputs=inputs, context=_context, repository=repository,
+            issue_number=issue_number, service=github_service_factory(),
+        )
+        return True
 
     if "issueSearch" in inputs:
         repository = _string(inputs.get("repository"))

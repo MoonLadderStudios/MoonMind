@@ -26,6 +26,10 @@ from moonmind.workflows.temporal.github_issue_attempts import (
 class ActiveIssueClaimConflict(ValueError):
     """Another durable owner reserved this candidate before any local write."""
 
+    def __init__(self, message: str, *, evidence: Mapping[str, Any] | None = None):
+        super().__init__(message)
+        self.evidence = dict(evidence or {})
+
 
 def claim_owner(context: Mapping[str, Any] | None = None) -> str:
     """The owning Activity supplies identity, never a tool's authored inputs."""
@@ -240,8 +244,17 @@ class IssueClaimStore:
                 await session.rollback()
             row = await session.get(GitHubIssueClaim, owner)
             if row is None:
+                active = await self.active_for_issue(repository, issue_number)
                 raise ActiveIssueClaimConflict(
-                    "active_attempt_conflict: another durable owner selected this issue"
+                    "active_attempt_conflict: another durable owner selected this issue",
+                    evidence={
+                        "source": "local_claim",
+                        **(
+                            {"owner": active.owner, "attemptId": active.attempt_id}
+                            if active is not None
+                            else {}
+                        ),
+                    },
                 )
             if (row.repository, row.issue_number) != (
                 repository.casefold(),
@@ -298,7 +311,7 @@ def inspect_claim_comments(
 ) -> str | None:
     """Validate own provenance and reject active contenders or conflicting copies."""
     own = []
-    contenders = False
+    contenders = []
     observed_release = receipt.released
     marker = stable_attempt_marker(receipt.attempt_id)
     for comment in comments:
@@ -329,7 +342,21 @@ def inspect_claim_comments(
             "releasing",
             "attention",
         }:
-            contenders = True
+            contender = {
+                "commentId": str(comment.get("id") or ""),
+                "parseStatus": parsed.status,
+                "attemptId": parsed.attempt_id,
+            }
+            if parsed.handoff is not None:
+                contender.update(
+                    {
+                        "deploymentId": parsed.handoff.deployment_id,
+                        "workflowId": parsed.handoff.workflow_id,
+                        "runId": parsed.handoff.run_id,
+                        "activity": parsed.handoff.activity,
+                    }
+                )
+            contenders.append(contender)
     own = list(dict.fromkeys(own))
     if len(own) > 1:
         from moonmind.observability.metrics import increment_counter
@@ -343,7 +370,13 @@ def inspect_claim_comments(
         )
     if contenders and not observed_release:
         raise ActiveIssueClaimConflict(
-            "active_attempt_conflict: another unresolved attempt is present"
+            "active_attempt_conflict: another unresolved attempt is present",
+            evidence={
+                "source": "github_comments",
+                "unresolvedAttemptCount": len(contenders),
+                "attempts": contenders[:10],
+                "attemptsTruncated": len(contenders) > 10,
+            },
         )
     return own[0] if own else None
 
