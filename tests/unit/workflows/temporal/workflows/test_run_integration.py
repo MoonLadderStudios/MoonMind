@@ -286,12 +286,16 @@ async def _immediate_wait_condition(
     assert predicate() is True
 
 def test_run_execution_stage_preserves_conditional_registry_patch_marker() -> None:
+    # MoonLadderStudios/MoonMind#3944 batch 1: the retired bare marker stays
+    # in its historical position as workflow.deprecate_patch so pre-change
+    # histories still replay while new executions record no marker.
     source = inspect.getsource(MoonMindRunWorkflow._run_execution_stage)
 
-    patch_call = f"workflow.patched({RUN_CONDITIONAL_REGISTRY_READ_PATCH!r})"
-    constant_call = "workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)"
+    patch_call = f"workflow.deprecate_patch({RUN_CONDITIONAL_REGISTRY_READ_PATCH!r})"
+    constant_call = "workflow.deprecate_patch(RUN_CONDITIONAL_REGISTRY_READ_PATCH)"
     assert constant_call in source or patch_call in source
     call_string = constant_call if constant_call in source else patch_call
+    assert "workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)" not in source
     assert source.index('workflow.patched("jules-bundling-v1")') < source.index(
         call_string
     )
