@@ -185,18 +185,31 @@ The service:
 ### Projection mutation ownership
 
 `api_service.core.sync.mutate_execution_projection` is the shared mutation
-boundary for Temporal reconciliation, service projection upserts, worker-created
-input snapshot refs, and Omnigent runtime-binding refs. Callers own transaction
-commit and retry. It locks canonical then projection rows and preserves semantic
-`updated_at`; `last_synced_at` measures synchronization, not lifecycle progress.
-A stale same-run running snapshot cannot reopen a terminal row.
+boundary for Temporal reconciliation, service projection upserts, API
+reschedule/plan-binding patches, worker-created input snapshot refs, and
+Omnigent runtime-binding refs. Callers own transaction commit and retry. It
+locks canonical then projection rows and preserves semantic `updated_at`;
+`last_synced_at` measures synchronization, not lifecycle progress. A stale
+same-run running snapshot cannot reopen a terminal row.
 
 | Writer | Owned fields |
 | --- | --- |
 | Temporal reconciliation | Lifecycle identity, state, close evidence, semantic timestamps and workflow metadata |
-| Execution service | API parameters and local idempotency/finish helpers, reconciled with newer lifecycle evidence |
+| Execution service / API routes | API parameters and local idempotency/finish helpers, admitted `scheduled_for` hints, and plan-binding memo keys, reconciled with newer lifecycle evidence |
 | Input snapshot persistence | Immutable task input snapshot memo fields and retained artifact refs |
 | Omnigent binding persistence | Runtime binding ref, revision, fencing generation and binding state |
+
+Field authority: a Temporal observation refreshes lifecycle but never changes
+the authorized principal, execution identity, or immutable admission
+parameters (stored values win; new parameter keys may be introduced). A
+canonical write supplies API fields but still may not move an existing
+execution to a different owner/namespace/type or rewrite immutable creation
+keys — those raise and must go through the existing API owner/coordination
+path. Snapshot and binding owners patch only their memo keys and artifact
+refs; snapshot identity is immutable and binding revisions cannot move
+backwards. Repair-status bookkeeping (`sync_state`/`sync_error`/`source_mode`
+only) and artifact-linkage rows are narrow bookkeeping writes that never touch
+lifecycle, identity, parameters, or memo.
 
 The execution service supplies complete parameter and ordinary memo snapshots,
 so intentional deletion of recovery or waiting metadata is retained. Temporal
@@ -319,6 +332,12 @@ The schema includes explicit sync metadata:
 - `source_mode` (`projection_only | mixed | temporal_authoritative`)
 
 That metadata is still a projection concern, not a claim that the projection has become authoritative.
+
+Freshness is truthful: duplicate observations preserve freshness without
+producing another meaningful revision; stale observations contribute no new
+refs; partially decoded observations yield `REPAIR_PENDING`, not `FRESH`; and
+the inline current-summary artifact ref list is bounded (overflow stays behind
+artifact linkage/history, never as unbounded summary growth).
 
 ---
 
@@ -525,6 +544,22 @@ If the product later needs a per-run audit or run-history view, add a **separate
 `rerun_count` is a local convenience field and may remain useful for compatibility/UI messaging, but it must not become the only audit source for run history.
 
 Temporal remains the authoritative source for the run chain.
+
+### 14.5 Run-chain successor evidence and logical completion
+
+Ordering selects the freshest stored row by semantic timestamps, and the
+no-reopen check applies within the same run. A different run without a
+reliable timestamp needs positive run-chain evidence (`previous_run_id` /
+`first_run_id` linkage); arrival time is not proof that it is the successor.
+Equal semantic timestamps across runs, missing timestamps without linkage, and
+late-predecessor observations stay stale and yield
+reconciliation-needed status rather than replacement, restart, or
+predecessor-close-as-success.
+
+`CONTINUED_AS_NEW` closes one run but continues the logical workflow: it is
+never terminal logical completion at the individual-run level, so the
+projection stays non-terminal and the successor run can advance the one
+logical-workflow projection.
 
 ---
 

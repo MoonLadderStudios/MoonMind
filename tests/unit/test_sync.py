@@ -1884,3 +1884,132 @@ async def test_continued_as_new_successor_advances_without_logical_completion(tm
         await engine.dispose()
 
 
+def _api_shaped_canonical_payload(canonical) -> dict:
+    """Rebuild a canonical-owner payload from the stored canonical row.
+
+    Mirrors the API reschedule/plan-binding patch shape: every column keeps
+    its authorized stored value and only the admitted patch keys change.
+    """
+    from api_service.db.models import TemporalExecutionCanonicalRecord
+
+    payload = {
+        column.name: getattr(canonical, column.name)
+        for column in TemporalExecutionCanonicalRecord.__table__.columns
+    }
+    payload["workflow_id"] = canonical.workflow_id
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_api_shaped_canonical_patch_accepts_scheduled_for_and_rejects_moves(tmp_path):
+    """REQ-02: the API reschedule/plan-binding patch shape (payload rebuilt
+    from the stored canonical row) applies admitted memo/scheduled_for hints
+    to both rows, while wrong-owner/namespace/type moves and immutable
+    creation-key rewrites are rejected instead of merging silently."""
+    import pytest as _pytest
+
+    from api_service.core.sync import mutate_execution_projection
+    from api_service.db.models import Base, TemporalExecutionCanonicalRecord
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            canonical, _ = _seed_execution(
+                session, "mm:api-canonical-patch", updated_at=stored_at,
+            )
+            canonical.create_idempotency_key = "key-1"
+            await session.commit()
+
+            # Happy path: admitted scheduled_for hint + plan memo keys.
+            scheduled_at = datetime(2026, 9, 2, 9, 0, tzinfo=UTC)
+            await session.refresh(canonical)
+            payload = _api_shaped_canonical_payload(canonical)
+            memo = dict(payload["memo"] or {})
+            memo["omnigent_execution_plan_ref"] = "plan-1"
+            payload["memo"] = memo
+            payload["artifact_refs"] = list(payload["artifact_refs"] or []) + ["plan-1"]
+            payload["scheduled_for"] = scheduled_at
+            refreshed = await mutate_execution_projection(
+                session, workflow_id="mm:api-canonical-patch",
+                payload=payload, owner="canonical",
+            )
+            await session.commit()
+            await session.refresh(refreshed)
+            assert _as_utc(refreshed.scheduled_for) == scheduled_at
+            assert refreshed.memo["omnigent_execution_plan_ref"] == "plan-1"
+            assert "plan-1" in refreshed.artifact_refs
+            stored_canonical = await session.get(
+                TemporalExecutionCanonicalRecord, "mm:api-canonical-patch"
+            )
+            assert _as_utc(stored_canonical.scheduled_for) == scheduled_at
+            assert stored_canonical.memo["omnigent_execution_plan_ref"] == "plan-1"
+
+            # Rejection paths: each moves a protected field or rewrites an
+            # immutable creation key under the same API payload shape.
+            await session.refresh(canonical)
+            bad_payloads = []
+            for field, bad in (
+                ("owner_id", "owner-2"),
+                ("namespace", "other-namespace"),
+                ("workflow_type", TemporalWorkflowType.MANIFEST_INGEST),
+                ("create_idempotency_key", "key-2"),
+            ):
+                bad_payload = _api_shaped_canonical_payload(canonical)
+                bad_payload[field] = bad
+                bad_payloads.append((field, bad_payload))
+            for field, bad_payload in bad_payloads:
+                with _pytest.raises(ValueError):
+                    await mutate_execution_projection(
+                        session, workflow_id="mm:api-canonical-patch",
+                        payload=bad_payload, owner="canonical",
+                    )
+                await session.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_owner_patch_applies_first_write_to_both_rows(tmp_path):
+    """REQ-02: a first-time snapshot-owner patch carries snapshot memo keys
+    and refs to both canonical and projection rows through the mutator."""
+    from api_service.core.sync import mutate_execution_projection
+    from api_service.db.models import Base, TemporalExecutionCanonicalRecord
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            _seed_execution(session, "mm:snapshot-first-write", updated_at=stored_at)
+            await session.commit()
+
+            refreshed = await mutate_execution_projection(
+                session, workflow_id="mm:snapshot-first-write",
+                payload={
+                    "workflow_id": "mm:snapshot-first-write",
+                    "memo": {
+                        "task_input_snapshot_ref": "snap-1",
+                        "task_input_snapshot_version": 1,
+                        "task_input_snapshot_source_kind": "create",
+                    },
+                    "artifact_refs": ["snap-1"],
+                },
+                owner="snapshot",
+            )
+            await session.commit()
+            await session.refresh(refreshed)
+            assert refreshed.memo["task_input_snapshot_ref"] == "snap-1"
+            assert "snap-1" in refreshed.artifact_refs
+            stored_canonical = await session.get(
+                TemporalExecutionCanonicalRecord, "mm:snapshot-first-write"
+            )
+            assert stored_canonical.memo["task_input_snapshot_ref"] == "snap-1"
+            assert "snap-1" in stored_canonical.artifact_refs
+    finally:
+        await engine.dispose()
+
+

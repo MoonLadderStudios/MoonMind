@@ -10363,6 +10363,79 @@ async def _snapshot_source_payload_from_parameters_and_artifact(
         )
     return payload, parameter_task or artifact_task
 
+async def _apply_snapshot_memo_patch_via_mutator(
+    *,
+    session: AsyncSession,
+    workflow_id: str,
+    memo_patch: Mapping[str, Any],
+    artifact_refs: list[str] | None = None,
+) -> None:
+    """Apply a snapshot-owner memo/refs patch through the shared mutator (REQ-02).
+
+    First-time snapshot writes and idempotent replays go through
+    ``mutate_execution_projection`` with ``owner="snapshot"`` so field
+    authority, projection versioning, and missing-projection repair stay
+    cohesive. The caller owns commit/refresh. A conflicting stored snapshot
+    identity raises ``ValueError`` instead of silently overwriting; an
+    API-authorized snapshot replacement (edit/rerun with new parameters)
+    stays a direct write at its explicit call site with a field-scope note.
+    """
+    await execution_sync.mutate_execution_projection(
+        session,
+        workflow_id=workflow_id,
+        payload={
+            "workflow_id": workflow_id,
+            "memo": dict(memo_patch),
+            "artifact_refs": list(artifact_refs or []),
+        },
+        owner="snapshot",
+    )
+
+
+async def _apply_canonical_projection_patch_via_mutator(
+    *,
+    session: AsyncSession,
+    workflow_id: str,
+    memo_patch: Mapping[str, Any] | None = None,
+    artifact_refs: list[str] | None = None,
+    scheduled_for: Any = None,
+    set_scheduled_for: bool = False,
+) -> None:
+    """Apply a canonical-owner projection patch through the shared mutator (REQ-02).
+
+    The payload is rebuilt from the stored canonical row so lifecycle,
+    identity, and admission fields keep their authorized values; only the
+    supplied memo keys, new artifact refs, and (optionally) the admitted
+    ``scheduled_for`` hint change. Wrong-owner/namespace/type moves and
+    immutable-creation rewrites are rejected by the mutator instead of
+    merging silently. The caller owns commit/refresh.
+    """
+    canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+    if canonical is None:
+        raise ValueError(f"canonical record not found for {workflow_id}")
+    payload = {
+        column.name: getattr(canonical, column.name)
+        for column in TemporalExecutionCanonicalRecord.__table__.columns
+    }
+    payload["workflow_id"] = workflow_id
+    if memo_patch:
+        memo = dict(canonical.memo or {})
+        memo.update(dict(memo_patch))
+        payload["memo"] = memo
+    if artifact_refs:
+        payload["artifact_refs"] = list(canonical.artifact_refs or []) + [
+            ref for ref in artifact_refs if ref not in (canonical.artifact_refs or [])
+        ]
+    if set_scheduled_for:
+        payload["scheduled_for"] = scheduled_for
+    await execution_sync.mutate_execution_projection(
+        session,
+        workflow_id=workflow_id,
+        payload=payload,
+        owner="canonical",
+    )
+
+
 async def _persist_original_workflow_input_snapshot(
     *,
     session: AsyncSession,
@@ -10429,25 +10502,47 @@ async def _persist_original_workflow_input_snapshot(
         content_type=_TASK_INPUT_SNAPSHOT_CONTENT_TYPE,
     )
 
-    records_to_update = [canonical_record]
-    if record is not canonical_record:
-        records_to_update.append(record)
-    for target_record in records_to_update:
-        memo = dict(target_record.memo or {})
-        memo["task_input_snapshot_ref"] = completed.artifact_id
-        memo["task_input_snapshot_version"] = _WORKFLOW_INPUT_SNAPSHOT_VERSION
-        memo["task_input_snapshot_source_kind"] = source_kind
-        target_record.memo = memo
-        refs = list(target_record.artifact_refs or [])
-        for attachment_ref in attachment_refs or []:
-            attachment_id = str(attachment_ref.get("artifactId") or "").strip()
-            if attachment_id and attachment_id not in refs:
-                refs.append(attachment_id)
-        if completed.artifact_id not in refs:
-            refs.append(completed.artifact_id)
+    memo_patch = {
+        "task_input_snapshot_ref": completed.artifact_id,
+        "task_input_snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
+        "task_input_snapshot_source_kind": source_kind,
+    }
+    new_refs: list[str] = []
+    for attachment_ref in attachment_refs or []:
+        attachment_id = str(attachment_ref.get("artifactId") or "").strip()
+        if attachment_id and attachment_id not in new_refs:
+            new_refs.append(attachment_id)
+    if completed.artifact_id not in new_refs:
+        new_refs.append(completed.artifact_id)
+    stored_ref = str(
+        (canonical_record.memo or {}).get("task_input_snapshot_ref") or ""
+    ).strip()
+    if stored_ref and stored_ref != completed.artifact_id:
+        # Field-scope note (REQ-02, justified direct write): API-authorized
+        # snapshot replacement for an edit/rerun with new parameters on the
+        # same workflow. The shared mutator keeps snapshot identity immutable
+        # per workflow, so the replacement stays an explicit write here under
+        # the caller's commit contract; it touches only snapshot memo keys
+        # and artifact refs, never lifecycle, identity, or parameters.
+        records_to_update = [canonical_record]
+        if record is not canonical_record:
+            records_to_update.append(record)
+        for target_record in records_to_update:
+            memo = dict(target_record.memo or {})
+            memo.update(memo_patch)
+            target_record.memo = memo
+            refs = list(target_record.artifact_refs or [])
+            for ref in new_refs:
+                if ref not in refs:
+                    refs.append(ref)
             target_record.artifact_refs = refs
-        else:
-            target_record.artifact_refs = refs
+    else:
+        await _apply_snapshot_memo_patch_via_mutator(
+            session=session,
+            workflow_id=canonical_record.workflow_id,
+            memo_patch=memo_patch,
+            artifact_refs=new_refs,
+        )
     return completed.artifact_id
 
 
@@ -10526,16 +10621,21 @@ async def _reuse_original_task_input_snapshot_from_source(
             if canonical_record is not None:
                 records_to_update.append(canonical_record)
     linked_execution_keys: set[tuple[str, str, str]] = set()
+    # Snapshot memo/refs go through the shared snapshot-owner mutator (REQ-02)
+    # so field authority and versioning stay cohesive; the artifact-link rows
+    # below remain direct bookkeeping writes (separate linkage table, no
+    # lifecycle/identity/memo content) under the caller's commit contract.
+    await _apply_snapshot_memo_patch_via_mutator(
+        session=session,
+        workflow_id=target_record.workflow_id,
+        memo_patch={
+            "task_input_snapshot_ref": snapshot_ref,
+            "task_input_snapshot_version": snapshot_version,
+            "task_input_snapshot_source_kind": "rerun",
+        },
+        artifact_refs=[snapshot_ref],
+    )
     for target in records_to_update:
-        memo = dict(target.memo or {})
-        memo["task_input_snapshot_ref"] = snapshot_ref
-        memo["task_input_snapshot_version"] = snapshot_version
-        memo["task_input_snapshot_source_kind"] = "rerun"
-        target.memo = memo
-        refs = list(target.artifact_refs or [])
-        if snapshot_ref not in refs:
-            refs.append(snapshot_ref)
-            target.artifact_refs = refs
         execution_key = (target.namespace, target.workflow_id, target.run_id)
         if execution_key in linked_execution_keys:
             continue
@@ -10569,6 +10669,14 @@ async def _attach_input_attachment_artifacts_to_execution(
     record,
     attachment_refs: list[dict[str, Any]],
 ) -> None:
+    # Field-scope note (REQ-02, justified direct write): input-attachment
+    # linkage appends only artifact refs plus ``input.attachment`` link rows.
+    # It never touches lifecycle, identity, parameters, memo, sync metadata,
+    # or versions, and it must not mark the projection FRESH (an attachment
+    # link is not lifecycle evidence). Routing refs-only linkage through the
+    # mutator would overstate freshness, so this stays a narrow bookkeeping
+    # write under the caller's commit contract, like the repair-status
+    # fallback in TemporalExecutionService.
     if session is None or not attachment_refs:
         return
     if not isinstance(
@@ -11766,40 +11874,36 @@ async def _create_execution_from_workflow_request(
     )
     if persisted_omnigent_plan is not None:
         snapshot_ref = prelaunch_task_input_snapshot_ref
-        records_to_bind = [record]
-        if isinstance(record, TemporalExecutionRecord):
-            canonical_record = await session.get(
-                TemporalExecutionCanonicalRecord, record.workflow_id
-            )
-            if canonical_record is not None:
-                records_to_bind.append(canonical_record)
-        for target_record in records_to_bind:
-            memo = dict(getattr(target_record, "memo", None) or {})
-            memo.update(
-                {
-                    "task_input_snapshot_ref": snapshot_ref,
-                    "task_input_snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
-                    "task_input_snapshot_source_kind": "create",
-                    "omnigent_execution_plan_ref": (
-                        persisted_omnigent_plan.binding.plan_ref
-                    ),
-                    "omnigent_execution_plan_digest": (
-                        persisted_omnigent_plan.binding.plan_digest
-                    ),
-                    "omnigent_execution_plan_artifact_ref": (
-                        persisted_omnigent_plan.binding.plan_artifact_ref
-                    ),
-                }
-            )
-            target_record.memo = memo
-            refs = list(getattr(target_record, "artifact_refs", None) or [])
-            for artifact_ref in (
-                snapshot_ref,
-                *persisted_omnigent_plan.artifact_refs,
-            ):
-                if artifact_ref not in refs:
-                    refs.append(artifact_ref)
-            target_record.artifact_refs = refs
+        # Snapshot memo keys go through the snapshot owner and the plan
+        # binding keys through the canonical owner (REQ-02); both route
+        # through the shared mutator instead of direct row writes. Caller
+        # owns the commit below.
+        await _apply_snapshot_memo_patch_via_mutator(
+            session=session,
+            workflow_id=record.workflow_id,
+            memo_patch={
+                "task_input_snapshot_ref": snapshot_ref,
+                "task_input_snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
+                "task_input_snapshot_source_kind": "create",
+            },
+            artifact_refs=[snapshot_ref],
+        )
+        await _apply_canonical_projection_patch_via_mutator(
+            session=session,
+            workflow_id=record.workflow_id,
+            memo_patch={
+                "omnigent_execution_plan_ref": (
+                    persisted_omnigent_plan.binding.plan_ref
+                ),
+                "omnigent_execution_plan_digest": (
+                    persisted_omnigent_plan.binding.plan_digest
+                ),
+                "omnigent_execution_plan_artifact_ref": (
+                    persisted_omnigent_plan.binding.plan_artifact_ref
+                ),
+            },
+            artifact_refs=list(persisted_omnigent_plan.artifact_refs),
+        )
     else:
         snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
             session=session,
@@ -17638,15 +17742,23 @@ async def continue_in_new_workflow(
             target_record=record,
         )
         source_memo = dict(canonical.memo or {})
-        target_memo = dict(getattr(record, "memo", None) or {})
-        for key in (
-            "omnigent_execution_plan_ref",
-            "omnigent_execution_plan_digest",
-            "omnigent_execution_plan_artifact_ref",
-        ):
-            if source_memo.get(key) is not None:
-                target_memo[key] = source_memo[key]
-        record.memo = target_memo
+        plan_memo_patch = {
+            key: source_memo[key]
+            for key in (
+                "omnigent_execution_plan_ref",
+                "omnigent_execution_plan_digest",
+                "omnigent_execution_plan_artifact_ref",
+            )
+            if source_memo.get(key) is not None
+        }
+        # Plan binding keys go through the canonical-owner mutator (REQ-02)
+        # instead of a direct row write; caller owns the commit below.
+        if plan_memo_patch:
+            await _apply_canonical_projection_patch_via_mutator(
+                session=session,
+                workflow_id=record.workflow_id,
+                memo_patch=plan_memo_patch,
+            )
     else:
         await _persist_original_workflow_input_snapshot_from_parameters(
             session=session,
@@ -18361,10 +18473,29 @@ async def reschedule_execution(
     
     # We shouldn't rely strictly on describing the Execution immediately because Temporal signal is async.
     # But let's return the updated record locally updated for the user.
+    # The admitted scheduling hint goes through the shared canonical-owner
+    # mutator (REQ-02), as done for the start path in
+    # TemporalExecutionService, so field authority and versioning stay
+    # cohesive; the service session owns the commit contract here.
     if isinstance(record, TemporalExecutionRecord):
-        record.scheduled_for = payload.scheduled_for
-        await service._session.commit()
-        await service._session.refresh(record)
+        try:
+            await _apply_canonical_projection_patch_via_mutator(
+                session=service._session,
+                workflow_id=record.workflow_id,
+                scheduled_for=payload.scheduled_for,
+                set_scheduled_for=True,
+            )
+            await service._session.commit()
+            await service._session.refresh(record)
+        except Exception:
+            logger.exception(
+                "Failed to record scheduled_for for execution %s",
+                record.workflow_id,
+            )
+            try:
+                await service._session.rollback()
+            except Exception:
+                pass
 
     return _serialize_execution(record, user=user)
 
@@ -18475,15 +18606,23 @@ async def rerun_execution(
             target_record=record,
         )
         source_memo = dict(canonical.memo or {})
-        target_memo = dict(getattr(record, "memo", None) or {})
-        for key in (
-            "omnigent_execution_plan_ref",
-            "omnigent_execution_plan_digest",
-            "omnigent_execution_plan_artifact_ref",
-        ):
-            if source_memo.get(key) is not None:
-                target_memo[key] = source_memo[key]
-        record.memo = target_memo
+        plan_memo_patch = {
+            key: source_memo[key]
+            for key in (
+                "omnigent_execution_plan_ref",
+                "omnigent_execution_plan_digest",
+                "omnigent_execution_plan_artifact_ref",
+            )
+            if source_memo.get(key) is not None
+        }
+        # Plan binding keys go through the canonical-owner mutator (REQ-02)
+        # instead of a direct row write; caller owns the commit below.
+        if plan_memo_patch:
+            await _apply_canonical_projection_patch_via_mutator(
+                session=session,
+                workflow_id=record.workflow_id,
+                memo_patch=plan_memo_patch,
+            )
     else:
         snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
             session=session,
