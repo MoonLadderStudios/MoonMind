@@ -17725,8 +17725,12 @@ async def test_exact_rerun_reuses_source_task_input_snapshot_lineage() -> None:
         TemporalExecutionCanonicalRecord,
         "mm:rerun",
     )
-    assert len(session.added) == 1
-    link = session.added[0]
+    # Shared mutator repairs the missing projection in-memory for session
+    # doubles (one record add) before the caller records the artifact link.
+    assert len(session.added) == 2
+    link = next(
+        added for added in session.added if isinstance(added, TemporalArtifactLink)
+    )
     assert isinstance(link, TemporalArtifactLink)
     assert link.artifact_id == "artifact://snapshot/source"
     assert link.namespace == "moonmind"
