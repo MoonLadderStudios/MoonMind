@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timedelta
 
 from temporalio import workflow
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ApplicationError, is_cancelled_exception
 
 RENEW_SECONDS = 300
 STOP_MARGIN_SECONDS = 60
@@ -18,7 +18,12 @@ async def execute_with_issue_lease(*, lease, execute, renew):
         nonlocal expires
         try:
             result = await renew(lease)
-        except Exception:  # noqa: BLE001 -- retry only within the last confirmed lease
+        except Exception as exc:
+            # Temporal wraps activity cancellation in ActivityError. Treating
+            # it as a retry would keep this auxiliary loop alive after its
+            # agent finished, trapping the parent's terminal result in gather.
+            if is_cancelled_exception(exc):
+                raise
             return False
         if result.get("status") == "lost":
             raise ApplicationError("GitHub issue claim lease lost", non_retryable=True)

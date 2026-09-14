@@ -51,7 +51,13 @@ class ClaimedParent:
 @pytest.mark.parametrize("journey", ["postgres"], indirect=True)
 @pytest.mark.parametrize("agent_kind", ["managed", "external"])
 @pytest.mark.parametrize(
-    "fault", ["outage", "worker_replacement", "expired_before_launch"]
+    "fault",
+    [
+        "outage",
+        "worker_replacement",
+        "expired_before_launch",
+        "completion_during_renewal",
+    ],
 )
 async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
     journey, monkeypatch, agent_kind, fault
@@ -79,7 +85,7 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
     monkeypatch.setattr(
         leases,
         "LEASE_DURATION",
-        timedelta(seconds=60 if fault == "worker_replacement" else 10),
+        timedelta(seconds=10 if fault in {"outage", "expired_before_launch"} else 60),
     )
     monkeypatch.setattr(leases, "RENEW_INTERVAL", timedelta(seconds=0.4))
     monkeypatch.setattr(lease_workflow, "RENEW_SECONDS", 0.5)
@@ -94,6 +100,7 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
     assert lease == (await store.get(owner)).handoff()["issueClaimLease"]
     before = state["comments"][0]["body"]
     started, preserved = asyncio.Event(), asyncio.Event()
+    renewal_pending = asyncio.Event()
     start_count = 0
 
     @activity.defn(name="fixture.start")
@@ -106,11 +113,21 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
     async def preserve():
         preserved.set()
 
+    @activity.defn(name="fixture.await_renewal")
+    async def await_renewal():
+        await renewal_pending.wait()
+
     async def cancellable_execution(self, request):
         await workflow.execute_activity(
             "fixture.start", start_to_close_timeout=timedelta(seconds=10)
         )
         try:
+            if fault == "completion_during_renewal":
+                await workflow.execute_activity(
+                    "fixture.await_renewal",
+                    start_to_close_timeout=timedelta(seconds=10),
+                )
+                return AgentRunResult(summary="fixture completed")
             await workflow.sleep(4 if fault == "worker_replacement" else 60)
             return AgentRunResult(summary="fixture completed")
         except asyncio.CancelledError:
@@ -131,9 +148,17 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
         SimpleNamespace(resolve_activity=lambda _: replace(route, task_queue=queue)),
     )
 
+    renewal_calls = 0
+
     @activity.defn(name="github_issue.renew_claim")
     async def renew(payload: dict):
-        return await TemporalIntegrationActivities().github_issue_renew_claim(payload)
+        nonlocal renewal_calls
+        renewal_calls += 1
+        result = await TemporalIntegrationActivities().github_issue_renew_claim(payload)
+        if fault == "completion_during_renewal" and renewal_calls > 1:
+            renewal_pending.set()
+            await asyncio.sleep(60)  # acknowledgement is still in flight at completion
+        return result
 
     request = AgentExecutionRequest(
         agentKind=agent_kind,
@@ -150,7 +175,7 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
         "workflow_runner": UnsandboxedWorkflowRunner(),
         "max_cached_workflows": 0,
         "workflows": [agent_run.MoonMindAgentRun, ClaimedParent],
-        "activities": [start, preserve, renew],
+        "activities": [start, preserve, renew, await_renewal],
     }
     async with Worker(client, **options):
         handle = await client.start_workflow(
@@ -162,6 +187,10 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
             assert not started.is_set()
             return
         await asyncio.wait_for(started.wait(), 15)
+        if fault == "completion_during_renewal":
+            result = await asyncio.wait_for(handle.result(), 15)
+            assert result.summary == "fixture completed" and not preserved.is_set()
+            return
         if fault == "outage":
             state["failed_read_path"] = "/repos/example/repo/issues/3970/comments"
             with pytest.raises(WorkflowFailureError):
