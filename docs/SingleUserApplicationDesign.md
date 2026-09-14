@@ -273,19 +273,77 @@ application-login session, role, membership, or human-ownership structures neede
 for normal operation. Obsolete foreign keys and user-scoped uniqueness rules do
 not survive behind a permanent default-user mapping.
 
-An upgraded instance preserves its admitted workflows, schedules, artifacts,
+An eligible single-operator upgrade preserves its admitted workflows, schedules, artifacts,
 preset versions, effective settings, preferences, and usable credential
 references. Existing resource IDs and relationships remain stable where other
 records or external references depend on them. Legacy creator information may
 remain as provenance, but never as an operator-access predicate.
 
-Multiple legacy identity rows are not silently assumed to be interchangeable.
-Conflicting effective settings, duplicate preset names, and distinct credentials
-have an explicit, data-preserving disposition. Data belonging to genuinely
-different people is not silently exposed or combined. Ambiguity is resolved at
-the migration boundary without restoring multi-user behavior to the running
-application. Ordinary cases are resolved automatically from reliable evidence,
-not through a routine requirement for manual approval.
+### Upgrade eligibility and disposition
+
+In-place conversion is supported only when the complete retained data set is
+attributable to one operator or to that operator's deployment. The chosen
+disposition for a genuinely multi-person database is to **block conversion
+without changing the source deployment**. The migration does not choose an
+administrator as the new owner, combine people's data, or silently discard the
+unselected rows. It does not implement automatic splitting, quarantine, or
+export as an alternate migration mode.
+
+| Source state | Conversion disposition |
+| --- | --- |
+| Fresh database with no retained application data | Initialize the single-user schema without creating an account |
+| Retained data attributable to one operator, including proven aliases of that same person | Convert automatically within existing deployment authorization, preserving the resources and effective configuration described below |
+| Retained data attributable to multiple people | Block before conversion or access cutover, leaving source data and its existing protections unchanged |
+| Missing, conflicting, or incomplete ownership evidence | Block on the same boundary until the source attribution is resolved through authorized evidence or a separately authorized data disposition |
+
+Attribution covers all retained resources and their dependencies, not just active
+login rows. It includes disabled or deleted users' remaining data, profile-held
+credentials, settings, presets, artifacts, schedules, serialized ownership, and
+in-flight execution references. A durable mapping to the same existing person
+can establish an alias. Matching email, display name, administrator status, one
+remaining active account, or merely selecting a preferred account cannot.
+Unowned rows require evidence that they are deployment-owned, not an assumption
+that they are safe to expose. Multiple provider accounts are not multiple people.
+
+The eligibility decision uses a consistent source snapshot and remains valid
+through cutover. A newly observed identity, resource, or conflicting reference
+invalidates the decision before the candidate can expose the converted data.
+The block precedes removal of access predicates, credential rebinding, destructive
+schema changes, and replacement of the serving application. The existing release
+and its protected operator URL remain available. Already-admitted work continues
+under its existing authority. A failed conversion is not a partial success or a
+reason to bring up the candidate against an unconverted database.
+
+Blocked conversion reports the reason and redacted evidence through the existing
+migration or deployment result. It does not disclose another person's resource
+contents or credentials. Resolution is a separate, authorized preparation of a
+single-operator data set or correction of the attribution evidence, followed by
+the same eligibility check. This design neither authorizes that preparation nor
+requires a new export service, identity registry, or permanent multi-user mode.
+The old release is a protected source pending a valid cutover, not a second
+application architecture supported by the new release. Lack of production
+authority does not prevent agents from implementing and testing these outcomes
+against isolated fixtures.
+
+### Data preservation within an eligible upgrade
+
+Within a verified single-operator data set, instance settings preserve the
+operator's previously effective values and applicable project or runtime
+contexts. If conflicting same-person defaults cannot be represented without an
+arbitrary choice, conversion remains blocked until that choice has an explicit
+disposition. The migrator does not pick the newest row or an administrator's
+profile merely for convenience.
+
+Different same-person presets retain their IDs, contents, and versions. A name
+collision is resolved with a deterministic, collision-free name derived from the
+original scope and stable resource ID, with references preserved or updated
+transactionally. Credentials remain separate managed-secret references with
+their original provider and billing bindings. Identical-value deduplication is
+not permission to merge different credentials. Favorites are deduplicated by
+resource identity and recents retain their latest recorded use. These rules do
+not apply across people because such a source is ineligible for conversion.
+
+### History and deployment continuity
 
 Retained Temporal histories and durable payloads remain executable or have a
 controlled cutover under their existing compatibility rules. Historical user
@@ -319,7 +377,9 @@ in isolated environments and retains truthful results.
 | Scenario | Required outcome |
 | --- | --- |
 | Fresh local instance | Dashboard and ordinary operator actions work without account setup, login, user seeding, or an identity service |
-| Existing populated instance | Retained resources, effective settings, preset versions, and credential bindings survive without owner-based visibility |
+| Eligible single-operator populated instance | Retained resources, effective settings, preset versions, and credential bindings survive without owner-based visibility, including proven same-person aliases and collision handling |
+| Multiple people or unresolved attribution | Conversion is blocked before source mutation or access cutover, without exposing, combining, exporting, or deleting another person's data; the protected source release and admitted work remain available |
+| Source changes during conversion | The candidate is not exposed using a stale eligibility decision; inconsistent conversion has no partially published result |
 | Approved remote access | The configured operator URL works through its protected boundary without a local user registry |
 | Unapproved or bypass access | Direct-backend, forged-header, hostile-origin, and invalid-credential requests cannot acquire operator authority |
 | Scoped machine execution | Correctly scoped operations work, while unrelated resources and operator-only actions remain denied |
@@ -354,6 +414,15 @@ The human-user and tenancy-scope portions of the
 and profile-to-application-user relationships likewise do not define the target
 application model. Their useful configuration, catalog, and credential semantics
 remain owned by those subsystems within the single-user invariant.
+
+The owning documents carry this classification themselves. The Omnigent
+application-auth adapter is a superseded predecessor reference, and the Settings
+System explicitly supersedes its human ownership, tenancy, and role requirements
+while retaining its configuration and security responsibilities. Account-era
+examples in those documents describe existing implementations only, not new
+single-user interfaces. Consumers of those scope rules inherit the same
+classification. UI navigation, secret materialization, workflow capabilities,
+and other independent contracts are not redefined by an old scope example.
 
 This scope does not supersede machine-token wire formats, runtime binding,
 credential isolation, publication approval, or Temporal compatibility contracts.
