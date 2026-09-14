@@ -71,6 +71,72 @@ OPS_DIAGNOSIS_TAIL_LINES_MIN = 50
 OPS_DIAGNOSIS_TAIL_LINES_MAX = 1000
 OPS_DIAGNOSIS_TAIL_LINES_DEFAULT = 300
 
+#: Services that only exist under optional Compose profiles. A stopped or
+#: absent optional service is not a health failure (MoonMind#424).
+OPTIONAL_DIAGNOSIS_SERVICES = frozenset({"temporal-ui", "docker-proxy"})
+
+#: One-shot init containers expected to exit after success.
+ONE_SHOT_DIAGNOSIS_SERVICES = frozenset({"init-db"})
+
+#: Truthful observation support per collector include (MoonMind#424). A
+#: running container proves process presence only — never application
+#: reachability, worker queue polling, artifact round-trip success, or
+#: measured CPU/memory availability.
+OBSERVATION_SUPPORT = {
+    "compose_ps": "Container process presence per service (no health claim).",
+    "compose_images": "Pinned image references per service (no runtime claim).",
+    "container_health": "Container state/health strings per service (no app-probe claim).",
+    "container_inspect_summary": "Bounded inspect state excerpt per container (no credential claim).",
+    "recent_logs": "Bounded log tail excerpt, redacted (untrusted data, not diagnosis).",
+    "api_health": (
+        "Container presence for the api service only; "
+        "API reachability NOT proven (requires an application probe)."
+    ),
+    "worker_health": (
+        "Container presence for worker services only; "
+        "queue polling NOT proven (requires worker availability evidence)."
+    ),
+    "temporal_connectivity": (
+        "Container presence for the temporal service only; "
+        "Temporal connectivity NOT proven (requires a Temporal API check)."
+    ),
+    "artifact_store_health": (
+        "Container presence for the artifact store only; "
+        "store round-trip success NOT proven (requires a read/write probe)."
+    ),
+    "disk_memory_cpu": (
+        "Docker storage reporting only; "
+        "measured CPU/memory availability NOT proven."
+    ),
+}
+
+
+def observation_support_label(include: str) -> str:
+    """Return the supported-observation description for one include."""
+    return OBSERVATION_SUPPORT.get(include, f"{include}: collected evidence class.")
+
+
+def classify_diagnosed_container(service: str, state: str, health: str) -> str:
+    """Classify one diagnosed container without overstating health.
+
+    Returns one of ``running``, ``running_degraded``, ``stopped``,
+    ``optional_absent``, or ``one_shot_complete``.
+    """
+    name = str(service or "").strip()
+    state_l = str(state or "").lower()
+    health_l = str(health or "").lower()
+    if name in OPTIONAL_DIAGNOSIS_SERVICES and (
+        "exit" in state_l or not state_l or "not found" in state_l or "stopped" in state_l
+    ):
+        return "optional_absent"
+    if name in ONE_SHOT_DIAGNOSIS_SERVICES and ("exit" in state_l or "complete" in state_l):
+        return "one_shot_complete"
+    if "running" in state_l and health_l in {"", "healthy", "none"}:
+        return "running"
+    if "running" in state_l:
+        return "running_degraded"
+    return "stopped"
+
 
 class OpsDiagnosisEvidenceWriter(Protocol):
     async def write(self, kind: str, payload: Mapping[str, Any]) -> str:
@@ -688,7 +754,33 @@ def _findings_for_evidence(include: str, payload: Any) -> list[dict[str, Any]]:
             state = str(item.get("state") or "").lower()
             health = str(item.get("health") or "").lower()
             service = str(item.get("service") or "").strip() or None
-            if state and "running" not in state:
+            classification = classify_diagnosed_container(
+                service or "", state, health
+            )
+            if classification == "optional_absent":
+                findings.append(
+                    {
+                        "kind": "container_health",
+                        "severity": "info",
+                        "message": (
+                            f"Service {service or 'unknown'} is optional and absent; "
+                            "not a health failure."
+                        ),
+                        "service": service,
+                    }
+                )
+            elif classification == "one_shot_complete":
+                findings.append(
+                    {
+                        "kind": "container_health",
+                        "severity": "info",
+                        "message": (
+                            f"Service {service or 'unknown'} completed its one-shot run."
+                        ),
+                        "service": service,
+                    }
+                )
+            elif classification == "stopped":
                 findings.append(
                     {
                         "kind": "container_health",
@@ -697,7 +789,7 @@ def _findings_for_evidence(include: str, payload: Any) -> list[dict[str, Any]]:
                         "service": service,
                     }
                 )
-            elif health and health not in {"healthy", "none"}:
+            elif classification == "running_degraded":
                 findings.append(
                     {
                         "kind": "container_health",
@@ -708,6 +800,22 @@ def _findings_for_evidence(include: str, payload: Any) -> list[dict[str, Any]]:
                         "service": service,
                     }
                 )
+    elif include in {
+        "api_health",
+        "worker_health",
+        "temporal_connectivity",
+        "artifact_store_health",
+        "disk_memory_cpu",
+    }:
+        # Truthful scope label: presence/probe-limited evidence, never a
+        # global all-clear. Informational so partial probes stay explicit.
+        findings.append(
+            {
+                "kind": include,
+                "severity": "info",
+                "message": observation_support_label(include),
+            }
+        )
     return findings
 
 
@@ -730,14 +838,20 @@ def _summary(
     failed = sum(1 for item in evidence.values() if item.get("status") == "FAILED")
     errors = sum(1 for item in findings if item.get("severity") == "error")
     warnings = sum(1 for item in findings if item.get("severity") == "warning")
-    return (
+    base = (
         f"Ops diagnosis {status}: {succeeded} evidence class(es) collected, "
         f"{failed} failed, {errors} error finding(s), {warnings} warning finding(s)."
     )
+    if status == "PARTIALLY_VERIFIED":
+        base += " Partial probe: no global all-clear is claimed from partial evidence."
+    return base
 
 
 __all__ = [
     "DEFAULT_OPS_DIAGNOSIS_INCLUDES",
+    "OBSERVATION_SUPPORT",
+    "ONE_SHOT_DIAGNOSIS_SERVICES",
+    "OPTIONAL_DIAGNOSIS_SERVICES",
     "OPS_DIAGNOSIS_ARTIFACT_TYPE",
     "OPS_DIAGNOSIS_INCLUDES",
     "OPS_DIAGNOSIS_STACKS",
@@ -746,5 +860,7 @@ __all__ = [
     "HostDockerComposeOpsDiagnosisRunner",
     "TemporalOpsDiagnosisEvidenceWriter",
     "build_ops_diagnose_stack_handler",
+    "classify_diagnosed_container",
+    "observation_support_label",
     "register_ops_diagnose_stack_tool_handler",
 ]
