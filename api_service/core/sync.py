@@ -498,11 +498,25 @@ def _semantic_time(value: datetime | None) -> datetime | None:
 # Temporal owns lifecycle order; the canonical API owner owns admission identity
 # and creation-time parameters. A Temporal observation may refresh lifecycle
 # without changing the authorized principal or immutable admission parameters.
+# A canonical write is the admission owner, but it still may not move an
+# existing execution to a different owner/namespace/type or rewrite immutable
+# creation keys: those require their existing API owner/coordination path, not
+# general payload merging.
 _TEMPORAL_PROTECTED_IDENTITY_FIELDS = (
     "owner_id",
     "owner_type",
     "namespace",
     "workflow_type",
+)
+_CANONICAL_PROTECTED_IDENTITY_FIELDS = (
+    "owner_id",
+    "owner_type",
+    "namespace",
+    "workflow_type",
+)
+_CANONICAL_IMMUTABLE_CREATION_FIELDS = (
+    "create_idempotency_key",
+    "created_at",
 )
 
 # Terminal close statuses at the individual-run level. CONTINUED_AS_NEW closes
@@ -625,6 +639,50 @@ async def mutate_execution_projection(
                         workflow_id, key,
                     )
             incoming["parameters"] = merged_params
+    # Canonical authority (REQ-02): the admission owner supplies API fields,
+    # but an existing execution's principal/identity and immutable creation
+    # keys are not movable by general payload merging. Wrong-owner, wrong-
+    # namespace, wrong-type, or rewritten creation keys are rejected so the
+    # caller must coordinate through the existing API owner.
+    if owner == "canonical" and latest is not None:
+        for field in _CANONICAL_PROTECTED_IDENTITY_FIELDS:
+            stored_identity = _normalize_identity(getattr(latest, field, None))
+            incoming_identity = _normalize_identity(incoming.get(field))
+            if (
+                stored_identity is not None
+                and incoming_identity is not None
+                and stored_identity != incoming_identity
+            ):
+                raise ValueError(
+                    f"canonical mutation changes protected field {field}"
+                )
+        for field in _CANONICAL_IMMUTABLE_CREATION_FIELDS:
+            stored_value = getattr(latest, field, None)
+            incoming_value = incoming.get(field)
+            if stored_value is None or incoming_value is None:
+                continue
+            if isinstance(stored_value, datetime) or isinstance(incoming_value, datetime):
+                stored_time = _semantic_time(stored_value) if isinstance(stored_value, datetime) else None
+                incoming_time = _semantic_time(incoming_value) if isinstance(incoming_value, datetime) else None
+                if stored_time is not None and incoming_time is not None:
+                    if stored_time != incoming_time:
+                        raise ValueError(
+                            f"canonical mutation changes immutable field {field}"
+                        )
+                    continue
+            stored_norm = _normalize_identity(stored_value)
+            incoming_norm = _normalize_identity(incoming_value)
+            # created_at datetimes normalize via str; fall back to direct
+            # comparison when normalization erases the distinction.
+            if stored_norm is not None and incoming_norm is not None:
+                if stored_norm != incoming_norm:
+                    raise ValueError(
+                        f"canonical mutation changes immutable field {field}"
+                    )
+            elif stored_value != incoming_value:
+                raise ValueError(
+                    f"canonical mutation changes immutable field {field}"
+                )
     stale = False
     closes_current_run = False
     unknown_successor = False
