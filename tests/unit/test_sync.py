@@ -1569,3 +1569,256 @@ async def test_artifact_refs_are_bounded(tmp_path):
     finally:
         await engine.dispose()
 
+
+@pytest.mark.asyncio
+async def test_canonical_mutation_rejects_wrong_owner_namespace_type(tmp_path):
+    """REQ-02: canonical payload merging must reject wrong-owner, wrong-
+    namespace, and wrong-type changes under explicit field policy."""
+    import pytest as _pytest
+
+    from api_service.core.sync import mutate_execution_projection
+    from api_service.db.models import Base
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            _seed_execution(session, "mm:canonical-authority", updated_at=stored_at)
+            await session.commit()
+
+            base_payload = {
+                "workflow_id": "mm:canonical-authority",
+                "run_id": "run-1",
+                "namespace": "moonmind",
+                "workflow_type": TemporalWorkflowType.USER_WORKFLOW,
+                "owner_id": "owner-1",
+                "owner_type": TemporalExecutionOwnerType.USER,
+                "state": MoonMindWorkflowState.EXECUTING,
+                "close_status": None,
+                "entry": "run",
+                "search_attributes": {},
+                "memo": {"title": "Task"},
+                "artifact_refs": [],
+                "parameters": {"targetRuntime": "codex_cli"},
+                "updated_at": stored_at,
+            }
+            for field, bad in (
+                ("owner_id", "owner-2"),
+                ("namespace", "other-namespace"),
+            ):
+                payload = dict(base_payload)
+                payload[field] = bad
+                with _pytest.raises(ValueError, match="protected field"):
+                    await mutate_execution_projection(
+                        session,
+                        workflow_id="mm:canonical-authority",
+                        payload=payload,
+                        owner="canonical",
+                    )
+                await session.rollback()
+            # A move to a non-product workflow type is rejected (either by
+            # explicit canonical field policy or by product-projection scope).
+            payload = dict(base_payload)
+            payload["workflow_type"] = TemporalWorkflowType.MANIFEST_INGEST
+            with _pytest.raises(ValueError):
+                await mutate_execution_projection(
+                    session,
+                    workflow_id="mm:canonical-authority",
+                    payload=payload,
+                    owner="canonical",
+                )
+            await session.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_canonical_mutation_rejects_immutable_creation_key(tmp_path):
+    """REQ-02: canonical writes may not rewrite immutable creation keys."""
+    import pytest as _pytest
+
+    from api_service.core.sync import mutate_execution_projection
+    from api_service.db.models import Base
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            canonical, _ = _seed_execution(
+                session, "mm:canonical-immutable", updated_at=stored_at,
+            )
+            canonical.create_idempotency_key = "key-1"
+            await session.commit()
+
+            with _pytest.raises(ValueError, match="immutable field"):
+                await mutate_execution_projection(
+                    session,
+                    workflow_id="mm:canonical-immutable",
+                    payload={
+                        "workflow_id": "mm:canonical-immutable",
+                        "run_id": "run-1",
+                        "namespace": "moonmind",
+                        "workflow_type": TemporalWorkflowType.USER_WORKFLOW,
+                        "owner_id": "owner-1",
+                        "owner_type": TemporalExecutionOwnerType.USER,
+                        "state": MoonMindWorkflowState.EXECUTING,
+                        "close_status": None,
+                        "entry": "run",
+                        "search_attributes": {},
+                        "memo": {"title": "Task"},
+                        "artifact_refs": [],
+                        "parameters": {"targetRuntime": "codex_cli"},
+                        "create_idempotency_key": "key-2",
+                        "updated_at": stored_at,
+                    },
+                    owner="canonical",
+                )
+            await session.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_late_predecessor_observation_stays_stale(tmp_path):
+    """REQ-03: a late predecessor observation (incoming run equals the stored
+    run-chain previous_run_id) stays on the current run, never replacing it."""
+    from api_service.core.sync import mutate_execution_projection
+    from api_service.db.models import Base
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 5, tzinfo=UTC)
+            _seed_execution(
+                session, "mm:late-predecessor", run_id="run-2",
+                updated_at=stored_at,
+                memo={"title": "Task", "previous_run_id": "run-1"},
+            )
+            await session.commit()
+
+            older = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            refreshed = await mutate_execution_projection(
+                session,
+                workflow_id="mm:late-predecessor",
+                payload={
+                    "workflow_id": "mm:late-predecessor",
+                    "run_id": "run-1",
+                    "namespace": "moonmind",
+                    "workflow_type": TemporalWorkflowType.USER_WORKFLOW,
+                    "owner_id": "owner-1",
+                    "owner_type": TemporalExecutionOwnerType.USER,
+                    "state": MoonMindWorkflowState.EXECUTING,
+                    "close_status": None,
+                    "entry": "run",
+                    "search_attributes": {},
+                    "memo": {"title": "Task"},
+                    "artifact_refs": [],
+                    "parameters": {},
+                    "updated_at": older,
+                },
+                owner="temporal",
+            )
+            await session.commit()
+            await session.refresh(refreshed)
+
+            assert refreshed.run_id == "run-2"
+            assert refreshed.sync_state is TemporalExecutionProjectionSyncState.STALE
+            assert refreshed.sync_error == "stale_temporal_observation_ignored"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_strictly_newer_timestamp_replaces_without_run_link(tmp_path):
+    """REQ-03: a strictly newer semantic timestamp on a different run is
+    positive current-run evidence (supported reset / fresh-run case), so the
+    successor replaces the predecessor even without an explicit link."""
+    from api_service.core.sync import mutate_execution_projection
+    from api_service.db.models import Base
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            _seed_execution(session, "mm:reset-fresh", run_id="run-1", updated_at=stored_at)
+            await session.commit()
+
+            newer = datetime(2026, 9, 1, 12, 10, tzinfo=UTC)
+            refreshed = await mutate_execution_projection(
+                session,
+                workflow_id="mm:reset-fresh",
+                payload={
+                    "workflow_id": "mm:reset-fresh",
+                    "run_id": "run-2",
+                    "namespace": "moonmind",
+                    "workflow_type": TemporalWorkflowType.USER_WORKFLOW,
+                    "owner_id": "owner-1",
+                    "owner_type": TemporalExecutionOwnerType.USER,
+                    "state": MoonMindWorkflowState.EXECUTING,
+                    "close_status": None,
+                    "entry": "run",
+                    "search_attributes": {},
+                    "memo": {"title": "Task"},
+                    "artifact_refs": [],
+                    "parameters": {},
+                    "updated_at": newer,
+                },
+                owner="temporal",
+            )
+            await session.commit()
+            await session.refresh(refreshed)
+
+            assert refreshed.run_id == "run-2"
+            assert refreshed.sync_state is TemporalExecutionProjectionSyncState.FRESH
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_continued_as_new_successor_advances_without_logical_completion(tmp_path):
+    """REQ-03: a CONTINUED_AS_NEW predecessor close never reads as logical
+    completion; the successor run advances the one logical-workflow projection."""
+    from api_service.db.models import Base, TemporalExecutionCloseStatus
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            _seed_execution(
+                session, "mm:can-successor", run_id="run-1",
+                updated_at=stored_at,
+                state=MoonMindWorkflowState.EXECUTING,
+                close_status=TemporalExecutionCloseStatus.CONTINUED_AS_NEW,
+            )
+            await session.commit()
+
+            newer = datetime(2026, 9, 1, 12, 10, tzinfo=UTC)
+            desc = _temporal_desc(
+                workflow_id="mm:can-successor",
+                run_id="run-2",
+                updated_at=newer,
+                memo={"entry": "run", "owner_id": "owner-1", "owner_type": "user"},
+            )
+            desc.previous_run_id = "run-1"
+            refreshed = await sync_execution_projection(session, desc)
+            await session.commit()
+            await session.refresh(refreshed)
+
+            assert refreshed.run_id == "run-2"
+            assert refreshed.state == MoonMindWorkflowState.EXECUTING
+            assert refreshed.close_status is None
+            assert refreshed.sync_state is TemporalExecutionProjectionSyncState.FRESH
+    finally:
+        await engine.dispose()
+
+
