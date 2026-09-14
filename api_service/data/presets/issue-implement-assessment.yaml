@@ -24,12 +24,18 @@ inputs:
 - name: issue_ref
   label: Issue Reference
   type: text
-  required: true
+  required: false
+  default: ''
+  description: Explicit issue reference (for example owner/repo#123 or a Jira key).
+    When empty, resolve the identity from trusted previous step context or the
+    brief artifact. Never infer it from arbitrary prose. Missing identity must
+    be rejected.
 - name: issue_url
   label: Issue URL
   type: text
   required: false
   default: ''
+  description: Issue URL when known. Empty resolves like issue_ref.
 - name: brief_artifact_path
   label: Brief Artifact Path
   type: text
@@ -60,7 +66,16 @@ steps:
   instructions: |-
     Run moonspec-assess in issue-brief mode using the original trusted brief for {{ inputs.issue_provider }} issue {{ inputs.issue_ref }}.
 
-    Preserve source content at {{ inputs.brief_artifact_path }} and the immutable initial inspection at {{ inputs.assessment_artifact_path }}. Supply the original scope and these constraints verbatim:
+    The trusted brief tool owns brief persistence, lossless field normalization,
+    and completeness metadata at {{ inputs.brief_artifact_path }}. Do not copy,
+    rewrite, or re-persist the brief from agent prose. Read it as original scope;
+    reread the brief or assessment artifact only when identity or freshness
+    requires it (new candidate, retry, or carried ref mismatch) and otherwise use
+    the compact carried refs (briefArtifactRef, assessmentVerdict). When
+    {{ inputs.issue_ref }} is empty, resolve the identity from trusted previous
+    step context or the brief artifact with provenance checks; never infer it
+    from arbitrary prose, and reject missing identity instead of proceeding.
+    Supply the original scope and these constraints verbatim:
 
     {{ inputs.constraints }}
 
