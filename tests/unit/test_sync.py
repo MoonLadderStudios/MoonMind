@@ -1,3 +1,16 @@
+"""Unit regressions for issue #3946 (shared projection mutator).
+
+Test-substitution label (REQ-07): the DB-backed tests in this module run
+against SQLite (aiosqlite, one session per test via ``tmp_path``). SQLite
+proves the mutator's ordering, field-authority, savepoint, and freshness
+rules at unit level; it does NOT prove deployed-PostgreSQL isolation
+(two independent transactions, insert-conflict/retry incl. source-less
+executions) or Temporal-backed run-chain/outage wiring. Those deployed
+qualifications remain explicitly unexecuted here and must be proven through
+the hermetic integration suites under a ``moonmind-test`` compose project
+(coordinate #3950).
+"""
+
 import asyncio
 from datetime import UTC, datetime
 from unittest.mock import Mock
