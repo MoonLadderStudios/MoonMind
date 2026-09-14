@@ -13,7 +13,8 @@ import json
 import logging
 import time
 from dataclasses import replace
-from moonmind.utils.logging import redact_sensitive_text
+
+import moonmind.utils.logging as utils_logging
 
 from moonmind.workflows.skills.deployment_release import (
     ReleaseCohort,
@@ -197,7 +198,7 @@ async def reconcile_availability(client, *, deployment, runner, root):
                             record.update(
                                 phase="retrying",
                                 errorCode=type(exc).__name__,
-                                error=redact_sensitive_text(
+                                error=utils_logging.redact_sensitive_text(
                                     str(getattr(exc, "message", None) or exc)
                                 )[:500],
                             )
@@ -212,7 +213,7 @@ async def reconcile_availability(client, *, deployment, runner, root):
                 "version": version,
                 "phase": "retrying",
                 "errorCode": type(exc).__name__,
-                "error": redact_sensitive_text(
+                "error": utils_logging.redact_sensitive_text(
                     str(getattr(exc, "message", None) or exc)
                 )[:500],
                 "nextAttemptAt": time.time() + 30,
@@ -221,6 +222,79 @@ async def reconcile_availability(client, *, deployment, runner, root):
             # Keep any existing attempt/deadline evidence when observation fails.
             write_record(directory / "observation-error.json", outcome)
     return result
+
+
+def _readiness_build_ids(state):
+    """Collect distinct buildIds from a /readyz payload including children."""
+    if not isinstance(state, dict):
+        return set()
+    children = state.get("children")
+    if isinstance(children, list) and children:
+        collected = set()
+        for child in children:
+            collected.update(_readiness_build_ids(child))
+        return collected
+    build = state.get("buildId")
+    return {str(build)} if build else set()
+
+
+async def installed_fleet_inventory(runner):
+    """Inventory installed worker buildIds across every fleet service.
+
+    Returns a mapping with ``byFleet`` (fleet -> buildId or error detail),
+    ``distinctBuildIds`` (sorted list), and ``coherent`` (True only when every
+    known fleet reports exactly one live container whose readiness exposes a
+    single shared buildId). Any compose/readiness failure makes the inventory
+    incoherent rather than raising, so the supervisor can report partial or
+    conflicting identities instead of trusting this process's own build.
+    """
+    from moonmind.workflows.skills.deployment_release import worker_readiness
+    from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
+
+    by_fleet = {}
+    distinct = set()
+    for fleet, service in _FLEET_SERVICE_NAMES.items():
+        try:
+            found = await runner._run_compose_command(
+                ("docker", "compose", "ps", "-q", service)
+            )
+        except Exception as exc:
+            by_fleet[fleet] = {"status": "inventory_error"}
+            continue
+        if not isinstance(found, dict) or found.get("exitCode", 1) != 0:
+            by_fleet[fleet] = {"status": "inventory_error"}
+            continue
+        identifiers = str(found.get("stdout") or "").split()
+        if len(identifiers) != 1:
+            by_fleet[fleet] = {
+                "status": "partial",
+                "containers": len(identifiers),
+            }
+            continue
+        try:
+            state = await worker_readiness(identifiers[0])
+        except Exception:
+            by_fleet[fleet] = {"status": "unready"}
+            continue
+        if not isinstance(state, dict) or state.get("ready") is not True:
+            by_fleet[fleet] = {"status": "unready"}
+            continue
+        build_ids = _readiness_build_ids(state)
+        if len(build_ids) != 1:
+            by_fleet[fleet] = {"status": "conflicting"}
+            distinct.update(build_ids)
+            continue
+        build_id = next(iter(build_ids))
+        by_fleet[fleet] = {"status": "ready", "buildId": build_id}
+        distinct.add(build_id)
+    coherent = bool(by_fleet) and len(distinct) == 1 and all(
+        entry.get("status") == "ready" for entry in by_fleet.values()
+    )
+    return {
+        "byFleet": by_fleet,
+        "distinctBuildIds": sorted(distinct),
+        "coherent": coherent,
+    }
 
 
 async def supervise_availability(client, spec, metadata, *, stop=None):
@@ -252,36 +326,81 @@ async def supervise_availability(client, spec, metadata, *, stop=None):
                     client, deployment=spec.deployment_id, runner=runner, root=root
                 )
                 observed = metadata["releaseAvailability"]["current"]
-                candidate = f"{spec.deployment_id}.{spec.build_id}"
+                spec_candidate = f"{spec.deployment_id}.{spec.build_id}"
+                inventory = await installed_fleet_inventory(runner)
+                distinct = inventory["distinctBuildIds"]
+                has_inventory = bool(distinct)
+                if inventory["coherent"]:
+                    candidate = f"{spec.deployment_id}.{distinct[0]}"
+                    installed_versions = [candidate]
+                else:
+                    candidate = spec_candidate
+                    installed_versions = [
+                        f"{spec.deployment_id}.{build_id}" for build_id in distinct
+                    ]
+                drift_evidence = has_inventory and not inventory["coherent"]
                 routing = {
                     "status": (
                         "current"
-                        if observed == candidate
+                        if observed == candidate and not drift_evidence
                         else "awaiting_promotion"
                     ),
                     "currentVersion": observed,
                     "candidateVersion": candidate,
                     "recoveryOwner": "deployment-control",
                 }
-                if observed != candidate:
+                if drift_evidence:
                     routing.update(
-                        recoverySkill="update-moonmind",
-                        message=(
-                            "The installed release is not the current Temporal route. "
-                            "Ordinary workflows still use that release's behavior, "
-                            "even when retained workers are available. "
-                            "Resume the authorized release submission or run "
-                            "bash tools/update-moonmind.sh --branch <selected-branch> "
-                            "to qualify and promote the intended release. "
-                            "Docker Compose replacement alone does not promote routing."
-                        ),
+                        installedVersions=installed_versions,
+                        installedByFleet=inventory["byFleet"],
+                        installedCoherent=False,
                     )
-                    if last_routing != (observed, candidate):
+                if observed != candidate or drift_evidence:
+                    if drift_evidence:
+                        routing.update(
+                            recoverySkill="update-moonmind",
+                            message=(
+                                "Installed worker fleets report partial or "
+                                "conflicting releases. "
+                                f"Observed fleets: {', '.join(installed_versions)}. "
+                                "Verify every installed fleet before declaring "
+                                "routing current. Resume the authorized release "
+                                "submission or run "
+                                "bash tools/update-moonmind.sh --branch <selected-branch> "
+                                "to qualify and promote the intended release. "
+                                "Docker Compose replacement alone does not promote routing."
+                            ),
+                        )
+                    else:
+                        routing.update(
+                            recoverySkill="update-moonmind",
+                            message=(
+                                "The installed release is not the current Temporal route. "
+                                "Ordinary workflows still use that release's behavior, "
+                                "even when retained workers are available. "
+                                "Resume the authorized release submission or run "
+                                "bash tools/update-moonmind.sh --branch <selected-branch> "
+                                "to qualify and promote the intended release. "
+                                "Docker Compose replacement alone does not promote routing."
+                            ),
+                        )
+                    routing_key = (
+                        observed,
+                        candidate,
+                        ",".join(installed_versions),
+                        str(inventory["coherent"]),
+                    )
+                    if last_routing != routing_key:
                         logger.warning(
                             "%s Current version: %s; installed version: %s",
                             routing["message"], observed, candidate,
                         )
-                last_routing = (observed, candidate)
+                last_routing = (
+                    observed,
+                    candidate,
+                    ",".join(installed_versions),
+                    str(inventory["coherent"]),
+                )
                 metadata["releaseRouting"] = routing
                 # Retained pollers prove availability of the current route, not
                 # activation of the installed fix. Preserve both facts durably.
@@ -304,7 +423,7 @@ async def supervise_availability(client, spec, metadata, *, stop=None):
                 "owner": "deployment-control",
                 "phase": "retrying",
                 "errorCode": type(exc).__name__,
-                "error": redact_sensitive_text(
+                "error": utils_logging.redact_sensitive_text(
                     str(getattr(exc, "message", None) or exc)
                 )[:500],
                 "nextAttemptAt": time.time() + 30,
