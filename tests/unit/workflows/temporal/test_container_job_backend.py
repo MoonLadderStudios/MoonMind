@@ -1807,6 +1807,7 @@ def test_automatic_resource_accounting_is_gone_not_disabled(tmp_path) -> None:
     assert "Waiting for a container-job slot" in backend._slot_wait_message()
 
 
+@pytest.mark.asyncio
 async def test_create_applies_explicit_cpu_memory_and_pid_limits(tmp_path):
     """Fixed limits reach Docker verbatim; there is no pool to subtract from."""
 
