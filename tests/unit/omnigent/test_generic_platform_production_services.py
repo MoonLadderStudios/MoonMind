@@ -1812,6 +1812,151 @@ async def test_pi_provider_config_uses_same_generic_volume_contract() -> None:
 
 
 @pytest.mark.asyncio
+async def test_writer_ref_pulls_missing_digest_pinned_image() -> None:
+    """A missing digest-pinned writer must be pulled, not failed (mm:feced5b2)."""
+
+    class MissingThenPulledBackend(_DockerBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.image_present = False
+            self.pulls: list[list[str]] = []
+
+        async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                if self.image_present:
+                    return 0, b"sha256:abc\n", b""
+                return 1, b"", b"No such image"
+            if command[:2] == ["docker", "pull"]:
+                self.pulls.append(command)
+                self.image_present = True
+                return 0, b"Pulled\n", b""
+            return await super().run(
+                argv, input_bytes=input_bytes, timeout_seconds=timeout_seconds
+            )
+
+    backend = MissingThenPulledBackend()
+    materializer = DockerOpencodeAuthJsonMaterializer(backend)
+    ref = "ghcr.io/example/opencode@sha256:" + "d" * 64
+    resolved = await materializer._resolve_writer_ref(ref)
+    assert resolved == ref
+    assert backend.pulls == [["docker", "pull", ref]]
+
+
+@pytest.mark.asyncio
+async def test_writer_ref_still_fails_when_digest_pull_fails() -> None:
+    class MissingPullFailsBackend(_DockerBackend):
+        async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                return 1, b"", b"No such image"
+            if command[:2] == ["docker", "pull"]:
+                return 1, b"", b"pull access denied"
+            return await super().run(
+                argv, input_bytes=input_bytes, timeout_seconds=timeout_seconds
+            )
+
+    backend = MissingPullFailsBackend()
+    materializer = DockerOpencodeAuthJsonMaterializer(backend)
+    ref = "ghcr.io/example/opencode@sha256:" + "e" * 64
+    with pytest.raises(HarnessPlatformError) as exc:
+        await materializer._resolve_writer_ref(ref)
+    assert (
+        exc.value.code
+        == HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
+    )
+    assert "pull the selected Host Class image" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_writer_ref_does_not_pull_mutable_tag() -> None:
+    class MissingMutableBackend(_DockerBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pulls = 0
+
+        async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                return 1, b"", b"No such image"
+            if command[:2] == ["docker", "pull"]:
+                self.pulls += 1
+                return 0, b"", b""
+            return await super().run(
+                argv, input_bytes=input_bytes, timeout_seconds=timeout_seconds
+            )
+
+    backend = MissingMutableBackend()
+    materializer = DockerOpencodeAuthJsonMaterializer(backend)
+    ref = "ghcr.io/example/opencode:latest"
+    resolved = await materializer._resolve_writer_ref(ref)
+    assert resolved == ref
+    assert backend.pulls == 0
+
+
+@pytest.mark.asyncio
+async def test_provider_config_materializer_recovers_missing_writer_via_pull() -> None:
+    """provider-config must use the same pull recovery as opencode-auth-json."""
+
+    class MissingThenPulledBackend(_DockerBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.image_present = False
+            self.pulls: list[list[str]] = []
+
+        async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                if self.image_present:
+                    return 0, b"sha256:abc\n", b""
+                return 1, b"", b"No such image"
+            if command[:2] == ["docker", "pull"]:
+                self.pulls.append(command)
+                self.image_present = True
+                return 0, b"Pulled\n", b""
+            return await super().run(
+                argv, input_bytes=input_bytes, timeout_seconds=timeout_seconds
+            )
+
+    backend = MissingThenPulledBackend()
+    artifacts = _Artifacts()
+    acquired = AcquiredProviderLease(
+        slot="primary-model",
+        provider_profile_ref="pi-anthropic-primary",
+        capacity_scope_ref="provider-profile:pi-anthropic-primary",
+        provider_lease_ref="provider-profile-lease:lease-pi",
+        credential_generation=8,
+        lease=CredentialLease(
+            profile_id="pi-anthropic-primary",
+            runtime_id="omnigent",
+            lease_id="lease-pi",
+            owner_id="owner-pi",
+            purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+        ),
+    )
+    secrets = ScopedSecretBundle(
+        provider_profile_ref="pi-anthropic-primary",
+        credential_generation=8,
+        values={"api_key": "second-harness-provider-key"},
+    )
+    handle = await DockerOmnigentProviderConfigMaterializer(backend).materialize(
+        CredentialMaterializationContext(
+            request=_request(),
+            acquired=acquired,
+            secrets=secrets,
+            writer_image_ref="ghcr.io/example/pi@sha256:" + "2" * 64,
+            artifact_gateway=artifacts,
+            model_qualified_id="anthropic/claude-sonnet-4-6",
+            provider_route_ref="anthropic",
+        )
+    )
+    assert handle.materializerRef == "omnigent-provider-config@1"
+    assert backend.pulls == [
+        ["docker", "pull", "ghcr.io/example/pi@sha256:" + "2" * 64]
+    ]
+
+
+@pytest.mark.asyncio
 async def test_runtime_binding_identity_stays_stable_and_cas_fences_stale_updates() -> (
     None
 ):
