@@ -151,8 +151,10 @@ from moonmind.schemas.agent_skill_models import (
 from moonmind.services.skill_materialization import AgentSkillMaterializer
 from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
 from moonmind.workflows.skills.deployment_tools import (
+    DEPLOYMENT_OVERVIEW_TOOL_NAME,
     DEPLOYMENT_UPDATE_TOOL_NAME,
     OPS_DIAGNOSE_STACK_TOOL_NAME,
+    build_deployment_overview_tool_definition_payload,
     build_deployment_update_tool_definition_payload,
     build_ops_diagnose_stack_tool_definition_payload,
 )
@@ -1553,6 +1555,9 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
 
     if name == OPS_DIAGNOSE_STACK_TOOL_NAME:
         return build_ops_diagnose_stack_tool_definition_payload()
+
+    if name == DEPLOYMENT_OVERVIEW_TOOL_NAME:
+        return build_deployment_overview_tool_definition_payload()
 
 
     if name == JIRA_CHECK_BLOCKERS_TOOL_NAME:
