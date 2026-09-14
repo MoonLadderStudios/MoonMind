@@ -840,6 +840,6 @@ def test_shared_resource_changes_require_real_docker_journey():
         "moonmind/container_job_cli.py",
         "services/omnigent/scripts/moonmind-container-cli.py",
         "tools/test_worker_count.py",
-        "tests/integration/resource_allocation/test_shared_resources.py",
+        "tests/integration/resource_allocation/test_shared_resource_journey.py",
     ):
         assert select_suites([path]).reliability_journey, path
