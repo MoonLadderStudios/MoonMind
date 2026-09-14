@@ -57,8 +57,9 @@ MUTATION_VERBS = (
 OBSERVATION_OUTCOMES = frozenset({"succeeded", "failed", "unavailable", "not_requested"})
 
 #: Services that only exist under optional Compose profiles. Absence or a
-#: stopped state here is not a health failure.
-OPTIONAL_PROFILE_SERVICES = frozenset({"temporal-ui", "docker-proxy"})
+#: stopped state here is not a health failure. ``docker-proxy`` is always-on
+#: (required by deployment-control workers) and must never be classified here.
+OPTIONAL_PROFILE_SERVICES = frozenset({"temporal-ui"})
 
 #: One-shot / init containers that are expected to exit after success.
 ONE_SHOT_SERVICES = frozenset({"init-db"})
@@ -172,15 +173,15 @@ def requests_arbitrary_access(text: str) -> bool:
 def sanitize_untrusted_text(text: str, *, max_chars: int = 2000) -> str:
     """Redact sensitive values and bound untrusted text before disclosure.
 
-    Instruction-override patterns are removed (not passed through), so
-    injected log/tool content cannot widen assistant authority.
+    When an instruction-override pattern is detected the entire value is
+    withheld behind a fixed safe placeholder: partial regex surgery would
+    still disclose the actionable malicious remainder. Sensitive values are
+    redacted before the injection check so the placeholder never echoes them.
     """
     redacted = redact_sensitive_payload(str(text or ""))
     cleaned = str(redacted) if isinstance(redacted, str) else str(text or "")
     if detect_prompt_injection(cleaned):
-        for pattern in _INJECTION_PATTERNS:
-            cleaned = pattern.sub("[removed possible instruction-override]", cleaned)
-        cleaned = "[untrusted content: instruction patterns removed] " + cleaned
+        return "[untrusted content withheld: possible instruction-override]"
     if len(cleaned) > max_chars:
         cleaned = cleaned[:max_chars] + "…[truncated]"
     return cleaned
@@ -249,6 +250,31 @@ def _scope_workflows(
     return visible, len(visible) != len(records)
 
 
+def _is_stale(collected_at_ms: int | None, now_ms: int) -> bool:
+    if collected_at_ms is None:
+        return False
+    return (now_ms - collected_at_ms) / 1000 > CACHE_FRESHNESS_SECONDS
+
+
+def _is_capacity_wait_record(record: Mapping[str, Any]) -> bool:
+    """Return True only for authoritative capacity waits.
+
+    ``queued``/``pending`` in the canonical execution-list projection also
+    cover scheduled and initializing workflows. Those are ordinary startup,
+    not capacity pressure, unless the recorded wait reason itself names a
+    capacity signal (capacity, lease, queue depth).
+    """
+    status = str(record.get("status") or "").strip().lower()
+    if status in {"waiting", "capacity_wait"}:
+        return True
+    if status in {"queued", "pending"}:
+        reason = str(record.get("waitReason") or record.get("wait_reason") or "").lower()
+        return any(
+            marker in reason for marker in ("capacity", "lease", "queue depth", "queue_depth")
+        )
+    return False
+
+
 def answer_running(
     principal: OverviewPrincipal,
     workflows: Sequence[Mapping[str, Any]],
@@ -259,6 +285,7 @@ def answer_running(
 ) -> dict[str, Any]:
     """Answer 'what is running' from authorized workflow list/detail evidence."""
     now_ms = _now_ms(now)
+    stale = _is_stale(collected_at_ms, now_ms)
     visible, denied = _scope_workflows(principal, workflows)
     running = [
         r for r in visible if str(r.get("status") or "").lower() in {"running", "executing", "active"}
@@ -273,6 +300,11 @@ def answer_running(
         for r in running
     ]
     permission = "operator:deployment-wide" if is_operator(principal) else "user:own-workflows"
+    observation = (
+        f"{len(items)} running workflow(s) visible to {principal.subject}."
+        if not stale
+        else "Running-workflow observations are stale and re-collection is required."
+    )
     return {
         "question": "running",
         "scoped": denied,
@@ -280,16 +312,17 @@ def answer_running(
             "workflows": _field(
                 owner="workflow list/detail API",
                 permission=permission,
-                outcome="succeeded" if collected_at_ms is not None else "unavailable",
+                outcome="succeeded" if collected_at_ms is not None and not stale else "unavailable",
                 value=items,
                 evidence_ref=evidence_ref,
                 collected_at_ms=collected_at_ms,
                 now_ms=now_ms,
+                stale=stale,
             )
         },
-        "observation": f"{len(items)} running workflow(s) visible to {principal.subject}.",
+        "observation": observation,
         "hypotheses": [],
-        "nextChecks": [] if items else ["Check the workflow list for queued or recently terminal work."],
+        "nextChecks": [] if items and not stale else ["Check the workflow list for queued or recently terminal work."],
     }
 
 
@@ -303,25 +336,31 @@ def answer_waiting(
 ) -> dict[str, Any]:
     """Answer 'what is waiting' from recorded wait reasons (never zero backlog from missing telemetry)."""
     now_ms = _now_ms(now)
+    stale = _is_stale(collected_at_ms, now_ms)
     visible, denied = _scope_workflows(principal, workflows)
-    waiting = [
-        r
-        for r in visible
-        if str(r.get("status") or "").lower() in {"waiting", "queued", "pending", "capacity_wait"}
-    ][:MAX_WORKFLOWS_PER_ANSWER]
+    waiting = [r for r in visible if _is_capacity_wait_record(r)][
+        :MAX_WORKFLOWS_PER_ANSWER
+    ]
     unknown_wait = [r for r in waiting if not str(r.get("waitReason") or "").strip()]
     items = [
         {
             "workflowId": str(r.get("workflowId") or r.get("id") or ""),
-            "waitReason": str(r.get("waitReason") or "recorded wait reason unavailable"),
+            "waitReason": sanitize_untrusted_text(
+                str(r.get("waitReason") or "recorded wait reason unavailable"),
+                max_chars=500,
+            ),
             "waitReasonRecorded": bool(str(r.get("waitReason") or "").strip()),
             "detailUrl": workflow_detail_url(str(r.get("workflowId") or r.get("id") or "")),
         }
         for r in waiting
     ]
-    outcome = "succeeded" if collected_at_ms is not None else "unavailable"
+    outcome = (
+        "succeeded" if collected_at_ms is not None and not stale else "unavailable"
+    )
     if collected_at_ms is None:
         note = "Missing wait telemetry is reported as unavailable, not as zero backlog."
+    elif stale:
+        note = "Waiting-workflow observations are stale and re-collection is required."
     elif unknown_wait:
         note = (
             f"{len(unknown_wait)} waiting workflow(s) have no recorded wait reason; "
@@ -342,11 +381,12 @@ def answer_waiting(
                 evidence_ref=evidence_ref,
                 collected_at_ms=collected_at_ms,
                 now_ms=now_ms,
+                stale=stale,
             )
         },
         "observation": note,
         "hypotheses": [],
-        "nextChecks": ["Inspect the capacity wait ledger for the oldest waiting entry."] if items else [],
+        "nextChecks": ["Inspect the capacity wait ledger for the oldest waiting entry."] if items and not stale else [],
     }
 
 
@@ -360,6 +400,7 @@ def answer_recent_failure(
 ) -> dict[str, Any]:
     """Answer 'what recently failed' from recorded terminal outcomes with linked evidence."""
     now_ms = _now_ms(now)
+    stale = _is_stale(collected_at_ms, now_ms)
     visible, denied = _scope_workflows(principal, terminal_outcomes)
     failures = [
         r
@@ -378,6 +419,11 @@ def answer_recent_failure(
         for r in failures
     ]
     permission = "operator:deployment-wide" if is_operator(principal) else "user:own-workflows"
+    observation = (
+        f"{len(items)} recent failure(s) visible to {principal.subject}. Summaries are observations, not root-cause diagnoses."
+        if not stale
+        else "Recent-failure observations are stale and re-collection is required."
+    )
     return {
         "question": "recent_failure",
         "scoped": denied,
@@ -385,16 +431,17 @@ def answer_recent_failure(
             "failures": _field(
                 owner="workflow terminal-evidence ledger",
                 permission=permission,
-                outcome="succeeded" if collected_at_ms is not None else "unavailable",
+                outcome="succeeded" if collected_at_ms is not None and not stale else "unavailable",
                 value=items,
                 evidence_ref=evidence_ref,
                 collected_at_ms=collected_at_ms,
                 now_ms=now_ms,
+                stale=stale,
             )
         },
-        "observation": f"{len(items)} recent failure(s) visible to {principal.subject}. Summaries are observations, not root-cause diagnoses.",
+        "observation": observation,
         "hypotheses": [],
-        "nextChecks": ["Open the linked Workflow Detail evidence for the newest failure."] if items else [],
+        "nextChecks": ["Open the linked Workflow Detail evidence for the newest failure."] if items and not stale else [],
     }
 
 
@@ -407,11 +454,17 @@ def classify_collector_include(include: str, result: Mapping[str, Any] | None) -
     one-shot init containers are reported distinctly from real health.
     """
     status = str((result or {}).get("status") or "").strip().upper()
-    if not result or status in {"", "FAILED"}:
+    if not result or status == "":
         return {
             "observation": "unavailable",
             "outcome": "unavailable",
             "label": f"{include}: probe produced no usable evidence",
+        }
+    if status == "FAILED":
+        return {
+            "observation": "failed",
+            "outcome": "failed",
+            "label": f"{include}: probe failed; no usable evidence",
         }
     if include in {"api_health", "worker_health", "temporal_connectivity", "artifact_store_health"}:
         return {
@@ -496,10 +549,45 @@ def answer_deployment_observation(
                 "outcome": classified["outcome"],
             }
         )
+    if not checks:
+        findings = diagnosis.get("findings") if isinstance(diagnosis, Mapping) else None
+        if isinstance(findings, (list, tuple)) and findings:
+            for finding in findings:
+                if not isinstance(finding, Mapping):
+                    continue
+                kind = str(
+                    finding.get("kind") or finding.get("include") or "diagnosis"
+                ).strip() or "diagnosis"
+                service = str(finding.get("service") or "").strip()
+                label_source = f"{kind}({service})" if service else kind
+                severity = str(finding.get("severity") or "").strip().lower()
+                message = str(
+                    finding.get("message") or finding.get("summary") or ""
+                ).strip()
+                outcome = (
+                    "failed"
+                    if severity == "error"
+                    else "succeeded"
+                    if severity in {"info", "warning"}
+                    else "unavailable"
+                )
+                checks.append(
+                    {
+                        "include": label_source,
+                        "classification": message or f"{label_source}: collected",
+                        "outcome": outcome,
+                    }
+                )
     succeeded = sum(1 for c in checks if c["outcome"] == "succeeded")
+    failed = sum(1 for c in checks if c["outcome"] == "failed")
     stale = collected_at_ms is not None and (now_ms - collected_at_ms) / 1000 > CACHE_FRESHNESS_SECONDS
     if not checks:
         summary = "No deployment observations were collected in this scope; no all-clear is claimed."
+    elif failed:
+        summary = (
+            f"Failed probe: {failed}/{len(checks)} check(s) failed. "
+            "No global all-clear is claimed; see per-check classifications."
+        )
     elif succeeded < len(checks):
         summary = (
             f"Partial probe: {succeeded}/{len(checks)} check(s) produced evidence. "
@@ -512,15 +600,23 @@ def answer_deployment_observation(
         )
     if stale:
         summary += " Cached observations are stale and re-collection is required."
+    if not checks or stale:
+        aggregate_outcome = "unavailable"
+    elif failed:
+        aggregate_outcome = "failed"
+    elif succeeded < len(checks):
+        aggregate_outcome = "unavailable"
+    else:
+        aggregate_outcome = "succeeded"
     return {
         "question": "deployment_observation",
         "scoped": False,
         "fields": {
-            "diagnosis": _field(
-                owner="deployment-control worker (moonmind.ops_diagnose_stack)",
-                permission="operator:deployment-control",
-                outcome="succeeded" if checks and not stale else "unavailable",
-                value=checks,
+                "diagnosis": _field(
+                    owner="deployment-control worker (moonmind.ops_diagnose_stack)",
+                    permission="operator:deployment-control",
+                    outcome=aggregate_outcome,
+                    value=checks,
                 evidence_ref=str(diagnosis.get("artifactRef") or diagnosis.get("artifact_ref") or "")
                 or None,
                 collected_at_ms=collected_at_ms,
@@ -635,11 +731,25 @@ def answer_question(
 
 
 def _overview_auth_principal(context: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    """Return the server-resolved auth principal from handler context."""
+    """Return the server-resolved auth principal from handler context.
+
+    The deployment-control activity boundary always sets
+    ``deployment_evidence_principal`` from the trusted ``principal`` activity
+    parameter. When an explicit ``authenticated_principal`` mapping is absent,
+    fall back to that boundary principal as a least-privilege subject (no
+    roles/capabilities): ordinary invocations then receive scoped,
+    non-deployment answers instead of failing with PERMISSION_DENIED, while
+    deployment-wide disclosure still requires an explicit operator mapping.
+    """
     for key in ("authenticated_principal", "auth_principal", "principal"):
         candidate = context.get(key)
         if isinstance(candidate, Mapping) and candidate:
             return candidate
+    fallback = context.get("deployment_evidence_principal")
+    if isinstance(fallback, Mapping) and fallback:
+        return fallback
+    if isinstance(fallback, str) and fallback.strip():
+        return {"subject": fallback.strip()}
     return None
 
 

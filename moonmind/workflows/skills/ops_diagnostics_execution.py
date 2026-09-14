@@ -65,6 +65,7 @@ DEFAULT_MOONMIND_SERVICES = frozenset(
         "temporal-worker-workflow",
         "minio",
         "docker-proxy",
+        "init-db",
     }
 )
 OPS_DIAGNOSIS_TAIL_LINES_MIN = 50
@@ -73,7 +74,9 @@ OPS_DIAGNOSIS_TAIL_LINES_DEFAULT = 300
 
 #: Services that only exist under optional Compose profiles. A stopped or
 #: absent optional service is not a health failure (MoonMind#424).
-OPTIONAL_DIAGNOSIS_SERVICES = frozenset({"temporal-ui", "docker-proxy"})
+#: ``docker-proxy`` is always-on (required via depends_on) and must be treated
+#: as a required service; only genuinely profile-gated ``temporal-ui`` stays here.
+OPTIONAL_DIAGNOSIS_SERVICES = frozenset({"temporal-ui"})
 
 #: One-shot init containers expected to exit after success.
 ONE_SHOT_DIAGNOSIS_SERVICES = frozenset({"init-db"})

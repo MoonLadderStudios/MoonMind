@@ -6,8 +6,6 @@ projection boundaries. No model, network, Docker, or live-service access.
 
 from __future__ import annotations
 
-import pytest
-
 from moonmind.workflows.skills.deployment_overview import (
     CACHE_FRESHNESS_SECONDS,
     OverviewPrincipal,
@@ -68,9 +66,6 @@ def _workflows() -> list[dict[str, object]]:
 
 
 # REQ-424-01: authorized operator asks the four canonical questions.
-
-_PROG_IDS = ("running", "waiting", "recent_failure", "deployment_observation")
-
 
 def test_operator_running_answer_carries_linked_evidence() -> None:
     answer = answer_running(
@@ -185,7 +180,8 @@ def test_revoked_access_and_stale_cache_reveal_nothing() -> None:
 
 def test_container_classification_distinguishes_optional_and_oneshot() -> None:
     assert classify_container_state("temporal-ui", "exited", "") == "optional_absent"
-    assert classify_container_state("docker-proxy", "", "") == "optional_absent"
+    assert classify_container_state("docker-proxy", "exited", "") == "stopped"
+    assert classify_container_state("docker-proxy", "", "") == "stopped"
     assert classify_container_state("init-db", "exited (0)", "") == "one_shot_complete"
     assert classify_container_state("api", "running", "healthy") == "running"
     assert classify_container_state("api", "running", "unhealthy") == "running_degraded"
@@ -257,7 +253,7 @@ def test_prompt_injection_in_logs_is_withheld_and_detected() -> None:
     assert detect_prompt_injection(injected) is True
     assert detect_prompt_injection("normal worker log line: retrying poll") is False
     sanitized = sanitize_untrusted_text(injected)
-    assert "instruction patterns removed" in sanitized
+    assert "withheld" in sanitized
     assert "Ignore all previous instructions" not in sanitized
 
     failures = answer_recent_failure(

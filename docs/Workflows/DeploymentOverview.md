@@ -22,9 +22,12 @@ status, and artifact ownership instead of copying their protocols:
 
 ## 1. UI entry
 
-The initial entry is a clearly labeled **deployment overview** affordance in
-the existing dashboard/runtime experience — not an attachment to every active
-agent session. For a specific active workflow, answers link to the existing
+The first increment ships the backend read path only: `moonmind.deployment_overview`
+(`mm.tool.execute` / `by_capability` on the deployment-control worker) plus this
+contract, projections, and hermetic tests. No dedicated dashboard route,
+component, or API entry is added here. When a conversational entry is introduced
+it must reuse the existing dashboard/runtime experience — not an attachment to
+every active agent session. For a specific active workflow, answers link to the existing
 Workflow Detail (`/workflows/{workflowId}`) and native chat binding
 (`/workflows/{workflowId}/chat`) and their supported controls. No second
 composer, transcript, agent controller, or always-on chat/metrics service is
@@ -62,8 +65,9 @@ separate checks with `succeeded` / `failed` / `unavailable` /
   reachability, worker queue polling, artifact round-trip success, or
   measured CPU/memory availability. `disk_memory_cpu` reports Docker storage
   only. Per-include support labels live in `OBSERVATION_SUPPORT`.
-- Optional profile-gated services (`temporal-ui`, `docker-proxy`) absent or
-  stopped are reported as `optional_absent`, not failures. One-shot init
+- Optional profile-gated services (`temporal-ui`) absent or
+  stopped are reported as `optional_absent`, not failures. `docker-proxy` is
+  always-on and a stopped proxy is a required-service failure. One-shot init
   containers (`init-db`) that exited after success are `one_shot_complete`.
 - Missing telemetry is `unavailable`, never zero backlog. A partial probe
   never claims a global all-clear. Stale observations (older than the
