@@ -22,7 +22,9 @@ from moonmind import release_identity
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.release_routing import (
     bootstrap_version_routing,
+    current_version,
     promote_version,
+    routing_snapshot,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.temporal.workflows.release_canary import (
@@ -132,13 +134,14 @@ async def test_cancel_preserves_live_state_until_worker_routing_recovers(
         else:
             pytest.fail("Slot-wait child did not start")
 
-    # Reproduce the escaped boundary: all old pollers disappear, while the
-    # replacement version remains a candidate and Temporal still routes to A.
+    # Startup stewardship converges abandoned routing: the recorded current
+    # version has no live pollers, so bootstrap promotes the deployed
+    # replacement instead of parking for the release controller.
     replacement = install("replacement = True\n")
     async with worker(replacement):
-        assert (await bootstrap_version_routing(client, spec(replacement)))[
-            "status"
-        ] == "awaiting_promotion"
+        converged = await bootstrap_version_routing(client, spec(replacement))
+        assert converged["status"] == "current"
+        assert converged["currentVersion"] == f"{deployment}.{replacement}"
         record = TemporalExecutionCanonicalRecord(
             workflow_id=parent.id,
             run_id=parent.first_execution_run_id,
@@ -173,15 +176,20 @@ async def test_cancel_preserves_live_state_until_worker_routing_recovers(
         assert accepted.memo["summary"].startswith("Cancellation requested.")
         service._fan_out_dependency_resolution.assert_not_awaited()
 
-        await promote_version(
-            client,
-            deployment=deployment,
-            build_id=replacement,
-            expected_current=f"{deployment}.{original}",
-            task_queue=queue,
-            task_queues=(queue,),
-            canary_id=deployment + "-recovery",
-        )
+        # Startup stewardship already promoted the replacement (see above),
+        # so the recovery promotion is a no-op when routing already converged.
+        if current_version(await routing_snapshot(client, deployment)) != (
+            f"{deployment}.{replacement}"
+        ):
+            await promote_version(
+                client,
+                deployment=deployment,
+                build_id=replacement,
+                expected_current=f"{deployment}.{original}",
+                task_queue=queue,
+                task_queues=(queue,),
+                canary_id=deployment + "-recovery",
+            )
         with pytest.raises(WorkflowFailureError):
             await asyncio.wait_for(parent.result(), timeout=30)
         assert (await parent.describe()).status is WorkflowExecutionStatus.CANCELED

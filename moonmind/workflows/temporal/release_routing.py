@@ -457,6 +457,49 @@ async def steward_abandoned_routing(
             for item in observation["queues"]
             if item["type"] == TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY
         )
+        # The starting fleet must explicitly declare the complete serving
+        # surface it intends to converge. When the recorded current version
+        # served queues outside this process's declared topology (for example
+        # a workflow-worker steward that does not host the deployment's
+        # activity fleets), qualification and promotion stay with the
+        # authorized release controller, exactly like the
+        # unpromoted-installed-fix replay requires. Promoting a subset would
+        # converge routing to a release ordinary workflows cannot use.
+        # Only park when the target release has actually registered the full
+        # surface elsewhere (for example Docker workers serving queues this
+        # process does not declare); when the target has not registered those
+        # queues, fall through so the qualification below fails loudly
+        # instead of parking an unqualifiable release forever.
+        declared = set(spec.task_queues)
+        served = {item["queue"] for item in observation["queues"]}
+        if not served <= declared:
+            try:
+                from temporalio.api.workflowservice.v1 import (
+                    DescribeWorkerDeploymentVersionRequest,
+                )
+
+                service = client.workflow_service
+                target_desc = await service.describe_worker_deployment_version(
+                    DescribeWorkerDeploymentVersionRequest(
+                        namespace=client.namespace, version=target
+                    )
+                )
+                info = target_desc.worker_deployment_version_info
+                _registered = {item.name for item in info.task_queue_infos}
+            except RPCError as _exc:
+                if _exc.status != RPCStatusCode.NOT_FOUND:
+                    raise
+                _registered = set()
+            if served <= _registered:
+                logger.info(
+                    "Release routing current version %s served queues %s beyond "
+                    "this fleet's declared %s; preserving its route for the "
+                    "authorized release controller",
+                    current,
+                    sorted(served - declared),
+                    sorted(declared),
+                )
+                return _parked(current, target)
     else:
         workflow_queues = ()
         activity_queues = tuple(spec.task_queues)
