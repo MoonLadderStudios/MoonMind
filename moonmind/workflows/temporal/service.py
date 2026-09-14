@@ -2517,6 +2517,8 @@ class TemporalExecutionService:
                 try:
                     await self._session.rollback()
                 except Exception:
+                    # Best-effort cleanup: the scheduled_for write already
+                    # failed, so a rollback failure must not mask it.
                     pass
                 synced_record = await self._sync_projection_best_effort(record)
         return synced_record
