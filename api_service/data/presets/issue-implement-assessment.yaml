@@ -71,7 +71,11 @@ steps:
     rewrite, or re-persist the brief from agent prose. Read it as original scope;
     reread the brief or assessment artifact only when identity or freshness
     requires it (new candidate, retry, or carried ref mismatch) and otherwise use
-    the compact carried refs (briefArtifactRef, assessmentVerdict). When
+    the compact carried refs (briefArtifactRef, assessmentVerdict). This satisfies
+    the portable moonspec-assess brief-preservation requirement through the trusted
+    brief tool's output: the assessment step verifies and reads {{ inputs.brief_artifact_path }}
+    and preserves the immutable initial inspection at {{ inputs.assessment_artifact_path }}
+    without rewriting the brief from agent prose. When
     {{ inputs.issue_ref }} is empty, resolve the identity from trusted previous
     step context or the brief artifact with provenance checks; never infer it
     from arbitrary prose, and reject missing identity instead of proceeding.
