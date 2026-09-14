@@ -42,6 +42,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     MoonMindProviderProfileManagerWorkflow,
     PendingRequest,
     ProfileSlotState,
+    _CLEANUP_DELIVERY_PER_PASS,
     _LEASE_CLEANUP_ESCALATION_SECONDS,
 )
 
@@ -1766,7 +1767,7 @@ async def test_two_durable_leases_sharing_an_owner_block_admission() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_pre_contract_history_ignores_the_new_recovery_evidence() -> None:
+async def test_a_pre_contract_history_ignores_the_new_recovery_evidence():
     """Replay safety: an older history keeps admitting exactly as it recorded."""
 
     ledger = _restore_ledger(
@@ -1783,3 +1784,321 @@ async def test_a_pre_contract_history_ignores_the_new_recovery_evidence() -> Non
         enabled={DB_LEASE_PERSISTENCE_PATCH, PROVIDER_INCREMENTAL_LEASE_PATCH},
     ):
         assert await wf._load_leases_from_db() is True
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#1089 R4: cleanup obligations reach an executing
+# owner with a stable claim and bounded retry
+# ---------------------------------------------------------------------------
+#
+# These tests pin the manager side of the delivery handoff at the same
+# activity boundary the worker actually invokes (a recording
+# ``provider_profile.sync_slot_leases`` substitute, labeled here). The
+# durable half runs against a real PostgreSQL cluster in
+# ``tests/integration/omnigent/test_provider_lease_incremental_contract_postgres.py``.
+# The executing consumer in production is the existing AgentRun, runtime
+# realizer, janitor, or operator polling ``get_state``/``manager_state`` for
+# ``cleanup_obligations`` and completing each claim through
+# ``report_cleanup_verified`` — no new cleanup engine is added.
+
+
+def _admitted_manager(
+    *, ledger_generation: int = 6, run_id: str = "run-admitted-1"
+) -> MoonMindProviderProfileManagerWorkflow:
+    """One held lease carrying its exact admitted consumer identity."""
+
+    wf = _held_manager(ledger_generation=ledger_generation)
+    profile = wf._profiles[PROFILE_ID]
+    metadata = dict(profile.lease_metadata.get("agent-run-1") or {})
+    metadata.update(
+        {
+            "workflowId": "agent-run-1",
+            "runId": run_id,
+            "evidenceIdentity": "evidence-admitted-1",
+            "ownerIsWorkflow": True,
+        }
+    )
+    profile.lease_metadata["agent-run-1"] = metadata
+    return wf
+
+
+@pytest.mark.asyncio
+async def test_cleanup_redrive_reissues_the_same_stable_claim() -> None:
+    """A terminal-owner obligation is re-driven, never re-decided.
+
+    The first pass requests cleanup with the admitted fence and reason; the
+    redrive re-issues the same lease ID, fence, and original reason while the
+    slot stays spent. The published claim ID is stable — only ``attempt``
+    advances — and it carries the exact admitted run and evidence identity
+    the executing owner must quote back.
+    """
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
+            }
+        }
+    )
+    wf = _admitted_manager()
+
+    with _patched(ledger):
+        await wf._reclaim_terminal_leases_durably(
+            {"agent-run-1": {"running": False, "status": "NOT_FOUND"}}
+        )
+    assert ledger.actions() == ["request_cleanup"]
+    first = ledger.rows_for("request_cleanup")[0]
+    assert first["lease_id"] == "agent-run-1"
+    assert first["fencing_generation"] == 6
+    assert first["reason"] == "owner_terminal"
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+    claims = wf.get_state()["cleanup_obligations"]
+    assert len(claims) == 1
+    assert claims[0]["claim_id"] == "agent-run-1:6"
+    assert claims[0]["reason"] == "owner_terminal"
+    assert claims[0]["runId"] == "run-admitted-1"
+    assert claims[0]["evidenceIdentity"] == "evidence-admitted-1"
+    assert claims[0]["attempt"] == 0
+
+    with _patched(ledger):
+        await wf._deliver_cleanup_requests()
+
+    assert ledger.actions() == ["request_cleanup", "request_cleanup"]
+    redrive = ledger.rows_for("request_cleanup")[1]
+    assert redrive["lease_id"] == "agent-run-1"
+    assert redrive["fencing_generation"] == 6
+    assert redrive["reason"] == "owner_terminal"
+    # The slot stays spent: a redrive never frees capacity.
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+    claims = wf.get_state()["cleanup_obligations"]
+    assert claims[0]["claim_id"] == "agent-run-1:6"
+    assert claims[0]["attempt"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cleanup_redrive_recovers_a_lost_request_ack() -> None:
+    """A cleanup request that never resolved retries as a cleanup — not a release.
+
+    The first ``request_cleanup`` activity fails after the ledger may already
+    have committed, so the outcome is RETRYABLE. The obligation must be kept
+    as a cleanup request with its original reason and re-driven through the
+    same fenced transition. Re-driving it as an owner release would free a
+    consumer that may still be running.
+    """
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": [
+                RuntimeError("artifacts worker unavailable"),
+                {
+                    "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                    "cleanup_requested": True,
+                },
+            ]
+        }
+    )
+    wf = _admitted_manager()
+
+    with _patched(ledger):
+        await wf._reclaim_terminal_leases_durably(
+            {"agent-run-1": {"running": False, "status": "TERMINATED"}}
+        )
+
+    assert ledger.actions() == ["request_cleanup"]
+    assert "agent-run-1" not in wf._cleanup_requested_leases
+    pending = wf._unresolved_releases.get("agent-run-1")
+    assert pending is not None
+    assert pending["kind"] == "cleanup_request"
+    assert pending["reason"] == "owner_terminal"
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+    with _patched(ledger):
+        await wf._retry_unresolved_releases()
+
+    assert ledger.actions() == ["request_cleanup", "request_cleanup"]
+    assert "release_one" not in ledger.actions()
+    retry = ledger.rows_for("request_cleanup")[1]
+    assert retry["lease_id"] == "agent-run-1"
+    assert retry["fencing_generation"] == 6
+    assert retry["reason"] == "owner_terminal"
+    assert "agent-run-1" in wf._cleanup_requested_leases
+    assert wf._cleanup_request_reasons["agent-run-1"] == "owner_terminal"
+    assert wf._unresolved_releases == {}
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_redrive_resolves_across_restart_and_continue_as_new() -> None:
+    """The successor re-issues the same stable claim after a rollover."""
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
+            }
+        }
+    )
+    wf = _admitted_manager()
+
+    with _patched(ledger):
+        await wf._reclaim_terminal_leases_durably(
+            {"agent-run-1": {"running": False, "status": "NOT_FOUND"}}
+        )
+        await wf._deliver_cleanup_requests()
+    assert wf._cleanup_delivery_attempts["agent-run-1"] == 1
+
+    successor = _manager()
+    successor._profiles = wf._profiles
+    successor._scopes = wf._scopes
+    successor._restore_lease_obligations(wf._build_continue_as_new_input())
+
+    assert successor._cleanup_requested_leases == {"agent-run-1"}
+    assert successor._cleanup_request_reasons["agent-run-1"] == "owner_terminal"
+    assert successor._cleanup_delivery_attempts["agent-run-1"] == 1
+    assert successor.get_state()["cleanup_obligations"][0]["claim_id"] == (
+        "agent-run-1:6"
+    )
+
+    with _patched(ledger):
+        await successor._deliver_cleanup_requests()
+
+    redrive = ledger.rows_for("request_cleanup")[-1]
+    assert redrive["lease_id"] == "agent-run-1"
+    assert redrive["fencing_generation"] == 6
+    assert redrive["reason"] == "owner_terminal"
+    assert successor.get_state()["cleanup_obligations"][0]["attempt"] == 2
+    assert successor._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_redrive_completes_through_verified_teardown() -> None:
+    """A redriven obligation completes only via the verified-teardown handoff."""
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
+            },
+            "release_verified": {
+                "released": True,
+                "outcome": LeaseTransitionOutcome.RELEASED.value,
+            },
+        }
+    )
+    wf = _admitted_manager()
+
+    with _patched(ledger):
+        await wf._reclaim_terminal_leases_durably(
+            {"agent-run-1": {"running": False, "status": "NOT_FOUND"}}
+        )
+        await wf._deliver_cleanup_requests()
+        assert wf.get_state()["cleanup_obligations"][0]["attempt"] == 1
+        await wf.report_cleanup_verified(
+            {
+                "lease_id": "agent-run-1",
+                "profile_id": PROFILE_ID,
+                "fencing_generation": 6,
+                "teardown_evidence": {
+                    "consumer_stopped": True,
+                    "verified_by": "runtime-janitor",
+                    "run_id": "run-admitted-1",
+                    "evidence_identity": "evidence-admitted-1",
+                },
+            }
+        )
+
+    assert ledger.actions() == [
+        "request_cleanup",
+        "request_cleanup",
+        "release_verified",
+    ]
+    assert wf._profiles[PROFILE_ID].current_leases == []
+    assert wf.get_state()["cleanup_obligations"] == []
+    assert wf.get_state()["cleanup_requested_leases"] == []
+
+
+@pytest.mark.asyncio
+async def test_cleanup_redrive_work_is_bounded_per_pass() -> None:
+    """One pass re-drives at most a bounded number of owed slots."""
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
+            }
+        }
+    )
+    wf = _manager()
+    profile = wf._profiles[PROFILE_ID]
+    profile.max_parallel_runs = _CLEANUP_DELIVERY_PER_PASS + 4
+    total = _CLEANUP_DELIVERY_PER_PASS + 2
+    for index in range(total):
+        lease_id = f"agent-run-{index}"
+        metadata = wf._grant_metadata(
+            {"workflowId": lease_id},
+            fencing_generation=10 + index,
+            profile=profile,
+            lease_mode=CredentialLeaseMode.SHARED_EXECUTION,
+        )
+        profile.reserve(lease_id, NOW, metadata=metadata)
+        wf._index_lease(PROFILE_ID, lease_id, lease_id)
+        wf._cleanup_requested_leases.add(lease_id)
+        wf._cleanup_request_reasons[lease_id] = "owner_terminal"
+
+    with _patched(ledger):
+        await wf._deliver_cleanup_requests()
+
+    assert len(ledger.rows_for("request_cleanup")) == _CLEANUP_DELIVERY_PER_PASS
+    assert len(wf._cleanup_requested_leases) == total
+    assert len(profile.current_leases) == total
+
+
+@pytest.mark.asyncio
+async def test_cleanup_redrive_carries_a_non_workflow_consumer_claim() -> None:
+    """Validation/enrollment owners get the same stable-claim redrive.
+
+    MoonLadderStudios/MoonMind#1089: exact consumer identity covers
+    non-workflow validation/enrollment owners too. An activity-owned lease
+    with a verifiable owning workflow is classified as such in its published
+    claim and its redrive re-issues the same fenced request while the slot
+    stays spent.
+    """
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
+            }
+        }
+    )
+    wf = _held_manager(ledger_generation=6)
+    profile = wf._profiles[PROFILE_ID]
+    profile.lease_metadata["agent-run-1"] = {
+        **profile.lease_metadata["agent-run-1"],
+        "ownerIsWorkflow": False,
+        "workflowId": "agent-run-1",
+        "runId": "run-validation-1",
+    }
+
+    with _patched(ledger):
+        await wf._reclaim_terminal_leases_durably(
+            {"agent-run-1": {"running": False, "status": "TERMINATED"}},
+            include_activity_owned=True,
+        )
+        await wf._deliver_cleanup_requests()
+
+    assert ledger.actions() == ["request_cleanup", "request_cleanup"]
+    assert "release_one" not in ledger.actions()
+    claims = wf.get_state()["cleanup_obligations"]
+    assert len(claims) == 1
+    assert claims[0]["consumer"] == "activity_owned"
+    assert claims[0]["claim_id"] == "agent-run-1:6"
+    assert claims[0]["runId"] == "run-validation-1"
+    assert claims[0]["attempt"] == 1
+    assert profile.current_leases == ["agent-run-1"]
