@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Iterable, Mapping
 from enum import StrEnum
@@ -122,6 +124,30 @@ def _credential_value_is_redacted_sentinel(match_text: str) -> bool:
     return bool(_REDACTED_SENTINEL_VALUE_PATTERN.match(value))
 
 
+def _operator_requires_enforcement() -> bool:
+    """Return True when operator env/config requires enforcement at call time.
+
+    ``app_settings`` is instantiated at import time, so reading it directly
+    goes stale when ``MOONMIND_HIGH_SECURITY_MODE`` changes after import
+    (for example under ``monkeypatch.setenv`` in tests or a reconfigured
+    operator environment). Constructing a fresh ``SecuritySettings`` re-reads
+    the current environment; fall back to the import-time singleton only when
+    that fresh read is unavailable.
+    """
+
+    try:
+        from moonmind.config.settings import SecuritySettings
+
+        if bool(SecuritySettings().high_security_mode):
+            return True
+    except Exception:
+        pass
+    try:
+        return bool(app_settings.security.high_security_mode)
+    except Exception:
+        return False
+
+
 def resolve_high_security_mode(
     explicit: bool | None = None,
     *,
@@ -148,7 +174,31 @@ def resolve_high_security_mode(
         if bool(getattr(settings, "high_security_mode")):
             return True
 
-    return bool(app_settings.security.high_security_mode)
+    return _operator_requires_enforcement()
+
+
+def canonical_outbound_digest(body: Any) -> str:
+    """Return a stable sha256 digest binding a scan decision to one payload.
+
+    Non-native MoonMind-owned senders must recompute this over the exact
+    outbound payload before each side effect and must not reuse an earlier
+    allow after mutation, changed-content retry, or an alternate route. The
+    native facade binds the same digest plus the idempotency key in
+    ``NativeScanEvidence``; this helper gives every other boundary the same
+    canonical construction without duplicating serialization rules.
+    """
+
+    try:
+        serialized = json.dumps(
+            body,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+    except (TypeError, ValueError):
+        serialized = "\x00unserializable"
+    return hashlib.sha256(serialized.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def scan_outbound_text(

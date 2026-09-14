@@ -74,6 +74,8 @@ Binary attachments, terminal input, and browser automation are outside the nativ
 
 When high-security mode is disabled, the scan contract returns an allow result and does not silently mutate caller-supplied outbound content. Disabled-mode passthrough carries the original payload in `original_content` / `original_bundle` only; audit evidence must use the `audit_metadata()` projection (decision, policy ref, finding categories/locations, sanitized diagnostics), which never includes raw payloads. Finding locations and previews are bounded and secret-safe.
 
+Verified boundary matrix (MoonMind#809): PR/issue comments via `JiraToolService.add_comment` (`scan_outbound_text`, explicit mode), provider follow-up messages via `JulesClient.send_message` and the `jules_send_message` / `answer_question` activities (operator settings), operator workflow messages via the Temporal service `SendMessage` path (operator settings), native queued/steered messages via `scan_native_outbound` (digest plus idempotency binding through the shared `canonical_outbound_digest`), notification/publish payloads and git push bundles via `scan_outbound_bundle` plus `push_scan_coverage_error` fail-closed truncation handling. Boundary proof lives in `tests/unit/security/test_outbound_boundaries_809.py` alongside `test_outbound_scan.py`, `test_push_scan_truncation_809.py`, and `test_native_outbound_scan.py`. Non-native senders recompute `canonical_outbound_digest` over the exact outbound payload before each side effect and never reuse an earlier allow after mutation, retry, or route change.
+
 ---
 
 ## 2. Goals

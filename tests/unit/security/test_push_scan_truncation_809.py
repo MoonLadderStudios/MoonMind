@@ -14,6 +14,7 @@ pytestmark = pytest.mark.asyncio
 
 
 def _enable_high_security(monkeypatch) -> None:
+    monkeypatch.setenv("MOONMIND_HIGH_SECURITY_MODE", "true")
     monkeypatch.setattr(settings.security, "high_security_mode", True)
 
 
