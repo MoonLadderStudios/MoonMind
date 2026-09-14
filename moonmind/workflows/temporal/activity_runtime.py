@@ -38,6 +38,8 @@ from moonmind.config.settings import settings
 from moonmind.services.skills_on_demand import skills_on_demand_runtime_instruction
 from moonmind.security.outbound_scan import (
     OutboundBundleItem,
+    is_binary_git_diff_marker,
+    push_scan_coverage_error,
     resolve_high_security_mode,
     scan_outbound_bundle,
     scan_outbound_text,
@@ -14894,13 +14896,29 @@ class TemporalAgentRuntimeActivities:
                 workspace=workspace,
                 env=env,
                 timeout=15,
-                args=("diff", "--name-only", commit_range),
+                args=("diff", "--name-only", "-z", commit_range),
             )
-            changed_files = [
-                line.strip()
-                for line in changed_files_text.splitlines()
-                if line.strip()
-            ][:_GIT_PUSH_SCAN_MAX_CHANGED_FILES]
+            # NUL-separated output preserves exact pathnames (whitespace,
+            # newlines, or otherwise quoted names); never strip entries.
+            all_changed_files = [
+                entry for entry in changed_files_text.split("\x00") if entry
+            ]
+            coverage_error = push_scan_coverage_error(
+                commit_range=commit_range,
+                commit_metadata_len=len(commit_metadata),
+                max_commit_metadata_chars=_GIT_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS,
+                changed_file_count=len(all_changed_files),
+                max_changed_files=_GIT_PUSH_SCAN_MAX_CHANGED_FILES,
+            )
+            if coverage_error is not None:
+                return {
+                    "push_status": "blocked",
+                    "push_branch": branch_name,
+                    "push_base_ref": base_ref,
+                    "push_error": coverage_error,
+                    "diagnostic_kind": "outbound_scan_enforcement_unavailable",
+                }
+            changed_files = all_changed_files[:_GIT_PUSH_SCAN_MAX_CHANGED_FILES]
             bundle: list[OutboundBundleItem] = [
                 OutboundBundleItem(
                     location=f"git.push.commits:{commit_range}",
@@ -14910,8 +14928,11 @@ class TemporalAgentRuntimeActivities:
                 )
             ]
             diff_semaphore = asyncio.Semaphore(10)
+            oversized_diff_path: str | None = None
+            binary_diff_path: str | None = None
 
             async def _diff_item(changed_file: str) -> OutboundBundleItem:
+                nonlocal oversized_diff_path, binary_diff_path
                 async with diff_semaphore:
                     file_diff = await self._read_workspace_git_text(
                         workspace=workspace,
@@ -14920,21 +14941,64 @@ class TemporalAgentRuntimeActivities:
                         args=(
                             "diff",
                             "--no-ext-diff",
+                            "--text",
                             commit_range,
                             "--",
                             changed_file,
                         ),
                     )
+                # A binary marker means the blob was not inspected as text;
+                # fail closed instead of accepting the short marker as clean.
+                if is_binary_git_diff_marker(file_diff):
+                    binary_diff_path = binary_diff_path or changed_file
+                    return OutboundBundleItem(
+                        location=f"git.push.diff:{changed_file}",
+                        content=file_diff[:_GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS],
+                    )
+                if len(file_diff) > _GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS:
+                    oversized_diff_path = oversized_diff_path or changed_file
+                    return OutboundBundleItem(
+                        location=f"git.push.diff:{changed_file}",
+                        content=file_diff[:_GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS],
+                    )
                 return OutboundBundleItem(
                     location=f"git.push.diff:{changed_file}",
-                    content=file_diff[:_GIT_PUSH_SCAN_MAX_FILE_DIFF_CHARS],
+                    content=file_diff,
                 )
 
             bundle.extend(
                 await asyncio.gather(*(_diff_item(path) for path in changed_files))
             )
+            if oversized_diff_path is not None or binary_diff_path is not None:
+                coverage_error = push_scan_coverage_error(
+                    commit_range=commit_range,
+                    commit_metadata_len=len(commit_metadata),
+                    max_commit_metadata_chars=_GIT_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS,
+                    changed_file_count=len(all_changed_files),
+                    max_changed_files=_GIT_PUSH_SCAN_MAX_CHANGED_FILES,
+                    oversized_diff_path=oversized_diff_path,
+                    binary_diff_path=binary_diff_path,
+                )
+                assert coverage_error is not None
+                return {
+                    "push_status": "blocked",
+                    "push_branch": branch_name,
+                    "push_base_ref": base_ref,
+                    "push_error": coverage_error,
+                    "diagnostic_kind": "outbound_scan_enforcement_unavailable",
+                }
         except Exception as exc:
-            safe_detail = redact_sensitive_text(str(exc))
+            message = str(exc)
+            if message.startswith("outbound git push blocked:"):
+                # Already a fail-closed coverage reason; preserve verbatim.
+                return {
+                    "push_status": "blocked",
+                    "push_branch": branch_name,
+                    "push_base_ref": base_ref,
+                    "push_error": message,
+                    "diagnostic_kind": "outbound_scan_enforcement_unavailable",
+                }
+            safe_detail = redact_sensitive_text(message)
             return {
                 "push_status": "blocked",
                 "push_branch": branch_name,
@@ -14946,7 +15010,19 @@ class TemporalAgentRuntimeActivities:
                 "diagnostic_kind": "outbound_scan_blocked",
             }
 
-        scan_result = scan_outbound_bundle(bundle, high_security_mode=True)
+        try:
+            scan_result = scan_outbound_bundle(bundle, high_security_mode=True)
+        except Exception as exc:  # noqa: BLE001 - scanner failure must fail closed
+            return {
+                "push_status": "blocked",
+                "push_branch": branch_name,
+                "push_base_ref": base_ref,
+                "push_error": (
+                    "outbound git push blocked: high security scan enforcement "
+                    f"unavailable for {commit_range}: {exc.__class__.__name__}"
+                ),
+                "diagnostic_kind": "outbound_scan_enforcement_unavailable",
+            }
         if scan_result.allowed:
             return None
 

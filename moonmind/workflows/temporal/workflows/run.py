@@ -16604,7 +16604,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
     def _native_pr_push_status_blocks_creation(self, push_status: Any) -> bool:
         status = self._coerce_text(push_status)
-        if status in {"failed", "skipped"}:
+        if status in {"failed", "skipped", "blocked"}:
             return True
         if status == "lease_conflict":
             return workflow.patched(NATIVE_PR_LEASE_CONFLICT_GATE_PATCH)
@@ -16751,6 +16751,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             push_error = self._coerce_text(outputs.get("push_error"), max_chars=200)
             self._publish_status = "failed"
             self._publish_reason = push_error or "publish failed"
+            return
+
+        if push_status == "blocked":
+            # A high-security scan block is terminal: no push occurred, so
+            # there is nothing a downstream PR creation could target.
+            push_error = self._coerce_text(outputs.get("push_error"), max_chars=200)
+            self._publish_status = "failed"
+            self._publish_reason = push_error or "publish blocked"
             return
 
         if push_status == "skipped":
