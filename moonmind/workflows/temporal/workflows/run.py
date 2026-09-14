@@ -185,6 +185,10 @@ with workflow.unsafe.imports_passed_through():
     )
 
 from moonmind.workflows.skills.approval_policy import (
+    gate_transition_allows_review_retry,
+    inject_review_feedback_into_inputs,
+    merge_accepted_output_evidence,
+    merge_direct_output_evidence,
     review_gate_budget_metadata,
     review_gate_retry_allowed,
     review_gate_verdict_made_progress,
@@ -192,8 +196,6 @@ from moonmind.workflows.skills.approval_policy import (
     is_review_gate_active,
     ReviewRequest,
     StepGateResult,
-    build_feedback_input,
-    build_feedback_instruction,
     parse_step_gate_result,
     recommended_next_actions,
 )
@@ -9092,10 +9094,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         plan_routed_moonspec_remediation_enabled: bool,
         transition: GateTransitionDecision,
     ) -> bool:
-        """Keep pre-cutover review retries independent of new plan routing."""
-        return (
-            not plan_routed_moonspec_remediation_enabled
-            or transition.disposition in {"generic", "retry"}
+        """Keep pre-cutover review retries independent of new plan routing.
+
+        Value computation lives in ``approval_policy``; the workflow owns the
+        transition object and passes its compact disposition value.
+        """
+        return gate_transition_allows_review_retry(
+            plan_routed_moonspec_remediation_enabled=(
+                plan_routed_moonspec_remediation_enabled
+            ),
+            transition_disposition=transition.disposition,
         )
 
     def _step_has_accepted_output_evidence(
@@ -9103,13 +9111,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         logical_step_id: str,
         execution_result: Any,
     ) -> bool:
+        # Workflow-owned ledger reads; value merge lives in approval_policy.
         outputs = self._effective_result_outputs(execution_result)
         row_outputs = self._step_execution_compact_output_refs(logical_step_id)
-        merged_outputs: dict[str, Any] = {}
-        if isinstance(outputs, Mapping):
-            merged_outputs.update(dict(outputs))
-            self._merge_direct_output_evidence(merged_outputs, outputs)
-        merged_outputs.update(row_outputs)
+        merged_outputs = merge_accepted_output_evidence(
+            execution_outputs=outputs if isinstance(outputs, Mapping) else None,
+            ledger_output_refs=row_outputs,
+        )
         return logical_step_success_allowed(outputs=merged_outputs)
 
     @staticmethod
@@ -9117,15 +9125,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         merged_outputs: dict[str, Any],
         outputs: Mapping[str, Any],
     ) -> None:
-        for source_key, target_key in (
-            ("primary_report_ref", "primaryRef"),
-            ("primaryReportRef", "primaryRef"),
-            ("summary_ref", "summaryRef"),
-            ("summaryRef", "summaryRef"),
-        ):
-            value = outputs.get(source_key)
-            if isinstance(value, str) and value.strip():
-                merged_outputs.setdefault(target_key, value.strip())
+        merge_direct_output_evidence(merged_outputs, outputs)
 
     def _inject_review_feedback_into_inputs(
         self,
@@ -9136,29 +9136,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         feedback: str,
         issues: tuple[Mapping[str, Any], ...],
     ) -> dict[str, Any]:
-        merged_inputs = build_feedback_input(
-            original_inputs,
-            attempt,
-            feedback,
-            issues,
+        # Pure value computation in approval_policy; no ledger/scheduling here.
+        return inject_review_feedback_into_inputs(
+            tool_type=tool_type,
+            original_inputs=original_inputs,
+            attempt=attempt,
+            feedback=feedback,
+            issues=issues,
         )
-        if tool_type == "agent_runtime":
-            for key in (
-                "instructions",
-                "instructionRef",
-                "instruction",
-                "instructionsText",
-                "instructions_text",
-            ):
-                instruction = merged_inputs.get(key)
-                if isinstance(instruction, str) and instruction.strip():
-                    merged_inputs[key] = build_feedback_instruction(
-                        instruction,
-                        attempt,
-                        feedback,
-                    )
-                    break
-        return merged_inputs
 
     @staticmethod
     def _truncate_json_context_value(
