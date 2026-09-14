@@ -89,6 +89,28 @@ async def test_unavailable_result_carries_provenance():
 
 
 @pytest.mark.asyncio
+async def test_reviewer_unavailable_truncated_and_timeout_carry_provenance():
+    class _Truncated(_StubReviewer):
+        async def review(self, *, prompt: str, model: str, timeout: int) -> str:
+            raise ReviewerUnavailable("too large", code="reviewer_truncated")
+
+    truncated = await step_review_activity(_payload(), reviewer=_Truncated("unused"))
+    assert truncated["verdict"] == "NO_DETERMINATION"
+    assert truncated["issues"][0]["code"] == "reviewer_truncated"
+    assert truncated["reviewProvenance"]["evidenceDigest"].startswith("sha256:")
+    assert truncated["reviewProvenance"]["reviewAttemptIdentity"].startswith("review:")
+
+    class _Hanging(_StubReviewer):
+        async def review(self, *, prompt: str, model: str, timeout: int) -> str:
+            raise TimeoutError("slow provider")
+
+    timed_out = await step_review_activity(_payload(), reviewer=_Hanging("unused"))
+    assert timed_out["verdict"] == "NO_DETERMINATION"
+    assert timed_out["issues"][0]["code"] == "reviewer_timeout"
+    assert timed_out["reviewProvenance"]["evidenceDigest"].startswith("sha256:")
+
+
+@pytest.mark.asyncio
 async def test_secret_shaped_inputs_redacted_before_provider_send():
     text = json.dumps({"verdict": "FULLY_IMPLEMENTED", "confidence": 0.9})
     capture: dict = {}
