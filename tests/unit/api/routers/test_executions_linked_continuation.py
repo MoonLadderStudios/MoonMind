@@ -52,6 +52,7 @@ async def _seed_canonical(
                 run_id="run-1",
                 workflow_type=TemporalWorkflowType.USER_WORKFLOW,
                 entry="user_workflow",
+                input_ref="art_original_instructions",
                 owner_id=owner_id,
                 owner_type=TemporalExecutionOwnerType.USER,
                 state=MoonMindWorkflowState.COMPLETED,
@@ -131,8 +132,8 @@ def _patch_collaborators(
     attach_calls: list[list[dict]] | None = None,
 ) -> None:
     async def _owned(*, service, workflow_id, user):  # noqa: ANN001
-        return SimpleNamespace(
-            workflow_id="mm:source", run_id="run-1", status=source_status
+        return TemporalExecutionRecord(
+            workflow_id="mm:source", run_id="run-1", state=source_status
         )
 
     async def _resolve(*, workflow_id, run_id):  # noqa: ANN001
@@ -241,6 +242,7 @@ async def test_continue_creates_linked_workflow_and_pins_source(monkeypatch) -> 
     # intent rather than pinned (a pinned plan short-circuits compilation, so the
     # continuation would run the source's old nodes).
     assert call["plan_artifact_ref"] is None
+    assert call["input_artifact_ref"] is None
     assert call["manifest_artifact_ref"] is None
     params = call["initial_parameters"]
     assert params["omnigentExecutionPlan"] == plan
@@ -511,7 +513,9 @@ async def test_list_continuations_outbound_and_inbound(monkeypatch) -> None:
     destination_id = created.destination_workflow_id
 
     async def _owned(*, service, workflow_id, user):  # noqa: ANN001
-        return SimpleNamespace(workflow_id=workflow_id, run_id="r", status="completed")
+        return TemporalExecutionRecord(
+            workflow_id=workflow_id, run_id="r", state=MoonMindWorkflowState.COMPLETED
+        )
 
     monkeypatch.setattr(ex, "_get_owned_execution", _owned)
 
@@ -774,7 +778,7 @@ async def test_materialize_source_attachments_copies_durable_refs(monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_materialize_source_attachments_reads_omnigent_and_skips_oversized(
+async def test_materialize_source_attachments_rejects_undeliverable_selected_evidence(
     monkeypatch,
 ) -> None:
     fake = _FakeArtifactService()
@@ -788,16 +792,16 @@ async def test_materialize_source_attachments_reads_omnigent_and_skips_oversized
 
     monkeypatch.setattr(bridge_artifacts, "LocalOmnigentArtifactGateway", _FakeGateway)
     # Force the size guard: the omnigent ref's 50 bytes exceeds the cap and is
-    # skipped rather than failing the continuation.
+    # rejected before launching the continuation.
     monkeypatch.setattr(ex, "_CONTINUATION_EVIDENCE_MAX_BYTES", 10)
 
-    result = await ex._materialize_continuation_source_attachments(
-        session=SimpleNamespace(),
-        user=SimpleNamespace(id=uuid4()),
-        refs=["artifact://omnigent/corr/final.json"],
-    )
-
-    assert result == []
+    with pytest.raises(HTTPException) as rejected:
+        await ex._materialize_continuation_source_attachments(
+            session=SimpleNamespace(),
+            user=SimpleNamespace(id=uuid4()),
+            refs=["artifact://omnigent/corr/final.json"],
+        )
+    assert rejected.value.detail["code"] == "continuation_evidence_unavailable"
     assert fake.writes == []
 
 

@@ -16797,12 +16797,39 @@ async def resolve_workflow_chat_binding(
 # and never routing the intent through the native composer / SubmitChatInstruction.
 # ---------------------------------------------------------------------------
 
-# Terminal ``ExecutionModel.status`` values. A linked continuation may only be
+# Terminal execution state values. A linked continuation may only be
 # authored from a terminal source (issue §7: "source is not terminal" fails
 # closed) — a still-idle or still-reachable session is never inferred writeable.
-_TERMINAL_EXECUTION_STATUSES: frozenset[str] = frozenset(
+_CONTINUATION_TERMINAL_STATES: frozenset[str] = frozenset(
     {"completed", "failed", "canceled"}
 )
+
+
+async def _recovery_source_record(
+    *,
+    source: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+    service: TemporalExecutionService,
+    session: AsyncSession,
+) -> TemporalExecutionCanonicalRecord:
+    canonical = await session.get(TemporalExecutionCanonicalRecord, source.workflow_id)
+    if canonical is not None:
+        if canonical.run_id != source.run_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "recovery_source_changed",
+                    "message": "The source run changed; refresh before recovery.",
+                },
+            )
+        return canonical
+    try:
+        return await service.read_scheduled_execution_source(source)
+    except (TemporalExecutionValidationError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "recovery_source_unavailable", "message": str(exc)},
+        ) from exc
+
 
 # Ordered (camelCase label, bridge-session column, kind) for the named terminal
 # evidence refs surfaced by **View captured evidence**. These are MoonMind
@@ -17196,9 +17223,8 @@ async def _materialize_continuation_source_attachments(
     evidence into execution context"). Copy each authorized selected ref into a
     durable ``LONG`` artifact and return ``inputAttachments`` entries; the caller
     injects them into the destination's ``workflow`` payload (the same shape the
-    ordinary create path uses) and links them to the destination workflow after
-    it is created. Unreadable or oversized refs are skipped rather than failing
-    the whole continuation — they remain pinned for display.
+    ordinary create path uses). The workflow's planning stage links the inputs
+    to its actual Temporal run before dispatch. Selected evidence must be readable.
     """
 
     if not refs:
@@ -17211,7 +17237,13 @@ async def _materialize_continuation_source_attachments(
             artifact_service=artifact_service, principal=principal, ref=ref
         )
         if body is None or len(body) > _CONTINUATION_EVIDENCE_MAX_BYTES:
-            continue
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_evidence_unavailable",
+                    "message": "Selected source evidence could not be delivered. Restore artifact access or revise the selection before retrying.",
+                },
+            )
         filename = _evidence_download_filename(ref)
         content_type = _evidence_attachment_content_type(filename)
         artifact, _upload = await artifact_service.create(
@@ -17345,7 +17377,7 @@ async def continue_in_new_workflow(
     source = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
     )
-    if str(getattr(source, "status", "") or "") not in _TERMINAL_EXECUTION_STATUSES:
+    if _enum_value(source.state) not in _CONTINUATION_TERMINAL_STATES:
         # Never infer writeability from an idle status or a still-reachable
         # upstream session after the MoonMind Workflow is terminal (§1, §7).
         raise HTTPException(
@@ -17368,17 +17400,9 @@ async def continue_in_new_workflow(
             },
         )
 
-    canonical = await session.get(TemporalExecutionCanonicalRecord, source.workflow_id)
-    if canonical is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "continuation_source_unpinnable",
-                "message": (
-                    "The source Workflow could not be pinned for continuation."
-                ),
-            },
-        )
+    canonical = await _recovery_source_record(
+        source=source, service=service, session=session
+    )
 
     evidence = await _resolve_source_captured_evidence(
         workflow_id=source.workflow_id, run_id=source_run_id
@@ -17475,6 +17499,14 @@ async def continue_in_new_workflow(
     # relationship. Fresh authority (runtime/profile/credential/policy) is
     # resolved by ``create_execution`` — nothing is silently inherited stale.
     initial_params = service._full_rerun_parameters(canonical.parameters or {})
+    if not _workflow_payload_from_parameters(initial_params):
+        _, source_task = await _snapshot_source_payload_from_parameters_and_artifact(
+            session=session,
+            user=user,
+            record=canonical,
+            parameters=initial_params,
+        )
+        initial_params["workflow"] = source_task
     if payload.initial_parameters:
         initial_params.update(payload.initial_parameters)
     source_plan_payload = (canonical.parameters or {}).get(
@@ -17522,18 +17554,12 @@ async def continue_in_new_workflow(
                 ),
             },
         )
+    # Canonicalize the retained task payload even when instructions are omitted.
+    # Copy before layering attachments/instructions so the source stays immutable.
+    initial_params["workflow"] = _workflow_payload_from_parameters(initial_params)
+    initial_params.pop("task", None)
     if payload.instructions:
-        workflow_payload = initial_params.get("workflow")
-        if not isinstance(workflow_payload, dict):
-            workflow_payload = initial_params.get("task")
-        if isinstance(workflow_payload, dict):
-            workflow_payload["instructions"] = payload.instructions
-            initial_params["workflow"] = workflow_payload
-            initial_params.pop("task", None)
-        else:
-            initial_params.setdefault("workflow", {})["instructions"] = (
-                payload.instructions
-            )
+        initial_params["workflow"]["instructions"] = payload.instructions
     initial_params["continuationSource"] = pinned
 
     # Materialize the authorized selected source evidence into durable input
@@ -17545,7 +17571,9 @@ async def continue_in_new_workflow(
     # create path uses) and link them to the destination workflow after it is
     # created (#3641 §6).
     source_attachments = await _materialize_continuation_source_attachments(
-        session=session, user=user, refs=payload.selected_source_artifact_refs
+        session=session,
+        user=user,
+        refs=payload.selected_source_artifact_refs,
     )
     if source_attachments:
         workflow_payload = initial_params.get("workflow")
@@ -17585,7 +17613,10 @@ async def continue_in_new_workflow(
             owner_type=canonical.owner_type.value if canonical.owner_type else "user",
             title=payload.title
             or (canonical.memo.get("title") if canonical.memo else None),
-            input_artifact_ref=canonical.input_ref,
+            # The ordinary parameter-backed compiler path owns the newly
+            # authored turn. The source input artifact would override these
+            # instructions and steps; retain it only as source/plan evidence.
+            input_artifact_ref=None,
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
@@ -17612,6 +17643,14 @@ async def continue_in_new_workflow(
             },
         ) from exc
 
+    if isinstance(record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)):
+        # Create may reconcile an earlier successful start whose acknowledgement
+        # was lost. Its recorded inputs own the snapshot and attachment links.
+        initial_params = dict(record.parameters or {})
+        source_attachments = list(
+            _workflow_payload_from_parameters(initial_params).get("inputAttachments")
+            or []
+        )
     await repository.finalize(
         reservation.record,
         destination_run_id=str(getattr(record, "run_id", "") or "").strip() or None,
@@ -17656,7 +17695,7 @@ async def continue_in_new_workflow(
             source_kind="linked_continuation",
             source_workflow_id=source.workflow_id,
             source_run_id=source_run_id,
-            input_artifact_ref=canonical.input_ref,
+            input_artifact_ref=None,
         )
     await session.commit()
 
@@ -17735,7 +17774,7 @@ async def list_execution_continuations(
             if exc.status_code == status.HTTP_404_NOT_FOUND:
                 return None
             raise
-        return str(getattr(execution, "status", "") or "") or None
+        return _enum_value(execution.state) or None
 
     items: list[LinkedContinuationSummaryModel] = []
     if direction == "outbound":
@@ -18919,16 +18958,12 @@ async def recover_execution_from_failed_step(
 ) -> RecoverFromFailedStepResponse:
     _reject_recovery_task_payload_edits(request, action="Recover from failed step")
 
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
-    canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
-    if canonical is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "execution_not_found",
-                "message": "Source execution was not found or is not visible.",
-            },
-        )
+    source = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    canonical = await _recovery_source_record(
+        source=source, service=service, session=session
+    )
     checkpoint_ref = request.recovery_checkpoint_ref or _recovery_checkpoint_ref_from_record(
         canonical
     )

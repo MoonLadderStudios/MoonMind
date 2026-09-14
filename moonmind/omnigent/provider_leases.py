@@ -70,6 +70,9 @@ class AcquiredProviderLease:
     # Re-admission creates a new credential lifecycle while preserving the
     # workflow's provider-capacity owner and selected credential generation.
     admission_epoch: int = 0
+    # Epochs restart at one after a Temporal reset. Scope credential lifecycles
+    # to the already-recorded admitted run without changing capacity ownership.
+    admission_run_id: str | None = None
 
     def runtime_binding_value(
         self, *, credential_runtime_ref: str = "pending"
@@ -252,14 +255,15 @@ class OmnigentProviderLeaseCoordinator:
                         slot=slot,
                         provider_profile_ref=profile_ref,
                         capacity_scope_ref=capacity_scope_ref,
-                        provider_lease_ref=(
-                            f"provider-profile-lease:{lease.lease_id}"
-                        ),
+                        provider_lease_ref=(f"provider-profile-lease:{lease.lease_id}"),
                         credential_generation=generation,
                         lease=lease,
                         owned_by_workflow=True,
                         admission_epoch=int(
                             getattr(admitted_capacity, "admission_epoch", 0)
+                        ),
+                        admission_run_id=getattr(
+                            admitted_capacity, "agent_run_run_id", None
                         ),
                     )
                 )

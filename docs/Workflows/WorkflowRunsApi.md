@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-08-07
+Last Updated: 2026-09-13
 
 ## 1. Purpose
 
@@ -52,6 +52,25 @@ The public `/api/agent-runs` path comes from the `agent_runs` router's `prefix="
 | `POST` | `/api/executions/{workflowId}/continue` | Create an authorized linked continuation from terminal source evidence when the product exposes **Continue in a new workflow**. |
 
 The terminal continuation route leaves the source execution unchanged. It is not an ordinary chat message, not failed-Step recovery, and not proof that the deferred chat-instruction feature is enabled.
+
+Continuation eligibility uses the execution's terminal domain state. Scheduled
+executions may have no API-created source row: continuation and failed-Step
+recovery read their exact Temporal run's admitted inputs, verify the owner and
+workflow type, and retain current checkpoint and terminal evidence from the
+Temporal-authoritative projection. Missing history returns an actionable
+`recovery_source_unavailable` response; compact Visibility parameters do not
+replace admitted inputs, and recovery does not backfill or mutate the source.
+
+A continuation compiles its newly authored instructions and steps through the
+parameter-backed planning path. The original input artifact cannot override the
+new turn. An immutable Omnigent execution plan and its original task snapshot
+remain separate, unchanged authority. Selected evidence is copied into durable
+inputs; unreadable or oversized selections return
+`continuation_evidence_unavailable` before launch. The workflow links declared
+inputs to its actual run during planning, before child dispatch, so API process
+loss cannot strand otherwise readable evidence. Repeating a continuation key
+reuses the reserved destination and its recorded inputs after a lost create
+acknowledgement.
 
 ### 2.3 Workflow-bound native Chat facade
 
