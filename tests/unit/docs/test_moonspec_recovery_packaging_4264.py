@@ -9,6 +9,9 @@ Covers the bounded slice implemented in this change:
   in meaning without invented numbers (#4266).
 - Verification resolves helpers through the immutable active bundle and allows
   a valid conflict-free alias instead of blanket-rejecting symlinks (#4275).
+- PR repair recovers with bounded retry and blocked evidence instead of
+  stopping to ask for a PR number/URL, never invents PR identity, and never
+  continues from stale comments (#4270).
 - Resulting skills/presets carry no named-model instructions; existing
   runtime/model/effort/billing selections stay opaque intent (epic constraint).
 
@@ -145,3 +148,13 @@ def test_verify_preflight_allows_valid_alias_and_forbids_destructive_repair():
     assert "never create a clean reclone" in text.lower()
     assert "Prefer restoring the tracked repository files or using a clean reclone" not in text
     assert "test ! -L .agents/skills" not in text
+
+
+def test_fix_comments_pr_failure_is_portable_and_preserves_branch_authority():
+    text = _read_skill("fix-comments")
+    assert "stop and ask the user for a PR number/URL" not in text.lower()
+    assert "pr_resolution_unavailable" in text
+    assert "never invent" in text.lower()
+    assert "only when it was supplied as a scope constraint" in text
+    assert "successfully refreshed" in text
+    assert "Do not continue from pre-fetched or stale comments" in text
