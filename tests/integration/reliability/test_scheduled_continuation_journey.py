@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from temporalio.testing import ActivityEnvironment
 from temporalio.client import (
     Schedule,
@@ -29,12 +29,12 @@ from temporalio.common import (
     TypedSearchAttributes,
 )
 from temporalio.api.enums.v1 import IndexedValueType
-from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
 
 from api_service.api.routers import executions as ex
 from api_service.db.models import (
     Base,
     TemporalExecutionCanonicalRecord,
+    TemporalArtifact,
     TemporalArtifactLink,
 )
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
@@ -79,29 +79,20 @@ REPLAY = json.loads(
 
 @pytest.mark.parametrize("authored", [False, True])
 @pytest.mark.parametrize("lost_ack", [False, True])
+@pytest.mark.parametrize("partial_parameters", [False, True])
 async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
-    tmp_path, monkeypatch, authored, lost_ack
+    tmp_path, monkeypatch, authored, lost_ack, partial_parameters
 ):
-    client = await resolver_test_client()
-    from temporalio.service import RPCError, RPCStatusCode
-
-    for name in ("mm_target_runtime", "mm_target_skill", "mm_title", "mm_updated_at"):
-        try:
-            await client.operator_service.add_search_attributes(
-                AddSearchAttributesRequest(
-                    namespace=client.namespace,
-                    search_attributes={
-                        name: (
-                            IndexedValueType.INDEXED_VALUE_TYPE_DATETIME
-                            if name == "mm_updated_at"
-                            else IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST
-                        )
-                    },
-                )
+    client = await resolver_test_client(
+        additional_search_attributes={
+            name: (
+                IndexedValueType.INDEXED_VALUE_TYPE_DATETIME
+                if name == "mm_updated_at"
+                else IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST
             )
-        except RPCError as exc:
-            if exc.status != RPCStatusCode.ALREADY_EXISTS:
-                raise
+            for name in ("mm_target_runtime", "mm_target_skill", "mm_title", "mm_updated_at")
+        }
+    )
     owner = str(uuid4())
     user = SimpleNamespace(id=owner)
     queue = "continuation-qualification-" + uuid4().hex
@@ -135,7 +126,16 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                 )
                 return artifact.artifact_id
 
-            original = REPLAY["originalInput"]
+            original = json.loads(json.dumps(REPLAY["originalInput"]))
+            if partial_parameters:
+                original.update(
+                    repository="MoonLadderStudios/MoonMind",
+                    targetRuntime="omnigent",
+                    requiredCapabilities=["git"],
+                )
+                original["task"]["steps"] = [
+                    {"id": "retained", "instructions": "Retained source intent"}
+                ]
             old_input = await publish(original)
             evidence_body = {"remainingWork": ["verify saved candidate"]}
             evidence_ref = await publish(evidence_body)
@@ -146,6 +146,11 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                 "model": "opencode-go/exact-model",
                 "effort": "xhigh",
             }
+            if partial_parameters:
+                initial.pop("repository")
+                initial.pop("requiredCapabilities")
+                initial.pop("targetRuntime")
+                initial["task"] = {"model": "opencode-go/exact-model"}
             start = {
                 "workflow_type": "MoonMind.UserWorkflow",
                 "owner_user_id": owner,
@@ -203,7 +208,10 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                     await ex.recover_execution_from_failed_step(
                         source_id,
                         ex.RecoverFromFailedStepRequest(idempotencyKey="failed-step"),
-                        service, session, user, None,
+                        service,
+                        session,
+                        user,
+                        None,
                     )
                 assert unavailable.value.status_code == 409
                 assert unavailable.value.detail["reason"] == "recovery_manifest_missing"
@@ -265,10 +273,28 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                         await ex.continue_in_new_workflow(
                             source_id, payload, service, session, user, None
                         )
+                    copied_before_retry = set(
+                        (
+                            await session.scalars(select(TemporalArtifact.artifact_id))
+                        ).all()
+                    )
                 result = await ex.continue_in_new_workflow(
                     source_id, payload, service, session, user, None
                 )
                 destination = result.destination_workflow_id
+                if lost_ack:
+                    new_artifacts = (
+                        await session.scalars(
+                            select(TemporalArtifact).where(
+                                TemporalArtifact.artifact_id.not_in(copied_before_retry)
+                            )
+                        )
+                    ).all()
+                    assert not any(
+                        (artifact.metadata_json or {}).get("artifact_class")
+                        == "linked_continuation_source_evidence"
+                        for artifact in new_artifacts
+                    ), "Lost acknowledgement retry must reuse recorded evidence copies"
                 duplicate = await ex.continue_in_new_workflow(
                     source_id, payload, service, session, user, None
                 )
@@ -293,6 +319,12 @@ async def test_schedule_continuation_preserves_intent_and_materializes_evidence(
                 )
                 assert params["continuationSource"]["sourceRunId"] == source_run
                 assert "task" not in params
+                if partial_parameters:
+                    assert params["repository"] == original["repository"]
+                    assert params["targetRuntime"] == "omnigent"
+                    assert params["requiredCapabilities"] == ["git"]
+                    if not authored:
+                        assert params["workflow"]["steps"] == original["task"]["steps"]
                 expected_instruction = (
                     "Bounded continuation" if authored else "Retained source intent"
                 )

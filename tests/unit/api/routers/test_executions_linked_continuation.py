@@ -178,7 +178,12 @@ def _payload(**overrides) -> ex.ContinueInNewWorkflowRequest:
 
 
 @pytest.mark.asyncio
-async def test_continue_creates_linked_workflow_and_pins_source(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "source_state", ["completed", "no_commit", "failed", "canceled"]
+)
+async def test_continue_creates_linked_workflow_and_pins_source(
+    monkeypatch, source_state
+) -> None:
     engine, sessions = await _database()
     user = SimpleNamespace(id=uuid4())
     plan = {
@@ -191,7 +196,7 @@ async def test_continue_creates_linked_workflow_and_pins_source(monkeypatch) -> 
     await _seed_canonical(
         sessions, owner_id=str(user.id), omnigent_plan=plan
     )
-    _patch_collaborators(monkeypatch)
+    _patch_collaborators(monkeypatch, source_status=source_state)
     service = _FakeService()
 
     async with sessions() as session:
@@ -380,6 +385,54 @@ async def test_continue_retries_to_same_destination_after_failed_create(
         assert [r.destination_workflow_id for r in outbound] == [
             result.destination_workflow_id
         ]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", ["create_idempotency_key", "owner_id", "owner_type", "workflow_type"])
+async def test_continue_rejects_foreign_reserved_admission(monkeypatch, mismatch) -> None:
+    engine, sessions = await _database()
+    user = SimpleNamespace(id=uuid4())
+    await _seed_canonical(sessions, owner_id=str(user.id))
+    _patch_collaborators(monkeypatch)
+    service = _FakeService(fail_times=1)
+    async with sessions() as session:
+        with pytest.raises(HTTPException):
+            await ex.continue_in_new_workflow(
+                "mm:source", _payload(), service, session, user, None
+            )
+        call = service.create_calls[0]
+        fields = dict(
+            workflow_id=call["_workflow_id"],
+            run_id="admitted-run",
+            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+            entry="user_workflow",
+            owner_id=str(user.id),
+            owner_type=TemporalExecutionOwnerType.USER,
+            state=MoonMindWorkflowState.INITIALIZING,
+            parameters=call["initial_parameters"],
+            create_idempotency_key=call["idempotency_key"],
+        )
+        fields[mismatch] = {
+            "create_idempotency_key": "foreign-key",
+            "owner_id": str(uuid4()),
+            "owner_type": TemporalExecutionOwnerType.SYSTEM,
+            "workflow_type": TemporalWorkflowType.MANIFEST_INGEST,
+        }[mismatch]
+        session.add(TemporalExecutionCanonicalRecord(**fields))
+        await session.commit()
+
+        async def no_copy(**kwargs):
+            raise AssertionError("Foreign admissions must not allocate evidence")
+
+        monkeypatch.setattr(ex, "_materialize_continuation_source_attachments", no_copy)
+        with pytest.raises(HTTPException) as rejected:
+            await ex.continue_in_new_workflow(
+                "mm:source", _payload(), service, session, user, None
+            )
+        assert rejected.value.status_code == 409
+        assert rejected.value.detail["code"] == "continuation_destination_conflict"
+        assert len(service.create_calls) == 1
     await engine.dispose()
 
 

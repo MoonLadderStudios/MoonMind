@@ -53,7 +53,8 @@ The public `/api/agent-runs` path comes from the `agent_runs` router's `prefix="
 
 The terminal continuation route leaves the source execution unchanged. It is not an ordinary chat message, not failed-Step recovery, and not proof that the deferred chat-instruction feature is enabled.
 
-Continuation eligibility uses the execution's terminal domain state. Scheduled
+Continuation eligibility uses the canonical terminal domain states, including
+`no_commit`. Scheduled
 executions may have no API-created source row: continuation and failed-Step
 recovery read their exact Temporal run's admitted inputs, verify the owner and
 workflow type, and retain current checkpoint and terminal evidence from the
@@ -62,7 +63,9 @@ Temporal-authoritative projection. Missing history returns an actionable
 replace admitted inputs, and recovery does not backfill or mutate the source.
 
 A continuation compiles its newly authored instructions and steps through the
-parameter-backed planning path. The original input artifact cannot override the
+parameter-backed planning path. It hydrates workflow and top-level settings from
+the source input artifact, combines them with retained parameters, and then
+layers authored overrides. The original input artifact cannot override the
 new turn. An immutable Omnigent execution plan and its original task snapshot
 remain separate, unchanged authority. Selected evidence is copied into durable
 inputs; unreadable or oversized selections return
@@ -70,7 +73,7 @@ inputs; unreadable or oversized selections return
 inputs to its actual run during planning, before child dispatch, so API process
 loss cannot strand otherwise readable evidence. Repeating a continuation key
 reuses the reserved destination and its recorded inputs after a lost create
-acknowledgement.
+acknowledgement, before allocating any new evidence copies.
 
 ### 2.3 Workflow-bound native Chat facade
 
