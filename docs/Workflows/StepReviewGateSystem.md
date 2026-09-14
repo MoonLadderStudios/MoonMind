@@ -520,6 +520,9 @@ Rules:
 - review state must be visible without parsing logs
 - verdict summaries should be bounded and operator-safe
 - large review feedback and issue detail belong in the linked artifact
+- committed checks carry `reviewProvenance` with `reviewAttemptIdentity` and
+  `evidenceDigest` so a duplicate delivery or lost-acknowledgment retry reuses
+  the same committed decision instead of persisting a divergent redelivery
 - The dashboard should render review evidence inside the expanded step row, not as a terminal-widget-only affordance
 
 ### 8.4 Finish Summary Integration
