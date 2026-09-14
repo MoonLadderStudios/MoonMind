@@ -373,7 +373,13 @@ class ContainerJobBackend(Protocol):
 
 # Only the exact image id and registry repo digests are read; never the full
 # manifest, so unbounded inspect output cannot reach the observation payload.
-_INSPECT_FORMAT = "{{.Id}}\t{{join .RepoDigests \",\"}}"
+# Older Docker clients decode RepoDigests as []interface{}, which cannot be
+# passed to join's []string parameter. Range preserves the same CSV payload
+# for both typed and untyped inspect results.
+_INSPECT_FORMAT = (
+    "{{.Id}}\t{{range $index, $digest := .RepoDigests}}"
+    "{{if $index}},{{end}}{{$digest}}{{end}}"
+)
 _LOCAL_INSPECT_FORMAT = (
     '{"id":{{json .Id}},"repoDigests":{{json .RepoDigests}},'
     '"created":{{json .Created}},"os":{{json .Os}},'
