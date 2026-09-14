@@ -135,11 +135,39 @@ class GitHubPermissionProfile:
 # Versioned capability-bundle definition consumed by the probe path.
 # Bump when required operations or profiles change; persisted evidence keys
 # on this version alongside credential/binding revisions (#4008 R2/R4).
+# This table IS the canonical GitHub capability compiler: probe requirements,
+# route keys, and observed evidence all derive from it through
+# capability_operations_for_mode / capability_bundle_for_mode /
+# probe_route_key_for, never from a parallel permission table.
 GITHUB_CAPABILITY_DEFINITION_VERSION = "github-capabilities.v1"
 GITHUB_PROBE_RESULT_VERSION = "github-probe.v1"
 GITHUB_API_BASE = "https://api.github.com"
 # Observed probe evidence freshness (configuration-time discovery/probing).
 PROBE_EVIDENCE_TTL_SECONDS = 300
+
+# Bounded discovery / multi-connection limits (#4008 R1/R7). Discovery never
+# attaches repositories or sets defaults; later-page failure preserves partial
+# results with a scoped continuation token instead of reading as an empty list.
+GITHUB_DISCOVERY_DEFAULT_MAX_PAGES = 5
+GITHUB_DISCOVERY_MAX_PAGES_HARD_CAP = 20
+GITHUB_DISCOVERY_DEFAULT_MAX_ITEMS = 100
+GITHUB_DISCOVERY_MAX_ITEMS_HARD_CAP = 1000
+GITHUB_MULTI_CONNECTION_HARD_CAP = 5
+
+# Identity-aware throttle coordination (#4008 R6). Unknown actor/budget
+# identity uses a conservative bounded bucket; tenants never share a bucket.
+GITHUB_THROTTLE_UNKNOWN_IDENTITY_BUCKET = "anonymous-egress:unknown"
+GITHUB_THROTTLE_BUCKET_VERSION = "github-throttle.v1"
+
+# Per-capability observed states (#4008 R4). Distinct from checklist display
+# statuses; preserved across refreshes, never fabricated on failure.
+GITHUB_EVIDENCE_STATES = (
+    "never-tested",
+    "verified",
+    "denied",
+    "stale",
+    "unavailable",
+)
 
 # ---------------------------------------------------------------------------
 # Service
@@ -370,13 +398,84 @@ class GitHubService:
     def capability_operations_for_mode(mode: str) -> tuple[str, ...]:
         """Return the actual caller operations for a known probe mode.
 
-        Raises ``ValueError`` for unknown modes so callers validate before
-        network access instead of silently defaulting to publish requirements.
+        Single canonical accessor for the GitHub capability compiler:
+        every probe, route-key, and evidence derivation reads operations
+        through this function, never by reaching into
+        ``github_permission_profiles`` directly. Raises ``ValueError`` for
+        unknown modes so callers validate before network access instead of
+        silently defaulting to publish requirements.
         """
         profile = GitHubService.github_permission_profiles().get(str(mode or ""))
         if profile is None:
             raise ValueError(f"Unsupported GitHub capability mode: {mode!r}.")
         return profile.required_operations
+
+    @staticmethod
+    def capability_bundle_for_mode(mode: str) -> dict[str, Any]:
+        """Return the versioned capability bundle for a probe mode.
+
+        The bundle (id + definition version + operations) is what execution
+        launchers and route selection consume; the probe derives its checks
+        from the same bundle so frontend, probe, and execution tables cannot
+        diverge (#4008 R2).
+        """
+        operations = GitHubService.capability_operations_for_mode(mode)
+        return {
+            "bundleId": f"github:{mode}:{GITHUB_CAPABILITY_DEFINITION_VERSION}",
+            "mode": mode,
+            "definitionVersion": GITHUB_CAPABILITY_DEFINITION_VERSION,
+            "operations": list(operations),
+        }
+
+    @staticmethod
+    def probe_route_key_for(
+        *,
+        scope_type: str = "system",
+        scope_ref: str | None = None,
+        endpoint: str = GITHUB_API_BASE,
+        repository_id: Any | None = None,
+        repo: str = "",
+        mode: str = "publish",
+    ) -> str:
+        """Derive the probe route key through the shared ``route_key_for``.
+
+        Consumes the same compiler execution launchers use
+        (``repository_contract.route_key_for``) with the probe's own
+        operations bundle, so probe requirements and execution admission
+        cannot drift (#4008 R2). Identity prefers the stable provider
+        repository id when observed; otherwise the canonical remote derived
+        from the bound endpoint + slug (display names are never fabricated
+        into provider ids).
+        """
+        from moonmind.workflows.executions.repository_contract import route_key_for
+
+        operations = GitHubService.capability_operations_for_mode(mode)
+        identity_kwargs: dict[str, Any]
+        repo_id_text = str(repository_id or "").strip()
+        if repo_id_text:
+            identity_kwargs = {
+                "endpoint": endpoint,
+                "providerRepoId": repo_id_text,
+                "displayName": str(repo or ""),
+            }
+        else:
+            slug = str(repo or "").strip()
+            identity_kwargs = {
+                "endpoint": endpoint,
+                "canonicalRemote": f"{endpoint.rstrip('/')}/{slug}" if slug else endpoint,
+                "displayName": slug or endpoint,
+            }
+        from moonmind.workflows.executions.repository_contract import (
+            RepositoryIdentity,
+        )
+
+        identity = RepositoryIdentity.model_validate(identity_kwargs)
+        return route_key_for(
+            scope_type=scope_type,
+            scope_ref=scope_ref,
+            identity=identity,
+            capability_bundle=list(operations),
+        )
 
     @staticmethod
     def _github_headers(token: str) -> dict[str, str]:
@@ -781,6 +880,511 @@ class GitHubService:
             return None
         return candidate
 
+    @staticmethod
+    def throttle_bucket_key(
+        *,
+        endpoint: str = GITHUB_API_BASE,
+        actor: str | None = None,
+        installation_id: str | None = None,
+        anonymous_egress: str | None = None,
+        resource: str = "rest",
+        token_fingerprint: str | None = None,
+    ) -> str:
+        """Derive an identity-aware throttle bucket key (#4008 R6).
+
+        Buckets coordinate by endpoint/resource and verified actor,
+        installation, or anonymous-egress identity. Two PATs sharing an actor
+        share one primary budget (same actor bucket); different installations
+        never share; unknown identity falls back to a conservative bounded
+        bucket keyed by endpoint + token fingerprint without merging tenants'
+        private metadata or inventing remaining quota.
+        """
+        import hashlib
+
+        endpoint_key = str(endpoint or GITHUB_API_BASE).strip().lower() or GITHUB_API_BASE
+        resource_key = str(resource or "rest").strip().lower() or "rest"
+        actor_text = str(actor or "").strip().lower()
+        installation_text = str(installation_id or "").strip()
+        egress_text = str(anonymous_egress or "").strip().lower()
+        if installation_text:
+            identity = f"installation:{installation_text}"
+        elif actor_text:
+            identity = f"actor:{actor_text}"
+        elif egress_text:
+            identity = f"egress:{egress_text}"
+        elif token_fingerprint:
+            digest = hashlib.sha256(str(token_fingerprint).encode()).hexdigest()[:16]
+            identity = f"unknown:{digest}"
+        else:
+            identity = GITHUB_THROTTLE_UNKNOWN_IDENTITY_BUCKET
+        return f"{GITHUB_THROTTLE_BUCKET_VERSION}|{endpoint_key}|{resource_key}|{identity}"
+
+    @staticmethod
+    def _token_fingerprint(token: str) -> str:
+        """Return a non-reversible fingerprint for bucket scoping (never the token)."""
+        import hashlib
+
+        return hashlib.sha256(str(token or "").encode()).hexdigest()[:16]
+
+    @staticmethod
+    def build_capability_evidence(
+        *,
+        operations: Any,
+        checklist: Any,
+        endpoint: str = GITHUB_API_BASE,
+        repository_identity: Any | None = None,
+        credential_revision: int | None = None,
+        binding_revision: int | None = None,
+        policy_revision: int | None = None,
+        definition_version: str = GITHUB_CAPABILITY_DEFINITION_VERSION,
+        observed_at: str = "",
+        expires_at: str = "",
+    ) -> list[dict[str, Any]]:
+        """Build per-capability observed evidence with distinct states (#4008 R4).
+
+        Maps checklist outcomes to never-tested / verified / denied / stale /
+        unavailable without fabricating denials: ``failed`` becomes denied,
+        ``unavailable`` stays unavailable, ``not_checked`` stays never-tested,
+        and any ``verified*``/``passed`` becomes verified. Each record carries
+        endpoint, stable repository identity, credential/binding/policy
+        revisions, definition version, and timestamp/expiry so refreshes can
+        fence late writes and surface staleness instead of overwriting valid
+        evidence with failure.
+        """
+        ops = list(operations or [])
+        items = list(checklist or [])
+        status_by_permission: dict[str, str] = {}
+        for item in items:
+            if isinstance(item, Mapping):
+                status_by_permission[str(item.get("permission") or "")] = str(
+                    item.get("status") or "not_checked"
+                )
+        evidence: list[dict[str, Any]] = []
+        for operation in ops:
+            # Checklist is permission-granular; capability evidence is
+            # operation-granular. A capability is denied only when its owning
+            # permission explicitly failed; otherwise the finest known state.
+            owning_status = "not_checked"
+            for permission, status in status_by_permission.items():
+                if status == "failed":
+                    owning_status = "failed"
+                    break
+                if status in {"unavailable", "verified_read_access", "passed"} and owning_status == "not_checked":
+                    owning_status = status
+            if owning_status == "failed":
+                state = "denied"
+            elif owning_status == "unavailable":
+                state = "unavailable"
+            elif owning_status in {"passed", "verified_read_access"} or owning_status.startswith("verified"):
+                state = "verified"
+            else:
+                state = "never-tested"
+            evidence.append(
+                {
+                    "operation": str(operation),
+                    "state": state,
+                    "endpoint": endpoint,
+                    "repositoryIdentity": repository_identity,
+                    "credentialRevision": credential_revision,
+                    "bindingRevision": binding_revision,
+                    "policyRevision": policy_revision,
+                    "definitionVersion": definition_version,
+                    "observedAt": observed_at,
+                    "expiresAt": expires_at,
+                }
+            )
+        return evidence
+
+    @staticmethod
+    def evidence_generation(
+        *,
+        credential_revision: int | None = None,
+        binding_revision: int | None = None,
+        policy_revision: int | None = None,
+        observed_at: str = "",
+    ) -> tuple[int, int, int, str]:
+        """Return a comparable generation tuple for fencing late probes."""
+        return (
+            int(credential_revision or 0),
+            int(binding_revision or 0),
+            int(policy_revision or 0),
+            str(observed_at or ""),
+        )
+
+    @staticmethod
+    def fence_probe_write(
+        prior: Mapping[str, Any] | None, candidate: Mapping[str, Any]
+    ) -> bool:
+        """Return True when *candidate* may overwrite *prior* (#4008 R4).
+
+        A late old-generation probe (rotated credential/binding/policy, or an
+        older observation timestamp at equal revisions) must never overwrite a
+        rotated connection's evidence. Missing revision fields compare as 0 so
+        unrevisioned legacy evidence never outranks revisioned evidence at the
+        same timestamp.
+        """
+        if not isinstance(prior, Mapping):
+            return True
+        prior_gen = GitHubService.evidence_generation(
+            credential_revision=prior.get("credentialRevision"),
+            binding_revision=prior.get("bindingRevision"),
+            policy_revision=prior.get("policyRevision"),
+            observed_at=str(prior.get("observedAt") or ""),
+        )
+        candidate_gen = GitHubService.evidence_generation(
+            credential_revision=candidate.get("credentialRevision"),
+            binding_revision=candidate.get("bindingRevision"),
+            policy_revision=candidate.get("policyRevision"),
+            observed_at=str(candidate.get("observedAt") or ""),
+        )
+        return candidate_gen >= prior_gen
+
+    @staticmethod
+    def preserve_prior_on_refresh_failure(
+        prior: Mapping[str, Any] | None, *, observed_at: str = ""
+    ) -> dict[str, Any] | None:
+        """Return prior evidence marked stale instead of a fabricated denial.
+
+        Refresh timeouts/quota/transport failures keep prior valid capability
+        evidence visible as historical/stale where policy allows; current
+        launch/operation admission remains authoritative and treats stale as
+        not-current. Returns None when there is no prior evidence to keep.
+        """
+        if not isinstance(prior, Mapping):
+            return None
+        kept = dict(prior)
+        capabilities = kept.get("capabilityEvidence")
+        if isinstance(capabilities, list):
+            refreshed: list[dict[str, Any]] = []
+            for entry in capabilities:
+                if not isinstance(entry, Mapping):
+                    continue
+                item = dict(entry)
+                if item.get("state") in {"verified", "denied"}:
+                    item["state"] = "stale"
+                refreshed.append(item)
+            kept["capabilityEvidence"] = refreshed
+        kept["staleAsOf"] = observed_at
+        return kept
+
+    @staticmethod
+    def validate_discovery_continuation(
+        token: Mapping[str, Any] | None,
+        *,
+        connection_ref: str,
+        principal: str,
+        query: str,
+        credential_revision: int | None = None,
+        policy_revision: int | None = None,
+    ) -> str | None:
+        """Validate a scoped continuation token and return its next URL.
+
+        Tokens are scoped to connection, principal, query, and revisions: a
+        wrong-owner cursor is rejected (None) so one tenant's pagination state
+        can never widen another's access or delete saved assignments (#4008 R7).
+        The returned URL is re-validated through the admitted endpoint.
+        """
+        if not isinstance(token, Mapping):
+            return None
+        if str(token.get("connectionRef") or "") != str(connection_ref or ""):
+            return None
+        if str(token.get("principal") or "") != str(principal or ""):
+            return None
+        if str(token.get("query") or "") != str(query or ""):
+            return None
+        if token.get("credentialRevision") != credential_revision:
+            return None
+        if token.get("policyRevision") != policy_revision:
+            return None
+        return GitHubService._validate_discovery_next_page(str(token.get("nextUrl") or ""))
+
+    # In-process cross-probe throttle marks keyed by identity bucket. These
+    # bound repeat probing after the selected identity is known throttled or
+    # invalid; durable retry/wait timing still reuses
+    # ``resolve_provider_cooldown_seconds`` and callers release execution
+    # worker slots during long waits (the adapter never owns slot lifecycle).
+    _throttle_marks: dict[str, dict[str, Any]] = {}
+    _throttle_in_flight: set[str] = set()
+
+    @classmethod
+    def check_throttle_before_probe(cls, bucket_key: str) -> dict[str, Any] | None:
+        """Return the active throttle mark for *bucket_key*, if still in force."""
+        from datetime import datetime, timezone
+
+        mark = cls._throttle_marks.get(str(bucket_key or ""))
+        if not mark:
+            return None
+        try:
+            not_before = datetime.fromisoformat(str(mark.get("notBefore") or ""))
+        except ValueError:
+            cls._throttle_marks.pop(str(bucket_key or ""), None)
+            return None
+        if datetime.now(timezone.utc) >= not_before:
+            cls._throttle_marks.pop(str(bucket_key or ""), None)
+            return None
+        return dict(mark)
+
+    @classmethod
+    def record_throttle_mark(
+        cls,
+        bucket_key: str,
+        *,
+        reason: str,
+        retry_after_seconds: int | None = None,
+        reset_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Record that *bucket_key* is throttled/invalid with bounded cooldown."""
+        from datetime import datetime, timedelta, timezone
+
+        cooldown = max(1, min(int(retry_after_seconds or 60), 900))
+        now = datetime.now(timezone.utc)
+        mark = {
+            "bucketKey": str(bucket_key or ""),
+            "reason": str(reason or "quota_exceeded"),
+            "notBefore": (now + timedelta(seconds=cooldown)).isoformat(),
+            "retryAfterSeconds": cooldown,
+            "resetAt": reset_at,
+            "recordedAt": now.isoformat(),
+        }
+        cls._throttle_marks[str(bucket_key or "")] = mark
+        return dict(mark)
+
+    @classmethod
+    def clear_throttle_mark(cls, bucket_key: str) -> None:
+        cls._throttle_marks.pop(str(bucket_key or ""), None)
+
+    async def discover_repositories(
+        self,
+        *,
+        start_url: str,
+        connection_ref: str,
+        principal: str,
+        query: str = "",
+        github_token: str | None = None,
+        credential_revision: int | None = None,
+        policy_revision: int | None = None,
+        max_pages: int = GITHUB_DISCOVERY_DEFAULT_MAX_PAGES,
+        max_items: int = GITHUB_DISCOVERY_DEFAULT_MAX_ITEMS,
+        continuation: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run bounded paginated discovery through the admitted endpoint.
+
+        Count/time-bounded loop over validated ``next`` targets only; hostile
+        pagination URLs are rejected without widening access. Partial results
+        are preserved with a connection/principal/query/revision-scoped
+        continuation token so later-page failure never reads as an empty list
+        and must not delete saved assignments. Rename/transfer reconciliation
+        stays #4005-owned: this loop performs name-preserving collection only,
+        never deduplication by name. Zero writes are performed.
+        """
+        admitted_start = self._validate_discovery_next_page(start_url)
+        if admitted_start is None:
+            return {
+                "items": [],
+                "complete": False,
+                "reasonCode": "invalid_start_target",
+                "connectionRef": connection_ref,
+                "continuation": None,
+                "writesPerformed": 0,
+            }
+        next_url: str | None = admitted_start
+        if continuation is not None:
+            resumed = self.validate_discovery_continuation(
+                continuation,
+                connection_ref=connection_ref,
+                principal=principal,
+                query=query,
+                credential_revision=credential_revision,
+                policy_revision=policy_revision,
+            )
+            if resumed is None:
+                return {
+                    "items": [],
+                    "complete": False,
+                    "reasonCode": "invalid_continuation",
+                    "connectionRef": connection_ref,
+                    "continuation": None,
+                    "writesPerformed": 0,
+                }
+            next_url = resumed
+        bounded_pages = max(1, min(int(max_pages or 1), GITHUB_DISCOVERY_MAX_PAGES_HARD_CAP))
+        bounded_items = max(1, min(int(max_items or 1), GITHUB_DISCOVERY_MAX_ITEMS_HARD_CAP))
+        from moonmind.auth.github_credentials import resolve_github_credential
+
+        resolved = await resolve_github_credential(github_token, repo=None)
+        if not resolved.token:
+            return {
+                "items": [],
+                "complete": False,
+                "reasonCode": "auth_unavailable",
+                "connectionRef": connection_ref,
+                "continuation": None,
+                "writesPerformed": 0,
+            }
+        headers = self._github_headers(resolved.token)
+        items: list[Any] = []
+        pages_fetched = 0
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            while next_url is not None and pages_fetched < bounded_pages and len(items) < bounded_items:
+                try:
+                    response = await client.get(next_url, headers=headers)
+                    response.raise_for_status()
+                except (httpx.HTTPStatusError, httpx.TransportError, httpx.TimeoutException) as exc:
+                    status: int | None = None
+                    if isinstance(exc, httpx.HTTPStatusError):
+                        status = exc.response.status_code
+                    continuation_token: dict[str, Any] | None = None
+                    if items:
+                        continuation_token = {
+                            "connectionRef": connection_ref,
+                            "principal": principal,
+                            "query": query,
+                            "credentialRevision": credential_revision,
+                            "policyRevision": policy_revision,
+                            "nextUrl": next_url,
+                        }
+                    return {
+                        "items": items,
+                        "complete": False,
+                        "reasonCode": (
+                            "quota_exceeded" if status in {403, 429} else "page_unavailable"
+                        ),
+                        "httpStatus": status,
+                        "pagesFetched": pages_fetched,
+                        "connectionRef": connection_ref,
+                        "continuation": continuation_token,
+                        "writesPerformed": 0,
+                    }
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = {}
+                page_items: list[Any] = []
+                raw_next: str | None = None
+                if isinstance(payload, Mapping):
+                    raw_items = payload.get("items", payload.get("repositories", []))
+                    if isinstance(raw_items, list):
+                        page_items = raw_items
+                    link = str(response.headers.get("link") or "")
+                    for segment in link.split(","):
+                        if 'rel="next"' in segment:
+                            candidate = segment.split(";")[0].strip().strip("<>")
+                            raw_next = candidate or None
+                elif isinstance(payload, list):
+                    page_items = payload
+                    link = str(response.headers.get("link") or "")
+                    for segment in link.split(","):
+                        if 'rel="next"' in segment:
+                            candidate = segment.split(";")[0].strip().strip("<>")
+                            raw_next = candidate or None
+                for entry in page_items:
+                    if len(items) >= bounded_items:
+                        break
+                    items.append(entry)
+                pages_fetched += 1
+                if raw_next is None or len(items) >= bounded_items:
+                    next_url = None
+                else:
+                    validated = self._validate_discovery_next_page(raw_next)
+                    if validated is None:
+                        continuation_token = {
+                            "connectionRef": connection_ref,
+                            "principal": principal,
+                            "query": query,
+                            "credentialRevision": credential_revision,
+                            "policyRevision": policy_revision,
+                            "nextUrl": next_url,
+                        }
+                        return {
+                            "items": items,
+                            "complete": False,
+                            "reasonCode": "invalid_continuation_target",
+                            "pagesFetched": pages_fetched,
+                            "connectionRef": connection_ref,
+                            "continuation": continuation_token,
+                            "writesPerformed": 0,
+                        }
+                    next_url = validated
+        complete = next_url is None
+        continuation_token = None
+        if not complete and next_url is not None:
+            continuation_token = {
+                "connectionRef": connection_ref,
+                "principal": principal,
+                "query": query,
+                "credentialRevision": credential_revision,
+                "policyRevision": policy_revision,
+                "nextUrl": next_url,
+            }
+        return {
+            "items": items,
+            "complete": complete,
+            "reasonCode": "complete" if complete else "truncated_bounds",
+            "pagesFetched": pages_fetched,
+            "connectionRef": connection_ref,
+            "continuation": continuation_token,
+            "writesPerformed": 0,
+        }
+
+    async def probe_many_connections(
+        self,
+        requests: Any,
+        *,
+        max_connections: int = GITHUB_MULTI_CONNECTION_HARD_CAP,
+    ) -> dict[str, Any]:
+        """Probe explicitly requested connections, each independently bounded.
+
+        Multi-connection discovery is an explicitly authorized per-connection
+        fan-out, not a retry list looking for a successful token: every entry
+        carries its own token/connection identity, each probe runs through the
+        same non-mutating evidence path, and newly probed repositories are
+        never attached nor set as defaults. Over-cap requests fail closed with
+        no network access beyond the bound.
+        """
+        entries = list(requests or [])
+        bounded = max(1, min(int(max_connections or 1), GITHUB_MULTI_CONNECTION_HARD_CAP))
+        if len(entries) > bounded:
+            return {
+                "results": [],
+                "complete": False,
+                "reasonCode": "too_many_connections",
+                "connectionCount": len(entries),
+                "maxConnections": bounded,
+            }
+        results: list[dict[str, Any]] = []
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                results.append(
+                    {"complete": False, "reasonCode": "invalid_request", "result": None}
+                )
+                continue
+            result = await self.probe_token(
+                repo=str(entry.get("repo") or ""),
+                mode=str(entry.get("mode") or "publish"),
+                base_branch=entry.get("base_branch"),
+                github_token=entry.get("github_token"),
+                connection_ref=entry.get("connection_ref"),
+                credential_revision=entry.get("credential_revision"),
+                binding_revision=entry.get("binding_revision"),
+                policy_revision=entry.get("policy_revision"),
+            )
+            results.append(
+                {
+                    "connectionRef": entry.get("connection_ref"),
+                    "repo": entry.get("repo"),
+                    "complete": True,
+                    "reasonCode": str(result.get("reasonCode") or "probed"),
+                    "result": result,
+                }
+            )
+        return {
+            "results": results,
+            "complete": True,
+            "reasonCode": "complete",
+            "connectionCount": len(results),
+            "maxConnections": bounded,
+        }
+
     @classmethod
     def _classify_probe_http_failure(
         cls, response: httpx.Response, *, operation: str
@@ -997,6 +1601,14 @@ class GitHubService:
         mode: str = "publish",
         base_branch: str | None = None,
         github_token: str | None = None,
+        connection_ref: str | None = None,
+        credential_revision: int | None = None,
+        binding_revision: int | None = None,
+        policy_revision: int | None = None,
+        actor: str | None = None,
+        installation_id: str | None = None,
+        scope_type: str = "system",
+        scope_ref: str | None = None,
     ) -> dict[str, Any]:
         """Collect narrowly sufficient, non-mutating capability evidence.
 
@@ -1009,6 +1621,16 @@ class GitHubService:
         client; zero writes are performed. Explicitly supplied tokens are
         ``selected-connection`` requests; ambient resolution is labeled legacy
         and never attaches repositories or sets defaults.
+
+        Selected-connection admission (#4008 R1): pass ``connection_ref``
+        (with optional credential/binding/policy revisions from the #4007
+        acquisition path) to scope this probe to one independently authorized
+        connection. A selected connection without an explicit token fails
+        closed (``unadmitted_connection``) instead of falling back to global
+        precedence. Multi-connection fan-out must use ``probe_many_connections``
+        so each connection stays bounded and authorized. Successful probes
+        record ``routeKey`` through the shared ``route_key_for`` compiler and
+        per-capability observed evidence with revision fencing metadata.
         """
         from datetime import timedelta
 
@@ -1027,17 +1649,26 @@ class GitHubService:
                 "resultVersion": GITHUB_PROBE_RESULT_VERSION,
                 "capabilityBundleVersion": GITHUB_CAPABILITY_DEFINITION_VERSION,
                 "definitionVersion": GITHUB_CAPABILITY_DEFINITION_VERSION,
+                "capabilityBundle": self.capability_bundle_for_mode(mode)
+                if str(mode or "") in self.github_permission_profiles()
+                else {"bundleId": None, "mode": mode, "operations": []},
                 "endpoint": GITHUB_API_BASE,
                 "observedAt": observed_at,
                 "expiresAt": (now + timedelta(seconds=PROBE_EVIDENCE_TTL_SECONDS)).isoformat(),
+                "connectionRef": connection_ref,
+                "credentialRevision": credential_revision,
+                "bindingRevision": binding_revision,
+                "policyRevision": policy_revision,
                 "repositoryAccessible": None,
                 "defaultBranchAccessible": None,
                 "pullRequestAccessible": None,
                 "permissionChecklist": [],
+                "capabilityEvidence": [],
                 "diagnostics": [],
                 "writesPerformed": 0,
                 "activeWriteTest": "not_requested",
                 "throttled": False,
+                "workerSlotReleaseRequired": False,
                 "limitations": [
                     (
                         "Fine-grained personal access tokens must target the repository "
@@ -1097,14 +1728,61 @@ class GitHubService:
             return result
 
         resolved = await resolve_github_credential(github_token, repo=repo)
+        selected_connection = str(connection_ref or "").strip() or None
+        explicit_token = str(github_token or "").strip()
+        if selected_connection and not explicit_token:
+            # Selected-connection probes never fall back to global precedence:
+            # without the admitted connection's token this probe is not
+            # authorized to speak for that connection (#4008 R1).
+            result = _base_result(
+                credentialSource=resolved.safe_source_dict(),
+                admissionMode="unadmitted-connection",
+                requiredOperations=list(operations),
+                permissionChecklist=checklist,
+                capabilityEvidence=self.build_capability_evidence(
+                    operations=list(operations),
+                    checklist=checklist,
+                    endpoint=GITHUB_API_BASE,
+                    credential_revision=credential_revision,
+                    binding_revision=binding_revision,
+                    policy_revision=policy_revision,
+                    observed_at=observed_at,
+                    expires_at=(now + timedelta(seconds=PROBE_EVIDENCE_TTL_SECONDS)).isoformat(),
+                ),
+                outcome="unadmitted_connection",
+                reasonCode="unadmitted_connection",
+            )
+            result["diagnostics"].append(
+                {
+                    "operation": "admit_connection",
+                    "reasonCode": "unadmitted_connection",
+                    "permissionState": "unavailable",
+                    "message": (
+                        f"Selected connection {selected_connection[:80]!r} requires "
+                        "its admitted credential; ambient credentials were not used."
+                    ),
+                    "retryable": False,
+                }
+            )
+            return result
         admission_mode = (
-            "selected-connection" if (github_token or "").strip() else "ambient-legacy"
+            "selected-connection" if explicit_token else "ambient-legacy"
         )
         result = _base_result(
             credentialSource=resolved.safe_source_dict(),
             admissionMode=admission_mode,
             requiredOperations=list(operations),
             permissionChecklist=checklist,
+            capabilityEvidence=self.build_capability_evidence(
+                operations=list(operations),
+                checklist=checklist,
+                endpoint=GITHUB_API_BASE,
+                credential_revision=credential_revision,
+                binding_revision=binding_revision,
+                policy_revision=policy_revision,
+                observed_at=observed_at,
+                expires_at=(now + timedelta(seconds=PROBE_EVIDENCE_TTL_SECONDS)).isoformat(),
+            ),
             outcome="unknown",
         )
         if not resolved.token:
@@ -1117,6 +1795,41 @@ class GitHubService:
                     "permissionState": "unavailable",
                     "message": resolved.safe_summary[:300],
                     "retryable": False,
+                }
+            )
+            return result
+
+        # Identity-aware cross-probe throttle check (#4008 R6): when this
+        # identity bucket is known throttled/invalid, return without network
+        # access instead of probing all remaining endpoints. Unknown identity
+        # uses a conservative bounded bucket; tenants never share a bucket.
+        throttle_bucket = self.throttle_bucket_key(
+            endpoint=GITHUB_API_BASE,
+            actor=actor,
+            installation_id=installation_id,
+            resource="rest",
+            token_fingerprint=resolved.token,
+        )
+        result["throttleBucket"] = throttle_bucket
+        throttle_mark = self.check_throttle_before_probe(throttle_bucket)
+        if throttle_mark is not None:
+            result["repositoryAccessible"] = None
+            result["reasonCode"] = "quota_exceeded"
+            result["outcome"] = "quota_exceeded"
+            result["throttled"] = True
+            result["workerSlotReleaseRequired"] = True
+            result["retryAfterSeconds"] = throttle_mark.get("retryAfterSeconds")
+            result["diagnostics"].append(
+                {
+                    "operation": "throttle_gate",
+                    "reasonCode": "quota_exceeded",
+                    "permissionState": "unavailable",
+                    "message": (
+                        "Probe identity bucket is known throttled; "
+                        "no probe request was sent."
+                    ),
+                    "retryable": True,
+                    "retryAfterSeconds": throttle_mark.get("retryAfterSeconds"),
                 }
             )
             return result
@@ -1145,6 +1858,17 @@ class GitHubService:
                         default_seconds=60,
                     )
                     result["retryAfterSeconds"] = cooldown
+                    # Coordinate across probes: this identity bucket is now
+                    # known throttled; later probes check the gate before any
+                    # network access. Worker-slot release stays with the
+                    # execution owner (adapter only signals it).
+                    self.record_throttle_mark(
+                        throttle_bucket,
+                        reason="quota_exceeded",
+                        retry_after_seconds=cooldown,
+                        reset_at=classified.get("resetAt"),
+                    )
+                    result["workerSlotReleaseRequired"] = True
                 entry: dict[str, Any] = {
                     "operation": "repository",
                     "httpStatus": exc.response.status_code,
@@ -1318,6 +2042,19 @@ class GitHubService:
                                 default_seconds=60,
                             )
                             result["retryAfterSeconds"] = cooldown
+                            self.record_throttle_mark(
+                                throttle_bucket,
+                                reason="quota_exceeded",
+                                retry_after_seconds=cooldown,
+                                reset_at=classified.get("resetAt"),
+                            )
+                            result["workerSlotReleaseRequired"] = True
+                        else:
+                            self.record_throttle_mark(
+                                throttle_bucket,
+                                reason="auth_denied",
+                                retry_after_seconds=60,
+                            )
                 except (httpx.TransportError, httpx.TimeoutException) as exc:
                     if field:
                         result[field] = None
@@ -1346,6 +2083,30 @@ class GitHubService:
                     result["outcome"] = "probed"
             elif result.get("outcome") == "unknown":
                 result["outcome"] = str(result.get("reasonCode"))
+            # Finalize revisioned observed evidence + shared-compiler route key.
+            identity = result.get("repositoryIdentity") if isinstance(result.get("repositoryIdentity"), Mapping) else {}
+            try:
+                result["routeKey"] = self.probe_route_key_for(
+                    scope_type=scope_type,
+                    scope_ref=scope_ref,
+                    endpoint=GITHUB_API_BASE,
+                    repository_id=(identity or {}).get("repositoryId"),
+                    repo=repo,
+                    mode=mode,
+                )
+            except Exception:
+                result["routeKey"] = None
+            result["capabilityEvidence"] = self.build_capability_evidence(
+                operations=list(operations),
+                checklist=result.get("permissionChecklist"),
+                endpoint=GITHUB_API_BASE,
+                repository_identity=result.get("repositoryIdentity"),
+                credential_revision=credential_revision,
+                binding_revision=binding_revision,
+                policy_revision=policy_revision,
+                observed_at=observed_at,
+                expires_at=result.get("expiresAt") or "",
+            )
         return result
 
     # -- PR operations ----------------------------------------------------

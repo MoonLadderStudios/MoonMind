@@ -44,6 +44,16 @@ def _mock_get_response_with_headers(
         request=httpx.Request("GET", "https://api.github.com/test"),
     )
 
+
+@pytest.fixture(autouse=True)
+def _clear_github_probe_throttle_marks():
+    """Isolate cross-probe throttle coordination between hermetic tests."""
+    GitHubService._throttle_marks.clear()
+    GitHubService._throttle_in_flight.clear()
+    yield
+    GitHubService._throttle_marks.clear()
+    GitHubService._throttle_in_flight.clear()
+
 # ---------------------------------------------------------------------------
 # create_pull_request
 # ---------------------------------------------------------------------------
@@ -892,6 +902,321 @@ def test_probe_helpers_validate_targets():
         pass
     else:
         raise AssertionError("unknown mode must raise")
+
+
+@pytest.mark.asyncio
+async def test_probe_explicit_missing_branch_is_absent_not_denied(monkeypatch):
+    """R3: explicitly requested but missing branch ref -> resource_absent.
+
+    Exercises the real probe_token wiring: repository metadata resolves,
+    the dependent branch check 404s, the field records False (absent) without
+    a permission denial, and the checklist stays unavailable (never failed).
+    """
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    GitHubService.clear_throttle_mark(
+        GitHubService.throttle_bucket_key(token_fingerprint="github-token-fixture")
+    )
+    repo_meta = _mock_get_response(
+        200, {"full_name": "o/r", "id": 9, "default_branch": "main"}
+    )
+
+    async def _branch_absent(*args, **kwargs):
+        url = args[0] if args else ""
+        if url == "https://api.github.com/repos/o/r":
+            return repo_meta
+        raise httpx.HTTPStatusError(
+            "absent",
+            request=httpx.Request("GET", url),
+            response=_mock_http_error(404, {"message": "Branch not found"}),
+        )
+
+    mock_client = _probe_client([])
+    mock_client.get = AsyncMock(side_effect=_branch_absent)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="o/r", mode="indexing", base_branch="missing-branch"
+        )
+    assert result["requestedRef"] == "missing-branch"
+    assert result["resolvedRef"] == "missing-branch"
+    assert result["defaultBranchAccessible"] is False
+    assert result["repositoryAccessible"] is True
+    branch_entries = [
+        item
+        for item in result["diagnostics"]
+        if isinstance(item, dict) and item.get("operation") == "branch"
+    ]
+    assert branch_entries and branch_entries[0]["reasonCode"] == "resource_absent"
+    checklist = {item["permission"]: item for item in result["permissionChecklist"]}
+    assert checklist["Contents"]["status"] == "unavailable"
+    assert checklist["Contents"]["status"] != "failed"
+    capability = {
+        item["operation"]: item for item in result.get("capabilityEvidence", [])
+    }
+    assert capability, "probe must attach per-capability observed evidence"
+    assert result.get("routeKey"), "probe must attach a shared-compiler route key"
+
+
+@pytest.mark.asyncio
+async def test_probe_selected_connection_without_token_fails_closed(monkeypatch):
+    """R1: selected connection without its admitted token never uses ambient."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _probe_client([])
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(
+            repo="o/r",
+            mode="publish",
+            github_token=None,
+            connection_ref="repository-connection:team-a",
+            credential_revision=2,
+        )
+    assert mock_client.get.await_count == 0
+    assert result["reasonCode"] == "unadmitted_connection"
+    assert result["admissionMode"] == "unadmitted-connection"
+    assert result["connectionRef"] == "repository-connection:team-a"
+
+
+@pytest.mark.asyncio
+async def test_probe_many_connections_bounds_fanout(monkeypatch):
+    """R1: explicitly requested multi-connection probes stay bounded per connection."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    GitHubService.clear_throttle_mark(
+        GitHubService.throttle_bucket_key(token_fingerprint="tok-a")
+    )
+    GitHubService.clear_throttle_mark(
+        GitHubService.throttle_bucket_key(token_fingerprint="tok-b")
+    )
+    over = await GitHubService().probe_many_connections(
+        [{"repo": "o/r", "mode": "publish", "github_token": "t"} for _ in range(6)],
+        max_connections=5,
+    )
+    assert over["reasonCode"] == "too_many_connections"
+    assert over["results"] == []
+
+    async def _ok(*args, **kwargs):
+        url = args[0] if args else ""
+        if url == "https://api.github.com/repos/o/r":
+            return _mock_get_response(
+                200, {"full_name": "o/r", "id": 9, "default_branch": "main"}
+            )
+        return _mock_get_response(200, {"name": "main"})
+
+    mock_client = _probe_client([])
+    mock_client.get = AsyncMock(side_effect=_ok)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        bounded = await GitHubService().probe_many_connections(
+            [
+                {
+                    "repo": "o/r",
+                    "mode": "indexing",
+                    "github_token": "tok-a",
+                    "connection_ref": "conn-a",
+                    "credential_revision": 1,
+                },
+                {
+                    "repo": "o/r",
+                    "mode": "indexing",
+                    "github_token": "tok-b",
+                    "connection_ref": "conn-b",
+                    "credential_revision": 1,
+                },
+            ]
+        )
+    assert bounded["complete"] is True
+    assert bounded["connectionCount"] == 2
+    assert bounded["results"][0]["connectionRef"] == "conn-a"
+    assert bounded["results"][1]["connectionRef"] == "conn-b"
+    for entry in bounded["results"]:
+        assert "attach" not in str(entry.get("result", {}).get("reasonCode", "")).lower()
+
+
+def test_capability_bundle_uses_shared_compiler():
+    """R2: probe bundles derive from one canonical table via shared route_key_for."""
+    for mode in ("indexing", "publish", "readiness", "full_pr_automation"):
+        bundle = GitHubService.capability_bundle_for_mode(mode)
+        assert bundle["bundleId"] == f"github:{mode}:github-capabilities.v1"
+        assert tuple(bundle["operations"]) == GitHubService.capability_operations_for_mode(mode)
+    key_publish = GitHubService.probe_route_key_for(
+        repo="o/r", repository_id=9, mode="publish"
+    )
+    key_indexing = GitHubService.probe_route_key_for(
+        repo="o/r", repository_id=9, mode="indexing"
+    )
+    assert key_publish != key_indexing
+    assert GitHubService.probe_route_key_for(
+        repo="o/r", repository_id=9, mode="publish"
+    ) == key_publish
+    try:
+        GitHubService.capability_bundle_for_mode("nope")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown mode must raise before network")
+
+
+def test_probe_evidence_fencing_and_stale_preservation():
+    """R4: late old-generation probes never overwrite rotated evidence."""
+    prior = {
+        "credentialRevision": 2,
+        "bindingRevision": 1,
+        "policyRevision": 1,
+        "observedAt": "2026-09-14T20:00:00+00:00",
+        "capabilityEvidence": [
+            {"operation": "branch.write", "state": "verified"},
+            {"operation": "pull_request.create", "state": "denied"},
+        ],
+    }
+    late = {
+        "credentialRevision": 1,
+        "bindingRevision": 1,
+        "policyRevision": 1,
+        "observedAt": "2026-09-14T21:00:00+00:00",
+        "capabilityEvidence": [],
+    }
+    assert GitHubService.fence_probe_write(prior, late) is False
+    current = {
+        "credentialRevision": 2,
+        "bindingRevision": 1,
+        "policyRevision": 1,
+        "observedAt": "2026-09-14T21:00:00+00:00",
+        "capabilityEvidence": [],
+    }
+    assert GitHubService.fence_probe_write(prior, current) is True
+    assert GitHubService.fence_probe_write(None, current) is True
+    kept = GitHubService.preserve_prior_on_refresh_failure(
+        prior, observed_at="2026-09-14T22:00:00+00:00"
+    )
+    assert kept is not None
+    states = {item["operation"]: item["state"] for item in kept["capabilityEvidence"]}
+    assert states == {"branch.write": "stale", "pull_request.create": "stale"}
+    assert GitHubService.preserve_prior_on_refresh_failure(None) is None
+    evidence = GitHubService.build_capability_evidence(
+        operations=["branch.write"],
+        checklist=[{"permission": "Contents", "required": True, "status": "failed"}],
+        observed_at="t",
+        expires_at="e",
+    )
+    assert evidence[0]["state"] == "denied"
+    assert evidence[0]["definitionVersion"] == "github-capabilities.v1"
+
+
+def test_throttle_buckets_preserve_identity():
+    """R6: shared actors share a budget; installations/tenants never merge."""
+    shared_a = GitHubService.throttle_bucket_key(
+        actor="octocat", resource="rest", token_fingerprint="tok-a"
+    )
+    shared_b = GitHubService.throttle_bucket_key(
+        actor="octocat", resource="rest", token_fingerprint="tok-b"
+    )
+    assert shared_a == shared_b
+    assert GitHubService.throttle_bucket_key(
+        actor="octocat", installation_id="123", resource="rest"
+    ) != GitHubService.throttle_bucket_key(
+        actor="octocat", installation_id="456", resource="rest"
+    )
+    unknown_a = GitHubService.throttle_bucket_key(token_fingerprint="tok-a")
+    unknown_b = GitHubService.throttle_bucket_key(token_fingerprint="tok-b")
+    assert unknown_a != unknown_b
+    assert "tok-a" not in unknown_a and "tok-b" not in unknown_b
+
+
+@pytest.mark.asyncio
+async def test_probe_throttle_gate_skips_network_when_bucket_throttled(monkeypatch):
+    """R6: a known-throttled identity bucket short-circuits before network."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    bucket = GitHubService.throttle_bucket_key(token_fingerprint="github-token-fixture")
+    GitHubService.clear_throttle_mark(bucket)
+    GitHubService.record_throttle_mark(bucket, reason="quota_exceeded", retry_after_seconds=120)
+    mock_client = _probe_client([])
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="o/r", mode="publish")
+    assert mock_client.get.await_count == 0
+    assert result["reasonCode"] == "quota_exceeded"
+    assert result["throttled"] is True
+    assert result["workerSlotReleaseRequired"] is True
+    GitHubService.clear_throttle_mark(bucket)
+
+
+@pytest.mark.asyncio
+async def test_discovery_rejects_hostile_next_page_and_preserves_partial(monkeypatch):
+    """R7: hostile pagination never widens access; mid-list failure keeps partial."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    svc = GitHubService()
+    hostile = await svc.discover_repositories(
+        start_url="https://evil.example/x",
+        connection_ref="conn-a",
+        principal="user:1",
+        github_token="tok",
+    )
+    assert hostile["reasonCode"] == "invalid_start_target"
+    assert hostile["items"] == []
+
+    first = _mock_get_response_with_headers(
+        200,
+        [{"full_name": "o/a"}, {"full_name": "o/b"}],
+        {"link": '<https://evil.example/next>; rel="next"'},
+    )
+
+    async def _one_page_then_hostile(*args, **kwargs):
+        return first
+
+    mock_client = _probe_client([])
+    mock_client.get = AsyncMock(side_effect=_one_page_then_hostile)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        partial = await svc.discover_repositories(
+            start_url="https://api.github.com/user/repos?per_page=2",
+            connection_ref="conn-a",
+            principal="user:1",
+            query="q",
+            github_token="tok",
+            credential_revision=1,
+            policy_revision=1,
+        )
+    assert [item["full_name"] for item in partial["items"]] == ["o/a", "o/b"]
+    assert partial["complete"] is False
+    assert partial["reasonCode"] == "invalid_continuation_target"
+    assert partial["continuation"] is not None
+    assert partial["continuation"]["connectionRef"] == "conn-a"
+
+    wrong_owner = dict(partial["continuation"])
+    resumed = GitHubService.validate_discovery_continuation(
+        wrong_owner,
+        connection_ref="conn-b",
+        principal="user:1",
+        query="q",
+        credential_revision=1,
+        policy_revision=1,
+    )
+    assert resumed is None
+    stale_revision = GitHubService.validate_discovery_continuation(
+        dict(partial["continuation"]),
+        connection_ref="conn-a",
+        principal="user:1",
+        query="q",
+        credential_revision=2,
+        policy_revision=1,
+    )
+    assert stale_revision is None
 
 # ---------------------------------------------------------------------------
 # merge_pull_request
