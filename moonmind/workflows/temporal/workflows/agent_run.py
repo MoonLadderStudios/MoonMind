@@ -1424,6 +1424,8 @@ class MoonMindAgentRun:
                     self._provider_wait_cumulative_seconds
                 ) + float(elapsed)
             except Exception:
+                # Cumulative wait time is best-effort telemetry; preserve the
+                # prior total when the stored value or elapsed time is invalid.
                 pass
             self._provider_wait_entered_at = None
         self._provider_wait_state = dict(transition)
@@ -7057,6 +7059,8 @@ class MoonMindAgentRun:
                                 granted=True,
                             )
                     except Exception:
+                        # Grant observation is best-effort timeline telemetry;
+                        # admission already succeeded so failures must not fail it.
                         pass
 
                     if self._paused:
