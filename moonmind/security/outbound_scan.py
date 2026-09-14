@@ -67,6 +67,24 @@ class OutboundScanResult(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    def audit_metadata(self) -> dict[str, Any]:
+        """Return secret-safe audit metadata, never including raw payloads.
+
+        ``original_content`` / ``original_bundle`` exist only for
+        disabled-mode passthrough and must never become audit evidence,
+        exception text, or Temporal history. Callers must persist or log
+        this projection instead of the full model dump.
+        """
+
+        return {
+            "decision": self.decision,
+            "highSecurityMode": self.high_security_mode,
+            "scannerPolicyRef": OUTBOUND_SCAN_POLICY_REF,
+            "findingCategories": sorted({finding.category for finding in self.findings}),
+            "findingLocations": [finding.location for finding in self.findings],
+            "sanitizedDiagnostics": list(self.sanitized_diagnostics),
+        }
+
 
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b(?:token|password|secret|api[_-]?key|credential)\s*[:=]\s*"
@@ -109,17 +127,26 @@ def resolve_high_security_mode(
     *,
     settings: object | None = None,
 ) -> bool:
-    """Resolve high-security mode using deterministic runtime precedence."""
+    """Resolve high-security mode using deterministic runtime precedence.
 
-    if explicit is not None:
-        return bool(explicit)
+    An operator-required ``True`` (supplied settings object or
+    environment/config-derived settings) is sticky: an explicit ``False``
+    from a workflow/message payload cannot downgrade it. An explicit
+    ``True`` always opts in. When no source requires enforcement the
+    result is ``False`` (disabled-mode passthrough).
+    """
+
+    if explicit is not None and bool(explicit):
+        return True
 
     security_settings = getattr(settings, "security", None)
     if security_settings is not None and hasattr(security_settings, "high_security_mode"):
-        return bool(getattr(security_settings, "high_security_mode"))
+        if bool(getattr(security_settings, "high_security_mode")):
+            return True
 
     if settings is not None and hasattr(settings, "high_security_mode"):
-        return bool(getattr(settings, "high_security_mode"))
+        if bool(getattr(settings, "high_security_mode")):
+            return True
 
     return bool(app_settings.security.high_security_mode)
 
@@ -252,3 +279,40 @@ def _scan_text_for_findings(text: str, *, location: str) -> list[OutboundFinding
                 )
             )
     return findings
+
+
+def push_scan_coverage_error(
+    *,
+    commit_range: str,
+    commit_metadata_len: int,
+    max_commit_metadata_chars: int,
+    changed_file_count: int,
+    max_changed_files: int,
+    oversized_diff_path: str | None = None,
+) -> str | None:
+    """Return a redacted fail-closed reason when push-scan input was truncated.
+
+    A truncated prefix must never be reported as complete coverage: in
+    enabled mode uninspectable required content is enforcement
+    unavailable, not a clean scan.
+    """
+
+    if commit_metadata_len > max_commit_metadata_chars:
+        return (
+            "outbound git push blocked: high security scan coverage "
+            f"incomplete for {commit_range}: commit metadata exceeds "
+            f"{max_commit_metadata_chars} chars"
+        )
+    if changed_file_count > max_changed_files:
+        return (
+            "outbound git push blocked: high security scan coverage "
+            f"incomplete for {commit_range}: changed file list exceeds "
+            f"{max_changed_files} entries"
+        )
+    if oversized_diff_path:
+        return (
+            "outbound git push blocked: high security scan coverage "
+            f"incomplete for {commit_range}: diff for "
+            f"{redact_sensitive_text(oversized_diff_path)[:200]} exceeds size bound"
+        )
+    return None
