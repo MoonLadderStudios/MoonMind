@@ -2198,3 +2198,158 @@ async def test_terminal_obligation_reaches_executing_owner_and_completes_verifie
             }
         )
     assert successor._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+
+@pytest.mark.asyncio
+async def test_capacity_one_oauth_and_credentialless_n_way_terminal_owners_request_cleanup() -> None:
+    """Capacity-one OAuth plus credentialless N-way terminal owners free nothing.
+
+    MoonLadderStudios/MoonMind#1089 R7: one capacity-one OAuth execution lease
+    and two credentialless execution leases share one upstream scope. All
+    three owners go terminal (TERMINATED / NOT_FOUND / FAILED) while their
+    exact runtime consumers remain live. Reclamation must cost one fenced
+    ``request_cleanup`` per lease, publish one stable claim per lease quoting
+    the admitted run and evidence identity, and keep every profile slot and
+    every shared-scope unit spent until verified teardown.
+
+    Boundary labels: the manager side runs here against a recording
+    ``provider_profile.sync_slot_leases`` substitute (``_Ledger``); there is
+    no real PostgreSQL ledger, no real Temporal server, and no Docker
+    container in this test. The durable half of this ordering — the same
+    transitions against a real PostgreSQL cluster running the real Alembic
+    migration and the real Activity — lives in
+    ``tests/integration/omnigent/test_provider_lease_incremental_contract_postgres.py``
+    (``test_cleanup_is_requested_without_freeing_the_slot`` plus
+    restore/Continue-As-New coverage) and was NOT executed in a host without
+    a Docker-capable runtime.
+    """
+
+    oauth_profile_id = "codex-oauth-free"
+    less_profile_id = "opencode-zen-credentialless"
+    shared_scope = "provider-scope:n-way-1089"
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
+            }
+        }
+    )
+    wf = MoonMindProviderProfileManagerWorkflow()
+    wf._runtime_id = "opencode"
+    wf._durable_maintenance_queue = True
+    wf._lease_transition_contract = True
+    wf._purpose_aware_capacity_ledger = True
+    oauth = _profile(
+        profile_id=oauth_profile_id,
+        max_parallel_runs=1,
+        credential_source="oauth_volume",
+        runtime_materialization_mode="oauth_home",
+        capacity_scope_ref=shared_scope,
+    )
+    less = _profile(
+        profile_id=less_profile_id,
+        max_parallel_runs=4,
+        credential_source="none",
+        capacity_scope_ref=shared_scope,
+    )
+    wf._profiles = {oauth.profile_id: oauth, less.profile_id: less}
+    wf._scopes = {
+        shared_scope: CapacityScopeState(
+            scope_ref=shared_scope,
+            runtime_id="opencode",
+            generation=2,
+            configured_limit=3,
+            effective_limit=3,
+        )
+    }
+    wf._lease_grant_sequence = 13
+
+    # The profiles under test really are capacity-one OAuth and credentialless.
+    assert oauth.max_parallel_runs == 1
+    assert oauth.credential_source == "oauth_volume"
+    assert less.credentialless is True
+
+    def _admit(
+        profile: ProfileSlotState,
+        lease_id: str,
+        *,
+        fence: int,
+        run_id: str,
+        evidence: str,
+    ) -> None:
+        metadata = wf._grant_metadata(
+            {},
+            fencing_generation=fence,
+            profile=profile,
+            lease_mode=CredentialLeaseMode.SHARED_EXECUTION,
+        )
+        assert profile.reserve(lease_id, NOW, metadata=metadata) is True
+        merged = dict(profile.lease_metadata[lease_id])
+        merged.update(
+            {
+                "workflowId": lease_id,
+                "runId": run_id,
+                "evidenceIdentity": evidence,
+                "ownerIsWorkflow": True,
+            }
+        )
+        profile.lease_metadata[lease_id] = merged
+        wf._index_lease(profile.profile_id, lease_id, lease_id)
+
+    _admit(
+        oauth, "oauth-run-1", fence=11, run_id="run-oauth-1",
+        evidence="evidence-oauth-1",
+    )
+    _admit(
+        less, "less-run-1", fence=12, run_id="run-less-1",
+        evidence="evidence-less-1",
+    )
+    _admit(
+        less, "less-run-2", fence=13, run_id="run-less-2",
+        evidence="evidence-less-2",
+    )
+
+    with _patched(ledger):
+        await wf._reclaim_terminal_leases_durably(
+            {
+                "oauth-run-1": {"running": False, "status": "TERMINATED"},
+                "less-run-1": {"running": False, "status": "NOT_FOUND"},
+                "less-run-2": {"running": False, "status": "FAILED"},
+            }
+        )
+
+    assert ledger.actions() == ["request_cleanup"] * 3
+    assert "release_one" not in ledger.actions()
+    assert "save" not in ledger.actions()
+    rows = ledger.rows_for("request_cleanup")
+    assert [
+        (row["lease_id"], row["fencing_generation"], row["reason"])
+        for row in rows
+    ] == [
+        ("oauth-run-1", 11, "owner_terminal"),
+        ("less-run-1", 12, "owner_terminal"),
+        ("less-run-2", 13, "owner_terminal"),
+    ]
+
+    # No profile slot became reusable: the OAuth unit stays full and both
+    # credentialless holders stay recorded.
+    assert oauth.current_leases == ["oauth-run-1"]
+    assert less.current_leases == ["less-run-1", "less-run-2"]
+    assert wf._profile_effective_available(oauth) is False
+
+    # No shared-scope unit became reusable either.
+    assert wf._scope_active_units(shared_scope) == 3
+    assert wf._scope_is_available(wf._scopes[shared_scope]) is False
+
+    # Each obligation is a stable claim quoting its exact admitted identity.
+    claims = wf.get_state()["cleanup_obligations"]
+    assert sorted(
+        (claim["claim_id"], claim["runId"], claim["evidenceIdentity"])
+        for claim in claims
+    ) == [
+        ("less-run-1:12", "run-less-1", "evidence-less-1"),
+        ("less-run-2:13", "run-less-2", "evidence-less-2"),
+        ("oauth-run-1:11", "run-oauth-1", "evidence-oauth-1"),
+    ]
