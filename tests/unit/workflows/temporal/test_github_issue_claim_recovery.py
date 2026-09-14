@@ -18,6 +18,10 @@ from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comm
 from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 
+# The import registers the shared fixture; the alias keeps import linters that
+# do not model pytest fixture injection from flagging the registration.
+_JOURNEY_FIXTURE = journey
+
 
 async def history_events(events):
     for event in events:
@@ -374,9 +378,187 @@ async def test_serialized_native_checkpoint_and_cleanup_control_release(
         import httpx
 
         with pytest.raises(httpx.HTTPStatusError):
-            await call
+            await asyncio.wait_for(call, timeout=120)
     else:
         with pytest.raises(
             ValueError, match="runtime_cleanup_pending|saved_work_requires_recovery"
         ):
+            await asyncio.wait_for(call, timeout=120)
+
+
+@pytest.mark.asyncio
+async def test_continue_as_new_chain_visits_prior_run_children():
+    from temporalio.api.common.v1 import WorkflowExecution
+    from temporalio.api.history.v1 import (
+        ChildWorkflowExecutionStartedEventAttributes,
+        HistoryEvent,
+        StartChildWorkflowExecutionInitiatedEventAttributes,
+        WorkflowExecutionStartedEventAttributes,
+    )
+
+    now = datetime.now(UTC)
+    terminal_started = HistoryEvent(event_id=1)
+    terminal_started.workflow_execution_started_event_attributes.CopyFrom(
+        WorkflowExecutionStartedEventAttributes(continued_execution_run_id="prev-run")
+    )
+    prior_started = HistoryEvent(event_id=1)
+    prior_started.workflow_execution_started_event_attributes.CopyFrom(
+        WorkflowExecutionStartedEventAttributes()
+    )
+    initiated = HistoryEvent(event_id=2)
+    initiated.start_child_workflow_execution_initiated_event_attributes.CopyFrom(
+        StartChildWorkflowExecutionInitiatedEventAttributes(
+            namespace="default", workflow_id="child-agent"
+        )
+    )
+    child_started = HistoryEvent(event_id=3)
+    child_started.child_workflow_execution_started_event_attributes.CopyFrom(
+        ChildWorkflowExecutionStartedEventAttributes(
+            workflow_execution=WorkflowExecution(
+                workflow_id="child-agent", run_id="child-run"
+            ),
+            initiated_event_id=2,
+        )
+    )
+
+    def closed(workflow_type, run_id):
+        return SimpleNamespace(
+            status=WorkflowExecutionStatus.FAILED,
+            close_time=now - timedelta(minutes=6),
+            workflow_type=workflow_type,
+            run_id=run_id,
+        )
+
+    terminal = SimpleNamespace(
+        describe=AsyncMock(return_value=closed("MoonMind.Run", "terminal-run")),
+        fetch_history_events=lambda **kwargs: history_events([terminal_started]),
+    )
+    prior = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=SimpleNamespace(
+                status=WorkflowExecutionStatus.CONTINUED_AS_NEW,
+                close_time=now - timedelta(minutes=30),
+                workflow_type="MoonMind.Run",
+                run_id="prev-run",
+            )
+        ),
+        fetch_history_events=lambda **kwargs: history_events(
+            [prior_started, initiated, child_started]
+        ),
+    )
+    child = SimpleNamespace(
+        describe=AsyncMock(return_value=closed("MoonMind.AgentRun", "child-run")),
+        fetch_history_events=lambda **kwargs: history_events([]),
+    )
+    handles = {None: terminal, "terminal-run": terminal, "prev-run": prior}
+    client = SimpleNamespace(
+        get_workflow_handle=lambda workflow_id, run_id=None: handles.get(
+            run_id, child
+        )
+    )
+    assert await recovery._continue_as_new_chain(client, "parent") == [
+        ("parent", "terminal-run"),
+        ("parent", "prev-run"),
+    ]
+    agents = await recovery._closed_execution_tree(
+        client, SimpleNamespace(owner="default/parent"), now
+    )
+    assert agents == {("child-agent", "child-run")}
+
+
+@pytest.mark.asyncio
+async def test_unannounced_tool_failure_still_releases_reservation(
+    journey, monkeypatch
+):
+    from temporalio.api.common.v1 import ActivityType
+    from temporalio.api.history.v1 import (
+        ActivityTaskScheduledEventAttributes,
+        HistoryEvent,
+    )
+
+    state, service, sessions = journey
+    store = IssueClaimStore(sessions)
+    await store.prepare(
+        owner="default/tool-fail",
+        repository="example/repo",
+        issue_number=1,
+        attempt_id="tool-fail",
+        actor_id="123",
+        comment_body="",
+    )
+    scheduled = HistoryEvent(event_id=5)
+    scheduled.activity_task_scheduled_event_attributes.CopyFrom(
+        ActivityTaskScheduledEventAttributes(
+            activity_type=ActivityType(name="mm.tool.execute")
+        )
+    )
+    handle = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=SimpleNamespace(
+                status=WorkflowExecutionStatus.FAILED,
+                close_time=datetime.now(UTC) - timedelta(minutes=6),
+                workflow_type="MoonMind.UserWorkflow",
+                run_id="tool-run",
+            )
+        ),
+        fetch_history_events=lambda **kwargs: history_events([scheduled]),
+    )
+    client = SimpleNamespace(get_workflow_handle=lambda *args, **kwargs: handle)
+    result = await recovery.reconcile_local_claims(
+        state={},
+        store=store,
+        service=service,
+        client_factory=AsyncMock(return_value=client),
+    )
+    assert result["released"] == 1, result
+    assert result["results"][0]["reasonCode"] == "unannounced_reservation_released"
+    assert (await store.get("default/tool-fail")).released is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault", ["held", "cleanup_requested", "unknown_state", "released", "absent"]
+)
+async def test_missing_binding_falls_back_to_slot_lease_ledger(
+    journey, fault
+):
+    from api_service.db.models import (
+        OmnigentRuntimeBindingRecord,
+        ProviderProfileSlotLease,
+    )
+
+    state, service, sessions = journey
+    async with sessions.kw["bind"].begin() as connection:
+        for table in (
+            OmnigentRuntimeBindingRecord.__table__,
+            ProviderProfileSlotLease.__table__,
+        ):
+            await connection.run_sync(
+                lambda conn, table=table: table.create(conn, checkfirst=True)
+            )
+    if fault != "absent":
+        async with sessions() as session:
+            async with session.begin():
+                session.add(
+                    ProviderProfileSlotLease(
+                        runtime_id="managed",
+                        workflow_id="agent",
+                        profile_id="profile",
+                        lease_state=(
+                            "bogus"
+                            if fault == "unknown_state"
+                            else fault
+                        ),
+                    )
+                )
+    call = recovery._runtime_no_work(
+        IssueClaimStore(sessions),
+        {("agent", "run")},
+        SimpleNamespace(owner="default/parent", repository="example/repo"),
+        service,
+    )
+    if fault in {"released", "absent"}:
+        assert await call == []
+    else:
+        with pytest.raises(ValueError, match="runtime_cleanup_pending"):
             await call

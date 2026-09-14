@@ -69,7 +69,9 @@ async def execute_with_issue_lease(*, lease, execute, renew):
         )
         if execution in done:
             return await execution
-        await renewal
+        # Explicit return: the maintainer completes only by raising expiry,
+        # so this preserves behavior while keeping return shapes consistent.
+        return await renewal
     finally:
         for task in (execution, renewal):
             if not task.done():
