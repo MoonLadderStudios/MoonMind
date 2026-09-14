@@ -634,6 +634,138 @@ def answer_question(
     return answer
 
 
+def _overview_auth_principal(context: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return the server-resolved auth principal from handler context."""
+    for key in ("authenticated_principal", "auth_principal", "principal"):
+        candidate = context.get(key)
+        if isinstance(candidate, Mapping) and candidate:
+            return candidate
+    return None
+
+
+def _overview_sources_from_context(context: Mapping[str, Any]) -> dict[str, Any]:
+    """Build answer_question sources from server-supplied context only.
+
+    Client inputs never supply workflow/diagnosis evidence: inputs carry the
+    question text alone, while the deployment-control worker injects the
+    already-authorized projections into context.
+    """
+    workflows = context.get("overview_workflows", context.get("workflows", ()))
+    terminal = context.get(
+        "overview_terminal_outcomes",
+        context.get("terminalOutcomes", context.get("terminal_outcomes", ())),
+    )
+    diagnosis = context.get("overview_diagnosis", context.get("diagnosis", {}))
+    collected = context.get(
+        "overview_collected_at_ms",
+        context.get("collectedAtMs", context.get("collected_at_ms")),
+    )
+    evidence_ref = context.get(
+        "overview_evidence_ref",
+        context.get("evidenceRef", context.get("evidence_ref")),
+    )
+    return {
+        "workflows": workflows if isinstance(workflows, (list, tuple)) else (),
+        "terminalOutcomes": terminal if isinstance(terminal, (list, tuple)) else (),
+        "diagnosis": diagnosis if isinstance(diagnosis, Mapping) else {},
+        "collectedAtMs": collected if isinstance(collected, (int, float)) else None,
+        "evidenceRef": str(evidence_ref) if evidence_ref else None,
+    }
+
+
+def build_deployment_overview_handler() -> Any:
+    """Build the ``mm.tool.execute`` handler for ``moonmind.deployment_overview``.
+
+    Server-side principal resolution only: the caller identity comes from
+    handler context (populated by the trusted worker from auth state), never
+    from tool inputs. Sources likewise come from context. The read path
+    performs no workflow-control, deployment, credential, or publication
+    mutation; every result carries an explicit audit record proving that.
+    """
+    from moonmind.workflows.skills.tool_plan_contracts import ToolFailure, ToolResult
+
+    async def _handler(
+        inputs: Mapping[str, Any], context: Mapping[str, Any] | None = None
+    ) -> ToolResult:
+        ctx = dict(context or {})
+        auth_raw = _overview_auth_principal(ctx)
+        if auth_raw is None:
+            raise ToolFailure(
+                error_code="PERMISSION_DENIED",
+                message="Deployment overview requires server-resolved authentication.",
+                retryable=False,
+                details={"failureClass": "permission_denied"},
+            )
+        principal = resolve_principal(auth_raw)
+        if not principal.subject or principal.subject == "unknown":
+            raise ToolFailure(
+                error_code="PERMISSION_DENIED",
+                message="Deployment overview requires an authenticated subject.",
+                retryable=False,
+                details={"failureClass": "permission_denied"},
+            )
+        raw_question: Any = None
+        if isinstance(inputs, Mapping):
+            raw_question = inputs.get("question")
+        question = str(raw_question or "").strip()
+        if not question:
+            raise ToolFailure(
+                error_code="INVALID_INPUT",
+                message="Deployment overview input 'question' is required.",
+                retryable=False,
+                details={"failureClass": "invalid_input"},
+            )
+        if len(question) > MAX_QUESTION_CHARS:
+            raise ToolFailure(
+                error_code="INVALID_INPUT",
+                message=(
+                    "Deployment overview question must be at most "
+                    f"{MAX_QUESTION_CHARS} characters."
+                ),
+                retryable=False,
+                details={"failureClass": "invalid_input"},
+            )
+        sources = _overview_sources_from_context(ctx)
+        now = ctx.get("overview_now")
+        now_value = float(now) if isinstance(now, (int, float)) else None
+        answer = answer_question(principal, question, sources, now=now_value)
+        refused = bool(answer.get("refused", False))
+        audit = {
+            "readOnly": True,
+            "mutations": [],
+            "sideEffects": [],
+            "toolsCalled": [],
+            "principal": principal.subject,
+            "operator": is_operator(principal),
+            "refused": refused,
+            "reasonCode": answer.get("reasonCode"),
+        }
+        return ToolResult(
+            status="COMPLETED",
+            outputs={
+                "status": "REFUSED" if refused else "SUCCEEDED",
+                "question": question[:MAX_QUESTION_CHARS],
+                "answer": answer,
+                "audit": audit,
+            },
+            progress={
+                "percent": 100,
+                "state": "REFUSED" if refused else "SUCCEEDED",
+                "message": str(answer.get("observation") or "")[:500],
+            },
+        )
+
+    return _handler
+
+
+def register_deployment_overview_tool_handler(dispatcher: Any) -> None:
+    """Register the overview handler on a ``ToolActivityDispatcher``."""
+    dispatcher.register_skill(
+        skill_name="moonmind.deployment_overview",
+        handler=build_deployment_overview_handler(),
+    )
+
+
 __all__ = [
     "CACHE_FRESHNESS_SECONDS",
     "DEPLOYMENT_OVERVIEW_QUESTION_SET",
@@ -649,12 +781,14 @@ __all__ = [
     "answer_recent_failure",
     "answer_running",
     "answer_waiting",
+    "build_deployment_overview_handler",
     "classify_collector_include",
     "classify_container_state",
     "classify_question",
     "detect_prompt_injection",
     "is_mutation_request",
     "is_operator",
+    "register_deployment_overview_tool_handler",
     "requests_arbitrary_access",
     "resolve_principal",
     "sanitize_untrusted_text",

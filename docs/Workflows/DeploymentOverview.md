@@ -104,3 +104,13 @@ Hermetic tests use deterministic question/tool fixtures through the real
 authorization/projection boundaries
 (`tests/unit/workflows/skills/test_deployment_overview.py`); optional live
 model evaluation is separate and never fabricates successful checks.
+
+Production dispatch travels the existing executable-tool boundary (#973):
+`moonmind.deployment_overview` (`moonmind/workflows/skills/deployment_tools.py`,
+`mm.tool.execute` / `by_capability` on the deployment-control worker) resolves
+the principal server-side from handler context and routes through
+`deployment_overview.answer_question` with context-supplied,
+already-authorized sources. Hermetic dispatch proof lives in
+`tests/integration/temporal/test_deployment_overview_dispatch.py`, covering
+the four canonical questions, ordinary-user scope / wrong-owner / revoked /
+stale-cache denial, read-only audit records, and injection/secret handling.

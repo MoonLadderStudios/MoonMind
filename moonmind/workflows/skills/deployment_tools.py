@@ -10,6 +10,8 @@ DEPLOYMENT_UPDATE_TOOL_NAME = "deployment.update_compose_stack"
 DEPLOYMENT_UPDATE_TOOL_VERSION = "1.0.0"
 OPS_DIAGNOSE_STACK_TOOL_NAME = "moonmind.ops_diagnose_stack"
 OPS_DIAGNOSE_STACK_TOOL_VERSION = "1.0.0"
+DEPLOYMENT_OVERVIEW_TOOL_NAME = "moonmind.deployment_overview"
+DEPLOYMENT_OVERVIEW_TOOL_VERSION = "1.0.0"
 
 _MOONMIND_REPOSITORY = "ghcr.io/moonladderstudios/moonmind"
 _NON_RETRYABLE_DEPLOYMENT_ERRORS = (
@@ -276,11 +278,95 @@ def build_ops_diagnose_stack_tool_definition_payload() -> dict[str, Any]:
     }
 
 
+def build_deployment_overview_tool_definition_payload() -> dict[str, Any]:
+    """Build the MM-424 read-only deployment overview tool registry definition.
+
+    The overview answers exactly four canonical questions through the
+    existing ``mm.tool.execute`` / by-capability boundary on the
+    deployment-control worker. Sources are server-supplied via handler
+    context (never client claims); per-field owner/permission/timestamp /
+    freshness is preserved by ``deployment_overview.answer_question``.
+    Ordinary users may call this tool: the handler scopes them to their
+    own workflows and denies deployment-wide diagnostics.
+    """
+
+    return {
+        "name": DEPLOYMENT_OVERVIEW_TOOL_NAME,
+        "type": "skill",
+        "description": (
+            "Answer read-only deployment overview questions (running, waiting, "
+            "recent failure, deployment checks) with linked evidence. "
+            "Performs no workflow-control, deployment, credential, or "
+            "publication mutation."
+        ),
+        "inputs": {
+            "schema": {
+                "type": "object",
+                "required": ["question"],
+                "additionalProperties": False,
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2000,
+                    },
+                },
+            }
+        },
+        "outputs": {
+            "schema": {
+                "type": "object",
+                "required": ["status", "question", "answer", "audit"],
+                "additionalProperties": False,
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["SUCCEEDED", "REFUSED"],
+                    },
+                    "question": {"type": "string"},
+                    "answer": {
+                        "type": "object",
+                        "additionalProperties": True,
+                    },
+                    "audit": {
+                        "type": "object",
+                        "additionalProperties": True,
+                    },
+                },
+            }
+        },
+        "executor": {
+            "activity_type": "mm.tool.execute",
+            "selector": {"mode": "by_capability"},
+        },
+        "requirements": {"capabilities": ["deployment_control"]},
+        "policies": {
+            "timeouts": {
+                "start_to_close_seconds": 60,
+                "schedule_to_close_seconds": 120,
+            },
+            "retries": {
+                "max_attempts": 1,
+                "non_retryable_error_codes": list(_NON_RETRYABLE_DIAGNOSIS_ERRORS),
+            },
+        },
+        "security": {
+            # Registry-level roles are intentionally open: ordinary users may
+            # ask about their own workflows. Deployment-wide disclosure is
+            # denied inside the handler by server-resolved principal.
+            "allowed_roles": [],
+        },
+    }
+
+
 __all__ = [
+    "DEPLOYMENT_OVERVIEW_TOOL_NAME",
+    "DEPLOYMENT_OVERVIEW_TOOL_VERSION",
     "DEPLOYMENT_UPDATE_TOOL_NAME",
     "DEPLOYMENT_UPDATE_TOOL_VERSION",
     "OPS_DIAGNOSE_STACK_TOOL_NAME",
     "OPS_DIAGNOSE_STACK_TOOL_VERSION",
     "build_deployment_update_tool_definition_payload",
+    "build_deployment_overview_tool_definition_payload",
     "build_ops_diagnose_stack_tool_definition_payload",
 ]
