@@ -805,3 +805,108 @@ def is_review_gate_active(
         normalized_tool_type not in skip_tool_types
         and normalized_tool_name not in skip_tool_types
     )
+
+
+# ── Review/evidence/feedback value seam (issue #3943) ─────────────────────
+#
+# Responsibility boundary: the helpers below are pure value computations with
+# compact typed inputs and immutable snapshots. They perform no step-ledger
+# reads, no workflow state access, and no Temporal command scheduling. The
+# workflow (`MoonMindRunWorkflow`) retains ownership of ledger reads
+# (`_effective_result_outputs`, `_step_execution_compact_output_refs`), state
+# application, and command scheduling, and delegates value computation here.
+# No helper accepts a workflow object, mirrored mutable lifecycle state, or an
+# unrestricted side-effect callback. This module stays importable in the
+# workflow sandbox (no client init, filesystem reads, network I/O, or
+# import-time mutable configuration).
+
+_DIRECT_OUTPUT_EVIDENCE_ALIASES: tuple[tuple[str, str], ...] = (
+    ("primary_report_ref", "primaryRef"),
+    ("primaryReportRef", "primaryRef"),
+    ("summary_ref", "summaryRef"),
+    ("summaryRef", "summaryRef"),
+)
+
+_REVIEW_FEEDBACK_INSTRUCTION_KEYS: tuple[str, ...] = (
+    "instructions",
+    "instructionRef",
+    "instruction",
+    "instructionsText",
+    "instructions_text",
+)
+
+
+def gate_transition_allows_review_retry(
+    *,
+    plan_routed_moonspec_remediation_enabled: bool,
+    transition_disposition: str,
+) -> bool:
+    """Keep pre-cutover review retries independent of new plan routing."""
+    return (
+        not plan_routed_moonspec_remediation_enabled
+        or transition_disposition in {"generic", "retry"}
+    )
+
+
+def direct_output_evidence_aliases(
+    outputs: Mapping[str, Any],
+) -> dict[str, str]:
+    """Compute normalized direct-output evidence aliases without mutation."""
+    aliases: dict[str, str] = {}
+    for source_key, target_key in _DIRECT_OUTPUT_EVIDENCE_ALIASES:
+        value = outputs.get(source_key)
+        if isinstance(value, str) and value.strip():
+            aliases.setdefault(target_key, value.strip())
+    return aliases
+
+
+def merge_direct_output_evidence(
+    merged_outputs: dict[str, Any],
+    outputs: Mapping[str, Any],
+) -> None:
+    """Apply direct-output evidence aliases into ``merged_outputs`` in place."""
+    for target_key, value in direct_output_evidence_aliases(outputs).items():
+        merged_outputs.setdefault(target_key, value)
+
+
+def merge_accepted_output_evidence(
+    *,
+    execution_outputs: Mapping[str, Any] | None,
+    ledger_output_refs: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge execution outputs with ledger refs into one evidence snapshot."""
+    merged_outputs: dict[str, Any] = {}
+    if isinstance(execution_outputs, Mapping):
+        merged_outputs.update(dict(execution_outputs))
+        merge_direct_output_evidence(merged_outputs, execution_outputs)
+    if isinstance(ledger_output_refs, Mapping):
+        merged_outputs.update(dict(ledger_output_refs))
+    return merged_outputs
+
+
+def inject_review_feedback_into_inputs(
+    *,
+    tool_type: str,
+    original_inputs: Mapping[str, Any],
+    attempt: int,
+    feedback: str,
+    issues: tuple[Mapping[str, Any], ...] = (),
+) -> dict[str, Any]:
+    """Inject review feedback into step inputs; append to agent instructions."""
+    merged_inputs = build_feedback_input(
+        original_inputs,
+        attempt,
+        feedback,
+        issues,
+    )
+    if tool_type == "agent_runtime":
+        for key in _REVIEW_FEEDBACK_INSTRUCTION_KEYS:
+            instruction = merged_inputs.get(key)
+            if isinstance(instruction, str) and instruction.strip():
+                merged_inputs[key] = build_feedback_instruction(
+                    instruction,
+                    attempt,
+                    feedback,
+                )
+                break
+    return merged_inputs
