@@ -36,7 +36,7 @@ If no constraints are provided, default to addressing all applicable feedback.
   - Fall back to `tools/get_branch_pr_comments.py` only for repositories that intentionally mirror skill helper tools into the repo root.
   - If neither helper exists, stop as blocked with reason `comments_helper_missing`; do not use a stale `var/pr_comments/current-branch-comments.json`.
 - Run the resolved helper with `python3 <helper> --output var/pr_comments/current-branch-comments.json`.
-- If PR resolution or comment retrieval fails, stop and ask the user for a PR number/URL or GitHub credential fix. Do not continue from pre-fetched or stale comments unless the helper successfully refreshed `var/pr_comments/current-branch-comments.json` in this run.
+- If PR resolution or comment retrieval fails, retry once after a targeted check (`gh auth status` or `test -n "$GITHUB_TOKEN"` health path without printing secrets), then stop as blocked with reason `pr_resolution_unavailable`. Record the exact branch and helper output. Use an explicit PR number/URL only when it was supplied as a scope constraint for this run; never invent one. Do not continue from pre-fetched or stale comments unless the helper successfully refreshed `var/pr_comments/current-branch-comments.json` in this run.
 - Load `var/pr_comments/current-branch-comments.json` and treat every entry in `comments` as input feedback.
 
 2. Build a feedback ledger before editing code.
