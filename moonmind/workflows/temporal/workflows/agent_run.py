@@ -715,21 +715,31 @@ CANONICAL_WAITING_REASONS = (
 
 
 def canonical_waiting_reason(
-    reason: str, *, queue_position: int | None = None
+    reason: str,
+    *,
+    queue_position: int | None = None,
+    cooldown_until: str | None = None,
 ) -> str:
     """Map internal wait state to one bounded product reason.
 
-    Emits only the canonical reason plus an optional numeric queue position.
-    No lease, host, session, credential, repository, or Docker identity ever
-    enters the parent progress payload; terminal outcome remains owned by
-    child completion and AgentRunResult.
+    Emits only the canonical reason plus optional safe observation fragments
+    (numeric queue position from an ordered snapshot, authoritative cooldown
+    deadline). No lease, host, session, credential, repository, or Docker
+    identity ever enters the parent progress payload; terminal outcome
+    remains owned by child completion and AgentRunResult.
     """
     normalized = str(reason or "").strip()
     if normalized not in CANONICAL_WAITING_REASONS:
         normalized = "awaiting_provider_capacity"
+    fragments = ""
     if isinstance(queue_position, int) and queue_position > 0:
-        return f"{normalized}; queue_position={queue_position}"
-    return normalized
+        fragments += f"; queue_position={queue_position}"
+    deadline = str(cooldown_until or "").strip()
+    if deadline and len(deadline) <= 64 and not any(
+        ch.isspace() or ch in ";," for ch in deadline
+    ):
+        fragments += f"; cooldown_until={deadline}"
+    return f"{normalized}{fragments}"
 
 
 def build_provider_wait_identity(
@@ -1423,10 +1433,34 @@ class MoonMindAgentRun:
         if transition is None:
             return None
         self.run_status = RunStatus.awaiting_slot
+        # MoonLadderStudios/MoonMind#1130 R5: the parent signal carries only
+        # the reason string (two-arg signal preserved for replay), so the
+        # authoritative structured fields travel as safe fragments the
+        # Workflow Detail parsers already understand. Never invent a
+        # deadline/position here: append only observed values missing from
+        # the reason, sanitized exactly like canonical_waiting_reason.
+        parent_reason = str(reason or "")
+        observed_queue = transition.get("queue_position")
+        if (
+            isinstance(observed_queue, int)
+            and observed_queue > 0
+            and "queue_position=" not in parent_reason
+        ):
+            parent_reason = f"{parent_reason}; queue_position={observed_queue}"
+        observed_deadline = str(transition.get("cooldown_until") or "").strip()
+        if (
+            observed_deadline
+            and len(observed_deadline) <= 64
+            and not any(
+                ch.isspace() or ch in ";," for ch in observed_deadline
+            )
+            and "cooldown_until=" not in parent_reason
+        ):
+            parent_reason = f"{parent_reason}; cooldown_until={observed_deadline}"
         await self._signal_parent_child_state_changed(
             parent_info,
             "awaiting_slot",
-            reason,
+            parent_reason,
         )
         return transition
 
@@ -1704,15 +1738,21 @@ class MoonMindAgentRun:
                     return canonical_waiting_reason(
                         "cleanup_pending", queue_position=queue_number
                     )
-                if str(profile.get("cooldown_until") or "").strip():
+                profile_deadline = str(profile.get("cooldown_until") or "").strip()
+                if profile_deadline:
                     return canonical_waiting_reason(
-                        "provider_cooldown", queue_position=queue_number
+                        "provider_cooldown",
+                        queue_position=queue_number,
+                        cooldown_until=profile_deadline,
                     )
                 scope = profile.get("capacity_scope")
                 if isinstance(scope, Mapping) and profile.get("scope_known") is True:
-                    if str(scope.get("cooldown_until") or "").strip():
+                    scope_deadline = str(scope.get("cooldown_until") or "").strip()
+                    if scope_deadline:
                         return canonical_waiting_reason(
-                            "provider_cooldown", queue_position=queue_number
+                            "provider_cooldown",
+                            queue_position=queue_number,
+                            cooldown_until=scope_deadline,
                         )
             return canonical_waiting_reason(
                 "awaiting_provider_capacity", queue_position=queue_number

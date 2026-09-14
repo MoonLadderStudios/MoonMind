@@ -632,6 +632,123 @@ def test_canonical_reason_never_carries_handles() -> None:
         assert rendered.startswith("awaiting_provider_capacity")
 
 
+def test_canonical_reason_carries_authoritative_cooldown_fragment() -> None:
+    """R5: canonical cooldown observations reach the parent signal string."""
+    from moonmind.workflows.temporal.workflows.agent_run import (
+        canonical_waiting_reason,
+    )
+
+    rendered = canonical_waiting_reason(
+        "provider_cooldown",
+        queue_position=2,
+        cooldown_until="2026-09-14T08:00:00+00:00",
+    )
+    assert rendered.startswith("provider_cooldown")
+    assert "queue_position=2" in rendered
+    assert "cooldown_until=2026-09-14T08:00:00+00:00" in rendered
+    # Missing deadline stays missing: never invented, never "immediate".
+    assert "cooldown_until" not in canonical_waiting_reason(
+        "awaiting_provider_capacity", queue_position=2
+    )
+
+
+def test_canonical_reason_rejects_malicious_cooldown_fragment() -> None:
+    """R5/R7: hostile deadlines never widen the parent payload."""
+    from moonmind.workflows.temporal.workflows.agent_run import (
+        canonical_waiting_reason,
+    )
+
+    for hostile in (
+        "2026-09-14T08:00:00+00:00; lease=abc",
+        "soon, now",
+        "in 5 minutes",
+        "x" * 65,
+        "",
+    ):
+        rendered = canonical_waiting_reason(
+            "provider_cooldown", cooldown_until=hostile
+        )
+        assert "lease" not in rendered
+        assert rendered == "provider_cooldown" or "cooldown_until=" not in rendered
+
+
+def test_manager_slot_wait_canonical_carries_scope_cooldown_fragment(
+    monkeypatch,
+) -> None:
+    """R5: scope-cooldown mapping embeds the deadline in the signal string."""
+    _enable_canonical(monkeypatch)
+    wf = MoonMindAgentRun()
+    profile = dict(_base_manager_state()["requested_profile"])
+    profile["scope_known"] = True
+    profile["capacity_scope"] = {"cooldown_until": "2026-09-14T09:00:00+00:00"}
+    state = _base_manager_state(requested_profile=profile)
+    reason = wf._build_manager_slot_waiting_reason(
+        runtime_id="codex_cli",
+        request=_make_request(),
+        manager_state=state,
+    )
+    assert reason.startswith("provider_cooldown")
+    assert "cooldown_until=2026-09-14T09:00:00+00:00" in reason
+
+
+@pytest.mark.asyncio
+async def test_signal_forwards_structured_fragments_to_parent(
+    monkeypatch,
+) -> None:
+    """R5: structured cooldown/queue reach the parent via the reason string.
+
+    The two-arg child_state_changed signal is preserved for replay; the
+    observed fields travel as safe fragments the Workflow Detail parsers
+    already understand. No ETA is implied here.
+    """
+    calls = _patch_canonical_signal(monkeypatch)
+    wf = MoonMindAgentRun()
+    parent = object()
+    transition = await wf._signal_provider_slot_wait(
+        parent,
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-1",
+        profile_ref="p1",
+        reason="provider_cooldown",
+        cooldown_until="2026-09-14T08:00:00+00:00",
+        queue_position=3,
+        revision=7,
+    )
+    assert transition is not None and transition["transition"] == "wait_entered"
+    assert len(calls) == 1
+    new_state, parent_reason = calls[0]
+    assert new_state == "awaiting_slot"
+    assert "queue_position=3" in parent_reason
+    assert "cooldown_until=2026-09-14T08:00:00+00:00" in parent_reason
+    assert "ETA" not in parent_reason and "eta" not in parent_reason.lower()
+
+
+def test_replay_compat_old_reason_without_fragments_stays_valid() -> None:
+    """R6: histories recorded before the cooldown fragment still replay.
+
+    Old canonical reasons carry no cooldown fragment; the record/reuse path
+    treats missing structure as unknown rather than failing or fabricating.
+    """
+    wf = MoonMindAgentRun()
+    entered = wf._record_provider_wait_observation(
+        **_record_kwargs(reason="provider_cooldown", revision=None)
+    )
+    assert entered is not None and entered["transition"] == "wait_entered"
+    assert entered["cooldown_until"] is None
+    assert entered["queue_position"] is None
+    assert wf._reuse_recorded_provider_wait() == entered
+
+
+def test_fresh_instance_reuse_after_revocation_is_empty() -> None:
+    """R7: a fresh instance (logged-out/revoked cache) exposes no wait."""
+    wf = MoonMindAgentRun()
+    assert wf._reuse_recorded_provider_wait() is None
+    # Recording then discarding state (revocation) leaves nothing cached.
+    assert wf._record_provider_wait_observation(**_record_kwargs()) is not None
+    revoked = MoonMindAgentRun()
+    assert revoked._reuse_recorded_provider_wait() is None
+
+
 @pytest.mark.asyncio
 async def test_compact_inspection_hides_other_identities_and_secrets(monkeypatch) -> None:
     from types import SimpleNamespace
@@ -696,3 +813,67 @@ async def test_compact_inspection_hides_other_identities_and_secrets(monkeypatch
     assert "sekret" not in serialized
     assert "lease_metadata" not in serialized
     assert "credential" not in serialized.lower()
+
+
+@pytest.mark.asyncio
+async def test_wait_signal_hides_other_identities_and_secrets_end_to_end(
+    monkeypatch,
+) -> None:
+    """R7: hostile manager state never leaks past the parent signal boundary.
+
+    Exercises the real glue entrypoint plus the parent-signal pipeline with
+    another user's queue entry, secret-bearing lease metadata, and an
+    authoritative cooldown present: the parent reason carries the deadline
+    and ordered position but no identities, handles, or secrets.
+    """
+    _enable_canonical(monkeypatch)
+    _mock_workflow_identity(monkeypatch)
+    calls = _patch_canonical_signal(monkeypatch)
+
+    async def _fake_manager_state(self, **kwargs):
+        profile = dict(_base_manager_state()["requested_profile"])
+        profile["cooldown_until"] = "2026-09-14T08:00:00+00:00"
+        profile["current_leases"] = ["agent-run-1", "someone-else"]
+        profile["lease_metadata"] = {
+            "agent-run-1": {"credential": "sekret", "fencingGeneration": 2},
+            "someone-else": {"credential": "other-sekret"},
+        }
+        state = _base_manager_state(requested_profile=profile)
+        state["pending_requests"] = [
+            {"requester_workflow_id": "agent-run-1"},
+            {"requester_workflow_id": "someone-else"},
+        ]
+        return state
+
+    monkeypatch.setattr(
+        MoonMindAgentRun,
+        "_manager_state_for_slot_wait",
+        _fake_manager_state,
+    )
+    wf = MoonMindAgentRun()
+    observation = await wf._inspected_provider_slot_wait(
+        manager_id="manager-1",
+        runtime_id="codex_cli",
+        request=_make_request(),
+    )
+    assert observation["cooldown_until"] == "2026-09-14T08:00:00+00:00"
+    transition = await wf._signal_provider_slot_wait(
+        object(),
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-1",
+        profile_ref=str(observation.get("profile_ref") or ""),
+        reason=str(observation.get("reason") or ""),
+        cooldown_until=observation.get("cooldown_until"),
+        queue_position=observation.get("queue_position"),
+        revision=observation.get("revision"),
+    )
+    assert transition is not None
+    assert len(calls) == 1
+    _, parent_reason = calls[0]
+    assert "cooldown_until=2026-09-14T08:00:00+00:00" in parent_reason
+    assert "someone-else" not in parent_reason
+    assert "sekret" not in parent_reason
+    assert "credential" not in parent_reason.lower()
+    assert "lease" not in parent_reason.lower()
+    assert "fence" not in parent_reason.lower()
+    assert "host" not in parent_reason.lower()
