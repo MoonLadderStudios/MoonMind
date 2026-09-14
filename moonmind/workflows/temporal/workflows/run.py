@@ -523,6 +523,8 @@ RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH = (
     "run-task-scoped-session-termination-v3"
 )
 # Replay-stable patch id for skipping registry reads on agent-runtime-only plans.
+# MoonLadderStudios/MoonMind#3944: deprecated (see the deprecate_patch call in
+# _run_execution_stage). Do not reuse this id for a new patch.
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = "run-workflow-child-task-queue-v2"
@@ -11980,11 +11982,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             and not pr_publish_optional
         )
         pull_request_url: str | None = None
-        # Keep this patch command in its historical position, after the
-        # jules-bundling marker and before any lazy registry read. Removing or
-        # reordering it strands in-flight user workflow histories before
-        # cancellation/failure handling.
-        workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)
+        # MoonLadderStudios/MoonMind#3944 retirement batch: this marker no
+        # longer guards a behavior branch (the conditional registry read is
+        # unconditional), so new executions stop recording it while retained
+        # pre-change histories still replay through the deprecated marker.
+        # Keep this deprecation command in its historical position, after the
+        # jules-bundling marker and before any lazy registry read. Removing
+        # or reordering it strands in-flight user workflow histories before
+        # cancellation/failure handling. Full call-site removal requires the
+        # evidence in docs/Temporal/WorkflowPatchRetirement.md: no retained
+        # history may still carry the marker under the reset/replay policy.
+        workflow.deprecate_patch(RUN_CONDITIONAL_REGISTRY_READ_PATCH)
         step_retry_overrides_enabled = workflow.patched(RUN_STEP_RETRY_OVERRIDES_PATCH)
         plan_routed_moonspec_remediation_enabled = workflow.patched(
             RUN_PLAN_ROUTED_MOONSPEC_REMEDIATION_PATCH
