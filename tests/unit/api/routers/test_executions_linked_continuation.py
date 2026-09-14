@@ -34,6 +34,9 @@ async def _database():
             lambda sync: TemporalExecutionCanonicalRecord.__table__.create(sync)
         )
         await connection.run_sync(
+            lambda sync: TemporalExecutionRecord.__table__.create(sync)
+        )
+        await connection.run_sync(
             lambda sync: WorkflowLinkedContinuationRecord.__table__.create(sync)
         )
     return engine, async_sessionmaker(engine, expire_on_commit=False)

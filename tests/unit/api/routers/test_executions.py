@@ -17979,12 +17979,19 @@ async def test_exact_rerun_reuses_source_task_input_snapshot_lineage() -> None:
         assert record.memo["task_input_snapshot_version"] == 1
         assert record.memo["task_input_snapshot_source_kind"] == "rerun"
         assert record.artifact_refs == ["artifact://snapshot/source"]
-    session.get.assert_awaited_once_with(
+    # Shared mutator adds locked canonical+projection fetches after the
+    # caller's plain canonical lookup.
+    assert session.get.await_count == 3
+    session.get.assert_any_await(
         TemporalExecutionCanonicalRecord,
         "mm:rerun",
     )
-    assert len(session.added) == 1
-    link = session.added[0]
+    # Shared mutator repairs the missing projection in-memory for session
+    # doubles (one record add) before the caller records the artifact link.
+    assert len(session.added) == 2
+    link = next(
+        added for added in session.added if isinstance(added, TemporalArtifactLink)
+    )
     assert isinstance(link, TemporalArtifactLink)
     assert link.artifact_id == "artifact://snapshot/source"
     assert link.namespace == "moonmind"
