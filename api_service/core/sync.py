@@ -579,7 +579,9 @@ async def mutate_execution_projection(
     """
     if owner not in {"temporal", "canonical", "snapshot", "runtime_binding"}:
         raise ValueError("unknown execution projection mutation owner")
-    await session.flush()
+    flush = getattr(session, "flush", None)
+    if callable(flush):
+        await flush()
     canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id, with_for_update=True, populate_existing=True)
     projection = await session.get(TemporalExecutionRecord, workflow_id, with_for_update=True, populate_existing=True)
     records = [record for record in (canonical, projection) if record is not None]
