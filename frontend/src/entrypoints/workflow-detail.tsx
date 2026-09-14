@@ -4245,6 +4245,170 @@ function formatStepLastError(lastError: unknown): string | null {
   return String(lastError);
 }
 
+// MoonLadderStudios/MoonMind#1130: honest provider-wait timing labels.
+// Queue position renders only from an ordered snapshot, cooldown only from
+// an authoritative deadline, next-check timing labeled as such — never a
+// promised start time or an ETA derived from active-count arithmetic.
+export function formatProviderWaitTiming(input: {
+  queuePosition?: number | null;
+  queueOrdered?: boolean;
+  queueFresh?: boolean;
+  cooldownUntil?: string | null;
+  nextCheck?: string | null;
+}): { queueLabel: string | null; cooldownLabel: string | null; nextCheckLabel: string | null } {
+  const position = input.queuePosition;
+  const queueLabel =
+    input.queueOrdered && input.queueFresh && typeof position === 'number' && position > 0
+      ? `Queue position ${position} (ordered snapshot)`
+      : null;
+  const deadline = (input.cooldownUntil ?? '').trim();
+  const cooldownLabel = deadline ? `Cooldown until ${deadline}` : null;
+  const check = (input.nextCheck ?? '').trim();
+  const nextCheckLabel = check ? `Next check ${check} (not a promised start time)` : null;
+  return { queueLabel, cooldownLabel, nextCheckLabel };
+}
+
+export function parseProviderQueuePosition(waitingReason: string | null | undefined): number | null {
+  if (!waitingReason) return null;
+  const match = /queue_position=(\d+)/.exec(waitingReason);
+  if (!match) return null;
+  const position = Number.parseInt(match[1] ?? '', 10);
+  return Number.isFinite(position) && position > 0 ? position : null;
+}
+
+export function parseProviderCooldownUntil(waitingReason: string | null | undefined): string | null {
+  if (!waitingReason) return null;
+  const match = /cooldown_until=([^\s;,]+)/.exec(waitingReason);
+  if (!match) return null;
+  const deadline = (match[1] ?? '').trim().replace(/\.+$/, '');
+  return deadline ? deadline : null;
+}
+
+function parseProviderFlagFragment(waitingReason: string | null | undefined, name: string): boolean | null {
+  if (!waitingReason) return null;
+  const match = new RegExp(`${name}=(\\d+)`).exec(waitingReason);
+  if (!match) return null;
+  return match[1] === '1';
+}
+
+export function parseProviderQueueOrdered(waitingReason: string | null | undefined): boolean | null {
+  return parseProviderFlagFragment(waitingReason, 'queue_ordered');
+}
+
+export function parseProviderQueueFresh(waitingReason: string | null | undefined): boolean | null {
+  return parseProviderFlagFragment(waitingReason, 'queue_fresh');
+}
+
+export function parseProviderNextCheck(waitingReason: string | null | undefined): string | null {
+  if (!waitingReason) return null;
+  const match = /next_check=([^\s;,]+)/.exec(waitingReason);
+  if (!match) return null;
+  const check = (match[1] ?? '').trim().replace(/\.+$/, '');
+  return check ? check : null;
+}
+
+export function parseProviderWaitEnteredAt(waitingReason: string | null | undefined): string | null {
+  if (!waitingReason) return null;
+  const match = /wait_entered_at=([^\s;,]+)/.exec(waitingReason);
+  if (!match) return null;
+  const entered = (match[1] ?? '').trim().replace(/\.+$/, '');
+  return entered ? entered : null;
+}
+
+export function formatWaitElapsedSince(enteredAt: string | null | undefined, nowMs?: number): string | null {
+  if (!enteredAt) return null;
+  const startMs = Date.parse(enteredAt);
+  if (!Number.isFinite(startMs)) return null;
+  const endMs = typeof nowMs === 'number' && Number.isFinite(nowMs) ? nowMs : Date.now();
+  const elapsedMs = endMs - startMs;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return null;
+  const totalSeconds = Math.floor(elapsedMs / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) {
+    const seconds = totalSeconds % 60;
+    return seconds > 0 ? `${totalMinutes}m ${seconds}s` : `${totalMinutes}m`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
+// MoonLadderStudios/MoonMind#1130: documented new safe wait fields. The
+// step-ledger row schema is passthrough, so a future backend may attach
+// these structured observation fields beside waitingReason; the card reads
+// them when present and otherwise falls back to reason fragments. Unknown
+// stays unknown: absent fields render nothing.
+function readOptionalWaitField<T>(row: unknown, name: string): T | null {
+  if (!row || typeof row !== 'object') return null;
+  const value = (row as Record<string, unknown>)[name];
+  return value === null || value === undefined ? null : (value as T);
+}
+
+export function ProviderWaitDetails({
+  waitingReason,
+  cooldownUntil,
+  queuePosition,
+  queueOrdered,
+  queueFresh,
+  nextCheck,
+  waitEnteredAt,
+  elapsedLabel,
+}: {
+  waitingReason: string | null | undefined;
+  cooldownUntil?: string | null;
+  queuePosition?: number | null;
+  queueOrdered?: boolean | null;
+  queueFresh?: boolean | null;
+  nextCheck?: string | null;
+  waitEnteredAt?: string | null;
+  elapsedLabel?: string | null;
+}) {
+  const parsedNextCheck = nextCheck ?? parseProviderNextCheck(waitingReason) ?? null;
+  const parsedEnteredAt = waitEnteredAt ?? parseProviderWaitEnteredAt(waitingReason) ?? null;
+  if (
+    !waitingReason
+    && !cooldownUntil
+    && queuePosition == null
+    && parsedNextCheck == null
+    && parsedEnteredAt == null
+    && !elapsedLabel
+  ) return null;
+  // The canonical backend reason carries queue_position only from an
+  // ordered scoped snapshot (artifacts guard), and newer reasons carry
+  // explicit queue_ordered/queue_fresh attestations. Explicit props win,
+  // then explicit fragments; legacy reasons without flag fragments keep
+  // the historical inference (position presence implies the ordered
+  // precondition) so retained history still renders. Structured
+  // cooldown/next-check render only from authoritative observation fields
+  // or explicit fragments; no deadline is invented here and no ETA is
+  // ever derived from active-count arithmetic.
+  const parsedPosition = queuePosition ?? parseProviderQueuePosition(waitingReason);
+  const parsedCooldown = (cooldownUntil ?? parseProviderCooldownUntil(waitingReason) ?? '').trim() || null;
+  const parsedOrdered = parseProviderQueueOrdered(waitingReason);
+  const parsedFresh = parseProviderQueueFresh(waitingReason);
+  const ordered = queueOrdered ?? parsedOrdered ?? parsedPosition !== null;
+  const fresh = queueFresh ?? parsedFresh ?? parsedPosition !== null;
+  const { queueLabel, cooldownLabel, nextCheckLabel } = formatProviderWaitTiming({
+    queuePosition: parsedPosition,
+    queueOrdered: ordered,
+    queueFresh: fresh,
+    cooldownUntil: parsedCooldown,
+    nextCheck: parsedNextCheck,
+  });
+  const elapsed = (elapsedLabel ?? '').trim()
+    || formatWaitElapsedSince(parsedEnteredAt) || '';
+  return (
+    <>
+      {queueLabel ? <p className="small">{queueLabel} — not a promised start time.</p> : null}
+      {cooldownLabel ? <p className="small">{cooldownLabel}.</p> : null}
+      {nextCheckLabel ? <p className="small">{nextCheckLabel}.</p> : null}
+      {elapsed ? <p className="small">Waiting {elapsed} so far.</p> : null}
+      <p className="small">Wait times are observations, not an ETA.</p>
+    </>
+  );
+}
+
 function stepTerminal(status: string | null | undefined): boolean {
   const normalized = String(status || '').trim().toLowerCase();
   return normalized === 'completed'
@@ -5756,6 +5920,15 @@ function StepLedgerRowCard({
               <h4>Summary</h4>
               <p className="small">{row.summary || 'No step summary yet.'}</p>
               {row.waitingReason ? <p className="small">Waiting reason: {row.waitingReason}</p> : null}
+              <ProviderWaitDetails
+                waitingReason={row.waitingReason}
+                queuePosition={readOptionalWaitField<number>(row, 'queuePosition')}
+                cooldownUntil={readOptionalWaitField<string>(row, 'cooldownUntil')}
+                queueOrdered={readOptionalWaitField<boolean>(row, 'queueOrdered')}
+                queueFresh={readOptionalWaitField<boolean>(row, 'queueFresh')}
+                nextCheck={readOptionalWaitField<string>(row, 'nextCheck')}
+                waitEnteredAt={readOptionalWaitField<string>(row, 'waitEnteredAt')}
+              />
               {row.preservedFrom ? (
                 <p className="small">
                   Preserved from source run <code>{row.preservedFrom.workflowId}</code> run{' '}
@@ -8381,6 +8554,9 @@ function InterventionMonitorPanel({
         <Card label="Audit Entries">{String(auditCount)}</Card>
         <Card label="Waiting Reason">{execution.waitingReason || '—'}</Card>
       </div>
+      {execution.waitingReason ? (
+        <p className="small">Wait times are observations, not an ETA. Positions appear only from an ordered snapshot.</p>
+      ) : null}
     </section>
   );
 }
