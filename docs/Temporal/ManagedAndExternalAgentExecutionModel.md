@@ -966,6 +966,14 @@ read/write access is owner-only; privilege bits and imported hooks are removed.
 Failure to apply these permissions aborts restore before readiness. Newly
 injected input artifacts retain their read-only projection contract.
 
+Checkpoint restore preserves contained relative symlinks as link text, including
+dangling links whose targets were excluded runtime inputs, empty directories, or
+absent repository files. Target existence is not workspace authority: existing
+ancestors and the remaining path must still resolve inside the restored tree.
+Restore rejects escaping links, cycles, and resolution errors other than missing
+targets before marking the workspace ready. Excluded Skill inputs remain subject
+to the current run's independent admission and materialization.
+
 A session-state ref is not evidence of workspace capture or restore. `external_state_ref` can preserve Omnigent/provider continuity without being locally restorable.
 
 For Omnigent, checkpoint identity may include profile, provider-lease, credential-generation, binding, host-lease, host, bridge-session, Omnigent-session, idempotency, first-message, workspace-locator, diagnostics, terminal, and artifact refs. Credentials and daemon paths are forbidden.
