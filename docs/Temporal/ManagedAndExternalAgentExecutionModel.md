@@ -229,6 +229,16 @@ attempt. An existing owned lease reuses its reservation. The cumulative waiting
 budget survives capacity requeues, and an unsatisfiable demand is rejected rather
 than queued indefinitely. Atomic allocation remains the final admission fence.
 
+Bootstrap on-demand policies select shared CPU (`cpuMillis: 0`). The Docker
+resource owner enforces one machine-derived CPU cap across agents and new
+container jobs, allowing testing to use idle agent CPU. Memory remains a hard
+reservation; test jobs may authorize a minimum/preferred range. Existing
+immutable policies and recorded launch limits retain their authority, and
+bootstrap startup creates a new version only for an unmodified stock default.
+Container-job capacity waits use durable timers under the original timeout.
+See [Docker Backend Service](../ManagedAgents/DockerBackendService.md#shared-machine-resource-budget)
+for enforcement, prerequisites, and diagnostics.
+
 The scheduled host janitor bounds OAuth and generic-host cleanup independently.
 A historical credential-generation failure remains fenced and visible while
 unrelated leases and machine reconciliation continue. Generic reclamation needs

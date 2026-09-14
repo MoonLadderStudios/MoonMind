@@ -6600,7 +6600,7 @@ export interface components {
          * ContainerJobState
          * @enum {string}
          */
-        ContainerJobState: "queued" | "preparing" | "resolving_workspace" | "workspace_not_visible" | "acquiring_image" | "building_image" | "starting" | "running" | "canceling" | "publishing_artifacts" | "cleaning_up" | "succeeded" | "failed" | "canceled" | "timed_out" | "rejected";
+        ContainerJobState: "queued" | "preparing" | "resolving_workspace" | "workspace_not_visible" | "acquiring_image" | "building_image" | "starting" | "waiting_for_capacity" | "running" | "canceling" | "publishing_artifacts" | "cleaning_up" | "succeeded" | "failed" | "canceled" | "timed_out" | "rejected";
         /** ContainerJobStatus */
         ContainerJobStatus: {
             /**
@@ -12258,10 +12258,15 @@ export interface components {
         };
         /** ResourceLimits */
         ResourceLimits: {
-            /** Cpumillis */
+            /**
+             * Cpumillis
+             * @default 0
+             */
             cpuMillis: number;
             /** Memorymib */
             memoryMiB: number;
+            /** Minimummemorymib */
+            minimumMemoryMiB?: number | null;
             /**
              * Pids
              * @default 256

@@ -35,6 +35,7 @@ async def temporal_owner_has_closed(binding):
 
 
 class GenericOmnigentHostJanitor:
+
     def __init__(
         self,
         *,
@@ -45,6 +46,7 @@ class GenericOmnigentHostJanitor:
         machine_capacity: Any | None = None,
         machine_backend_ref: str | None = None,
         container_inventory: Any | None = None,
+        cpu_pool: Any | None = None,
         owner_has_closed: Any = temporal_owner_has_closed,
     ) -> None:
         self._host_leases = host_leases
@@ -58,6 +60,7 @@ class GenericOmnigentHostJanitor:
         # "Nothing is running" and "I could not look" must never be the same
         # value here.
         self._container_inventory = container_inventory
+        self._cpu_pool = cpu_pool
         self._owner_has_closed = owner_has_closed
 
     async def _reconcile_machine_capacity(self) -> dict[str, Any] | None:
@@ -78,6 +81,8 @@ class GenericOmnigentHostJanitor:
                 exc_info=True,
             )
             live = None
+        if self._cpu_pool is not None:
+            await self._cpu_pool.reconcile()
         return await self._machine_capacity.reconcile(
             backend_ref=self._machine_backend_ref, inventory=live
         )
