@@ -145,6 +145,171 @@ def _section_too_large(value: Mapping[str, Any]) -> bool:
     return len(_canonical_bytes(dict(value))) > EVIDENCE_SECTION_MAX_BYTES
 
 
+def _coerce_section(payload: Mapping[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key)
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _early_provenance(
+    payload: Mapping[str, Any],
+    reviewer: Any,
+    *,
+    timeout_value: int | None = None,
+) -> dict[str, Any] | None:
+    """Best-effort provenance for paths that return before a ReviewRequest.
+
+    Binds the admitted route/model, policy and reviewed evidence digest to an
+    immutable review attempt even when the review cannot proceed. Never raises,
+    never touches credentials, and never returns provider detail. Returns None
+    only when the payload itself cannot supply an evidence identity.
+    """
+    try:
+        raw_inputs = _coerce_section(payload, "inputs")
+        raw_result = _coerce_section(payload, "execution_result")
+        raw_context = _coerce_section(payload, "workflow_context")
+        raw_feedback_value = payload.get("previous_feedback")
+        raw_feedback = (
+            str(raw_feedback_value) if raw_feedback_value is not None else None
+        )
+        try:
+            review_attempt = int(payload.get("review_attempt") or 1)
+        except (TypeError, ValueError):
+            review_attempt = 1
+        try:
+            step_index = int(payload.get("step_index") or 1)
+        except (TypeError, ValueError):
+            step_index = 1
+        model = str(payload.get("reviewer_model", "default"))
+        route = _resolve_route(reviewer, model)
+        evidence_digest = review_evidence_digest(
+            node_id=str(payload.get("node_id") or ""),
+            step_index=step_index,
+            review_attempt=review_attempt,
+            tool_name=str(payload.get("tool_name") or ""),
+            tool_type=str(payload.get("tool_type") or "skill"),
+            inputs=_redact_secrets(raw_inputs),
+            execution_result=_redact_secrets(raw_result),
+            workflow_context=_redact_secrets(raw_context),
+            previous_feedback=raw_feedback,
+        )
+        attempt_identity = review_attempt_identity(
+            provider=route["provider"],
+            model=route["model"],
+            evidence_digest=evidence_digest,
+            review_attempt=review_attempt,
+        )
+        provenance: dict[str, Any] = {
+            "provider": route["provider"],
+            "model": route["model"],
+            "evidenceDigest": evidence_digest,
+            "reviewAttemptIdentity": attempt_identity,
+            "reviewAttempt": review_attempt,
+        }
+        if timeout_value is not None:
+            provenance["policy"] = {"timeoutSeconds": timeout_value}
+        return provenance
+    except Exception:
+        return None
+
+
+# Smallest committed-review record for MoonLadderStudios/MoonMind#3945 (R5).
+#
+# The run.py scheduler persists every gate-result artifact plus step-ledger
+# checks before acknowledging completion; that artifact is the durable owner.
+# This registry is the Activity-side reuse key for duplicate delivery and
+# lost-acknowledgment retries within the worker: a completed verified verdict
+# (FULLY_IMPLEMENTED / ADDITIONAL_WORK_NEEDED) is committed under its immutable
+# review-attempt identity, and a retried request may reuse only the same
+# committed decision. Unavailable results (NO_DETERMINATION) are never
+# committed: a timeout after provider execution is an ambiguous inference
+# outcome, not exactly-once proof, and an unavailable reviewer must never
+# rerun a successfully completed business step. Changed evidence or an
+# explicitly different route yields a different identity and is therefore a
+# new review attempt, never a reuse. The default store is an in-process
+# fallback; callers may inject a shared mapping for cross-delivery reuse and
+# tests. No credentials are stored: records carry verdict, bounded feedback,
+# codes, policy and digests only.
+_COMMITTED_REVIEW_VERDICTS = frozenset({"FULLY_IMPLEMENTED", "ADDITIONAL_WORK_NEEDED"})
+
+_committed_reviews: dict[str, dict[str, Any]] = {}
+# Bound the in-process fallback so a long-lived worker cannot grow it
+# without limit. run.py scopes identities per run (workflow_context carries
+# workflow_id/run_id), so steady-state occupancy is small; eviction only
+# drops reuse hints, never correctness: a miss re-invokes the provider.
+_COMMITTED_REVIEWS_MAX_ENTRIES = 512
+
+
+def lookup_committed_review(attempt_identity: str) -> dict[str, Any] | None:
+    """Return a copy of the committed decision for an attempt identity."""
+    try:
+        record = _committed_reviews.get(str(attempt_identity))
+    except Exception:
+        return None
+    return dict(record) if isinstance(record, dict) else None
+
+
+def record_committed_review(
+    attempt_identity: str,
+    result_payload: Mapping[str, Any],
+    *,
+    store: Any | None = None,
+) -> dict[str, Any] | None:
+    """Commit a completed verified verdict under its attempt identity.
+
+    Returns the committed copy, or None when the payload is not a committable
+    completed review (unavailable verdicts are never committed).
+    """
+    try:
+        if str(result_payload.get("verdict") or "") not in _COMMITTED_REVIEW_VERDICTS:
+            return None
+        provenance = result_payload.get("reviewProvenance")
+        if not isinstance(provenance, Mapping):
+            return None
+        record = {
+            "verdict": str(result_payload.get("verdict")),
+            "confidence": result_payload.get("confidence", 0.0),
+            "feedback": result_payload.get("feedback"),
+            "issues": [
+                dict(issue)
+                for issue in (result_payload.get("issues") or [])
+                if isinstance(issue, Mapping)
+            ][:ISSUES_MAX_COUNT],
+            "reviewProvenance": dict(provenance),
+            "recommendedNextAction": result_payload.get("recommendedNextAction"),
+            "recoverableInCurrentRuntime": bool(
+                result_payload.get("recoverableInCurrentRuntime", False)
+            ),
+        }
+        target = store if isinstance(store, dict) else _committed_reviews
+        target[str(attempt_identity)] = record
+        if not isinstance(store, dict):
+            while len(target) > _COMMITTED_REVIEWS_MAX_ENTRIES:
+                target.pop(next(iter(target)))
+        return dict(record)
+    except Exception:
+        return None
+
+
+def clear_committed_reviews(*, store: Any | None = None) -> None:
+    """Clear committed-review records. Test and recovery hook only."""
+    try:
+        target = store if isinstance(store, dict) else _committed_reviews
+        target.clear()
+    except Exception:
+        pass
+
+
+def _lookup_committed_review(
+    attempt_identity: str, store: Any | None
+) -> dict[str, Any] | None:
+    try:
+        target = store if isinstance(store, dict) else _committed_reviews
+        record = target.get(str(attempt_identity))
+    except Exception:
+        return None
+    return dict(record) if isinstance(record, dict) else None
+
+
 def _validate_decoded_sizes(decoded: Mapping[str, Any]) -> str | None:
     """Return an unavailable code when structured output exceeds ceilings."""
     feedback = decoded.get("feedback")
@@ -176,10 +341,19 @@ def _validate_decoded_sizes(decoded: Mapping[str, Any]) -> str | None:
     return None
 
 
-async def step_review_activity(payload: Mapping[str, Any], *, reviewer: Any = None) -> dict[str, Any]:
+async def step_review_activity(
+    payload: Mapping[str, Any],
+    *,
+    reviewer: Any = None,
+    committed_store: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Execute the configured reviewer and fail closed on unavailable evidence."""
     if reviewer is None:
-        return _unavailable("reviewer_unavailable", "no reviewer implementation is configured")
+        return _unavailable(
+            "reviewer_unavailable",
+            "no reviewer implementation is configured",
+            provenance=_early_provenance(payload, None),
+        )
     provenance: Mapping[str, Any] | None = None
     try:
         raw_timeout = payload.get("review_timeout_seconds", 120)
@@ -193,6 +367,9 @@ async def step_review_activity(payload: Mapping[str, Any], *, reviewer: Any = No
             return _unavailable(
                 "review_timeout_over_budget",
                 "requested review timeout exceeds the deployment ceiling",
+                provenance=_early_provenance(
+                    payload, reviewer, timeout_value=timeout_value
+                ),
             )
         raw_inputs = payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {}
         raw_result = (
@@ -214,6 +391,9 @@ async def step_review_activity(payload: Mapping[str, Any], *, reviewer: Any = No
             return _unavailable(
                 "review_evidence_too_large",
                 "review feedback exceeds the bounded evidence budget",
+                provenance=_early_provenance(
+                    payload, reviewer, timeout_value=timeout_value
+                ),
             )
         for section_name, section in (
             ("inputs", raw_inputs),
@@ -224,6 +404,9 @@ async def step_review_activity(payload: Mapping[str, Any], *, reviewer: Any = No
                 return _unavailable(
                     "review_evidence_too_large",
                     f"review {section_name} exceeds the bounded evidence budget",
+                    provenance=_early_provenance(
+                        payload, reviewer, timeout_value=timeout_value
+                    ),
                 )
         # Secret/data-use controls apply before any provider send.
         inputs = _redact_secrets(raw_inputs)
@@ -269,6 +452,12 @@ async def step_review_activity(payload: Mapping[str, Any], *, reviewer: Any = No
             "reviewAttempt": request.review_attempt,
             "policy": {"timeoutSeconds": timeout_value},
         }
+        # Duplicate delivery / lost-acknowledgment retry: reuse only the same
+        # committed decision for this immutable attempt identity. A different
+        # route or evidence set is a different identity and never reuses.
+        committed = _lookup_committed_review(attempt_identity, committed_store)
+        if committed is not None:
+            return dict(committed)
         prompt = build_review_prompt(request)
         if len(prompt.encode("utf-8")) > PROMPT_BUDGET_BYTES:
             return _unavailable(
@@ -312,6 +501,12 @@ async def step_review_activity(payload: Mapping[str, Any], *, reviewer: Any = No
         gate = parse_step_gate_result(decoded)
         result_payload = gate.to_payload()
         result_payload["reviewProvenance"] = provenance
+        # Commit the completed verified decision before acknowledging
+        # completion so retried deliveries reuse it instead of re-invoking
+        # the provider. Unavailable outcomes are never committed.
+        record_committed_review(
+            attempt_identity, result_payload, store=committed_store
+        )
         return result_payload
     except (TimeoutError, asyncio.TimeoutError):
         return _unavailable(
@@ -334,8 +529,12 @@ async def step_review_activity(payload: Mapping[str, Any], *, reviewer: Any = No
             code = "review_timeout_invalid"
         else:
             code = "review_evidence_missing"
-        return _unavailable(code, message)
+        if provenance is None:
+            provenance = _early_provenance(payload, reviewer)
+        return _unavailable(code, message, provenance=provenance)
     except Exception as exc:
+        if provenance is None:
+            provenance = _early_provenance(payload, reviewer)
         # Provider exception strings can contain request bodies and credentials.
         # Do not persist or log them in a workflow outcome.
         code = getattr(exc, "code", None)
@@ -383,4 +582,7 @@ __all__ = [
     "step_review_activity",
     "review_evidence_digest",
     "review_attempt_identity",
+    "lookup_committed_review",
+    "record_committed_review",
+    "clear_committed_reviews",
 ]

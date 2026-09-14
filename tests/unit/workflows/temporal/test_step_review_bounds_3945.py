@@ -6,17 +6,30 @@ import json
 
 import pytest
 
-from moonmind.workflows.skills.approval_policy import parse_step_gate_result
+from moonmind.workflows.skills.approval_policy import (
+    parse_step_gate_result,
+    review_gate_retry_allowed,
+)
 from moonmind.workflows.temporal.activities.reviewer import (
     REVIEW_MAX_OUTPUT_TOKENS,
     REVIEW_RESPONSE_MAX_BYTES,
     ReviewerUnavailable,
 )
 from moonmind.workflows.temporal.activities.step_review import (
+    clear_committed_reviews,
+    lookup_committed_review,
     review_attempt_identity,
     review_evidence_digest,
     step_review_activity,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_committed_reviews():
+    """Keep committed-review state hermetic across tests."""
+    clear_committed_reviews()
+    yield
+    clear_committed_reviews()
 
 
 class _StubConfig:
@@ -205,3 +218,207 @@ def test_review_attempt_identity_stable_and_evidence_bound():
 def test_reviewer_output_budget_constants():
     assert REVIEW_MAX_OUTPUT_TOKENS == 4096
     assert REVIEW_RESPONSE_MAX_BYTES == 64_000
+
+
+# --- R2: pre-provenance early returns bind the review attempt (MoonMind#3945) ---
+
+
+@pytest.mark.asyncio
+async def test_reviewer_none_unavailable_carries_evidence_binding():
+    result = await step_review_activity(_payload())
+    assert result["verdict"] == "NO_DETERMINATION"
+    assert result["issues"][0]["code"] == "reviewer_unavailable"
+    provenance = result["reviewProvenance"]
+    assert provenance["provider"] == "unknown"
+    assert provenance["evidenceDigest"].startswith("sha256:")
+    assert provenance["reviewAttemptIdentity"].startswith("review:")
+    assert "hermetic" not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+async def test_over_budget_timeout_carries_evidence_binding():
+    result = await step_review_activity(
+        _payload(review_timeout_seconds=3600), reviewer=_StubReviewer("{}")
+    )
+    assert result["verdict"] == "NO_DETERMINATION"
+    assert result["issues"][0]["code"] == "review_timeout_over_budget"
+    provenance = result["reviewProvenance"]
+    assert provenance["evidenceDigest"].startswith("sha256:")
+    assert provenance["reviewAttemptIdentity"].startswith("review:")
+    assert provenance["policy"] == {"timeoutSeconds": 3600}
+
+
+@pytest.mark.asyncio
+async def test_oversized_section_carries_evidence_binding():
+    payload = _payload(inputs={"blob": "x" * 70_000})
+    result = await step_review_activity(payload, reviewer=_StubReviewer("{}"))
+    assert result["verdict"] == "NO_DETERMINATION"
+    assert result["issues"][0]["code"] == "review_evidence_too_large"
+    assert result["reviewProvenance"]["evidenceDigest"].startswith("sha256:")
+
+
+@pytest.mark.asyncio
+async def test_authoring_error_carries_evidence_binding():
+    result = await step_review_activity(
+        _payload(review_timeout_seconds=-1), reviewer=_StubReviewer("{}")
+    )
+    assert result["verdict"] == "NO_DETERMINATION"
+    assert result["issues"][0]["code"] == "review_timeout_invalid"
+    assert result["reviewProvenance"]["evidenceDigest"].startswith("sha256:")
+
+
+def test_provenance_survives_workflow_parse_and_persist_boundary():
+    """The run.py scheduler persists gate_result.to_payload(); provenance must survive."""
+    activity_payload = {
+        "verdict": "FULLY_IMPLEMENTED",
+        "confidence": 0.9,
+        "feedback": "Reviewed supplied execution evidence.",
+        "reviewProvenance": {
+            "provider": "openai",
+            "model": "stub-model",
+            "evidenceDigest": "sha256:abc",
+            "reviewAttemptIdentity": "review:abc123",
+            "reviewAttempt": 1,
+            "policy": {"timeoutSeconds": 120},
+        },
+    }
+    gate = parse_step_gate_result(activity_payload)
+    assert gate.verdict == "FULLY_IMPLEMENTED"
+    persisted = gate.to_payload()
+    assert persisted["reviewProvenance"]["reviewAttemptIdentity"] == "review:abc123"
+    assert persisted["reviewProvenance"]["evidenceDigest"] == "sha256:abc"
+
+
+def test_recorded_history_without_provenance_still_parses():
+    """Replay compatibility: payloads recorded before provenance parse unchanged."""
+    gate = parse_step_gate_result({"verdict": "FULLY_IMPLEMENTED", "confidence": 0.8})
+    assert gate.verdict == "FULLY_IMPLEMENTED"
+    assert gate.review_provenance is None
+    assert "reviewProvenance" not in gate.to_payload()
+
+
+# --- R5: keyed committed-decision reuse without repeating work (MoonMind#3945) ---
+
+
+class _CountingReviewer(_StubReviewer):
+    def __init__(self, text: str) -> None:
+        super().__init__(text)
+        self.calls = 0
+
+    async def review(self, *, prompt: str, model: str, timeout: int) -> str:
+        self.calls += 1
+        return await super().review(prompt=prompt, model=model, timeout=timeout)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_delivery_reuses_same_committed_decision():
+    text = json.dumps({"verdict": "FULLY_IMPLEMENTED", "confidence": 0.9})
+    store: dict = {}
+    reviewer = _CountingReviewer(text)
+    first = await step_review_activity(
+        _payload(), reviewer=reviewer, committed_store=store
+    )
+    assert first["verdict"] == "FULLY_IMPLEMENTED"
+    assert reviewer.calls == 1
+    identity = first["reviewProvenance"]["reviewAttemptIdentity"]
+
+    second = await step_review_activity(
+        _payload(), reviewer=reviewer, committed_store=store
+    )
+    assert reviewer.calls == 1
+    assert second["verdict"] == "FULLY_IMPLEMENTED"
+    assert second["reviewProvenance"]["reviewAttemptIdentity"] == identity
+    # The committed record carries no credentials.
+    assert "hermetic" not in json.dumps(lookup_committed_review(identity))
+
+
+@pytest.mark.asyncio
+async def test_changed_evidence_is_a_new_attempt_not_a_reuse():
+    text = json.dumps({"verdict": "FULLY_IMPLEMENTED", "confidence": 0.9})
+    store: dict = {}
+    reviewer = _CountingReviewer(text)
+    first = await step_review_activity(
+        _payload(), reviewer=reviewer, committed_store=store
+    )
+    changed = await step_review_activity(
+        _payload(inputs={"goal": "different work"}),
+        reviewer=reviewer,
+        committed_store=store,
+    )
+    assert reviewer.calls == 2
+    assert (
+        changed["reviewProvenance"]["reviewAttemptIdentity"]
+        != first["reviewProvenance"]["reviewAttemptIdentity"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_unavailable_reviews_are_never_committed():
+    class _Failing(_StubReviewer):
+        async def review(self, *, prompt: str, model: str, timeout: int) -> str:
+            raise ReviewerUnavailable("no authority", code="reviewer_disabled")
+
+    store: dict = {}
+    result = await step_review_activity(
+        _payload(), reviewer=_Failing("unused"), committed_store=store
+    )
+    assert result["verdict"] == "NO_DETERMINATION"
+    assert result["recommendedNextAction"] == "needs_human"
+    assert result["recoverableInCurrentRuntime"] is False
+    assert store == {}
+    assert (
+        lookup_committed_review(
+            result["reviewProvenance"]["reviewAttemptIdentity"]
+        )
+        is None
+    )
+
+
+def test_workflow_boundary_never_reruns_business_step_for_unavailable_reviewer():
+    """Scheduler harness: an unavailable review must not authorize another attempt.
+
+    run.py branches on review_gate_retry_allowed(); NO_DETERMINATION with
+    needs_human + recoverable False must refuse retry so the completed
+    business step is preserved and the run stops instead of re-executing.
+    """
+    unavailable = parse_step_gate_result(
+        {
+            "verdict": "NO_DETERMINATION",
+            "confidence": 0.0,
+            "recommendedNextAction": "needs_human",
+            "recoverableInCurrentRuntime": False,
+        }
+    ).to_review_verdict()
+    assert (
+        review_gate_retry_allowed(
+            verdict=unavailable,
+            review_retry_count=0,
+            max_review_attempts=3,
+            consecutive_no_progress_attempts=0,
+            max_consecutive_no_progress_attempts=3,
+        )
+        is False
+    )
+
+
+def test_workflow_boundary_preserves_bounded_retry_for_actionable_verdicts():
+    """The no-rerun rule for unavailable reviews must not remove real retries."""
+    actionable = parse_step_gate_result(
+        {
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "confidence": 0.7,
+            "feedback": "Missing test coverage.",
+            "recommendedNextAction": "reattempt_current_step",
+            "recoverableInCurrentRuntime": True,
+        }
+    ).to_review_verdict()
+    assert (
+        review_gate_retry_allowed(
+            verdict=actionable,
+            review_retry_count=0,
+            max_review_attempts=3,
+            consecutive_no_progress_attempts=0,
+            max_consecutive_no_progress_attempts=3,
+        )
+        is True
+    )
