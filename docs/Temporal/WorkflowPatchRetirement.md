@@ -90,6 +90,24 @@ query health). Its verdicts:
 Before retirement, old workers and admissions must stop creating new
 dependencies on the pre-patch path (`retirement_gate` in the audit module:
 `route_new_only`, or `block_unknown` while evidence is incomplete).
+Enforcement is wired into the production admission choke point:
+`TemporalClientAdapter.start_workflow` accepts optional
+`retirement_evidence` / `retirement_patch_ids` and raises
+`RetirementAdmissionBlocked` while any retiring patch's evidence is
+incomplete. The guard is opt-in per call site and defaults to unchanged
+behavior; `service.py` still starts without evidence until the operator
+evidence pipeline supplies it, so the current posture is mechanism-wired
+with manual review. New work always takes the new code path under worker
+versioning, so healthy evidence with known consumers still allows
+admission while old workers serve only pinned old executions.
+
+The durable per-patch catalog lives beside the audit module
+(`PATCH_CATALOG` in `moonmind/workflows/temporal/patch_retirement.py`):
+patch id, workflow types, changed command boundary, old/new behavior,
+introduction revision, representative fixture, dead-branch vs
+retained-history classification, and the explicit deprecate/remove
+conditions. Every catalog entry must carry both conditions; the batch
+records below mirror the catalog.
 
 ## 5. Retirement batches
 
@@ -97,6 +115,24 @@ Each removal is a bounded reviewed change with representative replay tests
 before and after. Required history replay must pass against the changed
 production code, not merely after deleting the old test cases. Surviving
 behavior keeps a minimized production-regression fixture.
+
+### Batch 0 (prior art, recorded retrospectively)
+
+- **Patch:** `run-workflow-nested-propose-tasks`
+  (`RUN_WORKFLOW_NESTED_PROPOSE_TASKS_PATCH`, `MoonMindRunWorkflow.run`).
+- **Kind:** deprecated marker at the former follow-up proposal stage
+  boundary; the proposal feature itself was removed by #3923.
+- **Change:** `workflow.patched(...)` to `workflow.deprecate_patch(...)` in
+  `5c5058c83` at the exact former stage boundary (introduced in
+  `2e5ae2945`).
+- **Evidence:** static inventory confirms the single deprecated call site;
+  no dedicated replay test was recorded at removal time. Replay coverage
+  is inherited from the `deprecate_patch` bridge semantics exercised by
+  the batch-1 fixture.
+- **Removal condition:** delete the `deprecate_patch` call only when the
+  audit reports `safe_to_remove` for this id: no retained history carries
+  the marker within retention and retained closed executions are no longer
+  reset/replay eligible.
 
 ### Batch 1 (this change)
 
@@ -119,6 +155,69 @@ behavior keeps a minimized production-regression fixture.
   audit reports `safe_to_remove` for this id: no retained history carries
   the marker within retention and retained closed executions are no longer
   reset/replay eligible.
+
+### Next batch (cataloged candidates, not yet retired)
+
+These are the next retirement candidates with concrete, checkable
+conditions. Neither call site is changed until its deprecate condition
+holds on healthy evidence plus a replay test pairing pre/post-change
+histories against the changed call site.
+
+- **Patch:** `fetch-profile-snapshots-v1`
+  (`RUN_FETCH_PROFILE_SNAPSHOTS_PATCH`,
+  `MoonMindRunWorkflow._run_execution_stage`).
+  - **Command boundary:** activity `provider_profile.list` per managed
+    runtime (new commands when patched).
+  - **Old/new behavior:** skip the snapshot fetch vs fetch snapshots so
+    plan node profile refs validate against known profiles.
+  - **Introduction:** `bdb4ab86` (2026-04-04).
+  - **Classification:** retained-history compatibility required.
+  - **Deprecate condition:** audit reports `safe_to_deprecate` with an
+    admission cutoff newer than every admitted execution that could
+    predate 2026-04-04, no pre-patch workers, and a pre/post-history
+    replay test passes against the `deprecate_patch` call site.
+  - **Remove condition:** audit reports `safe_to_remove`: no retained
+    history carries the marker within retention and retained closed
+    executions are no longer reset/replay eligible.
+- **Patch:** `run-incident-reconstruction-v1`
+  (`RUN_INCIDENT_RECONSTRUCTION_PATCH`, three call sites:
+  `_record_step_execution_manifest`, `_capture_incident_failure_evidence`,
+  `_emit_incident_reconstruction_manifest`).
+  - **Command boundary:** payload enrichment only (traceRef setdefault,
+    incident manifest/artifact payloads); confirm no command-shape change
+    at any of the three call sites before deprecation.
+  - **Old/new behavior:** omit incident trace refs and reconstruction
+    manifests vs stamp stable trace refs and emit manifests.
+  - **Introduction:** `a1bb3c71` (2026-06-24).
+  - **Classification:** retained-history compatibility required.
+  - **Deprecate condition:** audit reports `safe_to_deprecate` with an
+    admission cutoff newer than every admitted execution that could
+    predate 2026-06-24, no pre-patch workers, per-call-site boundary
+    review confirming payload-only change, and pre/post-history replay
+    tests pass against the `deprecate_patch` call sites.
+  - **Remove condition:** audit reports `safe_to_remove`: no retained
+    history carries the marker within retention and retained closed
+    executions are no longer reset/replay eligible.
+
+### Production-history evidence procedure (read-only)
+
+SDK-generated fixtures do not replace retained production histories. To
+demonstrate a batch against one production-retained history pair without
+mutating anything, the operator runs these read-only commands (never
+delete histories or shrink retention to make the audit pass):
+
+1. Find candidate executions carrying the marker:
+   `temporal workflow list --namespace default --query "TemporalWorkflowType = 'MoonMind.Run'"`.
+2. Fetch one pre-change history (marker recorded) and one post-change
+   history:
+   `temporal workflow show --namespace default --workflow-id <id> --output json`.
+3. Confirm the marker event (`PatchMarkerRecorded` with the patch id) is
+   present in the pre-change history and absent in the post-change
+   history.
+4. Record the reset/replay-policy disposition for retained closed
+   executions carrying the marker, then replay both histories against the
+   changed call site and preserve the pair as a minimized
+   production-regression fixture.
 
 ## 6. Non-goals
 

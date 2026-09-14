@@ -49,6 +49,10 @@ VERDICT_SAFE_TO_REMOVE = "safe_to_remove"
 VERDICT_REQUIRES_COMPATIBILITY = "requires_compatibility"
 VERDICT_UNKNOWN = "unknown"
 
+CLASSIFICATION_DEAD_BRANCH = "dead-branch"
+CLASSIFICATION_RETAINED_HISTORY = "retained-history"
+CLASSIFICATION_UNKNOWN = "unknown"
+
 USAGE_BRANCH = "branch"
 USAGE_BARE_MARKER = "bare_marker"
 USAGE_DEPRECATED = "deprecated"
@@ -89,6 +93,43 @@ class AuditEvidence:
     visibility_failures: tuple[str, ...] = ()
     history_failures: tuple[str, ...] = ()
     stale_visibility: bool = False
+
+
+@dataclass(frozen=True)
+class PatchCatalogEntry:
+    """Durable per-patch retirement record (MoonLadderStudios/MoonMind#3944).
+
+    The static inventory proves a call site exists; the catalog records the
+    human-verified retirement context the inventory cannot derive: the
+    changed command boundary, old/new behavior, the representative fixture,
+    whether the old branch is already dead or retained history still
+    requires compatibility, and the explicit checkable conditions for each
+    retirement stage. Every entry must carry both conditions; a missing
+    condition is an incomplete record, never an implicit approval.
+    """
+
+    patch_id: str
+    workflow_types: tuple[str, ...]
+    command_boundary: str
+    old_behavior: str
+    new_behavior: str
+    introduction_rev: str | None
+    fixture: str
+    classification: str
+    deprecate_condition: str
+    remove_condition: str
+
+
+@dataclass(frozen=True)
+class AdmissionCheck:
+    """Outcome of the pre-admission retirement gate for new executions."""
+
+    allowed: bool
+    reasons: tuple[str, ...]
+
+
+class RetirementAdmissionBlocked(RuntimeError):
+    """New executions are held: retirement evidence is incomplete."""
 
 
 @dataclass(frozen=True)
@@ -482,8 +523,140 @@ def retirement_gate(record: PatchRecord, evidence: AuditEvidence) -> tuple[str, 
     return ("open", "no consumers observed across healthy evidence sources")
 
 
-def report_to_json(report: AuditReport, evidence: AuditEvidence) -> dict:
-    return {
+PATCH_CATALOG: tuple[PatchCatalogEntry, ...] = (
+    PatchCatalogEntry(
+        patch_id="run-conditional-registry-read-v1",
+        workflow_types=("MoonMindRunWorkflow._run_execution_stage",),
+        command_boundary="none: bare marker only, no activity/child/timer/signal shape change",
+        old_behavior="recorded the marker and conditionally read the runtime registry",
+        new_behavior="no marker recorded; the registry read is unconditional",
+        introduction_rev="e80ef569ccbef83b085b856b96d390ea752d2233",
+        fixture="tests/unit/workflows/temporal/test_patch_retirement.py::test_retired_marker_old_and_new_histories_replay",
+        classification=CLASSIFICATION_RETAINED_HISTORY,
+        deprecate_condition="complete: audit reported safe_to_deprecate; call site now uses deprecate_patch",
+        remove_condition="audit reports safe_to_remove for this id: no retained history carries the marker within retention and retained closed executions are no longer reset/replay eligible",
+    ),
+    PatchCatalogEntry(
+        patch_id="run-workflow-nested-propose-tasks",
+        workflow_types=("MoonMindRunWorkflow.run",),
+        command_boundary="finalizing stage: follow-up proposal generation commands removed",
+        old_behavior="recorded the marker at the former follow-up proposal stage boundary",
+        new_behavior="automatic follow-up proposals removed (#3923); marker kept via deprecate_patch at the former stage boundary",
+        introduction_rev="2e5ae29459b987b4ea0a4972fef1dd5680a6b734",
+        fixture="retrospective: deprecated in 5c5058c83 without a dedicated replay test; replay coverage inherited from the deprecate_patch bridge semantics exercised by the batch-1 fixture",
+        classification=CLASSIFICATION_RETAINED_HISTORY,
+        deprecate_condition="complete: deprecated in 5c5058c83 at the exact former stage boundary",
+        remove_condition="audit reports safe_to_remove for this id: no retained history carries the marker within retention and retained closed executions are no longer reset/replay eligible",
+    ),
+    PatchCatalogEntry(
+        patch_id="fetch-profile-snapshots-v1",
+        workflow_types=("MoonMindRunWorkflow._run_execution_stage",),
+        command_boundary="activity: provider_profile.list per managed runtime (new commands when patched)",
+        old_behavior="skipped the provider profile snapshot fetch before step execution",
+        new_behavior="fetched provider profile snapshots so plan node profile refs validate against known profiles",
+        introduction_rev="bdb4ab86d78a280db10f0b41356925a604cd6be4",
+        fixture="none yet: deprecation requires a replay test pairing a pre-change history (marker recorded, fetch executed) with a post-change history, replayed against the changed call site",
+        classification=CLASSIFICATION_RETAINED_HISTORY,
+        deprecate_condition="audit reports safe_to_deprecate: healthy evidence, admission cutoff newer than every admitted execution that could predate 2026-04-04, no pre-patch workers, and a replay test pairing pre/post-change histories passes against the deprecate_patch call site",
+        remove_condition="audit reports safe_to_remove for this id: no retained history carries the marker within retention and retained closed executions are no longer reset/replay eligible",
+    ),
+    PatchCatalogEntry(
+        patch_id="run-incident-reconstruction-v1",
+        workflow_types=(
+            "MoonMindRunWorkflow._record_step_execution_manifest",
+            "MoonMindRunWorkflow._capture_incident_failure_evidence",
+            "MoonMindRunWorkflow._emit_incident_reconstruction_manifest",
+        ),
+        command_boundary="payload enrichment only (traceRef setdefault, incident manifest/artifact payloads); confirm no command-shape change at any of the three call sites before deprecation",
+        old_behavior="omitted incident trace refs and reconstruction manifests from step payloads",
+        new_behavior="stamped stable trace refs and emitted incident reconstruction manifests",
+        introduction_rev="a1bb3c715b8f61a5a57fa9bea072a518056ebbd5",
+        fixture="none yet: deprecation requires a replay test pairing pre/post-change histories for each of the three call sites, replayed against the changed call sites",
+        classification=CLASSIFICATION_RETAINED_HISTORY,
+        deprecate_condition="audit reports safe_to_deprecate: healthy evidence, admission cutoff newer than every admitted execution that could predate 2026-06-24, no pre-patch workers, per-call-site boundary review confirming payload-only change, and replay tests pairing pre/post-change histories pass against the deprecate_patch call sites",
+        remove_condition="audit reports safe_to_remove for this id: no retained history carries the marker within retention and retained closed executions are no longer reset/replay eligible",
+    ),
+)
+
+
+def catalog_entry(patch_id: str) -> PatchCatalogEntry | None:
+    """Return the durable catalog record for one patch id, if cataloged."""
+    for entry in PATCH_CATALOG:
+        if entry.patch_id == patch_id:
+            return entry
+    return None
+
+
+def catalog_coverage(records: Iterable[PatchRecord]) -> dict[str, int]:
+    """Count inventoried patch ids with and without a catalog record."""
+    cataloged = 0
+    uncatalogued = 0
+    seen: set[str] = set()
+    for record in records:
+        if record.patch_id in seen:
+            continue
+        seen.add(record.patch_id)
+        if catalog_entry(record.patch_id) is not None:
+            cataloged += 1
+        else:
+            uncatalogued += 1
+    return {"cataloged": cataloged, "uncatalogued": uncatalogued}
+
+
+def check_retirement_admission(
+    patch_ids: Iterable[str],
+    evidence: AuditEvidence,
+    *,
+    stage: str = STAGE_DEPRECATE,
+) -> AdmissionCheck:
+    """Decide whether new executions may be admitted while patches retire.
+
+    New work always takes the new code path under worker versioning, so
+    ``requires_compatibility`` (healthy evidence with known consumers) still
+    allows admission: old workers serve only pinned old executions. Admission
+    is held only when evidence itself is incomplete (``unknown``): admitting
+    new work without knowing the consumer set risks creating dependencies
+    the retirement cannot account for.
+    """
+    blocked: list[str] = []
+    compat: list[str] = []
+    for patch_id in patch_ids:
+        record = PatchRecord(
+            patch_id=patch_id,
+            constant_name=None,
+            file="<admission>",
+            line=0,
+            workflow_type="<admission>",
+            usage_kind=USAGE_BRANCH,
+        )
+        finding = audit_patch(record, evidence, stage=stage)
+        if finding.verdict == VERDICT_UNKNOWN:
+            blocked.append(patch_id)
+        elif finding.verdict == VERDICT_REQUIRES_COMPATIBILITY:
+            compat.append(patch_id)
+    if blocked:
+        return AdmissionCheck(
+            allowed=False,
+            reasons=tuple(
+                f"hold admission: evidence incomplete for {patch_id}"
+                for patch_id in blocked
+            ),
+        )
+    if compat:
+        return AdmissionCheck(
+            allowed=True,
+            reasons=tuple(
+                f"new work takes the new path; compatibility retained for {patch_id}"
+                for patch_id in compat
+            ),
+        )
+    return AdmissionCheck(
+        allowed=True,
+        reasons=("no consumers observed across healthy evidence sources",),
+    )
+
+
+def report_to_json(report: AuditReport, evidence: AuditEvidence) -> dict:    return {
         "stage": report.findings[0].stage if report.findings else STAGE_DEPRECATE,
         "summary": dict(report.summary_counts()),
         "truncated": report.truncated,

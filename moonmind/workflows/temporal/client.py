@@ -35,6 +35,12 @@ from moonmind.workflows.temporal.hard_switch_cutover import (
     resolve_user_workflow_start_contract,
 )
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
+from moonmind.workflows.temporal.patch_retirement import (
+    PATCH_CATALOG,
+    AuditEvidence,
+    RetirementAdmissionBlocked,
+    check_retirement_admission,
+)
 from moonmind.observability import temporal_tracing_interceptors
 
 if TYPE_CHECKING:
@@ -385,6 +391,8 @@ class TemporalClientAdapter:
         start_delay: timedelta | None = None,
         task_queue: str | None = None,
         id_reuse_policy: WorkflowIDReusePolicy | None = None,
+        retirement_evidence: AuditEvidence | None = None,
+        retirement_patch_ids: Sequence[str] | None = None,
     ) -> WorkflowStartResult:
         """Start a new Temporal workflow.
 
@@ -393,7 +401,27 @@ class TemporalClientAdapter:
                 to a worker. The workflow is created immediately (visible in
                 Visibility) but task dispatch is deferred by the specified
                 duration.
+            retirement_evidence: Optional operator-supplied patch-retirement
+                evidence (MoonLadderStudios/MoonMind#3944). When provided,
+                new executions are held with ``RetirementAdmissionBlocked``
+                while any retiring patch's evidence is incomplete
+                (``unknown``); known consumers still allow admission because
+                worker versioning routes new work to the new code path.
+                ``None`` (the default) preserves current behavior: callers
+                that have not supplied evidence start normally.
+            retirement_patch_ids: Patch ids under retirement evaluated by
+                the admission check. Defaults to the cataloged retiring
+                patch ids when ``retirement_evidence`` is provided.
         """
+        if retirement_evidence is not None:
+            patch_ids = (
+                tuple(retirement_patch_ids)
+                if retirement_patch_ids is not None
+                else tuple(entry.patch_id for entry in PATCH_CATALOG)
+            )
+            check = check_retirement_admission(patch_ids, retirement_evidence)
+            if not check.allowed:
+                raise RetirementAdmissionBlocked("; ".join(check.reasons))
         client = await self.get_client()
 
         task_queue = self._get_task_queue(workflow_type, task_queue=task_queue)
