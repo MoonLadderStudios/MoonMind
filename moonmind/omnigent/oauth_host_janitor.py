@@ -140,7 +140,11 @@ class OmnigentOAuthHostJanitor:
         teardown evidence (the stop above already succeeded), quoting the
         acquired fence. A terminal workflow, a missing Temporal record, or a
         database tombstone is never teardown evidence and never reaches the
-        ledger through this path. Omnigent host leases are created exclusively
+        ledger through this path. When no fenced cleanup obligation exists
+        for this lease yet, this returns False without signaling: the host
+        stays stopped but the slot stays spent until the manager requests
+        cleanup and the drain path completes it with the acquired fence.
+        Omnigent host leases are created exclusively
         for ``execution_omnigent`` capacity. The ProviderProfileManager
         deliberately uses the deterministic owner token as its lease ID, so the
         durable ``provider_lease_id`` is also the release authority needed
@@ -188,6 +192,14 @@ class OmnigentOAuthHostJanitor:
                 break
         report = getattr(self._lease_client, "report_cleanup_verified", None)
         if callable(report):
+            if not resolved_fence:
+                # No fenced cleanup obligation exists yet for this lease.
+                # Reporting verified teardown without the held fence would be
+                # ignored by the manager while this helper returned True,
+                # falsely recording the provider slot as released. Leave the
+                # slot spent: the manager's verification loop will request
+                # cleanup, then the drain path completes it with the fence.
+                return False
             await report(
                 CredentialLease(
                     profile_id=lease.provider_profile_id,
@@ -319,14 +331,28 @@ class OmnigentOAuthHostJanitor:
                     lease_released=provider_released,
                 )
                 await self._complete_runtime_binding_cleanup(runtime_binding_state)
-                actions.append(
-                    {
-                        "claimId": claim_id,
-                        "providerLeaseId": provider_lease_id,
-                        "action": "cleanup_claim_completed_verified",
-                        "providerLeaseReleased": provider_released,
-                    }
-                )
+                if provider_released:
+                    actions.append(
+                        {
+                            "claimId": claim_id,
+                            "providerLeaseId": provider_lease_id,
+                            "action": "cleanup_claim_completed_verified",
+                            "providerLeaseReleased": provider_released,
+                        }
+                    )
+                else:
+                    # Host is stopped but the slot stays spent: no fenced
+                    # verified-teardown outcome was confirmed (e.g. the claim
+                    # carried no usable fence). A later drain with the fenced
+                    # claim completes it; never record an unconfirmed release.
+                    actions.append(
+                        {
+                            "claimId": claim_id,
+                            "providerLeaseId": provider_lease_id,
+                            "action": "cleanup_claim_failed",
+                            "errorCode": "cleanup_not_verified",
+                        }
+                    )
             except Exception as exc:
                 try:
                     await self._record_terminal_cleanup(

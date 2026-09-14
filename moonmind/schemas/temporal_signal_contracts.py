@@ -111,15 +111,6 @@ class ChildStateChangedSignal(BaseModel):
     status: str = Field(..., alias="status")
     result_artifact_ref: Optional[str] = Field(None, alias="resultArtifactRef")
 
-class ProfileAssignedSignal(BaseModel):
-    """Payload for profile_assigned signals.
-
-    Records profile selection.
-    """
-    model_config = ConfigDict(populate_by_name=True)
-
-    profile_id: str = Field(..., alias="profileId")
-
 class CompletionSignal(BaseModel):
     """Payload for completion_signal signals.
 

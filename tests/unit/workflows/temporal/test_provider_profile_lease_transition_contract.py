@@ -2353,3 +2353,114 @@ async def test_capacity_one_oauth_and_credentialless_n_way_terminal_owners_reque
         ("less-run-2:13", "run-less-2", "evidence-less-2"),
         ("oauth-run-1:11", "run-oauth-1", "evidence-oauth-1"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#1089: the manager owns direct-lease completion
+# ---------------------------------------------------------------------------
+
+
+async def _request_direct_cleanup(wf) -> None:
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
+            },
+        }
+    )
+    with _patched(ledger):
+        await wf._reclaim_terminal_leases_durably(
+            {"agent-run-1": {"running": False, "status": "TERMINATED"}}
+        )
+    assert "agent-run-1" in wf._cleanup_requested_leases
+
+
+async def _direct_terminal(_workflow_ids, run_hints=None):
+    assert run_hints == {"agent-run-1": "run-admitted-1"}
+    return {"agent-run-1": {"running": False, "status": "TERMINATED"}}
+
+
+async def _direct_live(_workflow_ids, run_hints=None):
+    return {"agent-run-1": {"running": True, "status": "RUNNING"}}
+
+
+async def _terminal_missing_run(_workflow_ids, run_hints=None):
+    return {"agent-run-1": {"running": False, "status": "TERMINATED"}}
+
+
+@pytest.mark.asyncio
+async def test_direct_cleanup_completes_exact_run_terminal_obligation() -> None:
+    """A terminal exact-run direct lease is reclaimed by its manager owner."""
+
+    wf = _admitted_manager()
+    await _request_direct_cleanup(wf)
+
+    ledger = _Ledger(
+        {
+            "release_verified": {
+                "released": True,
+                "outcome": LeaseTransitionOutcome.RELEASED.value,
+            },
+        }
+    )
+    with _patched(ledger), patch.object(
+        wf, "_verify_workflow_statuses", side_effect=_direct_terminal
+    ):
+        await wf._complete_direct_cleanup_obligations()
+
+    assert ledger.actions() == ["release_verified"]
+    row = ledger.rows_for("release_verified")[0]
+    assert row["lease_id"] == "agent-run-1"
+    assert row["fencing_generation"] == 6
+    assert wf._profiles[PROFILE_ID].current_leases == []
+    assert wf.get_state()["cleanup_obligations"] == []
+
+
+@pytest.mark.asyncio
+async def test_direct_cleanup_leaves_live_and_unowned_obligations_spent() -> None:
+    """Live owners, missing runs, and host-attached claims stay spent."""
+
+    # Live owner stays spent and emits no verified release.
+    wf = _admitted_manager()
+    await _request_direct_cleanup(wf)
+
+    ledger = _Ledger()
+    with _patched(ledger), patch.object(
+        wf, "_verify_workflow_statuses", side_effect=_direct_live
+    ):
+        await wf._complete_direct_cleanup_obligations()
+    assert ledger.actions() == []
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+    # A lease with no admitted run ID is reconciliation-needed, never proof.
+    runless = _held_manager()
+    profile = runless._profiles[PROFILE_ID]
+    metadata = dict(profile.lease_metadata.get("agent-run-1") or {})
+    metadata.update({"workflowId": "agent-run-1", "ownerIsWorkflow": True})
+    metadata.pop("runId", None)
+    profile.lease_metadata["agent-run-1"] = metadata
+    await _request_direct_cleanup(runless)
+    ledger = _Ledger()
+    with _patched(ledger), patch.object(
+        runless,
+        "_verify_workflow_statuses",
+        side_effect=_terminal_missing_run,
+    ):
+        await runless._complete_direct_cleanup_obligations()
+    assert ledger.actions() == []
+    assert runless._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+    # A host-attached (non-direct) obligation stays for its janitor/operator.
+    attached = _admitted_manager()
+    attached._profiles[PROFILE_ID].lease_metadata["agent-run-1"]["purpose"] = (
+        "execution_omnigent"
+    )
+    await _request_direct_cleanup(attached)
+    ledger = _Ledger()
+    with _patched(ledger), patch.object(
+        attached, "_verify_workflow_statuses", side_effect=_direct_terminal
+    ):
+        await attached._complete_direct_cleanup_obligations()
+    assert ledger.actions() == []
+    assert attached._profiles[PROFILE_ID].current_leases == ["agent-run-1"]

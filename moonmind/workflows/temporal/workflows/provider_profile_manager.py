@@ -2729,6 +2729,12 @@ class MoonMindProviderProfileManagerWorkflow:
                 # claim per owed slot. Escalation below remains the overdue
                 # path, not the only path.
                 await self._deliver_cleanup_requests()
+                # Direct in-workflow leases whose exact admitted run is
+                # terminal have a durable automatic owner: the manager
+                # itself completes them with exact-run teardown evidence.
+                # Host-attached and run-unknown obligations stay spent for
+                # their janitor, realizer, or operator.
+                await self._complete_direct_cleanup_obligations()
             else:
                 # Evict leases that exceed the max duration (safety net for
                 # cancelled/terminated workflows that failed to release).
@@ -4322,12 +4328,19 @@ class MoonMindProviderProfileManagerWorkflow:
             fence = 0
             metadata: dict[str, Any] = {}
             consumer = "unknown"
+            purpose = CredentialLeasePurpose.EXECUTION_DIRECT.value
             for pid, profile in self._profiles.items():
                 if lease_id in profile.current_leases:
                     profile_id = pid
                     fence = profile.lease_fencing_generation(lease_id)
                     metadata = profile.lease_metadata.get(lease_id) or {}
                     consumer = self._lease_consumer_class(profile, lease_id)
+                    try:
+                        purpose = profile.lease_purpose(lease_id)
+                    except Exception:
+                        purpose = (
+                            CredentialLeasePurpose.EXECUTION_DIRECT.value
+                        )
                     break
             if not profile_id:
                 profile_id = self._lease_profile_index.get(lease_id, "")
@@ -4344,6 +4357,7 @@ class MoonMindProviderProfileManagerWorkflow:
                         lease_id, "cleanup_requested"
                     ),
                     "consumer": consumer,
+                    "purpose": purpose,
                     "workflowId": workflow_id,
                     "runId": run_id,
                     "evidenceIdentity": evidence_identity,
@@ -4429,6 +4443,107 @@ class MoonMindProviderProfileManagerWorkflow:
             self._cleanup_delivery_attempts[lease_id] = int(
                 self._cleanup_delivery_attempts.get(lease_id, 0)
             ) + 1
+
+    async def _complete_direct_cleanup_obligations(self) -> None:
+        """Complete owed direct leases whose exact admitted run terminated.
+
+        MoonLadderStudios/MoonMind#1089: an ``execution_direct`` AgentRun that
+        terminates without sending its own ``release_slot`` leaves a cleanup
+        obligation no host-attached janitor can own (there is no OAuth host
+        lease to stop) and the dead workflow cannot poll its own claim. The
+        manager is the durable automatic owner for this narrow class: a
+        ``workflow_owned`` direct lease authorizes in-workflow credential use
+        only, so Temporal cancellation cleans up its activities with workflow
+        closure. An exact-run terminal observation (logical workflow ID bound
+        to the admitted ``runId``) is therefore positive teardown evidence
+        for this class \u2014 unlike host-attached consumers whose external
+        containers survive workflow closure. Leases without an admitted run
+        ID, with another purpose or consumer class, or with a live owner stay
+        spent for their existing owner, realizer, janitor, or operator.
+        """
+
+        if not self._lease_transition_contract:
+            return
+        if not self._cleanup_requested_leases:
+            return
+        claims = [
+            claim
+            for claim in self._pending_cleanup_claims()
+            if str(claim.get("purpose") or "")
+            == CredentialLeasePurpose.EXECUTION_DIRECT.value
+            and str(claim.get("consumer") or "") == "workflow_owned"
+            and str(claim.get("workflowId") or "").strip()
+            and str(claim.get("runId") or "").strip()
+            and int(claim.get("fencing_generation") or 0) > 0
+        ]
+        if not claims:
+            return
+        workflow_ids = list(
+            dict.fromkeys(str(claim["workflowId"]) for claim in claims)
+        )
+        run_hints = {
+            str(claim["workflowId"]): str(claim["runId"]) for claim in claims
+        }
+        statuses = await self._verify_workflow_statuses(
+            workflow_ids, run_hints=run_hints
+        )
+        if not statuses:
+            return
+        for claim in claims:
+            lease_id = str(claim["lease_id"])
+            workflow_id = str(claim["workflowId"])
+            status_info = statuses.get(workflow_id, {})
+            if status_info.get("running", True):
+                continue
+            profile_id = str(claim.get("profile_id") or "")
+            profile = self._profiles.get(profile_id)
+            if profile is None or lease_id not in profile.current_leases:
+                continue
+            # Re-check the admitted identity before completing: a replacement
+            # holder under the same logical workflow ID must never be freed
+            # from a stale claim.
+            metadata = profile.lease_metadata.get(lease_id) or {}
+            if str(metadata.get("runId") or "").strip() != str(
+                claim.get("runId") or ""
+            ).strip():
+                continue
+            evidence = {
+                "consumer_stopped": True,
+                "verified_by": "provider-profile-manager-direct-reclamation",
+                "run_id": str(claim.get("runId") or ""),
+                "evidence_identity": str(claim.get("evidenceIdentity") or ""),
+                "owner_status": str(status_info.get("status") or "TERMINATED"),
+            }
+            outcome = await self._release_verified_cleanup(
+                lease_id,
+                profile_id=profile_id,
+                fencing_generation=int(claim.get("fencing_generation") or 0),
+                teardown_evidence=evidence,
+                _reason="cleanup_verified_direct_owner_terminal",
+            )
+            if outcome in RELEASING_LEASE_OUTCOMES:
+                self._unresolved_releases.pop(lease_id, None)
+                self._forget_cleanup_obligation(lease_id)
+                current = self._profiles.get(profile_id)
+                if current is not None and current.release(lease_id):
+                    self._unindex_lease(lease_id)
+                    self._has_new_events = True
+                    self._get_logger().warning(
+                        "Reclaimed direct lease %s on profile %s after "
+                        "exact-run termination of %s",
+                        lease_id,
+                        profile_id,
+                        workflow_id,
+                    )
+            else:
+                self._record_unresolved_release(
+                    lease_id,
+                    profile_id=profile_id,
+                    fencing_generation=int(claim.get("fencing_generation") or 0),
+                    outcome=outcome,
+                    kind="verified_cleanup",
+                    teardown_evidence=evidence,
+                )
 
     def _record_uncommitted_lease_grant(
         self,
@@ -5572,6 +5687,7 @@ class MoonMindProviderProfileManagerWorkflow:
         except (TypeError, ValueError):
             fencing_generation = 0
         evidence_identity = safe.get("evidenceIdentity")
+        admitted_run_id = str(safe.get("runId") or "").strip() or None
         capacity_scope_ref = str(
             safe.get("capacityScopeRef") or self._capacity_scope_ref(profile)
         )
@@ -5617,14 +5733,28 @@ class MoonMindProviderProfileManagerWorkflow:
                             ),
                             "expiresAt": safe.get("expiresAt"),
                             "ownerIsWorkflow": owner_is_workflow,
+                            # MoonLadderStudios/MoonMind#1089: the admitted run
+                            # binds liveness to the exact run; persist it with
+                            # the grant so restore and cleanup claims keep it.
+                            "runId": admitted_run_id,
                             # The compact versioned identity this lease
                             # authorizes, so a manager restart restores the
                             # evidence contract with the lease rather than
                             # inferring it from the owner ID alone.
                             "safe_metadata": (
-                                {"evidenceIdentity": str(evidence_identity)}
-                                if evidence_identity
-                                else None
+                                {
+                                    **(
+                                        {"evidenceIdentity": str(evidence_identity)}
+                                        if evidence_identity
+                                        else {}
+                                    ),
+                                    **(
+                                        {"runId": str(admitted_run_id)}
+                                        if admitted_run_id
+                                        else {}
+                                    ),
+                                }
+                                or None
                             ),
                         }
                     ],
@@ -5933,6 +6063,14 @@ class MoonMindProviderProfileManagerWorkflow:
                         if isinstance(safe_metadata, dict)
                         else None
                     )
+                    restored_run_id = (
+                        lease.get("runId")
+                        or (
+                            safe_metadata.get("runId")
+                            if isinstance(safe_metadata, dict)
+                            else None
+                        )
+                    )
                     profile.lease_metadata[wf_id] = {
                         "leaseId": lease.get("leaseId") or wf_id,
                         "ownerId": lease.get("ownerId") or wf_id,
@@ -5984,6 +6122,12 @@ class MoonMindProviderProfileManagerWorkflow:
                         **(
                             {"evidenceIdentity": str(restored_identity)}
                             if restored_identity
+                            else {}
+                        ),
+                        **(
+                            {"runId": str(restored_run_id).strip()}
+                            if restored_run_id
+                            and str(restored_run_id).strip()
                             else {}
                         ),
                     }
