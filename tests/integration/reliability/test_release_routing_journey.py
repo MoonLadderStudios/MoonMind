@@ -257,7 +257,9 @@ async def test_candidate_canary_compare_and_set_and_inflight_upgrade(
             activity_queue,
             id=uuid4().hex,
             task_queue=queue,
-            execution_timeout=timedelta(seconds=120),
+            # Startup stewardship may re-verify a seemingly live route past
+            # the poller-freshness window before converging it.
+            execution_timeout=timedelta(seconds=600),
             versioning_override=(
                 PinnedVersioningOverride(WorkerDeploymentVersion(deployment, a))
                 if pinned
@@ -286,12 +288,12 @@ async def test_candidate_canary_compare_and_set_and_inflight_upgrade(
             ),
         ):
             candidate = await bootstrap_version_routing(client, spec(b))
-            assert candidate["status"] == "current"
-            assert candidate["currentVersion"] == f"{deployment}.{b}"
+            assert candidate["status"] == "awaiting_promotion"
+            assert (
+                current_version(await routing_snapshot(client, deployment))
+                == f"{deployment}.{a}"
+            )
             canary_id = uuid4().hex
-            # The stewardship promotion above already converged routing. A
-            # caller holding a stale expectation still verifies the server's
-            # current decision against its named canary without moving routing.
             evidence = await promote_version(
                 client,
                 deployment=deployment,

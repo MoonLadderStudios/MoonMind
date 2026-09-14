@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -398,21 +399,66 @@ async def _deployment_version_create_time(
     return None
 
 
+def _parked(current: str, target: str) -> dict[str, str]:
+    """Upstream readiness shape: startup waits, deployment-control recovers."""
+    return {
+        "status": "awaiting_promotion",
+        "currentVersion": current,
+        "candidateVersion": target,
+        "recoveryOwner": "deployment-control",
+    }
+
+
+# The server reports a stopped fleet's last polls as live for a bounded
+# freshness window. Re-verification must outlast it before concluding that a
+# seemingly live route is actually dead. Workers already poll while this
+# waits; only the readiness report is delayed, and only on a version change.
+_ROUTE_DEATH_TIMEOUT_SECONDS = 120
+_ROUTE_DEATH_POLL_SECONDS = 10
+
+
+async def _await_route_death(client, version: str) -> dict | None:
+    """Re-observe a seemingly live route until it proves live or dead.
+
+    Fresh poller observations may be a restart in flight: the previous fleet
+    stopped seconds ago but the server still reports its last polls as live.
+    A truly live route keeps polling and stays available past the window; a
+    dead one expires. Returns the last observation, or None when the version
+    unregisters mid-watch.
+    """
+    observation = None
+    deadline = time.monotonic() + _ROUTE_DEATH_TIMEOUT_SECONDS
+    while True:
+        try:
+            observation = await version_availability(client, version)
+        except RPCError as exc:
+            if exc.status != RPCStatusCode.NOT_FOUND:
+                raise
+            return None
+        if not observation["available"] or time.monotonic() >= deadline:
+            return observation
+        await asyncio.sleep(_ROUTE_DEATH_POLL_SECONDS)
+
+
 async def steward_abandoned_routing(
     client, spec, *, current: str, target: str
 ) -> dict[str, str]:
-    """Adopt routing a previous release abandoned, or name its live owner.
+    """Adopt routing only when no live route remains to preserve.
 
-    A plain restart with a new image leaves the new version waiting for a
-    promotion owner that only exists inside a managed update, while the
-    recorded current version has no pollers left. That ownerless wait wedges
-    every queued workflow, so the starting fleet finishes the handoff itself
-    with the same canary-gated compare-and-set promotion the updater runs.
+    This covers the case the availability owner explicitly excludes: a
+    restart onto a never-promoted release whose recorded current version has
+    no live pollers on any of its queues, so there is no serving route to
+    preserve and no receipt the deployment-control recovery could restore.
+    The starting fleet finishes the handoff itself with the same
+    canary-gated compare-and-set promotion the updater runs.
 
-    The recorded current version keeps its authority when it is newer than
-    this worker's version: a stale image restarting after a newer release
-    must not roll routing back, so deliberate downgrades stay on the managed
-    update path and this only names the version that owns routing.
+    Whenever the recorded current version still serves traffic, startup
+    preserves that route exactly like the unpromoted-installed-fix replay
+    requires: qualification and promotion stay with the authorized release
+    controller. A live verdict is re-verified past the poller-freshness
+    window so a restart in flight is never mistaken for a serving route. A
+    stale image restarting under a newer route likewise never rolls routing
+    back; deliberate downgrades stay on the managed update path.
     """
     ours = await _deployment_version_create_time(client, target, retries=8)
     theirs = await _deployment_version_create_time(client, current)
@@ -422,14 +468,18 @@ async def steward_abandoned_routing(
             current,
             target,
         )
-        return {
-            "status": "awaiting_promotion",
-            "currentVersion": current,
-            "candidateVersion": target,
-            "owner": current,
-        }
+        return _parked(current, target)
+    observation = await _await_route_death(client, current)
+    if observation is not None and observation["available"]:
+        logger.info(
+            "Release routing current version %s still serves traffic; "
+            "preserving its route for the authorized release controller",
+            current,
+        )
+        return _parked(current, target)
     logger.warning(
-        "Release routing current version %s looks abandoned; stewarding promotion of %s",
+        "Release routing current version %s has no live pollers; "
+        "stewarding promotion of %s",
         current,
         target,
     )
@@ -461,12 +511,7 @@ async def steward_abandoned_routing(
             observed,
             target,
         )
-        return {
-            "status": "awaiting_promotion",
-            "currentVersion": observed,
-            "candidateVersion": target,
-            "owner": observed,
-        }
+        return _parked(observed, target)
     raise failure
 
 
