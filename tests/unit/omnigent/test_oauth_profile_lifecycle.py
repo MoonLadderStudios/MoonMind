@@ -1827,20 +1827,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     )
     effective_launch["hostImageRef"] = snapshot_image
     effective_launch["limits"]["cpuMillis"] = cpu_millis
-    pool = SimpleNamespace(
-        launch_args=AsyncMock(
-            return_value=["--cgroup-parent", "/owned-pool", "--cpu-shares", "1024"]
-        ),
-        prepare=AsyncMock(return_value=SimpleNamespace(holder="owned-helper")),
-        verify=AsyncMock(),
-        finish_launch=AsyncMock(),
-    )
-    monkeypatch.setattr(
-        "moonmind.capacity.cpu_pool.DockerCpuPool", lambda **kwargs: pool
-    )
-    monkeypatch.setattr("moonmind.capacity.machine_budget_from_runner", AsyncMock())
-
-    await runtime._launch_on_demand(
+    launch_kwargs = dict(
         binding=binding,
         host_lease=lease,
         container_name="mm-host-lease-1",
@@ -1860,17 +1847,18 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         effective_launch=effective_launch,
         egress_attestation=_egress_attestation(),
     )
+    if cpu_millis == 0:
+        # Retired shared-pool requests never reach Docker: new execution
+        # requires an explicit positive CPU limit.
+        with pytest.raises(OmnigentOAuthHostError, match="positive explicit"):
+            await runtime._launch_on_demand(**launch_kwargs)
+        runtime._run.assert_not_awaited()
+        return
+
+    await runtime._launch_on_demand(**launch_kwargs)
 
     commands = [call.args for call in runtime._run.await_args_list]
-    if cpu_millis == 0:
-        assert "--cpus" not in commands[2]
-        assert "/owned-pool" in commands[2]
-        pool.verify.assert_awaited_once()
-        pool.finish_launch.assert_awaited_once()
-        assert commands[-1] == ("docker", "rm", "-f", "owned-helper")
-    else:
-        assert commands[2][commands[2].index("--cpus") + 1] == "2.0"
-        pool.prepare.assert_not_awaited()
+    assert commands[2][commands[2].index("--cpus") + 1] == "2.0"
     assert commands[0][:3] == ("docker", "inspect", "--format")
     assert "/opt/moonmind/init-oauth-host.sh" in commands[1]
     assert commands[2][:3] == ("docker", "run", "-d")

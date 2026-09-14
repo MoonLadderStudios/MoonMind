@@ -419,11 +419,8 @@ async def omnigent_admit_generic_host_capacity_activity(
     or a requeue after a lost slot therefore reuses the reservation the ledger
     already records and is never refused by the capacity it is counted in.
 
-    MoonLadderStudios/MoonMind#3881: the read also reports the shared machine
-    ledger's oldest-waiter age and reconciliation health, and refuses to report
-    free capacity while the container backend's own state is unprovable. It
-    still reserves nothing, so the durable allocation may legitimately refuse a
-    race this read admitted and return the workflow to waiting.
+    It still reserves nothing, so the durable allocation may legitimately
+    refuse a race this read admitted and return the workflow to waiting.
     """
 
     from api_service.db.base import async_session_maker
@@ -433,40 +430,7 @@ async def omnigent_admit_generic_host_capacity_activity(
     admission = GenericHostCapacityAdmission.from_environment(
         session_factory=async_session_maker
     )
-    demand = budget = None
-    if not already_allocated:
-        from moonmind.capacity import ResourceDemand
-        from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
-        from moonmind.omnigent.production import (
-            build_generic_omnigent_execution_services,
-        )
-
-        plan_ref = str(payload.get("executionPlanRef") or "").strip()
-        plan = await DbExecutionPlanStore(async_session_maker).load(plan_ref)
-        if plan is None or plan.payload.hostClassRef != payload.get("hostClassRef"):
-            raise ValueError(
-                "host admission requires its exact committed execution plan"
-            )
-        services = build_generic_omnigent_execution_services(
-            session_factory=async_session_maker
-        )
-        _, policy = await services.planned_host_resolver(plan)
-        demand = ResourceDemand.from_launch_policy_limits(policy.limits)
-        from moonmind.capacity import MachineCapacityUnavailable
-
-        try:
-            budget = await services.machine_budget_provider()
-        except MachineCapacityUnavailable:
-            return {
-                "admitted": False,
-                "alreadyAllocated": False,
-                "retryAfterSeconds": 30,
-                "unsatisfiable": False,
-                "waitingReason": "Waiting for the machine capacity owner to observe the container backend.",
-            }
-    decision = await admission.evaluate(
-        already_allocated=already_allocated, demand=demand, budget=budget
-    )
+    decision = await admission.evaluate(already_allocated=already_allocated)
     return {
         **decision.as_payload(),
         "alreadyAllocated": already_allocated,
