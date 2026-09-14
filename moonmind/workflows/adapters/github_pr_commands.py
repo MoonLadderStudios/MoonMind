@@ -36,22 +36,27 @@ Execution-binding scope: this module owns the hermetic command-semantics
 boundary (parse -> eligibility -> authorization -> preflight -> freeze ->
 binding -> feedback). The GitHub App transport receiver, durable delivery
 store, and Temporal dispatch/recovery workflow belong to #3967, which binds
-to this contract as its handoff: #3967 supplies the verified-event facts,
-stores the stable ``identity_key`` as its durable idempotency key,
-reuses the existing dispatch/result on ``redelivery_reuse`` (via
+to this contract as its handoff: #3967 supplies the verified-event facts
+(coerced via :func:`verified_command_event_from_mapping`, the serialized
+payload shape its activity wrapper receives), stores the stable
+``identity_key`` as its durable idempotency key, transitions the command to
+``queued`` feedback only after objective Temporal accept evidence is
+recorded, reuses the existing dispatch/result on ``redelivery_reuse`` (via
 :func:`classify_redelivery`), and re-runs :func:`revalidate_before_mutation`
 plus :func:`resolve_competing_run` after any restart before mutation. No
 durable store, network I/O, or workflow scheduler lives in this module by
 design; :func:`handle_verified_command_event` is the single hermetic
-journey entrypoint the transport/activity calls.
+journey entrypoint the transport/activity calls, and it reports
+``dispatch_ready`` (never ``queued``) because it performs no scheduling.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 __all__ = [
     "CANONICAL_COMMANDS",
@@ -86,6 +91,7 @@ __all__ = [
     "resolve_skill_binding",
     "revalidate_before_mutation",
     "scan_for_secrets",
+    "verified_command_event_from_mapping",
 ]
 
 # ---------------------------------------------------------------------------
@@ -103,27 +109,24 @@ CANONICAL_COMMANDS: dict[str, str] = {
 
 @dataclass(frozen=True, slots=True)
 class SkillBinding:
-    """Existing preset/Skill identity a canonical command dispatches to."""
+    """Existing Skill identity a canonical command dispatches to."""
 
     skill_id: str
-    preset: str
     grants_merge_permission: bool = False
     requires_publication_evidence: bool = True
 
 
 #: Normalized command text -> existing Skill binding. ``resolve`` maps to the
 #: pr-resolver Skill under its declared publication policy; the command itself
-#: never grants merge permission.
+#: never grants merge permission. Bindings carry only the canonical
+#: skill-name identity: task presets are identified by preset-slug through a
+#: separate catalog (for example ``pr-review-resolve``), so no preset alias
+#: is stored here.
 COMMAND_SKILL_BINDINGS: dict[str, SkillBinding] = {
-    "fix comments": SkillBinding(
-        skill_id="fix-comments", preset="fix-comments"
-    ),
-    "fix merge conflicts": SkillBinding(
-        skill_id="fix-merge-conflicts", preset="fix-merge-conflicts"
-    ),
+    "fix comments": SkillBinding(skill_id="fix-comments"),
+    "fix merge conflicts": SkillBinding(skill_id="fix-merge-conflicts"),
     "resolve": SkillBinding(
         skill_id="pr-resolver",
-        preset="pr-resolver",
         grants_merge_permission=False,
         requires_publication_evidence=True,
     ),
@@ -312,7 +315,10 @@ class PreflightRequest:
     fork_write_permitted: bool = False
     branch_write_authorized: bool = False
     permissions_revoked: bool = False
-    skill_capability_supported: bool = True
+    # Fail-closed capability evidence: the transport must affirmatively prove
+    # a compatible runtime can execute the resolved Skill. An omitted flag is
+    # unproven capability and blocks before paid execution.
+    skill_capability_supported: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -490,22 +496,115 @@ class VerifiedCommandEvent:
     fork_write_permitted: bool = False
     branch_write_authorized: bool = False
     permissions_revoked: bool = False
-    skill_capability_supported: bool = True
+    # Fail-closed capability evidence, mirroring PreflightRequest: the event
+    # must carry affirmative proof that a compatible runtime can execute the
+    # resolved Skill. An omitted flag blocks before paid execution.
+    skill_capability_supported: bool = False
     skill_snapshot_ref: str = ""
     connection_id: str = ""
     workflow_ref: str = ""
+
+
+def _mapping_str(payload: Mapping[str, Any], key: str) -> str:
+    value = payload.get(key, "")
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    raise ValueError(f"verified command event field {key!r} must be a string")
+
+
+def _mapping_bool(payload: Mapping[str, Any], key: str) -> bool:
+    value = payload.get(key, False)
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"verified command event field {key!r} must be a boolean")
+
+
+def _mapping_int(payload: Mapping[str, Any], key: str) -> int:
+    value = payload.get(key, 0)
+    if isinstance(value, bool):
+        raise ValueError(f"verified command event field {key!r} must be an integer")
+    if isinstance(value, int):
+        return value
+    raise ValueError(f"verified command event field {key!r} must be an integer")
+
+
+def _mapping_authorization(payload: Mapping[str, Any]) -> AuthorizationRequest:
+    raw = payload.get("authorization", {})
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, Mapping):
+        raise ValueError("verified command event field 'authorization' must be a mapping")
+    return AuthorizationRequest(
+        transport_verified=_mapping_bool(raw, "transport_verified"),
+        repository_opted_in=_mapping_bool(raw, "repository_opted_in"),
+        actor_authorized=_mapping_bool(raw, "actor_authorized"),
+        connection_available=_mapping_bool(raw, "connection_available"),
+        budget_available=_mapping_bool(raw, "budget_available"),
+        publication_allowed=_mapping_bool(raw, "publication_allowed"),
+    )
+
+
+def verified_command_event_from_mapping(
+    payload: Mapping[str, Any],
+) -> VerifiedCommandEvent:
+    """Coerce a serialized verified-event payload into a VerifiedCommandEvent.
+
+    This is the exact invocation shape the #3967 Temporal activity wrapper
+    uses: it receives a JSON-compatible mapping (never keyword arguments) and
+    must reach the hermetic journey without inventing authority. Unknown keys
+    are ignored for forward compatibility; missing authorization or
+    capability facts fail closed through the authorization and preflight
+    gates (every default denies). A malformed field raises ``ValueError``
+    before any paid work.
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError("verified command event payload must be a mapping")
+    return VerifiedCommandEvent(
+        comment_body=_mapping_str(payload, "comment_body"),
+        installation_id=_mapping_str(payload, "installation_id"),
+        repository=_mapping_str(payload, "repository"),
+        pr_number=_mapping_int(payload, "pr_number"),
+        comment_id=_mapping_str(payload, "comment_id"),
+        is_edited=_mapping_bool(payload, "is_edited"),
+        is_inline=_mapping_bool(payload, "is_inline"),
+        is_bot_actor=_mapping_bool(payload, "is_bot_actor"),
+        trusted_automation_permitted=_mapping_bool(
+            payload, "trusted_automation_permitted"
+        ),
+        authorization=_mapping_authorization(payload),
+        pr_base_ref=_mapping_str(payload, "pr_base_ref"),
+        pr_base_sha=_mapping_str(payload, "pr_base_sha"),
+        pr_head_sha=_mapping_str(payload, "pr_head_sha"),
+        is_fork=_mapping_bool(payload, "is_fork"),
+        fork_write_permitted=_mapping_bool(payload, "fork_write_permitted"),
+        branch_write_authorized=_mapping_bool(payload, "branch_write_authorized"),
+        permissions_revoked=_mapping_bool(payload, "permissions_revoked"),
+        skill_capability_supported=_mapping_bool(
+            payload, "skill_capability_supported"
+        ),
+        skill_snapshot_ref=_mapping_str(payload, "skill_snapshot_ref"),
+        connection_id=_mapping_str(payload, "connection_id"),
+        workflow_ref=_mapping_str(payload, "workflow_ref"),
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class CommandJourneyResult:
     """Outcome of one hermetic command journey.
 
-    ``outcome`` is ``"dispatched"`` (frozen dispatch + queued feedback),
+    ``outcome`` is ``"dispatch_ready"`` (frozen dispatch-ready record plus
+    ``requested`` feedback: no scheduler has accepted the command yet),
     ``"help"`` (unknown explicit command: bounded help, no work),
     ``"ignored"`` (ordinary conversation or negative guard: no work), or
     ``"blocked"`` (eligible command stopped by a gate before paid work).
-    Only ``"dispatched"`` carries a ``dispatch`` record and a feedback
-    body; every other outcome carries no dispatch and no false feedback.
+    Only ``"dispatch_ready"`` carries a ``dispatch`` record and a feedback
+    body; every other outcome carries no dispatch and no false feedback. The
+    durable scheduling owner transitions the command to ``queued`` feedback
+    only after objective Temporal accept evidence is recorded.
     """
 
     outcome: str
@@ -522,12 +621,14 @@ def handle_verified_command_event(event: VerifiedCommandEvent) -> CommandJourney
 
     Chains the existing boundary contracts in production order --
     parse -> eligibility -> authorization -> Skill binding -> preflight ->
-    freeze -> queued feedback -- without I/O, scheduling, or Skill
+    freeze -> requested feedback -- without I/O, scheduling, or Skill
     execution. The caller (#3967 transport / Temporal dispatch activity)
     resolves and runs the frozen Skill bundle, stores ``identity_key``
-    durably, and posts/maintains the feedback comment. This function never
-    grants merge permission, never infers publication evidence, and never
-    invents another scheduler.
+    durably, transitions the command to ``queued`` feedback only after
+    objective Temporal accept evidence is recorded, and posts/maintains the
+    feedback comment. This function never grants merge permission, never
+    infers publication evidence, never claims scheduling, and never invents
+    another scheduler.
     """
     parsed = parse_pr_command(event.comment_body)
     if parsed.outcome == "help":
@@ -617,12 +718,12 @@ def handle_verified_command_event(event: VerifiedCommandEvent) -> CommandJourney
     feedback = build_feedback_body(
         command_label=f"@mm {parsed.normalized_command}",
         skill_id=binding.skill_id,
-        state="queued",
+        state="requested",
         workflow_ref=event.workflow_ref or identity.identity_key,
     )
     return CommandJourneyResult(
-        outcome="dispatched",
-        reason_code="queued_for_skill_dispatch",
+        outcome="dispatch_ready",
+        reason_code="dispatch_ready_awaiting_temporal_accept",
         normalized_command=parsed.normalized_command,
         skill_id=binding.skill_id,
         identity_key=identity.identity_key,
@@ -644,25 +745,42 @@ class RevalidationDecision:
 
 def revalidate_before_mutation(
     *,
-    frozen_head_sha: str,
-    frozen_base_sha: str,
-    frozen_actor_authorized: bool,
-    current_head_sha: str,
-    current_base_sha: str,
-    current_actor_authorized: bool,
+    frozen_authorization: AuthorizationRequest,
+    current_authorization: AuthorizationRequest,
+    frozen_preflight: PreflightRequest,
+    current_preflight: PreflightRequest,
 ) -> RevalidationDecision:
-    """Revalidate material head/base/authorization changes before mutation.
+    """Re-run the complete authorization/preflight contract before mutation.
 
-    A stale request (moved head/base or revoked authorization) blocks with
-    an explicit reason; it must never silently become a new billable request
-    against a different head.
+    Recovery (restart, redelivery, competing-run resume) must not continue
+    under stale authority: repository opt-in, App connection availability,
+    deployment budget, publication policy, fork/branch write permission, and
+    Skill capability evidence can all be revoked without changing the PR SHAs
+    or the original actor authorization. This re-evaluates the frozen and
+    current authorization gate plus the current preflight gate, then rejects
+    moved head/base or a changed Skill binding. Any failure blocks with the
+    underlying contract reason; a stale request must never silently become a
+    new billable request against different authority or a different head.
     """
-    if not current_actor_authorized or not frozen_actor_authorized:
-        return RevalidationDecision(False, "authz_revoked")
-    if current_head_sha != frozen_head_sha:
+    frozen_authz = evaluate_dispatch_authorization(frozen_authorization)
+    if not frozen_authz.allowed:
+        return RevalidationDecision(False, frozen_authz.reason_code)
+    current_authz = evaluate_dispatch_authorization(current_authorization)
+    if not current_authz.allowed:
+        return RevalidationDecision(False, current_authz.reason_code)
+    current_check = evaluate_command_preflight(current_preflight)
+    if not current_check.ready:
+        return RevalidationDecision(False, current_check.reason_code)
+    if current_preflight.pr_head_sha != frozen_preflight.pr_head_sha:
         return RevalidationDecision(False, "stale_head")
-    if current_base_sha != frozen_base_sha:
+    if (
+        current_preflight.pr_base_sha != frozen_preflight.pr_base_sha
+        or current_preflight.pr_base_ref.strip()
+        != frozen_preflight.pr_base_ref.strip()
+    ):
         return RevalidationDecision(False, "stale_base")
+    if current_preflight.skill_id != frozen_preflight.skill_id:
+        return RevalidationDecision(False, "stale_skill_binding")
     return RevalidationDecision(True, "fresh")
 
 
@@ -697,7 +815,12 @@ def resolve_competing_run(
 # ---------------------------------------------------------------------------
 
 #: Supported safe feedback states surfaced in the ack/result comment.
+#: ``requested`` is the only state this hermetic boundary emits on the accept
+#: path: the dispatch-ready record is frozen but no scheduler has accepted it
+#: yet. The durable scheduling owner (#3967) transitions to ``queued`` only
+#: after objective Temporal accept evidence is recorded.
 FEEDBACK_STATES: tuple[str, ...] = (
+    "requested",
     "queued",
     "running",
     "blocked",
@@ -713,6 +836,7 @@ _SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{10,}")),
     ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{10,}")),
     ("slack_token", re.compile(r"\bxox[bpas]-[A-Za-z0-9-]{6,}")),
+    ("atlassian_token", re.compile(r"\bATATT[A-Za-z0-9_-]{10,}")),
     ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("token_assignment", re.compile(r"(?i)\btoken\s*=\s*\S+")),
     ("password_assignment", re.compile(r"(?i)\bpassword\s*=\s*\S+")),
@@ -736,6 +860,37 @@ def redact_for_feedback(text: str) -> str:
     return redacted
 
 
+def _scan_feedback_inputs(*, workflow_ref: str, detail: str) -> tuple[bool, str]:
+    """Decide whether feedback inputs must be withheld as credentials.
+
+    Returns ``(blocked, block_detail)``. The canonical repository outbound
+    scanner (``moonmind.security``) is the authority: any finding -- or any
+    scanner failure -- blocks posting the detail instead of publishing
+    best-effort redaction of arbitrary diagnostics. The local
+    :func:`scan_for_secrets` shapes run as defense in depth so currently
+    unscanned credential shapes still withhold detail. Only sanitized
+    categories (never raw values) are returned in ``block_detail``.
+    """
+    raw = f"{workflow_ref or ''}\n{detail or ''}"
+    try:
+        from moonmind.security.outbound_scan import scan_outbound_text
+
+        result = scan_outbound_text(
+            raw,
+            location="github_pr_commands.feedback",
+            high_security_mode=True,
+        )
+    except Exception as exc:  # noqa: BLE001 - scanner failure must fail closed
+        return True, f"scanner unavailable ({exc.__class__.__name__})"
+    if not result.allowed:
+        categories = sorted({finding.category for finding in result.findings})
+        return True, "; ".join(categories) or "secret-like content detected"
+    local_kinds = scan_for_secrets(raw)
+    if local_kinds:
+        return True, "; ".join(sorted(set(local_kinds)))
+    return False, ""
+
+
 def build_feedback_body(
     *,
     command_label: str,
@@ -750,9 +905,22 @@ def build_feedback_body(
     completion, partial failure, and unavailable evidence distinctly via
     ``state``. Never includes tokens, private diagnostics, or raw command
     context, and never contains an ``@mm`` command line so feedback cannot
-    retrigger the bot.
+    retrigger the bot. When ``detail`` or ``workflow_ref`` contains
+    credential-like content, the detail is withheld as a blocked outcome
+    instead of being published through redaction.
     """
     safe_state = state if state in FEEDBACK_STATES else "blocked"
+    blocked, block_detail = _scan_feedback_inputs(
+        workflow_ref=workflow_ref, detail=detail
+    )
+    if blocked:
+        return "\n".join(
+            [
+                f"MoonMind PR command `{command_label}` ({skill_id}): blocked.",
+                "Detail: Feedback withheld by outbound scan "
+                f"({redact_for_feedback(block_detail)[:200]}).",
+            ]
+        )
     safe_detail = redact_for_feedback(detail)[:500]
     lines = [
         f"MoonMind PR command `{command_label}` ({skill_id}): {safe_state}.",

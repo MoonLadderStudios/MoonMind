@@ -9,6 +9,21 @@ metadata:
     verifyRemoteHead: exact
   required-capabilities:
     - git
+inputSchema:
+  type: object
+  required:
+    - base
+  properties:
+    base:
+      type: string
+      title: Base branch
+      description: >-
+        PR base branch name (for example `main` or `release/2.x`). The merge
+        target is always `origin/<base>`. Declared here so schema-driven
+        callers (including the Create page catalog entry, which has no other
+        base field) render a base input and the runtime supplies
+        `inputs.base`; standalone invocations without a base stop as
+        `base_unavailable` instead of substituting a default branch.
 ---
 
 # Fix Merge Conflicts
@@ -31,7 +46,7 @@ Run this as an end-to-end sync and conflict resolution workflow:
 ## Default Prompt
 
 ```text
-Fetch the latest PR base branch from origin, merge the PR base ref into the current branch, resolve all merge conflicts, verify no conflict markers remain, then commit and push.
+Fetch the latest PR base branch from origin for `inputs.base`, merge `origin/<base>` into the current branch, resolve all merge conflicts, verify no conflict markers remain, then commit and push. If `inputs.base` is missing or empty, stop as blocked with reason `base_unavailable`.
 ```
 
 ## Workflow
