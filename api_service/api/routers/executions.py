@@ -11991,6 +11991,8 @@ async def _get_owned_execution(
                     if p_type == "user" and p_id == _owner_id(user):
                         return record
                 except Exception:
+                    # Best-effort parent-ownership fallback: ignore lookup
+                    # failures and fall through to the 404 below.
                     pass
 
         raise HTTPException(
@@ -18495,6 +18497,8 @@ async def reschedule_execution(
             try:
                 await service._session.rollback()
             except Exception:
+                # Best-effort cleanup: the scheduled_for write already failed,
+                # so a rollback failure must not mask the original error.
                 pass
 
     return _serialize_execution(record, user=user)

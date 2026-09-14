@@ -609,10 +609,13 @@ async def mutate_execution_projection(
         records = [latest, *(record for record in records if record is not latest)]
     # Field authority (REQ-02): a Temporal observation refreshes lifecycle but
     # never changes the authorized principal, execution identity, or immutable
-    # admission parameters owned by the canonical API path.
+    # admission parameters owned by the canonical API path. Admission identity
+    # is authoritative on the canonical row when it exists; the projection may
+    # diverge, so it must never supply the protected owner.
     if owner == "temporal" and latest is not None:
+        identity_source = canonical if canonical is not None else latest
         for field in _TEMPORAL_PROTECTED_IDENTITY_FIELDS:
-            stored_identity = _normalize_identity(getattr(latest, field, None))
+            stored_identity = _normalize_identity(getattr(identity_source, field, None))
             incoming_identity = _normalize_identity(incoming.get(field))
             if (
                 stored_identity is not None
@@ -711,10 +714,21 @@ async def mutate_execution_projection(
                 latest.close_status and not incoming.get("close_status")
             )
         else:
+            stored_first_run = (getattr(latest, "memo", None) or {}).get("first_run_id")
+            incoming_first_run = incoming.get("first_run_id")
+            first_run_chain_match = bool(
+                incoming_first_run
+                and stored_first_run
+                and incoming_first_run == stored_first_run
+            ) or bool(
+                incoming_first_run
+                and stored_run
+                and incoming_first_run == stored_run
+            )
             successor_evidence = bool(
                 incoming.get("previous_run_id")
                 and incoming.get("previous_run_id") == stored_run
-            )
+            ) or first_run_chain_match
             latest_prev_run = (getattr(latest, "memo", None) or {}).get("previous_run_id")
             late_predecessor = bool(
                 incoming_run and incoming_run == latest_prev_run
@@ -772,6 +786,8 @@ async def mutate_execution_projection(
     memo_input = {} if stale or not metadata_loaded else dict(incoming.get("memo") or {})
     if not stale and metadata_loaded and not patch_only and incoming.get("previous_run_id"):
         memo_input.setdefault("previous_run_id", incoming["previous_run_id"])
+    if not stale and metadata_loaded and not patch_only and incoming.get("first_run_id"):
+        memo_input.setdefault("first_run_id", incoming["first_run_id"])
     merged["memo"] = _merge_owned_memo(
         memo_input, records, owner="temporal" if stale and owner == "canonical" else owner
     )
@@ -794,7 +810,10 @@ async def mutate_execution_projection(
             "Bounding artifact refs for %s from %d to %d",
             workflow_id, len(refs), _MAX_PROJECTION_ARTIFACT_REFS,
         )
-        refs = refs[:_MAX_PROJECTION_ARTIFACT_REFS]
+        # Newly produced evidence must survive bounding: refs are ordered
+        # oldest-first with incoming refs appended last, so keep the newest
+        # window instead of discarding the current observation's refs.
+        refs = refs[len(refs) - _MAX_PROJECTION_ARTIFACT_REFS:]
     merged["artifact_refs"] = refs
     params = {}
     for record in reversed(records):
@@ -827,10 +846,63 @@ async def mutate_execution_projection(
             if projection is None:
                 raise
             records = [record for record in (canonical, projection) if record is not None]
-            latest = projection
+            # Re-evaluate the winner after the conflict: decisions computed
+            # before the reload (merge, stale, ownership) used the pre-insert
+            # snapshot. Re-select the freshest stored row and recompute
+            # staleness so a losing concurrent writer cannot overwrite the
+            # winner's newer lifecycle observation with older payload data.
+            latest = max(records, key=lambda row: _projection_semantic_time(row.updated_at, row.search_attributes) or datetime.min.replace(tzinfo=UTC))
+            if owner == "temporal":
+                identity_source = canonical if canonical is not None else latest
+                for field in _TEMPORAL_PROTECTED_IDENTITY_FIELDS:
+                    stored_identity = _normalize_identity(getattr(identity_source, field, None))
+                    incoming_identity = _normalize_identity(incoming.get(field))
+                    if (
+                        stored_identity is not None
+                        and incoming_identity is not None
+                        and stored_identity != incoming_identity
+                    ):
+                        incoming[field] = getattr(identity_source, field)
+                merged.update({
+                    key: incoming[key]
+                    for key in ("owner_id", "owner_type", "namespace", "workflow_type", "parameters")
+                    if key in incoming
+                })
+            _re_prev = _projection_semantic_time(latest.updated_at, latest.search_attributes)
+            _re_in = _semantic_time(incoming.get("updated_at"))
+            _re_stale = False
+            if latest.run_id == incoming.get("run_id"):
+                _re_stale = bool(_re_prev and _re_in and _re_in < _re_prev) or bool(
+                    latest.close_status and not incoming.get("close_status")
+                )
+            else:
+                _re_prev_match = bool(
+                    incoming.get("previous_run_id")
+                    and incoming.get("previous_run_id") == latest.run_id
+                )
+                _re_stored_first = (getattr(latest, "memo", None) or {}).get("first_run_id")
+                _re_in_first = incoming.get("first_run_id")
+                _re_chain = bool(
+                    _re_in_first and _re_stored_first and _re_in_first == _re_stored_first
+                ) or bool(_re_in_first and latest.run_id and _re_in_first == latest.run_id)
+                _re_succ = _re_prev_match or _re_chain
+                if _re_prev and _re_in:
+                    if _re_in < _re_prev:
+                        _re_stale = True
+                    elif _re_in == _re_prev and not _re_succ:
+                        _re_stale = True
+                elif not _re_succ:
+                    _re_stale = True
+            if _re_stale:
+                stale = True
+                merged = {column.name: getattr(latest, column.name) for column in TemporalExecutionCanonicalRecord.__table__.columns if hasattr(TemporalExecutionRecord, column.name)}
+                merged["workflow_id"] = workflow_id
     # Snapshot the pre-write stored values before the write-back below: the
     # duplicate-observation check must compare against what was stored, not the
     # just-overwritten attributes (latest aliases one of the row objects).
+    # The comparison target is the projection being repaired, never the
+    # canonical row: matching the canonical while the projection diverges (or
+    # is REPAIR_PENDING) is a repair, not a duplicate.
     previous_version = int(projection.projection_version or 0) if projection is not None else 0
     if latest is not None:
         _prev_run_id = latest.run_id
@@ -841,8 +913,22 @@ async def mutate_execution_projection(
     else:
         _prev_run_id = _prev_state = _prev_close_status = None
         _prev_memo = _prev_params = None
+    _repair_base = projection if projection is not None else latest
+    if _repair_base is not None:
+        _prev_run_id = _repair_base.run_id
+        _prev_state = _repair_base.state
+        _prev_close_status = _repair_base.close_status
+        _prev_memo = dict(getattr(_repair_base, "memo", None) or {})
+        _prev_params = dict(getattr(_repair_base, "parameters", None) or {})
+    _repair_base_fresh = bool(
+        _repair_base is not None
+        and getattr(_repair_base, "sync_state", None) == TemporalExecutionProjectionSyncState.FRESH
+        and getattr(_repair_base, "sync_error", None) is None
+    )
     duplicate_observation = bool(
         latest is not None
+        and _repair_base is not None
+        and _repair_base_fresh
         and not stale
         and metadata_loaded
         and not patch_only
@@ -957,7 +1043,19 @@ async def sync_temporal_executions_safely(
         try:
             await session.rollback()
         except Exception:
+            # Best-effort cleanup: the commit already failed, so a rollback
+            # failure must not mask the original error.
             pass
+        # Rollback expires ORM instances; reload them inside this awaited
+        # context so the caller can serialize the fallback without implicit
+        # I/O outside async scope (MissingGreenlet -> 500).
+        for obj in items:
+            try:
+                await session.refresh(obj)
+            except Exception:
+                # Best-effort reload: fall back to expired attributes rather
+                # than masking the batch recovery with a refresh error.
+                pass
         return list(items)
     for obj in updated_items:
         try:
@@ -987,5 +1085,7 @@ async def sync_single_temporal_execution_safely(
             # usable for later work instead of poisoned.
             await session.rollback()
         except Exception:
+            # Best-effort cleanup: the sync already failed, so a rollback
+            # failure must not mask the original error.
             pass
         return None

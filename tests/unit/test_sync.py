@@ -1310,10 +1310,6 @@ async def test_batch_item_failure_does_not_poison_sibling(tmp_path, monkeypatch)
     repairs in the same shared-session batch."""
     from types import SimpleNamespace
 
-    from api_service.core.sync import (
-        sync_execution_projection,
-        sync_temporal_executions_safely,
-    )
     from api_service.db.models import Base
     import api_service.core.sync as sync_module
 
@@ -1337,7 +1333,7 @@ async def test_batch_item_failure_does_not_poison_sibling(tmp_path, monkeypatch)
             async def _fake_fetch(sess, workflow_id, client):
                 if workflow_id == "mm:batch-bad":
                     raise RuntimeError("temporal unavailable")
-                return await sync_execution_projection(sess, good_desc)
+                return await sync_module.sync_execution_projection(sess, good_desc)
 
             monkeypatch.setattr(
                 sync_module, "fetch_and_sync_execution", _fake_fetch,
@@ -1346,7 +1342,7 @@ async def test_batch_item_failure_does_not_poison_sibling(tmp_path, monkeypatch)
                 SimpleNamespace(workflow_id="mm:batch-bad"),
                 SimpleNamespace(workflow_id="mm:batch-good"),
             ]
-            results = await sync_temporal_executions_safely(session, items, object())
+            results = await sync_module.sync_temporal_executions_safely(session, items, object())
 
             assert len(results) == 2
             assert results[0].workflow_id == "mm:batch-bad"
@@ -1362,10 +1358,6 @@ async def test_batch_item_failure_does_not_poison_sibling(tmp_path, monkeypatch)
 async def test_single_item_failure_rolls_back_and_keeps_session_usable(tmp_path):
     """REQ-04: the single-item wrapper must roll back its failed transaction
     so the session can process later work."""
-    from api_service.core.sync import (
-        sync_execution_projection,
-        sync_single_temporal_execution_safely,
-    )
     from api_service.db.models import Base
     import api_service.core.sync as sync_module
 
@@ -1384,7 +1376,7 @@ async def test_single_item_failure_rolls_back_and_keeps_session_usable(tmp_path)
             original = sync_module.fetch_and_sync_execution
             sync_module.fetch_and_sync_execution = _boom  # type: ignore[assignment]
             try:
-                outcome = await sync_single_temporal_execution_safely(
+                outcome = await sync_module.sync_single_temporal_execution_safely(
                     session, "mm:single-usable", object()
                 )
             finally:
@@ -1398,7 +1390,7 @@ async def test_single_item_failure_rolls_back_and_keeps_session_usable(tmp_path)
                 updated_at=newer,
                 memo={"entry": "run", "owner_id": "owner-1", "owner_type": "user"},
             )
-            refreshed = await sync_execution_projection(session, desc)
+            refreshed = await sync_module.sync_execution_projection(session, desc)
             await session.commit()
             await session.refresh(refreshed)
             assert _as_utc(refreshed.updated_at) == newer
