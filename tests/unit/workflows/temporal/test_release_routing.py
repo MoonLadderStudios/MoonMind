@@ -438,7 +438,7 @@ async def test_steward_requires_every_served_queue(monkeypatch):
             (other, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY),
         },
     )
-    new = server.add_version(
+    server.add_version(
         "new",
         queues={
             (queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW),
