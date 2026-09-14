@@ -4276,21 +4276,56 @@ export function parseProviderQueuePosition(waitingReason: string | null | undefi
   return Number.isFinite(position) && position > 0 ? position : null;
 }
 
-export function ProviderWaitDetails({ waitingReason }: { waitingReason: string | null | undefined }) {
+export function parseProviderCooldownUntil(waitingReason: string | null | undefined): string | null {
   if (!waitingReason) return null;
+  const match = /cooldown_until=([^\s;,]+)/.exec(waitingReason);
+  if (!match) return null;
+  const deadline = (match[1] ?? '').trim().replace(/\.+$/, '');
+  return deadline ? deadline : null;
+}
+
+export function ProviderWaitDetails({
+  waitingReason,
+  cooldownUntil,
+  queuePosition,
+  queueOrdered,
+  queueFresh,
+  nextCheck,
+  elapsedLabel,
+}: {
+  waitingReason: string | null | undefined;
+  cooldownUntil?: string | null;
+  queuePosition?: number | null;
+  queueOrdered?: boolean;
+  queueFresh?: boolean;
+  nextCheck?: string | null;
+  elapsedLabel?: string | null;
+}) {
+  if (!waitingReason && !cooldownUntil && queuePosition == null && !nextCheck && !elapsedLabel) return null;
   // The canonical backend reason carries queue_position only from an
   // ordered scoped snapshot (artifacts guard), so its presence implies the
-  // ordered-snapshot precondition. Cooldown/next-check render when future
-  // API fields supply them; until then no deadline is invented here.
-  const queuePosition = parseProviderQueuePosition(waitingReason);
-  const { queueLabel } = formatProviderWaitTiming({
-    queuePosition,
-    queueOrdered: queuePosition !== null,
-    queueFresh: queuePosition !== null,
+  // ordered-snapshot precondition. Structured cooldown/next-check render
+  // only from authoritative observation fields or an explicit legacy
+  // cooldown_until fragment; no deadline is invented here and no ETA is
+  // ever derived from active-count arithmetic.
+  const parsedPosition = queuePosition ?? parseProviderQueuePosition(waitingReason);
+  const parsedCooldown = (cooldownUntil ?? parseProviderCooldownUntil(waitingReason) ?? '').trim() || null;
+  const ordered = queueOrdered ?? parsedPosition !== null;
+  const fresh = queueFresh ?? parsedPosition !== null;
+  const { queueLabel, cooldownLabel, nextCheckLabel } = formatProviderWaitTiming({
+    queuePosition: parsedPosition,
+    queueOrdered: ordered,
+    queueFresh: fresh,
+    cooldownUntil: parsedCooldown,
+    nextCheck: nextCheck ?? null,
   });
+  const elapsed = (elapsedLabel ?? '').trim();
   return (
     <>
       {queueLabel ? <p className="small">{queueLabel} — not a promised start time.</p> : null}
+      {cooldownLabel ? <p className="small">{cooldownLabel}.</p> : null}
+      {nextCheckLabel ? <p className="small">{nextCheckLabel}.</p> : null}
+      {elapsed ? <p className="small">Waiting {elapsed} so far.</p> : null}
       <p className="small">Wait times are observations, not an ETA.</p>
     </>
   );
