@@ -234,6 +234,11 @@ async def test_brief_persistence_stays_with_trusted_owner():
 
 
 async def test_mechanical_reads_are_conditional_on_identity_freshness():
+    import re
+
+    def _normalized(text: str) -> str:
+        return re.sub(r"\s+", " ", text)
+
     for slug, artifact in (
         ("github-issue-implement", "artifacts/github-issue-implement-assessment.json"),
         (
@@ -243,7 +248,7 @@ async def test_mechanical_reads_are_conditional_on_identity_freshness():
         ("issue-implement-work-pr", "assessment_artifact_path"),
     ):
         text = (PRESET_DIR / f"{slug}.yaml").read_text()
-        assert "only when identity or freshness requires it" in text, slug
+        assert "only when identity or freshness requires it" in _normalized(text), slug
         assert artifact in text, slug
 
 
@@ -322,6 +327,9 @@ async def test_untrusted_identity_cannot_drive_composed_status_step(
         TemporalSkillActivities,
         _default_registry_skill_payload,
     )
+    from moonmind.workflows.temporal.story_output_tools import (
+        register_story_output_tool_handlers,
+    )
 
     requests: list = []
 
@@ -342,8 +350,9 @@ async def test_untrusted_identity_cannot_drive_composed_status_step(
         AsyncMock(return_value=("test-only", None)),
     )
     dispatcher = ToolActivityDispatcher()
+    register_story_output_tool_handlers(dispatcher)
     snapshot = ToolRegistrySnapshot(
-        digest="reg:4269",
+        digest="reg:sha256:4269deadbeef4269deadbeef4269deadbeef4269deadbeef4269deadbeef0042",
         artifact_ref="art_registry",
         skills=tuple(
             parse_tool_definition(_default_registry_skill_payload(name=name))
