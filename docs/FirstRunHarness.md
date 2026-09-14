@@ -8,7 +8,9 @@ the README [Quick Start](../README.md#quick-start) (the documented production
 journey), and [FirstRunServiceInventory](FirstRunServiceInventory.md) (the
 operational service map).
 **Related:** #3926 (parent), #3937 (topology), #3939 (CLI), #3940 (Quick Start),
-#3950 (CI selection).
+#3950 (CI selection). CLI-example parity with this journey is owned by #3939;
+until it lands, this harness binds the README Quick Start commands/URLs only
+and claims no CLI coverage.
 
 The gap this harness closes: default admission authority (OpenCode Agent
 Profile / credentialless `opencode-zen-free` Provider Profile at the real
@@ -31,6 +33,8 @@ provider availability is never a required hermetic PR test.
   `arm64` host, registry access to GHCR for image pulls.
 - Disposable Compose project only: `moonmind-test` or `moonmind-test-<suffix>`.
   The `moonmind` deployment project is never a valid first-run target.
+- Compose services on this path include `api`, `postgres`, `temporal`, and
+  `omnigent` (derived from `docker-compose.yaml`; Compose wins on conflict).
 - Clean project-scoped volumes, no `.env`, no inherited provider credentials
   (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_API_KEY`,
   `OPENROUTER_API_KEY`, `OPENCODE_API_KEY`, `GITHUB_TOKEN`, `GITHUB_PAT`),

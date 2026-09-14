@@ -8,9 +8,11 @@ evidence belongs to ``tools/first_run_live_qualification.py --live``.
 
 Covers the bounded backlog: disposable-project definition, no-.env startup to
 provider-default authority via the real ``startup_event``, omitted-vs-explicit
-equivalence on startup-seeded rows, no-publication fixture, provider-vs-platform
-failure taxonomy with no substitution, restart idempotency, scoped teardown
-with redacted diagnostics, and per-phase timing structure.
+equivalence on startup-seeded rows, no-publication fixture, hermetic terminal
+finalization through the real projection sync with a controlled close
+substitution, provider-vs-platform failure taxonomy with no substitution,
+restart idempotency, scoped teardown with redacted diagnostics, and per-phase
+timing structure.
 """
 
 from __future__ import annotations
@@ -177,8 +179,9 @@ async def test_no_env_startup_seeds_credentialless_default(
     disabled_env_keys,
 ) -> None:
     """REQ-01/PLAN-02 (hermetic part): the no-.env startup path seeds the
-    credentialless default authority. Terminal-evidence observation of a live
-    run belongs to the protected live tier, not this hermetic check."""
+    credentialless default authority. Live-provider execution evidence belongs
+    to the protected live tier; hermetic terminal finalization is covered by
+    ``test_no_env_journey_reaches_terminal_evidence_with_controlled_substitution``."""
     await _startup_to_provider_default(tmp_path, monkeypatch, "firstrun.db")
 
 
@@ -346,6 +349,320 @@ def test_hermetic_tier_makes_no_live_provider_calls() -> None:
         assert marker not in source
     for key in FORBIDDEN_ENV_KEYS:
         assert not os.environ.get(key), f"hermetic run must not set {key}"
+    # Live-call markers are assembled by concatenation so this guard's own
+    # source never contains the forbidden call text it scans for (a literal
+    # marker here would fail unconditionally).
+    dot = chr(46)
+    live_call_markers = (
+        "httpx" + dot + "post",
+        "httpx" + dot + "get",
+        "httpx" + dot + "request",
+        "requests" + dot + "post",
+        "requests" + dot + "get",
+        "urllib" + dot + "request",
+    )
     this_source = Path(__file__).read_text(encoding="utf-8")
     assert "opencode-zen-free" in this_source  # seeded-row authority, not a call
-    assert "httpx.post" not in this_source
+    for marker in live_call_markers:
+        assert marker not in this_source, (
+            f"hermetic tier must not perform live provider call {marker!r}"
+        )
+
+
+def _first_run_terminal_memo(fixture: dict) -> dict:
+    return {
+        "summary": "First-run fixture result: README summary in three bullets.",
+        "owner_id": "first-run-owner",
+        "owner_type": "user",
+        "entry": "user_workflow",
+        "artifact_refs": [
+            "artifact://art_first_run_summary",
+            "artifact://art_first_run_diagnostics",
+        ],
+        "parameters": {
+            "task": fixture["task"],
+            "publication": fixture["publication"],
+        },
+    }
+
+
+def _first_run_completed_describe(workflow_id: str, run_id: str, memo: dict):
+    """Controlled substitution for the live Temporal close.
+
+    Stands in for the protected live tier's real workflow completion so the
+    hermetic tier can exercise the production finalization boundary (the real
+    ``sync_execution_projection``). It proves close handling, never live
+    provider execution.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, Mock
+
+    from temporalio.client import (
+        WorkflowExecutionDescription,
+        WorkflowExecutionStatus,
+    )
+
+    started = datetime.now(timezone.utc)
+    desc = Mock(spec=WorkflowExecutionDescription)
+    desc.id = workflow_id
+    desc.run_id = run_id
+    desc.namespace = "default"
+    desc.workflow_type = "MoonMind.UserWorkflow"
+    desc.status = WorkflowExecutionStatus.COMPLETED
+    desc.start_time = desc.execution_time = started
+    desc.close_time = started
+    desc.search_attributes = {}
+    desc.memo = AsyncMock(return_value=dict(memo))
+    return desc
+
+
+@pytest.mark.asyncio
+async def test_no_env_journey_reaches_terminal_evidence_with_controlled_substitution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    disabled_env_keys,
+) -> None:
+    """REQ-01/PLAN-02 (hermetic terminal half): the no-.env first-run path
+    goes from real startup through omitted-default admission to terminal
+    evidence with a no-publication fixture and scoped teardown.
+
+    Controlled substitutions, labeled here and never described as live proof:
+    the test catalog/image authority for the agent-profile row and a stubbed
+    COMPLETED close standing in for the live Temporal completion. The
+    startup, admission-resolution, projection-sync, and teardown-planning
+    boundaries are the real production code.
+    """
+    from uuid import uuid4
+
+    from api_service.core.sync import sync_execution_projection
+    from api_service.db.models import (
+        TemporalExecutionCanonicalRecord,
+        TemporalExecutionRecord,
+    )
+    from api_service.services.omnigent_agent_profile_selection import (
+        resolve_default_agent_profile_snapshot,
+    )
+    from tests.unit.services.test_default_omnigent_launch_authority import (
+        _publish_opencode_catalog_authority,
+    )
+
+    for key in FORBIDDEN_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    await _startup_to_provider_default(tmp_path, monkeypatch, "terminal.db")
+    # Controlled substitution for the harness catalog only; the provider
+    # default rows above came from the real startup_event.
+    _publish_opencode_catalog_authority(monkeypatch)
+    assert _SUBSTITUTION_LABEL
+
+    async with db_base.async_session_maker() as session:
+        user = SimpleNamespace(id=uuid4(), is_superuser=True)
+        automatic = await resolve_default_agent_profile_snapshot(
+            session,
+            provider_profile_ref=None,
+            launch_policy_ref=None,
+            consumer_type="workflow",
+            consumer_id="mm:first-run-terminal",
+            user=user,
+        )
+        assert automatic["providerProfileRef"] == "opencode-zen-free"
+
+    fixture = first_run_fixture()
+    assert fixture["publication"] == {"mode": "none", "authorized": False}
+    assert fixture["requires_pat"] is False
+
+    workflow_id = f"first-run-3938-{uuid4().hex[:8]}"
+    run_id = "first-run-3938-run"
+    memo = _first_run_terminal_memo(fixture)
+    projection_url = f"sqlite+aiosqlite:///{tmp_path}/terminal-projection.db"
+    engine = create_async_engine(projection_url, future=True)
+    maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with maker() as session:
+            from datetime import datetime, timezone
+
+            launched = datetime.now(timezone.utc)
+            session.add(
+                TemporalExecutionCanonicalRecord(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    namespace="default",
+                    workflow_type="MoonMind.UserWorkflow",
+                    owner_id="first-run-owner",
+                    owner_type="user",
+                    entry="user_workflow",
+                    state="executing",
+                    close_status=None,
+                    memo={"summary": "Launching bounded fixture task..."},
+                    parameters={"task": fixture["task"]},
+                    artifact_refs=[],
+                    search_attributes={"mm_state": ["executing"]},
+                    started_at=launched,
+                    updated_at=launched,
+                )
+            )
+            await session.commit()
+            desc = _first_run_completed_describe(workflow_id, run_id, memo)
+            record = await sync_execution_projection(session, desc)
+            await session.commit()
+            assert record is not None
+            assert record.state.value == "completed"
+            assert record.close_status.value == "completed"
+            assert record.run_id == run_id
+            assert list(record.artifact_refs) == list(memo["artifact_refs"])
+            stored = await session.get(
+                TemporalExecutionRecord, workflow_id, populate_existing=True
+            )
+            assert stored is not None
+            assert stored.state.value == "completed"
+            assert list(stored.artifact_refs) == list(memo["artifact_refs"])
+    finally:
+        await engine.dispose()
+
+    plan = plan_scoped_teardown(
+        "moonmind-test-first-run-3938",
+        [
+            "moonmind-test-first-run-3938_api_1",
+            "moonmind-test-first-run-3938_postgres_data",
+            "moonmind_postgres_data",
+            "docker volume prune",
+        ],
+    )
+    assert plan.resources == [
+        "moonmind-test-first-run-3938_api_1",
+        "moonmind-test-first-run-3938_postgres_data",
+    ]
+    assert "moonmind_postgres_data" in plan.refused
+
+
+@pytest.mark.asyncio
+async def test_restart_retry_keeps_single_session_without_duplicated_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    disabled_env_keys,
+) -> None:
+    """REQ-06: interrupting startup and restarting, retrying admission, and
+    re-delivering the terminal close must not duplicate sessions,
+    publications, credentials, or resources."""
+    from uuid import uuid4
+
+    from sqlalchemy import func, select
+
+    from api_service.core.sync import sync_execution_projection
+    from api_service.db.models import (
+        TemporalExecutionCanonicalRecord,
+        TemporalExecutionRecord,
+    )
+    from api_service.services.omnigent_agent_profile_selection import (
+        resolve_default_agent_profile_snapshot,
+    )
+    from tests.unit.services.test_default_omnigent_launch_authority import (
+        _publish_opencode_catalog_authority,
+    )
+
+    for key in FORBIDDEN_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    # Interrupted startup analogue: run the no-.env startup path twice; the
+    # second run resumes the same seeded authority.
+    await _startup_to_provider_default(tmp_path, monkeypatch, "retry-a.db")
+    await _startup_to_provider_default(tmp_path, monkeypatch, "retry-b.db")
+    _publish_opencode_catalog_authority(monkeypatch)
+    assert _SUBSTITUTION_LABEL
+
+    async with db_base.async_session_maker() as session:
+        user = SimpleNamespace(id=uuid4(), is_superuser=True)
+        first = await resolve_default_agent_profile_snapshot(
+            session,
+            provider_profile_ref=None,
+            launch_policy_ref=None,
+            consumer_type="workflow",
+            consumer_id="mm:first-run-retry",
+            user=user,
+        )
+        # Retried admission resolves the same authority, not a new session.
+        second = await resolve_default_agent_profile_snapshot(
+            session,
+            provider_profile_ref=None,
+            launch_policy_ref=None,
+            consumer_type="workflow",
+            consumer_id="mm:first-run-retry",
+            user=user,
+        )
+        assert resolve_same_authority(first, second)
+
+    fixture = first_run_fixture()
+    workflow_id = f"first-run-3938-retry-{uuid4().hex[:8]}"
+    run_id = "first-run-3938-retry-run"
+    memo = _first_run_terminal_memo(fixture)
+    projection_url = f"sqlite+aiosqlite:///{tmp_path}/retry-projection.db"
+    engine = create_async_engine(projection_url, future=True)
+    maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with maker() as session:
+            from datetime import datetime, timezone
+
+            launched = datetime.now(timezone.utc)
+            session.add(
+                TemporalExecutionCanonicalRecord(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    namespace="default",
+                    workflow_type="MoonMind.UserWorkflow",
+                    owner_id="first-run-owner",
+                    owner_type="user",
+                    entry="user_workflow",
+                    state="executing",
+                    close_status=None,
+                    memo={"summary": "Launching bounded fixture task..."},
+                    parameters={"task": fixture["task"]},
+                    artifact_refs=[],
+                    search_attributes={"mm_state": ["executing"]},
+                    started_at=launched,
+                    updated_at=launched,
+                )
+            )
+            await session.commit()
+            # The terminal close delivered twice (worker restart / redelivery)
+            # must converge on one terminal record.
+            await sync_execution_projection(
+                session, _first_run_completed_describe(workflow_id, run_id, memo)
+            )
+            await session.commit()
+            await sync_execution_projection(
+                session, _first_run_completed_describe(workflow_id, run_id, memo)
+            )
+            await session.commit()
+            count = (
+                await session.execute(
+                    select(func.count()).select_from(TemporalExecutionRecord)
+                )
+            ).scalar_one()
+            assert count == 1
+            stored = await session.get(
+                TemporalExecutionRecord, workflow_id, populate_existing=True
+            )
+            assert stored is not None
+            assert stored.run_id == run_id
+            assert stored.state.value == "completed"
+            assert list(stored.artifact_refs) == list(memo["artifact_refs"])
+    finally:
+        await engine.dispose()
+
+    # Exactly one no-publication decision; no credentials minted on retry.
+    assert fixture["publication"] == {"mode": "none", "authorized": False}
+    for key in FORBIDDEN_ENV_KEYS:
+        assert not os.environ.get(key), f"retry must not mint {key}"
+    candidates = [
+        "moonmind-test-first-run-3938_api_1",
+        "moonmind_postgres_data",
+        "docker volume prune",
+    ]
+    first_plan = plan_scoped_teardown("moonmind-test-first-run-3938", candidates)
+    second_plan = plan_scoped_teardown("moonmind-test-first-run-3938", candidates)
+    assert first_plan.resources == second_plan.resources == [
+        "moonmind-test-first-run-3938_api_1"
+    ]
+    assert "docker volume prune" in second_plan.refused
