@@ -245,7 +245,22 @@ Operator children (`MoonMind.AgentRun`, sessions, container jobs,
 merge/publication recovery, and the rest of the operator catalog in
 `WorkflowTypeCatalogGenerated.md`) stay out of ordinary product task cards and
 remain reachable only through their existing authorized diagnostics/detail
-surfaces and parent links; registry scope alone grants no route. Previously
+surfaces and parent links; registry scope alone grants no route. The
+per-child mapping (MoonLadderStudios/MoonMind#3947) is:
+
+| Operator child | Authorized detail route / read model | Parent link from product execution |
+| --- | --- | --- |
+| `MoonMind.AgentRun` | `GET /agent-runs/{id}/observability-summary`, `/{id}/observability/events`, `/{id}/diagnostics`, `/{agent_run_id}/artifact-sessions/{session_id}` (`api_service/api/routers/agent_runs.py`); owner-checked via `_require_observability_access` / `_require_agent_run_access` against the execution owner binding, with parent-workflow fallback | Execution detail `agentRunId` (memo / search attributes / parameters, surfaced as `agentRunId`) |
+| Agent / omnigent sessions | `GET /sessions/{session_id}` (+ `/items`, `/stream`, `/events`, `/elicitations/...`) (`api_service/api/routers/sessions.py`); authorized through the parent agent run (`_load_authorized_session_record` → `_require_agent_run_access`) | Session snapshot embedded in the agent-run observability summary (`sessionId`, `sessionSnapshot`) |
+| Container jobs (`MoonMindContainerJobWorkflow`) | `/api/v1/container-jobs/{job_id}` (+ `/logs`, `/artifacts`, `/cancel`) (`api_service/api/routers/container_jobs.py`); owner-scoped `ContainerJobService` keyed by `OwnerIdentity(user.id)` | No product parent link; jobs are addressed directly by `job_id` under the caller's own ownership scope |
+| Merge automation (`MoonMind.MergeAutomation`) | No standalone product route; read model is the parent execution detail `mergeAutomation` summary (`_enrich_execution_merge_automation`) with the child `workflowId` link and resolver children (`resolverChildren[].detailHref`) | `mergeAutomation.workflowId` + `resolverChildren[].workflowId` on the owning product execution |
+| Publication recovery (`MoonMind.PublicationRecoveryV1`) | No standalone product route; read model is the parent execution detail `actionEvidence.publicationRecovery*` fields (`publicationRecoveryWorkflowId`, phase/result) | `actionEvidence.publicationRecoveryWorkflowId` on the owning product execution |
+
+Cross-owner and operator/excluded access on every path above fails closed
+with the generic `execution_not_found` / `403` shapes (no internal type or
+child data disclosed); product detail links for the owning user keep working
+after exclusions are introduced (covered by
+`test_execution_operator_links_3947.py`). Previously
 misclassified rows are repaired only through the shared projection-mutation
 owner (`mutate_execution_projection`, §7.2 field ownership) against
 authoritative workflow/run and owner evidence: correct projection metadata
