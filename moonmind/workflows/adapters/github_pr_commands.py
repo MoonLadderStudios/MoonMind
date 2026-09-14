@@ -31,6 +31,19 @@ workflow boundary can consume the same contract. Every gate that cannot
 prove its precondition fails closed *before* paid execution, and no gate
 searches for an alternate PAT/profile/runtime when the authorized
 connection is unavailable.
+
+Execution-binding scope: this module owns the hermetic command-semantics
+boundary (parse -> eligibility -> authorization -> preflight -> freeze ->
+binding -> feedback). The GitHub App transport receiver, durable delivery
+store, and Temporal dispatch/recovery workflow belong to #3967, which binds
+to this contract as its handoff: #3967 supplies the verified-event facts,
+stores the stable ``identity_key`` as its durable idempotency key,
+reuses the existing dispatch/result on ``redelivery_reuse`` (via
+:func:`classify_redelivery`), and re-runs :func:`revalidate_before_mutation`
+plus :func:`resolve_competing_run` after any restart before mutation. No
+durable store, network I/O, or workflow scheduler lives in this module by
+design; :func:`handle_verified_command_event` is the single hermetic
+journey entrypoint the transport/activity calls.
 """
 
 from __future__ import annotations
@@ -47,6 +60,7 @@ __all__ = [
     "AuthorizationDecision",
     "AuthorizationRequest",
     "CommandIdentity",
+    "CommandJourneyResult",
     "CompetingRunDecision",
     "FrozenCommandDispatch",
     "ParsedCommand",
@@ -54,6 +68,7 @@ __all__ = [
     "PreflightRequest",
     "RevalidationDecision",
     "SkillBinding",
+    "VerifiedCommandEvent",
     "build_feedback_body",
     "classify_feedback_write_outcome",
     "classify_redelivery",
@@ -63,6 +78,7 @@ __all__ = [
     "evaluate_event_eligibility",
     "feedback_triggers_bot",
     "freeze_command_dispatch",
+    "handle_verified_command_event",
     "normalize_command_line",
     "parse_pr_command",
     "redact_for_feedback",
@@ -437,6 +453,181 @@ def freeze_command_dispatch(
         pr_base_sha=pr_base_sha,
         merge_target_ref=merge_target_ref,
         connection_id=connection_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hermetic journey entrypoint (single production-boundary contract)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedCommandEvent:
+    """One transport-verified command event supplied by the #3967 owner.
+
+    ``transport_verified`` lives inside :attr:`authorization`; every other
+    fact is the current value the transport resolved at receipt time.
+    ``workflow_ref`` is the inspectable run link the dispatcher assigned
+    (or ``""`` when the dispatcher has not assigned one yet, in which case
+    the stable ``identity_key`` is used as the ref). ``skill_snapshot_ref``
+    and ``connection_id`` are frozen into the dispatch record unchanged.
+    """
+
+    comment_body: str = ""
+    installation_id: str = ""
+    repository: str = ""
+    pr_number: int = 0
+    comment_id: str = ""
+    is_edited: bool = False
+    is_inline: bool = False
+    is_bot_actor: bool = False
+    trusted_automation_permitted: bool = False
+    authorization: AuthorizationRequest = AuthorizationRequest()
+    pr_base_ref: str = ""
+    pr_base_sha: str = ""
+    pr_head_sha: str = ""
+    is_fork: bool = False
+    fork_write_permitted: bool = False
+    branch_write_authorized: bool = False
+    permissions_revoked: bool = False
+    skill_capability_supported: bool = True
+    skill_snapshot_ref: str = ""
+    connection_id: str = ""
+    workflow_ref: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class CommandJourneyResult:
+    """Outcome of one hermetic command journey.
+
+    ``outcome`` is ``"dispatched"`` (frozen dispatch + queued feedback),
+    ``"help"`` (unknown explicit command: bounded help, no work),
+    ``"ignored"`` (ordinary conversation or negative guard: no work), or
+    ``"blocked"`` (eligible command stopped by a gate before paid work).
+    Only ``"dispatched"`` carries a ``dispatch`` record and a feedback
+    body; every other outcome carries no dispatch and no false feedback.
+    """
+
+    outcome: str
+    reason_code: str
+    normalized_command: str = ""
+    skill_id: str = ""
+    identity_key: str = ""
+    dispatch: Optional[FrozenCommandDispatch] = None
+    feedback_body: str = ""
+
+
+def handle_verified_command_event(event: VerifiedCommandEvent) -> CommandJourneyResult:
+    """Run the full hermetic journey for one verified command event.
+
+    Chains the existing boundary contracts in production order --
+    parse -> eligibility -> authorization -> Skill binding -> preflight ->
+    freeze -> queued feedback -- without I/O, scheduling, or Skill
+    execution. The caller (#3967 transport / Temporal dispatch activity)
+    resolves and runs the frozen Skill bundle, stores ``identity_key``
+    durably, and posts/maintains the feedback comment. This function never
+    grants merge permission, never infers publication evidence, and never
+    invents another scheduler.
+    """
+    parsed = parse_pr_command(event.comment_body)
+    if parsed.outcome == "help":
+        return CommandJourneyResult(
+            outcome="help",
+            reason_code=parsed.reason_code,
+            normalized_command=parsed.normalized_command,
+        )
+    if parsed.outcome != "dispatch":
+        return CommandJourneyResult(
+            outcome="ignored", reason_code=parsed.reason_code
+        )
+
+    eligible, eligibility_reason = evaluate_event_eligibility(
+        parsed,
+        is_edited=event.is_edited,
+        is_inline=event.is_inline,
+        is_bot_actor=event.is_bot_actor,
+        trusted_automation_permitted=event.trusted_automation_permitted,
+    )
+    if not eligible:
+        return CommandJourneyResult(
+            outcome="blocked",
+            reason_code=eligibility_reason,
+            normalized_command=parsed.normalized_command,
+            skill_id=parsed.skill_id,
+        )
+
+    authz = evaluate_dispatch_authorization(event.authorization)
+    if not authz.allowed:
+        return CommandJourneyResult(
+            outcome="blocked",
+            reason_code=authz.reason_code,
+            normalized_command=parsed.normalized_command,
+            skill_id=parsed.skill_id,
+        )
+
+    binding = resolve_skill_binding(parsed.normalized_command)
+    if binding is None:
+        return CommandJourneyResult(
+            outcome="blocked",
+            reason_code="unsupported_skill_capability",
+            normalized_command=parsed.normalized_command,
+        )
+
+    preflight = evaluate_command_preflight(
+        PreflightRequest(
+            skill_id=binding.skill_id,
+            pr_base_ref=event.pr_base_ref,
+            pr_base_sha=event.pr_base_sha,
+            pr_head_sha=event.pr_head_sha,
+            is_fork=event.is_fork,
+            fork_write_permitted=event.fork_write_permitted,
+            branch_write_authorized=event.branch_write_authorized,
+            permissions_revoked=event.permissions_revoked,
+            skill_capability_supported=event.skill_capability_supported,
+        )
+    )
+    if not preflight.ready:
+        return CommandJourneyResult(
+            outcome="blocked",
+            reason_code=preflight.reason_code,
+            normalized_command=parsed.normalized_command,
+            skill_id=binding.skill_id,
+        )
+
+    identity = command_identity(
+        installation_id=event.installation_id,
+        repository=event.repository,
+        pr_number=event.pr_number,
+        comment_id=event.comment_id,
+        normalized_command=parsed.normalized_command,
+        comment_body=event.comment_body,
+    )
+    frozen = freeze_command_dispatch(
+        identity_key=identity.identity_key,
+        skill_id=binding.skill_id,
+        skill_snapshot_ref=event.skill_snapshot_ref,
+        repository=event.repository,
+        pr_number=event.pr_number,
+        pr_head_sha=event.pr_head_sha,
+        pr_base_ref=event.pr_base_ref,
+        pr_base_sha=event.pr_base_sha,
+        merge_target_ref=preflight.merge_target_ref,
+        connection_id=event.connection_id,
+    )
+    feedback = build_feedback_body(
+        command_label=f"@mm {parsed.normalized_command}",
+        skill_id=binding.skill_id,
+        state="queued",
+        workflow_ref=event.workflow_ref or identity.identity_key,
+    )
+    return CommandJourneyResult(
+        outcome="dispatched",
+        reason_code="queued_for_skill_dispatch",
+        normalized_command=parsed.normalized_command,
+        skill_id=binding.skill_id,
+        identity_key=identity.identity_key,
+        dispatch=frozen,
+        feedback_body=feedback,
     )
 
 

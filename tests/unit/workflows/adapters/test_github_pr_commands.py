@@ -13,7 +13,9 @@ from pathlib import Path
 
 from moonmind.workflows.adapters.github_pr_commands import (
     AuthorizationRequest,
+    CommandJourneyResult,
     PreflightRequest,
+    VerifiedCommandEvent,
     build_feedback_body,
     classify_feedback_write_outcome,
     classify_redelivery,
@@ -23,6 +25,7 @@ from moonmind.workflows.adapters.github_pr_commands import (
     evaluate_event_eligibility,
     feedback_triggers_bot,
     freeze_command_dispatch,
+    handle_verified_command_event,
     parse_pr_command,
     redact_for_feedback,
     resolve_competing_run,
@@ -463,3 +466,157 @@ def test_fix_merge_conflicts_skill_has_no_silent_main_substitution():
     assert "origin/main" not in text
     assert "inputs.base" in text
     assert "base_unavailable" in text
+
+
+# ---------------------------------------------------------------------------
+# R6/R8/R10: hermetic per-command journey (transport receipt -> feedback)
+# ---------------------------------------------------------------------------
+#
+# This is the complete production-boundary journey for this issue's
+# "parsing and command semantics, not another executor" scope: the #3967
+# transport receiver and Temporal dispatch/recovery workflow bind to
+# handle_verified_command_event as their handoff contract. Durability
+# (idempotency store, redelivery, restart recovery) lives with #3967,
+# which stores the stable identity_key, reuses the existing
+# dispatch/result on redelivery_reuse, and re-runs revalidation plus
+# competing-run resolution before mutation.
+
+
+def _journey_event(
+    body: str, *, pr_base_ref: str = "release/2.x", **overrides
+) -> VerifiedCommandEvent:
+    base = {
+        "comment_body": body,
+        "installation_id": "123",
+        "repository": "MoonLadderStudios/MoonMind",
+        "pr_number": 42,
+        "comment_id": "999",
+        "authorization": _authorized(),
+        "pr_base_ref": pr_base_ref,
+        "pr_base_sha": "b" * 40,
+        "pr_head_sha": "a" * 40,
+        "branch_write_authorized": True,
+        "skill_snapshot_ref": "snapshot-1",
+        "connection_id": "conn-1",
+        "workflow_ref": "https://workflows.example/runs/1",
+    }
+    base.update(overrides)
+    return VerifiedCommandEvent(**base)
+
+
+def test_journey_each_canonical_command_reaches_skill_dispatch():
+    cases = [
+        ("@mm fix comments", "fix-comments"),
+        ("@mm fix merge conflicts", "fix-merge-conflicts"),
+        ("@mm resolve", "pr-resolver"),
+    ]
+    for body, skill_id in cases:
+        result = handle_verified_command_event(_journey_event(body))
+        assert result.outcome == "dispatched"
+        assert result.skill_id == skill_id
+        assert result.dispatch is not None
+        assert result.dispatch.skill_id == skill_id
+        assert result.dispatch.skill_snapshot_ref == "snapshot-1"
+        assert result.dispatch.connection_id == "conn-1"
+        assert result.dispatch.pr_head_sha == "a" * 40
+        # Non-main base is preserved end to end, never silent main.
+        assert result.dispatch.merge_target_ref == "origin/release/2.x"
+        assert result.identity_key == result.dispatch.identity_key
+        # Queued feedback carries the workflow link and cannot retrigger.
+        assert "queued" in result.feedback_body
+        assert "https://workflows.example/runs/1" in result.feedback_body
+        assert feedback_triggers_bot(result.feedback_body) is False
+        # resolve preserves the declared publication policy: no merge grant.
+        binding = resolve_skill_binding(result.normalized_command)
+        assert binding is not None
+        assert binding.grants_merge_permission is False
+        assert binding.requires_publication_evidence is True
+
+
+def test_journey_negative_paths_never_dispatch():
+    assert (
+        handle_verified_command_event(
+            _journey_event("@mm frobnicate")
+        ).outcome
+        == "help"
+    )
+    ignored = handle_verified_command_event(
+        _journey_event("Looks good, thanks!")
+    )
+    assert ignored.outcome == "ignored"
+    assert ignored.dispatch is None
+    edited = handle_verified_command_event(
+        _journey_event("@mm fix comments", is_edited=True)
+    )
+    assert edited.outcome == "blocked"
+    assert edited.dispatch is None
+    revoked_authz = _authorized().__class__(
+        **{**_authorized().__dict__, "actor_authorized": False}
+    )
+    revoked = handle_verified_command_event(
+        _journey_event("@mm fix comments", authorization=revoked_authz)
+    )
+    assert revoked.outcome == "blocked"
+    assert revoked.reason_code == "actor_not_authorized"
+    assert revoked.dispatch is None
+    fork_blocked = handle_verified_command_event(
+        _journey_event("@mm fix comments", is_fork=True)
+    )
+    assert fork_blocked.outcome == "blocked"
+    assert fork_blocked.reason_code == "fork_write_unavailable"
+
+
+def test_journey_recovery_redelivery_reuse_and_stale_head_block():
+    result = handle_verified_command_event(
+        _journey_event("@mm fix comments")
+    )
+    assert result.outcome == "dispatched"
+    assert result.dispatch is not None
+    # Redelivery of the same comment body reuses the existing dispatch.
+    redelivered = handle_verified_command_event(
+        _journey_event("@mm fix comments")
+    )
+    assert redelivered.identity_key == result.identity_key
+    assert (
+        classify_redelivery(
+            stored_comment_id="999",
+            stored_digest=command_identity(
+                installation_id="123",
+                repository="MoonLadderStudios/MoonMind",
+                pr_number=42,
+                comment_id="999",
+                normalized_command="fix comments",
+                comment_body="@mm fix comments",
+            ).content_digest,
+            incoming_comment_id="999",
+            incoming_digest=command_identity(
+                installation_id="123",
+                repository="MoonLadderStudios/MoonMind",
+                pr_number=42,
+                comment_id="999",
+                normalized_command="fix comments",
+                comment_body="@mm fix comments",
+            ).content_digest,
+        )
+        == "redelivery_reuse"
+    )
+    # After a restart the dispatcher revalidates before mutation: a moved
+    # head blocks instead of silently becoming a new billable request.
+    assert (
+        revalidate_before_mutation(
+            frozen_head_sha=result.dispatch.pr_head_sha,
+            frozen_base_sha=result.dispatch.pr_base_sha,
+            frozen_actor_authorized=True,
+            current_head_sha="c" * 40,
+            current_base_sha=result.dispatch.pr_base_sha,
+            current_actor_authorized=True,
+        ).reason_code
+        == "stale_head"
+    )
+    # A conflicting active run surfaces explicitly; the command layer never
+    # invents another scheduler.
+    assert (
+        resolve_competing_run(has_conflicting_run=True).result
+        == "conflicting"
+    )
+    assert isinstance(result, CommandJourneyResult)
