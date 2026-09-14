@@ -159,7 +159,11 @@ def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
 
         assert response.status_code == 200
         data = response.json()
-        assert data["count"] == 1
+        # MoonLadderStudios/MoonMind#3947: direct-Temporal totals are always
+        # unknown (per-row exclusion filtering makes upstream counts unprovable).
+        assert data["count"] is None
+        assert data["countMode"] == "estimated_or_unknown"
+        mock_client.count_workflows.assert_not_awaited()
         item = data["items"][0]
         assert item["workflowId"] == "mm:wf-1"
         assert item["runId"] == "run-1"
@@ -197,9 +201,15 @@ def test_list_executions_source_temporal_defaults_to_workflow_scope(client) -> N
             'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
             'AND mm_owner_id="user-123"'
         )
-        mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
+        # MoonLadderStudios/MoonMind#3947: no count RPC on the direct-Temporal
+        # list path; the upstream query still carries the registry product
+        # domain and the total is reported unknown.
+        mock_client.count_workflows.assert_not_awaited()
         mock_client.list_workflows.assert_called_once()
         assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
+        body = response.json()
+        assert body["count"] is None
+        assert body["countMode"] == "estimated_or_unknown"
 
 
 def test_list_executions_source_temporal_default_scope_excludes_legacy_run_entry(
@@ -225,7 +235,7 @@ def test_list_executions_source_temporal_default_scope_excludes_legacy_run_entry
         response = test_client.get("/api/executions", params={"source": "temporal"})
 
         assert response.status_code == 200
-        query = mock_client.count_workflows.await_args.kwargs["query"]
+        query = mock_client.list_workflows.call_args.kwargs["query"]
         assert 'mm_entry="user_workflow"' in query
         assert 'mm_entry="run"' not in query
 
@@ -260,7 +270,7 @@ def test_list_executions_source_temporal_default_scope_uses_workflow_query(
             'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
             'AND mm_owner_id="user-123"'
         )
-        mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
+        mock_client.count_workflows.assert_not_awaited()
         assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
 
 
@@ -378,7 +388,7 @@ def test_list_executions_source_temporal_ignores_retired_scope_values(
         )
 
     assert response.status_code == 200
-    query = mock_client.count_workflows.await_args.kwargs["query"]
+    query = mock_client.list_workflows.call_args.kwargs["query"]
     assert 'WorkflowType="MoonMind.UserWorkflow"' in query
     assert 'mm_entry="user_workflow"' in query
 
@@ -417,7 +427,7 @@ def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_workf
             'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
             'AND mm_owner_id="user-123"'
         )
-        mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
+        mock_client.count_workflows.assert_not_awaited()
         assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
 
 
@@ -445,7 +455,7 @@ def test_list_executions_source_temporal_ignores_unknown_scope(client) -> None:
         )
 
     assert response.status_code == 200
-    query = mock_client.count_workflows.await_args.kwargs["query"]
+    query = mock_client.list_workflows.call_args.kwargs["query"]
     assert 'WorkflowType="MoonMind.UserWorkflow"' in query
     assert 'mm_entry="user_workflow"' in query
 

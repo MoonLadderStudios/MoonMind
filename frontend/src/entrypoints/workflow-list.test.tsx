@@ -2385,6 +2385,28 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByRole('button', { name: 'Previous page' }).getAttribute('disabled')).toBeNull();
   });
 
+  it('keeps next enabled with a continuation message on excluded-only empty pages', async () => {
+    // MoonLadderStudios/MoonMind#3947 (R2): zero product items plus a
+    // continuation token is navigable, not an empty repository.
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [],
+        nextPageToken: 'onward-token',
+        count: null,
+        countMode: 'estimated_or_unknown',
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/No product workflows on this page/)).toBeTruthy();
+    });
+
+    expect(screen.getByRole('button', { name: 'Next page' }).getAttribute('disabled')).toBeNull();
+  });
+
   it('shows blocked dependency summaries for waiting dependency rows', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
