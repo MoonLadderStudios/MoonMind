@@ -939,51 +939,51 @@ async def mutate_execution_projection(
                 # staleness so a losing concurrent writer cannot overwrite the
                 # winner's newer lifecycle observation with older payload data.
                 latest = max(records, key=lambda row: _record_semantic_time(row) or datetime.min.replace(tzinfo=UTC))
-            if owner == "temporal":
-                identity_source = canonical if canonical is not None else latest
-                for field in _TEMPORAL_PROTECTED_IDENTITY_FIELDS:
-                    stored_identity = _normalize_identity(getattr(identity_source, field, None))
-                    incoming_identity = _normalize_identity(incoming.get(field))
-                    if (
-                        stored_identity is not None
-                        and incoming_identity is not None
-                        and stored_identity != incoming_identity
-                    ):
-                        incoming[field] = getattr(identity_source, field)
-                merged.update({
-                    key: incoming[key]
-                    for key in ("owner_id", "owner_type", "namespace", "workflow_type", "parameters")
-                    if key in incoming
-                })
-            _re_prev = _projection_semantic_time(latest.updated_at, latest.search_attributes)
-            _re_in = _semantic_time(incoming.get("updated_at"))
-            _re_stale = False
-            if latest.run_id == incoming.get("run_id"):
-                _re_stale = bool(_re_prev and _re_in and _re_in < _re_prev) or bool(
-                    latest.close_status and not incoming.get("close_status")
-                )
-            else:
-                _re_prev_match = bool(
-                    incoming.get("previous_run_id")
-                    and incoming.get("previous_run_id") == latest.run_id
-                )
-                _re_stored_first = (getattr(latest, "memo", None) or {}).get("first_run_id")
-                _re_in_first = incoming.get("first_run_id")
-                _re_chain = bool(
-                    _re_in_first and _re_stored_first and _re_in_first == _re_stored_first
-                ) or bool(_re_in_first and latest.run_id and _re_in_first == latest.run_id)
-                _re_succ = _re_prev_match or _re_chain
-                if _re_prev and _re_in:
-                    if _re_in < _re_prev:
+                if owner == "temporal":
+                    identity_source = canonical if canonical is not None else latest
+                    for field in _TEMPORAL_PROTECTED_IDENTITY_FIELDS:
+                        stored_identity = _normalize_identity(getattr(identity_source, field, None))
+                        incoming_identity = _normalize_identity(incoming.get(field))
+                        if (
+                            stored_identity is not None
+                            and incoming_identity is not None
+                            and stored_identity != incoming_identity
+                        ):
+                            incoming[field] = getattr(identity_source, field)
+                    merged.update({
+                        key: incoming[key]
+                        for key in ("owner_id", "owner_type", "namespace", "workflow_type", "parameters")
+                        if key in incoming
+                    })
+                _re_prev = _projection_semantic_time(latest.updated_at, latest.search_attributes)
+                _re_in = _semantic_time(incoming.get("updated_at"))
+                _re_stale = False
+                if latest.run_id == incoming.get("run_id"):
+                    _re_stale = bool(_re_prev and _re_in and _re_in < _re_prev) or bool(
+                        latest.close_status and not incoming.get("close_status")
+                    )
+                else:
+                    _re_prev_match = bool(
+                        incoming.get("previous_run_id")
+                        and incoming.get("previous_run_id") == latest.run_id
+                    )
+                    _re_stored_first = (getattr(latest, "memo", None) or {}).get("first_run_id")
+                    _re_in_first = incoming.get("first_run_id")
+                    _re_chain = bool(
+                        _re_in_first and _re_stored_first and _re_in_first == _re_stored_first
+                    ) or bool(_re_in_first and latest.run_id and _re_in_first == latest.run_id)
+                    _re_succ = _re_prev_match or _re_chain
+                    if _re_prev and _re_in:
+                        if _re_in < _re_prev:
+                            _re_stale = True
+                        elif _re_in == _re_prev and not _re_succ:
+                            _re_stale = True
+                    elif not _re_succ:
                         _re_stale = True
-                    elif _re_in == _re_prev and not _re_succ:
-                        _re_stale = True
-                elif not _re_succ:
-                    _re_stale = True
-            if _re_stale:
-                stale = True
-                merged = {column.name: getattr(latest, column.name) for column in TemporalExecutionCanonicalRecord.__table__.columns if hasattr(TemporalExecutionRecord, column.name)}
-                merged["workflow_id"] = workflow_id
+                if _re_stale:
+                    stale = True
+                    merged = {column.name: getattr(latest, column.name) for column in TemporalExecutionCanonicalRecord.__table__.columns if hasattr(TemporalExecutionRecord, column.name)}
+                    merged["workflow_id"] = workflow_id
     # Snapshot the pre-write stored values before the write-back below: the
     # duplicate-observation check must compare against what was stored, not the
     # just-overwritten attributes (latest aliases one of the row objects).
