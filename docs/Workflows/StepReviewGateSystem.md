@@ -45,10 +45,10 @@ flowchart TD
         C -->|No| D[Record Result & Continue]
         C -->|Yes| E[Review Activity]
         E --> F{Review Verdict}
-        F -->|PASS or acceptable INCONCLUSIVE| D
-        F -->|FAIL or blocker INCONCLUSIVE & retries remaining| G[Inject Feedback]
+        F -->|FULLY_IMPLEMENTED or acceptable NO_DETERMINATION| D
+        F -->|ADDITIONAL_WORK_NEEDED or blocker NO_DETERMINATION & retries remaining| G[Inject Feedback]
         G --> B
-        F -->|FAIL or blocker INCONCLUSIVE & max retries reached| H{Adaptive path available?}
+        F -->|ADDITIONAL_WORK_NEEDED or blocker NO_DETERMINATION & max retries reached| H{Adaptive path available?}
         H -->|Yes| I[Execute or schedule adaptive action]
         H -->|No| J[Apply failure_mode Policy]
         I --> K{Adaptation outcome}
@@ -121,10 +121,23 @@ chat settings (`DEFAULT_CHAT_PROVIDER` and that provider's settings). Omitted
 through unchanged. Disabled, unsupported or uncredentialed providers do not
 fall back to another provider. Credentials never come from workflow payloads.
 
-The reviewer receives the supplied bounded step evidence, with a 256 KB prompt
-budget and the requested timeout. Its response is parsed through the canonical
+The reviewer receives the supplied bounded step evidence, with per-section
+64 KB input ceilings plus a 256 KB final prompt budget, secret redaction of
+secret-shaped fields before provider send, and the requested timeout clamped
+to the 1–600 second deployment ceiling. OpenAI/Google requests carry a 4096
+output-token budget (Anthropic `max_tokens` 4096); provider responses are
+read under a 64 KB byte ceiling before JSON parsing, and oversized findings,
+feedback, non-finite confidence, or malformed fields return
+`NO_DETERMINATION` instead of a positive verdict. Its response is parsed through the canonical
 step-gate contract, including recorded `PASS` compatibility. Unknown/malformed
 results, timeouts and missing reviewer authority return `NO_DETERMINATION`.
+Every returned payload — positive and unavailable — carries
+`reviewProvenance` (`provider`, `model`, `evidenceDigest`,
+`reviewAttemptIdentity`, `reviewAttempt`, `policy.timeoutSeconds`).
+An explicitly different route or evidence set is a new review attempt;
+retries of the same admitted review reuse the attempt identity and may reuse
+only the same committed decision, which the calling workflow persists as a
+gate-result artifact and step-ledger check before acknowledging completion.
 Execution completion alone is not a review verdict. Unavailable auxiliary review
 must preserve completed outputs and cannot authorize publication or an
 unnecessary implementation retry. Artifact refs alone do not establish that the
@@ -156,11 +169,11 @@ referenced content was reviewed.
 }
 ```
 
-**ReviewVerdict** — output from the review activity:
+**ReviewVerdict** — output from the review activity (new writes use canonical verdicts):
 
 ```json
 {
-  "verdict": "PASS",
+  "verdict": "FULLY_IMPLEMENTED",
   "confidence": 0.92,
   "feedback": null,
   "issues": []
@@ -169,7 +182,7 @@ referenced content was reviewed.
 
 ```json
 {
-  "verdict": "FAIL",
+  "verdict": "ADDITIONAL_WORK_NEEDED",
   "confidence": 0.85,
   "feedback": "The patch was applied but the test suite still has 3 failing tests. The step outputs show all files were changed, but the error in stderr_tail indicates a missing import.",
   "issues": [
@@ -182,11 +195,20 @@ referenced content was reviewed.
 }
 ```
 
-Verdict values: `PASS`, `FAIL`, `INCONCLUSIVE`.
+Canonical verdict values for new writes: `FULLY_IMPLEMENTED`, `ADDITIONAL_WORK_NEEDED`, `NO_DETERMINATION`, `BLOCKED`, `FAILED_UNRECOVERABLE`.
 
-- `PASS` → step is accepted; proceed.
-- `FAIL` → step should be retried with feedback (if retries remain).
-- `INCONCLUSIVE` → accepted only when the review does not identify missing required evidence, unsafe ambiguity, or another gate blocker. Inconclusive reviews caused by missing validation evidence, credential/provider access, or source-authority uncertainty are classified through the same hard/adaptive gate path as failed reviews.
+- `FULLY_IMPLEMENTED` → step is accepted; proceed.
+- `ADDITIONAL_WORK_NEEDED` → step should be retried with feedback (if retries remain).
+- `NO_DETERMINATION` → accepted only when the review does not identify missing required evidence, unsafe ambiguity, or another gate blocker. Reviews missing validation evidence, credential/provider access, or source-authority certainty follow the same hard/adaptive gate path as failed reviews.
+- `BLOCKED` / `FAILED_UNRECOVERABLE` → terminal stop; never retried automatically.
+
+Compatibility: the canonical parser still accepts the legacy draft values
+`PASS` → `FULLY_IMPLEMENTED`, `FAIL` → `ADDITIONAL_WORK_NEEDED`, and
+`INCONCLUSIVE` → `NO_DETERMINATION` for recorded histories only. New code,
+payload examples, prompts, and docs must emit canonical values. Recorded
+histories are preserved: serialized decisions keep their stored verdict and
+gain `downgradeReason`/`invalid`/`degraded` fields only through the
+fail-closed parser, never by rewriting history in place.
 
 ---
 
@@ -228,17 +250,17 @@ for index, node in enumerate(ordered_nodes, start=1):
             previous_feedback=previous_feedback,
         )
 
-        if review_verdict["verdict"] == "PASS":
+        if review_verdict["verdict"] == "FULLY_IMPLEMENTED":
             break  # Step accepted
 
         if (
-            review_verdict["verdict"] == "INCONCLUSIVE"
+            review_verdict["verdict"] == "NO_DETERMINATION"
             and not has_gate_blocker(review_verdict)
         ):
             break  # Step accepted; no blocker evidence was found
 
-        # FAIL or blocker INCONCLUSIVE — retry with feedback only inside
-        # the configured review budget.
+        # ADDITIONAL_WORK_NEEDED or blocker NO_DETERMINATION — retry with
+        # feedback only inside the configured review budget.
         if attempt < max_attempts:
             previous_feedback = review_verdict["feedback"]
             self._summary = (
@@ -383,18 +405,36 @@ workflow step achieved its intended outcome.
 ## Your Task
 Evaluate whether the step output satisfies the aims described in the inputs.
 
-Respond with JSON:
+Respond with JSON (new writes must use canonical verdicts):
 {
-  "verdict": "PASS" | "FAIL" | "INCONCLUSIVE",
+  "verdict": "FULLY_IMPLEMENTED" | "ADDITIONAL_WORK_NEEDED" | "NO_DETERMINATION" | "BLOCKED" | "FAILED_UNRECOVERABLE",
   "confidence": <0.0-1.0>,
-  "feedback": "<explanation if FAIL>",
+  "feedback": "<explanation if ADDITIONAL_WORK_NEEDED>",
   "issues": [{"severity": "error|warning", "description": "...", "evidence": "..."}]
 }
 ```
 
+Legacy recorded histories may contain `PASS` / `FAIL` / `INCONCLUSIVE`;
+the parser maps them to the canonical values above. Do not emit legacy
+values in new prompts, payloads, or docs.
+
 ### 6.3 Routing
 
 The review activity routes to the **LLM activity fleet** (`mm.activity.llm`), leveraging the existing model routing infrastructure. The `reviewer_model` policy controls which model is used (allowing a cheaper, faster model for reviews vs. the agent's primary model).
+
+Worker configuration: provider, enablement, credential, and default model
+come from the existing chat settings (`DEFAULT_CHAT_PROVIDER` and that
+provider's `*_ENABLED` / `*_API_KEY` / `*_CHAT_MODEL` values). Omitted and
+`default` reviewer models resolve identically; explicit models pass through
+unchanged. Disabled, unsupported, or uncredentialed providers never fall back.
+The admitted route is bound into `reviewProvenance` on the returned payload,
+and the calling workflow persists the gate-result artifact plus step-ledger
+`checks[]` entry before acknowledging completion, so a lost completion
+acknowledgment can reuse the committed decision instead of repeating work.
+
+UI provenance: the dashboard renders `gateVerdict` from the step row's
+`checks[]` entry and links the persisted gate-result artifact (`gateResultRef`)
+for full `reviewProvenance` (provider/model/evidence digest/attempt identity).
 
 ---
 
@@ -480,6 +520,9 @@ Rules:
 - review state must be visible without parsing logs
 - verdict summaries should be bounded and operator-safe
 - large review feedback and issue detail belong in the linked artifact
+- committed checks carry `reviewProvenance` with `reviewAttemptIdentity` and
+  `evidenceDigest` so a duplicate delivery or lost-acknowledgment retry reuses
+  the same committed decision instead of persisting a divergent redelivery
 - The dashboard should render review evidence inside the expanded step row, not as a terminal-widget-only affordance
 
 ### 8.4 Finish Summary Integration
@@ -601,4 +644,4 @@ Each review adds one activity result to the workflow history. With a default of 
 - **Review criteria customization**: Custom review prompts per step or per skill type.
 - **Conditional edges post-review**: Use review output to drive plan branching (depends on conditional-edge support — §Q2 in SkillAndPlanContracts).
 - **Review result caching**: Skip re-review on retry if only feedback injection changed (hash-based).
-- **Human review escalation**: If `INCONCLUSIVE` confidence is below a threshold, escalate to a human approval gate.
+- **Human review escalation**: If `NO_DETERMINATION` confidence is below a threshold, escalate to a human approval gate. (Legacy histories may record this state as `INCONCLUSIVE`.)

@@ -10,6 +10,7 @@ Data models for the step approval policy system:
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
@@ -303,6 +304,14 @@ class StepGateResult:
     degraded: bool = False
     downgrade_reason: str | None = None
     schema_version: str = "v1"
+    # Immutable review-attempt binding (MoonMind#3945 R2): the admitted
+    # reviewer route/model, policy and reviewed evidence digest carried with
+    # the verdict so the persisted gate-result artifact names the exact
+    # review attempt. Optional for replay compatibility: payloads recorded
+    # before this field parse unchanged with review_provenance None. The
+    # field never influences invalid/degraded branching and never carries
+    # credentials (route/model/digests/policy only).
+    review_provenance: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != "v1":
@@ -373,6 +382,8 @@ class StepGateResult:
             )
         if self.downgrade_reason:
             payload["downgradeReason"] = self.downgrade_reason
+        if self.review_provenance is not None:
+            payload["reviewProvenance"] = dict(self.review_provenance)
         return payload
 
     def to_review_verdict(self) -> ReviewVerdict:
@@ -420,31 +431,65 @@ def parse_step_gate_result(
 
     confidence_raw = payload.get("confidence")
     confidence: float | str
-    if isinstance(confidence_raw, str) and confidence_raw.strip().lower() in {
+    confidence_invalid = False
+    if isinstance(confidence_raw, bool):
+        # Booleans are not numeric confidence: `float(True) == 1.0` would
+        # otherwise authorize advancement on malformed provider evidence.
+        confidence = 0.0
+        confidence_invalid = True
+    elif isinstance(confidence_raw, str) and confidence_raw.strip().lower() in {
         "low",
         "medium",
         "high",
     }:
         confidence = confidence_raw.strip().lower()
+    elif isinstance(confidence_raw, str) and confidence_raw.strip().lower() in {
+        "nan", "+nan", "-nan", "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity",
+    }:
+        confidence = 0.0
+        confidence_invalid = True
     else:
         try:
-            confidence = float(confidence_raw or 0.0)
-            confidence = max(0.0, min(1.0, confidence))
+            confidence_value = float(confidence_raw or 0.0)
+            if not math.isfinite(confidence_value):
+                confidence = 0.0
+                confidence_invalid = True
+            else:
+                confidence = max(0.0, min(1.0, confidence_value))
         except (TypeError, ValueError):
             confidence = 0.0
+    if confidence_invalid:
+        invalid = True
+        degraded = True
 
     feedback = payload.get("feedback")
     if isinstance(feedback, str):
         feedback = feedback.strip() or None
     else:
         feedback = None
+    # Bounded-output ceilings at the canonical contract boundary (#3945):
+    # oversized findings/feedback can never authorize advancement. Truncation
+    # is incomplete review, not a positive verdict.
+    if isinstance(feedback, str) and len(feedback) > 4_000:
+        invalid = True
+        degraded = True
 
     issues_raw = payload.get("issues")
     issues: tuple[Mapping[str, Any], ...] = ()
     if isinstance(issues_raw, list):
+        if len(issues_raw) > 20:
+            invalid = True
+            degraded = True
         issues = tuple(
-            dict(issue) for issue in issues_raw if isinstance(issue, dict)
+            dict(issue) for issue in issues_raw[:20] if isinstance(issue, dict)
         )
+        for issue in issues:
+            for key in ("description", "evidence"):
+                text = issue.get(key)
+                if isinstance(text, str) and len(text) > 2_000:
+                    invalid = True
+                    degraded = True
+                    break
     validated_refs = payload.get("validatedRefs") or payload.get("validated_refs")
     invalidated_refs = payload.get("invalidatedRefs") or payload.get(
         "invalidated_refs"
@@ -515,6 +560,13 @@ def parse_step_gate_result(
     }:
         recommended_next_action = "blocked"
 
+    provenance_raw = payload.get("reviewProvenance")
+    if provenance_raw is None:
+        provenance_raw = payload.get("review_provenance")
+    review_provenance: Mapping[str, Any] | None = (
+        dict(provenance_raw) if isinstance(provenance_raw, Mapping) else None
+    )
+
     return StepGateResult(
         verdict=verdict_raw,
         confidence=confidence,
@@ -555,6 +607,7 @@ def parse_step_gate_result(
         invalid=invalid,
         degraded=degraded,
         downgrade_reason=downgrade_reason,
+        review_provenance=review_provenance,
     )
 
 

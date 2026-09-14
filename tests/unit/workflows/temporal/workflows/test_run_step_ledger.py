@@ -5584,6 +5584,9 @@ async def test_run_execution_stage_records_review_evidence(
         "recommendedNextAction": "advance",
         "invalid": False,
         "degraded": False,
+        "reviewProvenance": None,
+        "reviewAttemptIdentity": None,
+        "reviewEvidenceDigest": None,
     }
     review_payloads = [
         payload
@@ -5770,6 +5773,9 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
         "recommendedNextAction": "advance",
         "invalid": False,
         "degraded": False,
+        "reviewProvenance": None,
+        "reviewAttemptIdentity": None,
+        "reviewEvidenceDigest": None,
     }
     review_payloads = [
         payload
@@ -6437,6 +6443,9 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
         "recommendedNextAction": "advance",
         "invalid": False,
         "degraded": False,
+        "reviewProvenance": None,
+        "reviewAttemptIdentity": None,
+        "reviewEvidenceDigest": None,
     }
     review_payloads = [
         payload

@@ -6,8 +6,16 @@ import pytest
 from fastapi import Request
 
 from moonmind.workflows.temporal.activities.step_review import (
+    clear_committed_reviews,
     step_review_activity,
 )
+
+@pytest.fixture(autouse=True)
+def _isolated_committed_reviews():
+    """Keep the in-process committed-review fallback hermetic across tests."""
+    clear_committed_reviews()
+    yield
+    clear_committed_reviews()
 
 @pytest.mark.asyncio
 async def test_step_review_activity_does_not_infer_review_from_completed_execution():
