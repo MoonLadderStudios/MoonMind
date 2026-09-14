@@ -237,3 +237,11 @@ def test_readme_new_doc_links_resolve() -> None:
     for target in ("docs/FirstRunServiceInventory.md", "docs/UI/CreatePage.md"):
         assert target in readme
         assert (REPO_ROOT / target).exists(), f"README link target must exist: {target}"
+
+
+def test_quick_start_requires_task_input_before_submit() -> None:
+    readme = _read(README)
+    quick_start = readme[readme.find("## Quick Start") :]
+    normalized = _normalized(quick_start)
+    assert "task instructions or select an explicit Skill" in normalized
+    assert "repository and branch" in normalized
