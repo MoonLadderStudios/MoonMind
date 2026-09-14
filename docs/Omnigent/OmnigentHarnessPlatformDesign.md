@@ -1083,6 +1083,20 @@ ClassAdmissionDecision
 
 The result is a fenced `ExactHostCapabilityDecision` stored in the runtime binding. Missing, unknown, stale, or mismatched required evidence blocks runner and session creation.
 
+Model validation retains the exact host and credential lease while retrying a
+missing selected model or a typed model-catalog probe failure. The attestor makes
+at most three catalog reads, separated by one and two seconds, using the same
+admitted model, image, credentials, workspace, and egress policy. A successful CLI
+exit alone does not prove model availability: OpenCode can return its bundled
+catalog when a refresh fails. Only an observation containing the exact selected
+model permits launch. Build, credential, and policy failures remain outside this
+read-retry policy, and cancellation interrupts it. Model evidence retains the
+bounded observations and typed probe failures without raw CLI diagnostics. On
+exhaustion, the attestor publishes that evidence before host cleanup and reports
+that the model could not be confirmed; an auxiliary artifact-write failure does
+not replace the primary validation failure. This is Activity-side recovery and
+does not amend immutable plans or recorded workflow commands.
+
 ### 15.3 Required, preferred, and unknown
 
 - Missing required class-level capability blocks plan creation.
