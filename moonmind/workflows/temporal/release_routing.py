@@ -1,10 +1,11 @@
-"""Temporal owns release routing; startup initializes only an empty deployment."""
+"""Temporal owns release routing; startup converges abandoned routing to the deployed release."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from temporalio.api.workflowservice.v1 import (
@@ -14,6 +15,8 @@ from temporalio.api.workflowservice.v1 import (
 )
 from temporalio.common import PinnedVersioningOverride, WorkerDeploymentVersion
 from temporalio.service import RPCError, RPCStatusCode
+
+logger = logging.getLogger(__name__)
 
 
 async def routing_snapshot(client, deployment: str):
@@ -202,6 +205,118 @@ async def promote_version(
     }
 
 
+async def _deployment_version_create_time(
+    client, version: str, *, retries: int = 1
+) -> datetime | None:
+    """Create time of a deployment version, or None when it never registered.
+
+    A freshly started worker's own version may take seconds to appear after
+    its first poll, so callers can retry that lookup briefly. Anything else
+    missing means the version genuinely has no fleet behind it.
+    """
+    for attempt in range(max(1, retries)):
+        try:
+            response = await client.workflow_service.describe_worker_deployment_version(
+                DescribeWorkerDeploymentVersionRequest(
+                    namespace=client.namespace, version=version
+                )
+            )
+        except RPCError as exc:
+            if exc.status != RPCStatusCode.NOT_FOUND:
+                raise
+            if attempt < max(1, retries) - 1:
+                await asyncio.sleep(2)
+                continue
+            return None
+        create_time = getattr(
+            response.worker_deployment_version_info, "create_time", None
+        )
+        if create_time is None:
+            return None
+        to_datetime = getattr(create_time, "ToDatetime", None)
+        observed = (
+            to_datetime(tzinfo=timezone.utc) if callable(to_datetime) else create_time
+        )
+        if observed is None:
+            return None
+        if getattr(observed, "tzinfo", None) is None:
+            observed = observed.replace(tzinfo=timezone.utc)
+        return observed
+    return None
+
+
+async def steward_abandoned_routing(
+    client, spec, *, current: str, target: str
+) -> dict[str, str]:
+    """Adopt routing a previous release abandoned, or name its live owner.
+
+    A plain restart with a new image leaves the new version waiting for a
+    promotion owner that only exists inside a managed update, while the
+    recorded current version has no pollers left. That ownerless wait wedges
+    every queued workflow, so the starting fleet finishes the handoff itself
+    with the same canary-gated compare-and-set promotion the updater runs.
+
+    The recorded current version keeps its authority when it is newer than
+    this worker's version: a stale image restarting after a newer release
+    must not roll routing back, so deliberate downgrades stay on the managed
+    update path and this only names the version that owns routing.
+    """
+    ours = await _deployment_version_create_time(client, target, retries=8)
+    theirs = await _deployment_version_create_time(client, current)
+    if theirs is not None and (ours is None or ours <= theirs):
+        logger.info(
+            "Release routing stays with live current version %s; %s awaits promotion",
+            current,
+            target,
+        )
+        return {
+            "status": "awaiting_promotion",
+            "currentVersion": current,
+            "candidateVersion": target,
+            "owner": current,
+        }
+    logger.warning(
+        "Release routing current version %s looks abandoned; stewarding promotion of %s",
+        current,
+        target,
+    )
+    failure = None
+    try:
+        await promote_version(
+            client,
+            deployment=spec.deployment_id,
+            build_id=spec.build_id,
+            expected_current=current,
+            task_queue=spec.task_queues[0],
+            task_queues=tuple(spec.task_queues),
+        )
+    except (RPCError, ValueError) as exc:
+        if isinstance(exc, RPCError) and exc.status != RPCStatusCode.ABORTED:
+            raise
+        # A failed canary and a lost compare-and-set both land here. A failed
+        # canary leaves the observed routing untouched, while a lost race
+        # moves it, so server state tells them apart: never spin canaries.
+        failure = exc
+    else:
+        return {"status": "current", "currentVersion": target}
+    observed = current_version(await routing_snapshot(client, spec.deployment_id))
+    if observed == target:
+        return {"status": "current", "currentVersion": target}
+    if observed != current:
+        logger.info(
+            "Release routing moved to %s during stewardship; %s awaits promotion",
+            observed,
+            target,
+        )
+        return {
+            "status": "awaiting_promotion",
+            "currentVersion": observed,
+            "candidateVersion": target,
+            "owner": observed,
+        }
+    raise failure
+
+
 async def bootstrap_version_routing(client, spec):
     if not spec.versioning_enabled:
         return {"status": "unversioned"}
@@ -219,11 +334,15 @@ async def bootstrap_version_routing(client, spec):
                 "current_version_changed_time"
             )
             if current and not never_routed:
-                return {
-                    "status": "current" if current == target else "awaiting_promotion",
-                    "currentVersion": current,
-                    "candidateVersion": target,
-                }
+                if current == target:
+                    return {
+                        "status": "current",
+                        "currentVersion": current,
+                        "candidateVersion": target,
+                    }
+                return await steward_abandoned_routing(
+                    client, spec, current=current, target=target
+                )
             try:
                 await promote_version(
                     client,

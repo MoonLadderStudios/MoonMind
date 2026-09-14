@@ -783,6 +783,13 @@ also qualifies a candidate API's health, dashboard, assets and read-only API.
 Temporal's compare-and-set routing update promotes only that candidate. A lost
 response reuses the same canary run and verifies the server's current decision.
 
+A plain restart that replaces the fleet image without a managed update must
+still converge: when the recorded current version is older than the deployed
+release, the starting workflow fleet runs the same pinned canary and
+compare-and-set promotion itself instead of waiting for an update owner. A
+newer recorded current version keeps its authority, so deliberate downgrades
+stay on the managed update path.
+
 Before promotion, the controller retains pollers from the exact previous image.
 Pinned work remains owned by that version after normal Compose services change.
 The existing maintenance schedule retires those temporary pollers only when
