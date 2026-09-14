@@ -11513,6 +11513,130 @@ def test_describe_execution_hides_foreign_workflow_visibility(
     assert response.json()["detail"]["code"] == "execution_not_found"
     assert str(user.id) != service.describe_execution.return_value.owner_id
 
+def test_owner_product_detail_surfaces_operator_child_parent_links() -> None:
+    """MoonLadderStudios/MoonMind#3947 R3: the owning user reaches operator
+    children through parent links on the product detail payload.
+
+    The product link itself must stay reachable (200) after exclusions were
+    introduced, carrying the AgentRun parent link (``agentRunId``) and the
+    merge-automation child link (``mergeAutomation.workflowId``).
+    """
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    user = _override_user_dependencies(app, is_superuser=False)
+    record = _build_execution_record(owner_id=str(user.id))
+    record.parameters = {
+        "publishMode": "pr",
+        "mergeAutomation": {"enabled": True},
+    }
+    record.memo = {
+        **record.memo,
+        "agentRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
+        "merge_automation": {
+            "enabled": True,
+            "status": "awaiting_child",
+            "childWorkflowId": "merge-automation:mm:wf-1:pr:1614:head:abc123",
+        },
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        progress={
+            "total": 1,
+            "pending": 0,
+            "ready": 0,
+            "executing": 0,
+            "awaitingExternal": 1,
+            "reviewing": 0,
+            "completed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": None,
+            "updatedAt": "2026-04-08T12:00:00Z",
+        },
+        summary={
+            "status": "waiting",
+            "prNumber": 1614,
+            "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/1614",
+            "latestHeadSha": "abc123",
+            "blockers": [],
+            "resolverChildWorkflowIds": [],
+            "artifactRefs": {},
+        },
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-2",
+            "runScope": "latest",
+            "steps": [],
+        },
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["workflowId"] == "mm:wf-1"
+    assert body["agentRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
+    merge_automation = body["mergeAutomation"]
+    assert (
+        merge_automation["workflowId"]
+        == "merge-automation:mm:wf-1:pr:1614:head:abc123"
+    )
+
+
+def test_other_owner_product_detail_hides_operator_child_data(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """MoonLadderStudios/MoonMind#3947 R3: another owner's run — including its
+    operator-child links — is not readable through the product detail path."""
+    test_client, service, user = client
+    record = _build_execution_record(owner_id=str(uuid4()))
+    record.memo = {
+        **record.memo,
+        "agentRunId": "other-owner-agent-run",
+        "merge_automation": {
+            "enabled": True,
+            "status": "awaiting_child",
+            "childWorkflowId": "merge-automation:mm:foreign:pr:9:head:def456",
+        },
+    }
+    service.describe_execution.return_value = record
+
+    response = test_client.get("/api/executions/mm:foreign")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "execution_not_found"
+    assert str(user.id) != record.owner_id
+    assert "other-owner-agent-run" not in response.text
+    assert "merge-automation:mm:foreign" not in response.text
+    assert "agentRunId" not in response.text
+    assert "mergeAutomation" not in response.text
+
+
+def test_operator_type_detail_stays_out_of_product_cards_for_non_admin(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """MoonLadderStudios/MoonMind#3947 R3: an operator-typed execution stays
+    out of ordinary product cards with no internal-type disclosure."""
+    from moonmind.workflows.temporal.workflow_registry import (
+        WorkflowProjectionExcluded as _Excluded,
+    )
+
+    test_client, service, _user = client
+    service.describe_execution.side_effect = _Excluded("MoonMind.AgentRun")
+
+    response = test_client.get("/api/executions/mm:operator-1")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "execution_not_found"
+    assert "MoonMind.AgentRun" not in response.text
+    assert "agentRunId" not in response.text
+
+
 def test_describe_execution_allows_search_attribute_owner_id_fallback(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
