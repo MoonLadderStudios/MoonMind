@@ -500,7 +500,14 @@ async def test_divergent_terminal_replay_cannot_overwrite_newer_evidence_3949(
             **stale["agentResult"],
             "diagnosticsRef": refs["output"],
         }
-        with pytest.raises(ValueError, match="immutable terminal field"):
+        # Two fail-closed layers reject divergent evidence: the activity-level
+        # retained-artifact guard ("owned terminal artifact ... changed across
+        # retry") fires before the service-level owned-row guard
+        # ("immutable terminal field ..."). Accept either wording; both prove
+        # the replay cannot overwrite newer evidence (MoonMind#3949).
+        with pytest.raises(
+            ValueError, match="(immutable terminal field|changed across retry)"
+        ):
             await persist_checkpoint_branch_turn_terminal(stale)
         async with sessions() as session:
             turn = await session.get(WorkflowCheckpointBranchTurn, "turn-1")
