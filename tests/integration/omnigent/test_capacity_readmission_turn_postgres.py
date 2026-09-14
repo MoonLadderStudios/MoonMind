@@ -15,10 +15,11 @@ from tests.unit.omnigent.test_generic_platform_production_services import (
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
 
 
-async def test_capacity_readmission_turn_postgres(pg_store, monkeypatch):
+@pytest.mark.parametrize("reset", [False, True])
+async def test_capacity_readmission_turn_postgres(pg_store, monkeypatch, reset):
     plan = _plan("opencode-go/model")
     await seed_plan(pg_store, plan)
-    await replay_capacity_readmission(pg_store, monkeypatch)
+    await replay_capacity_readmission(pg_store, monkeypatch, reset=reset)
 
 
 @pytest.mark.parametrize("delivery_unknown", [False, True])

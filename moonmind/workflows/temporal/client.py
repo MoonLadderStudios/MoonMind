@@ -512,6 +512,25 @@ class TemporalClientAdapter:
         handle = await self.get_workflow_handle(workflow_id, run_id=run_id)
         return await handle.describe()
 
+    async def read_workflow_start_input(
+        self, workflow_id: str, *, run_id: str
+    ) -> Mapping[str, Any]:
+        """Read admitted inputs from the exact run, never from mutable Visibility."""
+        handle = await self.get_workflow_handle(workflow_id, run_id=run_id)
+        client = await self.get_client()
+        async for event in handle.fetch_history_events(page_size=1):
+            if event.event_id != 1 or not event.HasField(
+                "workflow_execution_started_event_attributes"
+            ):
+                break
+            values = await client.data_converter.decode(
+                event.workflow_execution_started_event_attributes.input.payloads
+            )
+            if len(values) == 1 and isinstance(values[0], Mapping):
+                return values[0]
+            break
+        raise ValueError("The source run has no readable workflow start input")
+
     # --- Worker Pause: Temporal Visibility drain metrics (DOC-REQ-002) ---
 
     async def get_drain_metrics(
