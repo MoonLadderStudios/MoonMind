@@ -103,6 +103,7 @@ class GenericOmnigentExecutionServices:
     owned_container_inventory: Any | None = None
     planned_host_resolver: Any | None = None
     machine_budget_provider: Any | None = None
+    cpu_pool: Any | None = None
 
 
 # MoonLadderStudios/MoonMind#3878: the services graph is rebuilt per execution,
@@ -216,12 +217,48 @@ def build_generic_omnigent_execution_services(
         registry=build_default_credential_materializer_registry(),
         artifact_gateway=artifacts,
     )
+    # Aggregate machine capacity and cold-launch rate (#3878 invariant 7). One
+    # instance is shared: the realizer uses it for the fail-closed pre-check and
+    # the lease repository enforces it atomically with the reservation itself.
+    host_capacity_admission = GenericHostCapacityAdmission.from_environment(
+        session_factory=session_factory
+    )
+
+    async def capacity_runner(
+        argv: Sequence[str], *, timeout_seconds: float = 30.0
+    ) -> tuple[int, bytes, bytes]:
+        """Run one bounded read against the backend hosts actually launch on.
+
+        MoonLadderStudios/MoonMind#3881: machine capacity is established from
+        the daemon that carries the workload, so an unreadable daemon blocks
+        the allocation instead of admitting it against a guess.
+        """
+
+        code, out, err = await docker.run(
+            ["docker", *argv], check=False, timeout_seconds=timeout_seconds
+        )
+        return code, out.encode("utf-8"), err.encode("utf-8")
+
+    async def machine_budget() -> Any:
+        from moonmind.capacity import machine_budget_from_runner
+
+        return await machine_budget_from_runner(capacity_runner)
+
+    from moonmind.capacity.cpu_pool import DockerCpuPool
+
+    cpu_pool = DockerCpuPool(
+        runner=capacity_runner,
+        ledger=host_capacity_admission.machine_capacity,
+        backend_ref=host_capacity_admission.backend_ref,
+    )
     host_runtime = GenericOmnigentHostRuntime(
         launcher=DockerOmnigentHostLauncher(
             backend=docker,
             runtime_scripts=OmnigentRuntimeScriptService(),
             server_url=host_server_url,
             host_api_token=resolved_host_runner_token(),
+            cpu_pool=cpu_pool,
+            machine_budget_provider=machine_budget,
         ),
         workspace_service=OmnigentWorkspaceMaterializer(
             command_runner=daemon_command,
@@ -275,33 +312,6 @@ def build_generic_omnigent_execution_services(
         )
 
     runtime_bindings = DbRuntimeBindingStore(session_factory)
-    # Aggregate machine capacity and cold-launch rate (#3878 invariant 7). One
-    # instance is shared: the realizer uses it for the fail-closed pre-check and
-    # the lease repository enforces it atomically with the reservation itself.
-    host_capacity_admission = GenericHostCapacityAdmission.from_environment(
-        session_factory=session_factory
-    )
-
-    async def capacity_runner(
-        argv: Sequence[str], *, timeout_seconds: float = 30.0
-    ) -> tuple[int, bytes, bytes]:
-        """Run one bounded read against the backend hosts actually launch on.
-
-        MoonLadderStudios/MoonMind#3881: machine capacity is established from
-        the daemon that carries the workload, so an unreadable daemon blocks
-        the allocation instead of admitting it against a guess.
-        """
-
-        code, out, err = await docker.run(
-            ["docker", *argv], check=False, timeout_seconds=timeout_seconds
-        )
-        return code, out.encode("utf-8"), err.encode("utf-8")
-
-    async def machine_budget() -> Any:
-        from moonmind.capacity import machine_budget_from_runner
-
-        return await machine_budget_from_runner(capacity_runner)
-
     host_leases = DbOmnigentHostLeaseRepository(
         session_factory,
         capacity_admission=host_capacity_admission,
@@ -372,6 +382,7 @@ def build_generic_omnigent_execution_services(
         owned_container_inventory=owned_container_inventory,
         planned_host_resolver=planned_host_resolver,
         machine_budget_provider=machine_budget,
+        cpu_pool=cpu_pool,
         planning_service=planning,
         realizer_registry=registry,
         catalog_service=OmnigentHarnessCatalogService(

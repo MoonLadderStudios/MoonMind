@@ -1220,6 +1220,7 @@ async def omnigent_oauth_host_janitor_activity(
                     machine_capacity=services.machine_capacity,
                     machine_backend_ref=services.machine_backend_ref,
                     container_inventory=services.owned_container_inventory,
+                    cpu_pool=services.cpu_pool,
                 ).run()
         except Exception as exc:
             generic_result = {

@@ -324,7 +324,12 @@ def python_test_submission(
                 },
                 {"name": "PYTHONPATH", "value": "/workspace"},
             ],
-            "resources": {"cpuMillis": 4000, "memoryMiB": 4096, "pids": 512},
+            "resources": {
+                "cpuMillis": 0,
+                "memoryMiB": 4096,
+                "minimumMemoryMiB": 2048,
+                "pids": 512,
+            },
             "timeoutSeconds": timeout_seconds,
             "outputs": [
                 {

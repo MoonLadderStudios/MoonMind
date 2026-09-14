@@ -1786,8 +1786,9 @@ async def test_daemon_workspace_root_skips_inspection_for_local_daemon(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cpu_millis", [2000, 0])
 async def test_on_demand_host_initializes_state_before_unprivileged_launch(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, cpu_millis
 ) -> None:
     environment_image = "registry.example/environment-host@sha256:" + "1" * 64
     snapshot_image = "registry.example/snapshot-host@sha256:" + "2" * 64
@@ -1804,6 +1805,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     runtime._run = AsyncMock(
         side_effect=[
             (1, "", "no such container"),
+            (0, "", ""),
             (0, "", ""),
             (0, "", ""),
         ]
@@ -1824,6 +1826,19 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         provider_profile_id="codex",
     )
     effective_launch["hostImageRef"] = snapshot_image
+    effective_launch["limits"]["cpuMillis"] = cpu_millis
+    pool = SimpleNamespace(
+        launch_args=AsyncMock(
+            return_value=["--cgroup-parent", "/owned-pool", "--cpu-shares", "1024"]
+        ),
+        prepare=AsyncMock(return_value=SimpleNamespace(holder="owned-helper")),
+        verify=AsyncMock(),
+        finish_launch=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "moonmind.capacity.cpu_pool.DockerCpuPool", lambda **kwargs: pool
+    )
+    monkeypatch.setattr("moonmind.capacity.machine_budget_from_runner", AsyncMock())
 
     await runtime._launch_on_demand(
         binding=binding,
@@ -1847,6 +1862,15 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     )
 
     commands = [call.args for call in runtime._run.await_args_list]
+    if cpu_millis == 0:
+        assert "--cpus" not in commands[2]
+        assert "/owned-pool" in commands[2]
+        pool.verify.assert_awaited_once()
+        pool.finish_launch.assert_awaited_once()
+        assert commands[-1] == ("docker", "rm", "-f", "owned-helper")
+    else:
+        assert commands[2][commands[2].index("--cpus") + 1] == "2.0"
+        pool.prepare.assert_not_awaited()
     assert commands[0][:3] == ("docker", "inspect", "--format")
     assert "/opt/moonmind/init-oauth-host.sh" in commands[1]
     assert commands[2][:3] == ("docker", "run", "-d")

@@ -38,7 +38,7 @@ See the [Omnigent module entrypoint](docs/Omnigent/README.md), the canonical [Om
 1. [Install Docker Desktop](https://docs.docker.com/get-started/get-docker/) (includes Compose V2)
 2. Install git
 3. `git clone https://github.com/MoonLadderStudios/MoonMind.git`
-4. `cd MoonMind && git submodule update --init --recursive`. This initializes submodules such as Omnigent, and it is required: the stack references submodule content at startup.
+4. `cd MoonMind && git submodule update --init --checkout -- moonspec omnigent`. This checks out the recorded `moonspec` and `omnigent` commits, and it is required: the stack references submodule content at startup. It does not advance dependencies to upstream.
 5. Run `docker compose up -d` to start the services (infrastructure startup; no mandatory `.env` on a fresh install). Images are pulled from their configured registries (GHCR by default); nothing is built locally on this path. To prefetch without starting, run `docker compose pull` first.
 6. Wait until the control plane is ready: the dashboard loads at [http://localhost:7000](http://localhost:7000) **and** `curl -fsS http://localhost:7000/healthz` succeeds. For combined MoonMind plus Omnigent validation, see [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md). Control-plane health means the API and dashboard are up; it does not mean a run is ready — model eligibility and source access below are separate checks.
 7. Complete protected operator setup: a zero-config `docker compose up` ships
@@ -250,4 +250,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, validation commands, tes
 
 MoonMind is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full license text and [NOTICE](NOTICE) for copyright and attribution notices.
 
-MoonMind includes Omnigent as a Git submodule at `omnigent/`. Omnigent is separately licensed by the Omnigent project under Apache License 2.0. After running `git submodule update --init --recursive`, see `omnigent/LICENSE` and `omnigent/NOTICE` for its license and attribution notices. Other submodules retain their own upstream licenses.
+MoonMind includes Omnigent as a Git submodule at `omnigent/`. Omnigent is separately licensed by the Omnigent project under Apache License 2.0. After running `git submodule update --init --checkout -- moonspec omnigent`, see `omnigent/LICENSE` and `omnigent/NOTICE` for its license and attribution notices. Other submodules retain their own upstream licenses.

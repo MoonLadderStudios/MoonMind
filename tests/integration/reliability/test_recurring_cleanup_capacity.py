@@ -258,6 +258,7 @@ async def test_scheduled_cleanup_isolates_oauth_failure_and_unblocks_same_agent_
             machine_capacity=ledger,
             machine_backend_ref=key,
             owned_container_inventory=inventory,
+            cpu_pool=None,
             planned_host_resolver=AsyncMock(
                 return_value=(None, SimpleNamespace(limits=limits))
             ),
