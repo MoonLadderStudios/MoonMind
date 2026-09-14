@@ -209,3 +209,21 @@ def test_jira_breakdown_presets_use_provider_neutral_issue_creation():
         preset = (PRESETS_ROOT / slug).read_text(encoding="utf-8")
         assert "issueCreation.action" in preset
         assert "jiraCreation.action" not in preset
+
+
+def test_tactics_test_defines_phase_scoped_terminal_outcomes():
+    text = _read_skill("tactics-test")
+    assert "requested phase" in text
+    assert "stale evidence" in text.lower()
+    assert "do not run tests against a build that did not succeed" in text.lower()
+    assert "--dry-run" in text and "strictly non-mutating" in text.lower()
+    assert "never deletes or overwrites prior timestamped" in text.lower()
+
+
+def test_update_moonmind_defines_receipt_readiness_and_dry_run_outcomes():
+    text = _read_skill("update-moonmind")
+    assert "terminal release receipt" in text.lower()
+    assert "pinned repository digest" in text.lower()
+    assert "verified installed" in text.lower()
+    assert "--dry-run" in text and "strictly non-mutating" in text.lower()
+    assert "preserve" in text.lower() and "deployment-owned" in text.lower()

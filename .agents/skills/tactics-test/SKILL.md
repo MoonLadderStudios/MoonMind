@@ -81,6 +81,30 @@ scripts/run_dood_unreal_tactics.sh \
 scripts/run_dood_unreal_tactics.sh --dry-run
 ```
 
+## Terminal outcomes
+
+A run is complete only when its reported outcome names the requested phase
+(`build`, `test`, or both), the current candidate under test (repository path
+plus exact toolchain image reference when an explicit image was supplied), and
+the gate-file evidence it was read from. Report per-phase status separately;
+never report a test verdict when only the build phase ran, and never report a
+build verdict when only the test phase ran.
+
+- Read the gate result only from the explicit `--gate-file` path or
+  `.artifacts/dood-unreal-tactics/latest/gate.json` written by the current run.
+  A gate file from a previous timestamp, a different repository path, or a
+  different image reference is stale evidence: re-run the requested phase
+  instead of reporting it.
+- Sequence safely: run the build phase before the test phase when both were
+  requested; do not run tests against a build that did not succeed in the same
+  run.
+- `--dry-run` is strictly non-mutating: it previews the intended container
+  operation without building, testing, fetching, or writing gate output. Never
+  report a dry-run preview as a build or test result.
+- Preserve existing artifacts: the script writes a new timestamped folder and
+  refreshes the `latest` link; it never deletes or overwrites prior timestamped
+  evidence.
+
 ## Notes
 
 - The script runs build and test in separate ephemeral containers to keep worker and toolchain isolation clear.
