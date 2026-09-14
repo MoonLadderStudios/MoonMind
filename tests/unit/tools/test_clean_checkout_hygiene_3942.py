@@ -130,7 +130,7 @@ def test_factories_package_marker_removed_and_unreferenced() -> None:
         and "route factories" not in path.read_text(encoding="utf-8").lower()
     ]
     assert matches == []
-    completed = subprocess.run(
+    subprocess.run(
         ["git", "ls-tree", "-r", "HEAD", "--name-only"],
         cwd=REPO_ROOT,
         check=True,
