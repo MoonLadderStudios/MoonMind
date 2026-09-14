@@ -558,6 +558,7 @@ RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH = "run-direct-tool-report-outputs-v1"
 RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = "run-assessment-parameter-injection-v1"
 RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH = "run-assessment-consumer-handoff-v1"
 RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = "run-assessment-attachment-handoff-v1"
+RUN_WORKFLOW_PREPARED_INPUTS_PATCH = "run-workflow-prepared-inputs-v1"
 RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = "run-issue-brief-attachment-handoff-v1"
 RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
 # New gates bind objective acceptance; old histories retain their recorded routing.
@@ -11516,6 +11517,31 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         input_ref: Optional[str],
         plan_ref: Optional[str],
     ) -> Optional[str]:
+        if workflow.patched(RUN_WORKFLOW_PREPARED_INPUTS_PATCH):
+            # Temporal supplies the actual run identity here. Authorize declared
+            # inputs before any child can read them, including scheduled starts
+            # and create acknowledgements lost before API-side linkage.
+            task_payload = parameters.get("workflow") or parameters.get("task") or {}
+            manifest = build_prepared_input_manifest(task_payload)
+            if manifest.has_entries:
+                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.link")
+                for artifact_id in dict.fromkeys(
+                    entry.artifact_id for entry in manifest.entries
+                ):
+                    await workflow.execute_activity(
+                        "artifact.link",
+                        {
+                            "artifact_id": artifact_id,
+                            "principal": self._principal(),
+                            "execution_ref": {
+                                "namespace": workflow.info().namespace,
+                                "workflow_id": workflow.info().workflow_id,
+                                "run_id": workflow.info().run_id,
+                                "link_type": "input.attachment",
+                            },
+                        },
+                        **self._execute_kwargs_for_route(route),
+                    )
         # A new scheduled execution must validate its saved requirements even
         # when it supplies a plan. Recorded histories and durable continuations
         # keep their admitted inputs and already validated progress.
@@ -20897,6 +20923,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         prepared_context = None
         if isinstance(workflow_parameters, Mapping):
             task_payload = workflow_parameters.get("task")
+            if self._patched_or_false_outside_workflow(
+                RUN_WORKFLOW_PREPARED_INPUTS_PATCH
+            ):
+                task_payload = workflow_parameters.get("workflow") or task_payload
             if isinstance(task_payload, Mapping):
                 task_payload_for_context = task_payload
                 prepared_manifest = build_prepared_input_manifest(task_payload)
