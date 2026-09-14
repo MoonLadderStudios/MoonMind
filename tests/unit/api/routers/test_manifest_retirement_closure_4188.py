@@ -426,10 +426,16 @@ async def test_ordinary_schedule_trigger_and_backfill_still_run(
         RecurringWorkflowsService,
     )
     from moonmind.workflows.temporal.schedule_errors import ScheduleNotFoundError
+    from moonmind.workflows.temporal.client import ScheduleTriggerResult
 
     async with _recurring_db(tmp_path) as maker:
         async with maker() as session:
             adapter = _mock_adapter()
+            adapter.trigger_schedule.return_value = ScheduleTriggerResult(
+                workflow_id="ordinary-workflow",
+                run_id="ordinary-run",
+                disposition="started",
+            )
             service = RecurringWorkflowsService(
                 session, temporal_client_adapter=adapter
             )
@@ -452,6 +458,8 @@ async def test_ordinary_schedule_trigger_and_backfill_still_run(
             run = await service.create_manual_run(definition)
             adapter.trigger_schedule.assert_awaited_once()
             assert run.outcome.value == "enqueued"
+            assert run.temporal_workflow_id == "ordinary-workflow"
+            assert run.temporal_run_id == "ordinary-run"
 
             # Missing Temporal Schedule with catch-up policy is recreated.
             adapter2 = _mock_adapter()

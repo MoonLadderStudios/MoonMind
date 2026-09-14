@@ -1058,8 +1058,7 @@ async def omnigent_profile_bound_execute_activity(
     return await omnigent_execute_activity(request)
 
 
-@activity.defn(name="integration.omnigent.oauth_host_janitor")
-async def omnigent_oauth_host_janitor_activity(
+async def _reconcile_oauth_hosts(
     request: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Reconcile expired, missing, and orphaned OAuth hosts."""
@@ -1139,14 +1138,23 @@ async def omnigent_oauth_host_janitor_activity(
                 profile_id=str((request or {}).get("profile_id") or "").strip() or None,
                 force=bool((request or {}).get("force", False)),
             )
-        except Exception:
+        except Exception as exc:
             control_plane_metrics.increment(
                 control_plane_metrics.JANITOR_OPERATIONS, janitor_outcome="failure"
             )
-            raise
-        control_plane_metrics.increment(
-            control_plane_metrics.JANITOR_OPERATIONS, janitor_outcome="success"
-        )
+            result = {
+                "status": "degraded",
+                "actions": [],
+                "count": 0,
+                "errorCode": str(getattr(exc, "code", "") or type(exc).__name__),
+            }
+        else:
+            control_plane_metrics.increment(
+                control_plane_metrics.JANITOR_OPERATIONS,
+                janitor_outcome=(
+                    "success" if result.get("status") == "completed" else "failure"
+                ),
+            )
         if isinstance(result, dict) and any(
             int(result.get(key) or 0) > 0
             for key in ("conflicts", "claimConflicts", "fencingConflicts")
@@ -1155,32 +1163,60 @@ async def omnigent_oauth_host_janitor_activity(
                 control_plane_metrics.JANITOR_OPERATIONS,
                 janitor_outcome="conflict",
             )
-        from moonmind.omnigent.settings import generic_host_enabled
-
-        if generic_host_enabled():
-            from moonmind.omnigent.generic_host_janitor import (
-                GenericOmnigentHostJanitor,
-            )
-            from moonmind.omnigent.production import (
-                build_generic_omnigent_execution_services,
-            )
-
-            services = build_generic_omnigent_execution_services(
-                session_factory=async_session_maker
-            )
-            generic_result = await GenericOmnigentHostJanitor(
-                host_leases=services.host_lease_repository,
-                runtime_bindings=services.runtime_binding_store,
-                realizer=services.generic_realizer,
-                # MoonLadderStudios/MoonMind#3881: the existing janitor also
-                # reconciles machine-capacity reservations against owned
-                # container state. No second cleanup coordinator is introduced.
-                machine_capacity=services.machine_capacity,
-                machine_backend_ref=services.machine_backend_ref,
-                container_inventory=services.owned_container_inventory,
-            ).run()
-            result = {**result, "genericHost": generic_result}
         return result
+
+
+@activity.defn(name="integration.omnigent.oauth_host_janitor")
+async def omnigent_oauth_host_janitor_activity(
+    request: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Run independent cleanup owners without weakening their authority fences."""
+    import asyncio
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.settings import generic_host_enabled
+
+    # Explicit control actions keep their precise failure contract.
+    if (request or {}).get("actionKind"):
+        return await _reconcile_oauth_hosts(request)
+    try:
+        async with asyncio.timeout(120):
+            result = await _reconcile_oauth_hosts(request)
+    except Exception as exc:
+        result = {
+            "status": "degraded",
+            "actions": [],
+            "count": 0,
+            "errorCode": str(getattr(exc, "code", "") or type(exc).__name__),
+        }
+    if generic_host_enabled():
+        from moonmind.omnigent.generic_host_janitor import GenericOmnigentHostJanitor
+        from moonmind.omnigent.production import (
+            build_generic_omnigent_execution_services,
+        )
+
+        try:
+            async with asyncio.timeout(120):
+                services = build_generic_omnigent_execution_services(
+                    session_factory=async_session_maker
+                )
+                generic_result = await GenericOmnigentHostJanitor(
+                    host_leases=services.host_lease_repository,
+                    runtime_bindings=services.runtime_binding_store,
+                    realizer=services.generic_realizer,
+                    machine_capacity=services.machine_capacity,
+                    machine_backend_ref=services.machine_backend_ref,
+                    container_inventory=services.owned_container_inventory,
+                ).run()
+        except Exception as exc:
+            generic_result = {
+                "failures": [
+                    {"reason": str(getattr(exc, "code", "") or type(exc).__name__)}
+                ]
+            }
+        if generic_result.get("failures"):
+            result["status"] = "degraded"
+        result["genericHost"] = generic_result
+    return result
 
 
 __all__ = [

@@ -68,7 +68,8 @@ async def test_independently_built_hosts_share_a_release_series(
 
 
 @pytest.mark.parametrize("version,compatible", [("0.12.9", True), ("0.13.0", False)])
-def test_admitted_plan_survives_patch_update_without_replacing_host(
+@pytest.mark.asyncio
+async def test_admitted_plan_survives_patch_update_without_replacing_host(
     tmp_path, monkeypatch, version, compatible
 ):
     monkeypatch.delenv("OMNIGENT_BUILD_DIGEST", raising=False)
@@ -96,11 +97,11 @@ def test_admitted_plan_survives_patch_update_without_replacing_host(
         hostImageRef="old-host@sha256:" + "c" * 64,
     )
     if compatible:
-        deployment_identity.assert_plan_matches_deployed_runtime(plan)
+        await deployment_identity.assert_plan_matches_deployed_runtime(plan)
         assert plan.hostImageRef == "old-host@sha256:" + "c" * 64
     else:
         with pytest.raises(deployment_identity.OmnigentDeploymentIdentityConflict):
-            deployment_identity.assert_plan_matches_deployed_runtime(plan)
+            await deployment_identity.assert_plan_matches_deployed_runtime(plan)
 
 
 def test_missing_deployment_is_retryable_but_invalid_override_is_not(
@@ -378,7 +379,19 @@ async def test_host_override_never_masks_server_replacement(
         plan.model_dump_json(by_alias=True)
     )
     assert plan.payload.supportIdentity.omnigentServerBuildRef == original_digest
-    deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)
+    await deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)
+
+    from unittest.mock import AsyncMock
+    from moonmind.omnigent.harness_platform.catalog_service import DbHarnessCatalogRepository
+
+    monkeypatch.setattr(DbHarnessCatalogRepository, "load", AsyncMock(return_value=SimpleNamespace(
+        snapshot=SimpleNamespace(
+            catalogRef=plan.payload.harnessCatalogRef,
+            endpointRef=plan.payload.endpointRef,
+            omnigentBuildDigest=original_digest,
+            omnigentVersion="1.0.0",
+        ),
+    )))
 
     observed.update(digest=replacement_digest, version=replacement_version)
     current = await image_resolution.publish_resolved_omnigent_images()
@@ -394,7 +407,7 @@ async def test_host_override_never_masks_server_replacement(
         deployment_identity.resolve_deployed_server_build_digest() == replacement_digest
     )
     if compatible:
-        deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)
+        await deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)
     else:
         with pytest.raises(deployment_identity.OmnigentDeploymentIdentityConflict):
-            deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)
+            await deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)

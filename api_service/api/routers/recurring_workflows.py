@@ -6,10 +6,10 @@ import base64
 import binascii
 import logging
 from datetime import UTC, datetime
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -861,6 +861,7 @@ async def update_recurring_workflow(
         action_permissions=_action_permissions_for_definition(updated, user=user),
     )
 
+
 @router.post(
     "/{definition_id}/run",
     response_model=RecurringWorkflowRunModel,
@@ -868,6 +869,7 @@ async def update_recurring_workflow(
 )
 async def run_recurring_workflow_now(
     definition_id: UUID,
+    idempotency_key: Annotated[UUID | None, Header()] = None,
     service: RecurringWorkflowsService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> RecurringWorkflowRunModel:
@@ -878,7 +880,7 @@ async def run_recurring_workflow_now(
             user_id=user_id if isinstance(user_id, UUID) else None,
             can_manage_global=bool(getattr(user, "is_superuser", False)),
         )
-        run = await service.create_manual_run(definition)
+        run = await service.create_manual_run(definition, request_id=idempotency_key)
     except Exception as exc:  # pragma: no cover - thin mapping layer
         _log_route_exception(
             action="run_recurring_workflow_now",
@@ -901,6 +903,7 @@ async def run_recurring_workflow_now(
         scope=definition.scope_type.value,
     )
     return _serialize_run(run)
+
 
 @router.delete("/{definition_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_recurring_workflow(

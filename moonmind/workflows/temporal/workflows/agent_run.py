@@ -4742,7 +4742,10 @@ class MoonMindAgentRun:
         input that looks authoritative is worse than no input at all.
         """
 
-        waited_seconds = 0
+        cumulative = workflow.patched("omnigent-cumulative-host-capacity-wait-v1")
+        waited_seconds = (
+            getattr(self, "_host_capacity_wait_seconds", 0) if cumulative else 0
+        )
         while True:
             decision = await self._execute_routed_activity(
                 "omnigent.admit_generic_host_capacity",
@@ -4762,6 +4765,15 @@ class MoonMindAgentRun:
                 }
             if decision.get("admitted") is True:
                 return
+            if decision.get("unsatisfiable") is True:
+                raise ApplicationError(
+                    str(
+                        decision.get("waitingReason")
+                        or "Host demand exceeds machine limits"
+                    ),
+                    type="HostCapacityUnsatisfiable",
+                    non_retryable=True,
+                )
             retry_after = decision.get("retryAfterSeconds")
             if not isinstance(retry_after, int) or retry_after < 1:
                 retry_after = _OMNIGENT_HOST_CAPACITY_RETRY_SECONDS
@@ -4771,6 +4783,11 @@ class MoonMindAgentRun:
                     f"{waited_seconds}s: {decision.get('waitingReason')}",
                     type="HostCapacityAcquisitionTimeout",
                     non_retryable=True,
+                )
+            if cumulative:
+                retry_after = min(
+                    retry_after,
+                    _OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS - waited_seconds,
                 )
             self.run_status = RunStatus.awaiting_slot
             await self._signal_parent_child_state_changed(
@@ -4783,6 +4800,8 @@ class MoonMindAgentRun:
             )
             await workflow.sleep(timedelta(seconds=retry_after))
             waited_seconds += retry_after
+            if cumulative:
+                self._host_capacity_wait_seconds = waited_seconds
 
     async def _reset_and_request_slot(
         self,

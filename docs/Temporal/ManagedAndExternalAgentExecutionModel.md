@@ -213,6 +213,23 @@ timed_out
 
 `awaiting_slot` means a required execution resource, commonly Provider Profile capacity or machine capacity, has not yet been acquired. Metadata states the exact reason and authority rather than using a vague waiting state.
 
+Generic-host preadmission resolves resource demand from the committed plan's
+launch policy and compares it with the same machine budget and ledger used by
+allocation. A short control Activity reports the limiting resource; workflow
+timers own waiting without occupying an execution Activity or consuming a host
+attempt. An existing owned lease reuses its reservation. The cumulative waiting
+budget survives capacity requeues, and an unsatisfiable demand is rejected rather
+than queued indefinitely. Atomic allocation remains the final admission fence.
+
+The scheduled host janitor bounds OAuth and generic-host cleanup independently.
+A historical credential-generation failure remains fenced and visible while
+unrelated leases and machine reconciliation continue. Generic reclamation needs
+positive closure evidence for the exact Temporal workflow/run owner; stale age
+alone cannot release a host. Existing workspace preservation, canonical cleanup
+claims, generation fences, and Docker-observed resource release remain the
+cleanup authority.
+
+
 ### 3.4 `AgentRunResult`
 
 A terminal result contains compact fields such as:
@@ -948,6 +965,14 @@ remain runnable and unchanged Git candidates remain clean. Regular-file
 read/write access is owner-only; privilege bits and imported hooks are removed.
 Failure to apply these permissions aborts restore before readiness. Newly
 injected input artifacts retain their read-only projection contract.
+
+Checkpoint restore preserves contained relative symlinks as link text, including
+dangling links whose targets were excluded runtime inputs, empty directories, or
+absent repository files. Target existence is not workspace authority: existing
+ancestors and the remaining path must still resolve inside the restored tree.
+Restore rejects escaping links, cycles, and resolution errors other than missing
+targets before marking the workspace ready. Excluded Skill inputs remain subject
+to the current run's independent admission and materialization.
 
 A session-state ref is not evidence of workspace capture or restore. `external_state_ref` can preserve Omnigent/provider continuity without being locally restorable.
 

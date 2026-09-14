@@ -387,6 +387,51 @@ async def test_exact_rerun_rejects_plan_for_replaced_server_before_creation(
     load.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable", [None, OSError("catalog offline")])
+async def test_exact_rerun_preserves_plan_through_catalog_recovery(monkeypatch, unavailable):
+    from copy import deepcopy
+    from moonmind.omnigent.bootstrap import store
+
+    parameters = _historical_omnigent_rerun_parameters()
+    original = deepcopy(parameters)
+    payload = SimpleNamespace(
+        executionRealizerRef="generic-omnigent-host@1",
+        endpointRef="default", harnessCatalogRef="admitted-catalog",
+        supportIdentity=SimpleNamespace(omnigentServerBuildRef="sha256:" + "a" * 64),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.stores.SessionExecutionPlanStore",
+        lambda _: SimpleNamespace(load=AsyncMock(return_value=SimpleNamespace(payload=payload))),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.deployment_identity.resolve_deployed_server_build_digest",
+        lambda: "sha256:" + "b" * 64,
+    )
+    catalog = SimpleNamespace(snapshot=SimpleNamespace(
+        catalogRef="admitted-catalog", endpointRef="default",
+        omnigentBuildDigest="sha256:" + "a" * 64, omnigentVersion="0.13.0",
+    ))
+    lookup = AsyncMock(side_effect=[unavailable, catalog])
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.catalog_service.DbHarnessCatalogRepository.load", lookup,
+    )
+    monkeypatch.setattr(store, "load_resolved_state", lambda: SimpleNamespace(details={
+        "opencodeHostCompatibility": {
+            "serverVersion": "0.13.9", "serverBuildDigest": "sha256:" + "b" * 64,
+        },
+    }))
+    service = TemporalExecutionService(SimpleNamespace())
+    with pytest.raises(TemporalExecutionRerunPlanError) as error:
+        await service.validate_exact_rerun_execution_plan(parameters=parameters)
+    assert error.value.detail["code"] == "exact_rerun_deployment_not_ready"
+    assert error.value.detail["nextAction"] == "retry"
+    assert parameters == original
+    await service.validate_exact_rerun_execution_plan(parameters=parameters)
+    assert parameters == original
+    assert lookup.await_count == 2
+
+
 def test_visibility_helpers_ignore_empty_parameters() -> None:
     assert _visibility_runtime_from_parameters(None) is None
     assert _visibility_runtime_from_parameters({}) is None

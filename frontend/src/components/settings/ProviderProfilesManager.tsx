@@ -478,15 +478,15 @@ export function resolveCreationAction(input: CreationActionInput): CreationActio
   if (input.manualCreationAllowed) {
     return { label: 'Save disabled profile', disabled: false, reason: null };
   }
+  if (input.presetError) {
+    return { label: 'Create profile', disabled: true, reason: input.presetError };
+  }
   if (input.presetLoading || input.presetSupported === null) {
     return {
       label: 'Create profile',
       disabled: true,
       reason: 'Waiting for the backend creation preset…',
     };
-  }
-  if (input.presetError) {
-    return { label: 'Create profile', disabled: true, reason: input.presetError };
   }
   if (!input.presetSupported) {
     return {
@@ -605,17 +605,34 @@ export function saveResponseIdentityMatches(
 
 /**
  * The completed submission still owns the visible form only when no other
- * draft was opened or edited while the request was pending.
+ * draft was opened or edited while the request was pending. Tier edits ride
+ * alongside the form: when the caller supplies the current tier drafts and
+ * default-tier selection, those must also match the submission snapshots —
+ * otherwise a response arriving after post-submit tier edits must not reset
+ * the editor and silently discard them.
  */
 export function submissionOwnsCurrentForm(
   currentForm: ProviderProfileFormState,
   currentEditingProfileId: string | null,
   submission: SubmittedProfileOperation,
+  currentTierDrafts?: ProviderProfileTierDraft[],
+  currentDefaultTierClientId?: string | null,
 ): boolean {
-  return (
-    currentEditingProfileId === submission.editingProfileIdAtSubmit &&
-    valuesEqual(currentForm, submission.formSnapshot)
-  );
+  if (currentEditingProfileId !== submission.editingProfileIdAtSubmit) return false;
+  if (!valuesEqual(currentForm, submission.formSnapshot)) return false;
+  if (
+    currentTierDrafts !== undefined &&
+    !valuesEqual(currentTierDrafts, submission.tierDraftsSnapshot)
+  ) {
+    return false;
+  }
+  if (
+    currentDefaultTierClientId !== undefined &&
+    currentDefaultTierClientId !== submission.defaultTierClientIdSnapshot
+  ) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -623,8 +640,16 @@ export function submissionOwnsCurrentForm(
  * lost acknowledgment: ambiguous, never success, and never permission to
  * retry automatically. Structured server errors answered truthfully and stay
  * on the normal validation path.
+ *
+ * A successful status with an undecodable body is the same hazard from the
+ * other side: the profile may already have been committed, so the create
+ * must reconcile the profile list before permitting another POST instead of
+ * falling through to ordinary validation-error UI.
  */
+export class AmbiguousSaveAcknowledgmentError extends Error {}
+
 export function isLostSaveAcknowledgment(error: Error): boolean {
+  if (error instanceof AmbiguousSaveAcknowledgmentError) return true;
   if (error instanceof ProviderProfileRequestError) return false;
   if (error instanceof TypeError) return true;
   return /failed to fetch|network ?error|load failed|timeout|timed out|abort/i.test(
@@ -648,6 +673,21 @@ export interface SaveMutationVariables {
 export const PENDING_DEFAULT_INTENT_STORAGE_KEY =
   'moonmind:pending-provider-profile-default';
 
+/**
+ * A deferred "use as runtime default" intent plus the runtime default that
+ * was already in place when the intent was captured. The pre-existing
+ * default is not a newer operator choice: when enrollment completes and
+ * that same profile is still the default, the intent PATCH replaces it.
+ * Only a *different* current default proves the operator chose otherwise
+ * while setup was pending. A null prior means the observation predates
+ * this capture (for example legacy page-local data) and keeps the safe
+ * behavior of treating any other default as a newer choice.
+ */
+export interface PendingDefaultIntent {
+  profileId: string;
+  priorDefaultProfileId: string | null;
+}
+
 type IntentStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 function intentStorage(): IntentStorage | null {
@@ -663,36 +703,69 @@ function intentStorage(): IntentStorage | null {
 
 export function loadPersistedDefaultIntents(
   storage: IntentStorage | null = intentStorage(),
-): string[] {
+): PendingDefaultIntent[] {
   if (!storage) return [];
   try {
     const raw = storage.getItem(PENDING_DEFAULT_INTENT_STORAGE_KEY);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (entry): entry is string =>
-        typeof entry === 'string' && entry.trim() !== '',
-    );
+    const intents: PendingDefaultIntent[] = [];
+    for (const entry of parsed) {
+      if (typeof entry === 'string') {
+        // Legacy page-local format: the pre-existing default is unknown, so
+        // any other current default still counts as a newer operator choice.
+        const profileId = entry.trim();
+        if (profileId) intents.push({ profileId, priorDefaultProfileId: null });
+        continue;
+      }
+      if (
+        entry !== null &&
+        typeof entry === 'object' &&
+        typeof (entry as { profileId?: unknown }).profileId === 'string' &&
+        ((entry as { profileId?: string }).profileId ?? '').trim() !== ''
+      ) {
+        const record = entry as { profileId: string; priorDefaultProfileId?: unknown };
+        intents.push({
+          profileId: record.profileId.trim(),
+          priorDefaultProfileId:
+            typeof record.priorDefaultProfileId === 'string' &&
+            record.priorDefaultProfileId.trim() !== ''
+              ? record.priorDefaultProfileId.trim()
+              : null,
+        });
+      }
+    }
+    return intents;
   } catch {
     return [];
   }
 }
 
 export function persistDefaultIntents(
-  profileIds: ReadonlyArray<string>,
+  intents: ReadonlyArray<PendingDefaultIntent>,
   storage: IntentStorage | null = intentStorage(),
 ): void {
   if (!storage) return;
   try {
-    const unique = [...new Set(profileIds.map((id) => id.trim()).filter(Boolean))];
+    const seen = new Set<string>();
+    const unique: PendingDefaultIntent[] = [];
+    for (const intent of intents) {
+      const profileId = intent.profileId.trim();
+      if (!profileId || seen.has(profileId)) continue;
+      seen.add(profileId);
+      unique.push({
+        profileId,
+        priorDefaultProfileId: intent.priorDefaultProfileId?.trim() || null,
+      });
+    }
     if (unique.length === 0) {
       storage.removeItem(PENDING_DEFAULT_INTENT_STORAGE_KEY);
       return;
     }
     storage.setItem(PENDING_DEFAULT_INTENT_STORAGE_KEY, JSON.stringify(unique));
   } catch {
-    // Page-local intent is best effort; the in-memory Set stays authoritative.
+    // Page-local intent is best effort; the in-memory Map stays authoritative.
   }
 }
 
@@ -810,14 +883,41 @@ export function collectAdvancedControlDeviations(
   if (differs(form.priority.trim(), baseline.priority.trim())) {
     deviations.push('priority');
   }
-  if (differs(form.accountLabel.trim(), baseline.accountLabel.trim())) {
-    deviations.push('account label');
+  // Account label lives in the always-visible Identity fieldset, not the
+  // advanced section, so it must never flip the collapsed advanced summary.
+  if (differs(form.providerLabel.trim(), baseline.providerLabel.trim())) {
+    deviations.push('provider label');
+  }
+  if (
+    (form.executionConfiguration ?? '') !== (baseline.executionConfiguration ?? '')
+  ) {
+    deviations.push('execution configuration');
   }
   return deviations;
 }
 
-export function computeAdvancedPolicySummary(input: {
-  presetState: 'loading' | 'error' | 'missing' | 'ready';
+/**
+ * Collapsed-summary fallback copy when no override or attention state wins.
+ * Expert-manual creation has no backend preset behind it, so it always
+ * reports the manual-creation state — even though the (unsupported) preset
+ * object itself is non-null — instead of claiming recommended settings.
+ */
+export function resolveAdvancedRecommendedText(input: {
+  manualCreationAllowed: boolean;
+  isEditing: boolean;
+  presetReady: boolean;
+  recommendedLaunchSettingsText: string;
+}): string {
+  if (input.manualCreationAllowed) {
+    return 'Manual creation — profile will be saved disabled';
+  }
+  if (!input.presetReady && input.isEditing) {
+    return 'Preserving the existing launch contract';
+  }
+  return input.recommendedLaunchSettingsText;
+}
+
+export function computeAdvancedPolicySummary(input: {  presetState: 'loading' | 'error' | 'missing' | 'ready';
   presetErrorText?: string | null;
   hasUnknownAuthenticationMethod: boolean;
   presetUnsupportedWithoutManual: boolean;
@@ -1638,32 +1738,54 @@ export function ProviderProfilesManager({
   // credential validation, so the intent is persisted here and applied once
   // the readiness-completing operation (OAuth finalize or API-key enrollment)
   // succeeds for that profile.
-  const pendingDefaultIntentRef = useRef<Set<string>>(
-    new Set(loadPersistedDefaultIntents()),
+  const pendingDefaultIntentRef = useRef<Map<string, string | null>>(
+    new Map(
+      loadPersistedDefaultIntents().map((intent) => [
+        intent.profileId,
+        intent.priorDefaultProfileId,
+      ]),
+    ),
   );
-  const rememberDefaultIntent = (profileId: string) => {
+  const persistPendingDefaultIntents = () => {
+    persistDefaultIntents(
+      [...pendingDefaultIntentRef.current.entries()].map(
+        ([profileId, priorDefaultProfileId]) => ({ profileId, priorDefaultProfileId }),
+      ),
+    );
+  };
+  const rememberDefaultIntent = (profileId: string, priorDefaultProfileId: string | null = null) => {
     const trimmed = profileId.trim();
     if (!trimmed) return;
-    pendingDefaultIntentRef.current.add(trimmed);
-    persistDefaultIntents([...pendingDefaultIntentRef.current]);
+    pendingDefaultIntentRef.current.set(trimmed, priorDefaultProfileId?.trim() || null);
+    persistPendingDefaultIntents();
   };
   const clearDefaultIntent = (profileId: string) => {
     pendingDefaultIntentRef.current.delete(profileId);
-    persistDefaultIntents([...pendingDefaultIntentRef.current]);
+    persistPendingDefaultIntents();
   };
-  const applyPendingDefaultIntent = async (profileId: string) => {
-    if (!pendingDefaultIntentRef.current.has(profileId)) return;
+  /**
+   * Applies a remembered runtime-default intent once enrollment completes.
+   * Returns true when it posted its own terminal notice so the enrollment
+   * success notice must not overwrite it; false when nothing was pending
+   * (or the server already honored the intent) and the caller should report
+   * enrollment success normally.
+   */
+  const applyPendingDefaultIntent = async (profileId: string): Promise<boolean> => {
+    if (!pendingDefaultIntentRef.current.has(profileId)) return false;
     // A newer explicit operator choice wins: never silently override a
-    // different profile that is already the runtime default, and never
-    // re-apply an intent the server already honored.
+    // different profile that became the runtime default after the intent was
+    // captured, and never re-apply an intent the server already honored. The
+    // default that already existed at capture time is the intent's target to
+    // replace, not evidence of a newer choice.
     const knownProfiles =
       queryClient.getQueryData<ProviderProfile[]>(PROVIDER_PROFILE_QUERY_KEY) ??
       profiles;
     const target = knownProfiles.find((profile) => profile.profile_id === profileId);
     if (target?.is_default) {
       clearDefaultIntent(profileId);
-      return;
+      return false;
     }
+    const priorDefaultProfileId = pendingDefaultIntentRef.current.get(profileId) ?? null;
     const currentDefault = target
       ? knownProfiles.find(
           (profile) =>
@@ -1672,13 +1794,13 @@ export function ProviderProfilesManager({
             profile.is_default,
         )
       : undefined;
-    if (currentDefault) {
+    if (currentDefault && currentDefault.profile_id !== priorDefaultProfileId) {
       clearDefaultIntent(profileId);
       onNotice({
         level: 'error',
         text: `Profile "${profileId}" was not made the runtime default because "${currentDefault.profile_id}" is now the default. Use Make default on the saved profile to change it.`,
       });
-      return;
+      return true;
     }
     try {
       const response = await fetch(
@@ -1702,11 +1824,13 @@ export function ProviderProfilesManager({
       clearDefaultIntent(profileId);
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
       onNotice({ level: 'ok', text: `Profile "${profileId}" is now the runtime default.` });
+      return true;
     } catch (error) {
       onNotice({
         level: 'error',
         text: `${error instanceof Error ? error.message : `Failed to set "${profileId}" as the runtime default.`} The default was not applied — use Make default on the saved profile to retry.`,
       });
+      return true;
     }
   };
   const [tierDrafts, setTierDrafts] = useState<ProviderProfileTierDraft[]>(() => [runtimeDefaultTierDraft()]);
@@ -2138,14 +2262,14 @@ export function ProviderProfilesManager({
     // Prune deferred default intents the server already honored (for example
     // applied from another tab) so a reload never re-applies stale intent.
     let changed = false;
-    for (const profileId of pendingDefaultIntentRef.current) {
+    for (const profileId of pendingDefaultIntentRef.current.keys()) {
       if (profiles.some((profile) => profile.profile_id === profileId && profile.is_default)) {
         pendingDefaultIntentRef.current.delete(profileId);
         changed = true;
       }
     }
     if (changed) {
-      persistDefaultIntents([...pendingDefaultIntentRef.current]);
+      persistPendingDefaultIntents();
     }
   }, [profiles]);
 
@@ -2272,14 +2396,14 @@ export function ProviderProfilesManager({
           : creationPresetError
             ? 'error'
             : 'missing';
-    const recommendedText =
-      manualCreationAllowed && !presetReady
-        ? 'Manual creation — profile will be saved disabled'
-        : !presetReady && isEditing
-          ? 'Preserving the existing launch contract'
-          : selectedAuthenticationCapability
-            ? `Using recommended ${selectedAuthenticationCapability.label} launch settings`
-            : 'Using recommended launch settings';
+    const recommendedText = resolveAdvancedRecommendedText({
+      manualCreationAllowed,
+      isEditing,
+      presetReady,
+      recommendedLaunchSettingsText: selectedAuthenticationCapability
+        ? `Using recommended ${selectedAuthenticationCapability.label} launch settings`
+        : 'Using recommended launch settings',
+    });
     return computeAdvancedPolicySummary({
       presetState,
       presetErrorText: creationPresetError,
@@ -2519,13 +2643,15 @@ export function ProviderProfilesManager({
         failureReason: null,
       }));
     },
-    onSuccess: (result, { profileId }) => {
+    onSuccess: async (result, { profileId }) => {
       // The combined API call already committed the credential: reconcile the
       // saved-profile cache even if this drawer closed. Only visible drawer
       // mutations and notices are fenced to the owning profile, so one
-      // enrollment can never rewrite another profile's panel.
+      // enrollment can never rewrite another profile's panel. The deferred
+      // default intent owns the final notice when it fires, so its outcome
+      // is never overwritten by the enrollment notice below.
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-      void applyPendingDefaultIntent(profileId);
+      const defaultNoticePosted = await applyPendingDefaultIntent(profileId);
       if (claudeEnrollmentProfileIdRef.current !== profileId) {
         return;
       }
@@ -2537,10 +2663,12 @@ export function ProviderProfilesManager({
         statusLabel: formatStatusLabel(result.status_label ?? result.statusLabel ?? current.statusLabel, ''),
         readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
       }));
-      onNotice({
-        level: 'ok',
-        text: `Anthropic API key enrollment completed for "${profileId}".`,
-      });
+      if (!defaultNoticePosted) {
+        onNotice({
+          level: 'ok',
+          text: `Anthropic API key enrollment completed for "${profileId}".`,
+        });
+      }
     },
     onError: (error, { profileId, submittedToken }) => {
       if (claudeEnrollmentProfileIdRef.current !== profileId) {
@@ -2677,8 +2805,9 @@ export function ProviderProfilesManager({
       const copy = apiKeyEnrollmentCopy(profile);
       // Committed enrollment reconciles the saved-profile cache even if this
       // drawer closed; visible mutations stay fenced to the owning profile.
+      // The deferred default intent owns the final notice when it fires.
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-      void applyPendingDefaultIntent(profileId);
+      const defaultNoticePosted = await applyPendingDefaultIntent(profileId);
       if (opencodeEnrollmentProfileIdRef.current !== profileId) {
         return;
       }
@@ -2690,10 +2819,12 @@ export function ProviderProfilesManager({
         statusLabel: formatStatusLabel(result.status_label ?? result.statusLabel ?? current.statusLabel, ''),
         readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
       }));
-      onNotice({
-        level: 'ok',
-        text: `${copy.credentialLabel} enrollment completed for "${profileId}".`,
-      });
+      if (!defaultNoticePosted) {
+        onNotice({
+          level: 'ok',
+          text: `${copy.credentialLabel} enrollment completed for "${profileId}".`,
+        });
+      }
     },
     onError: (error, { profileId, submittedToken, profile }) => {
       const copy = apiKeyEnrollmentCopy(profile);
@@ -2864,7 +2995,16 @@ export function ProviderProfilesManager({
           extractErrorField(errorPayload),
         );
       }
-      return response.json() as Promise<ProviderProfile>;
+      try {
+        return (await response.json()) as ProviderProfile;
+      } catch {
+        // The status committed, but the body cannot be decoded: the profile
+        // may already exist, so this stays an ambiguous acknowledgment that
+        // reconciles the list before another POST is permitted.
+        throw new AmbiguousSaveAcknowledgmentError(
+          `Save for "${submission.profileId}" confirmed but returned an unreadable response.`,
+        );
+      }
     },
     onSuccess: (savedProfile, variables) => {
       const { submission } = variables;
@@ -2882,8 +3022,20 @@ export function ProviderProfilesManager({
       const createdProfile = submission.kind === 'create';
       if (createdProfile && submission.defaultIntent && !savedProfile.is_default) {
         // Creation stores the profile non-default until credential validation;
-        // carry the checked intent forward to the readiness-completing step.
-        rememberDefaultIntent(savedProfile.profile_id);
+        // carry the checked intent forward to the readiness-completing step
+        // along with the runtime default already in place, so that
+        // pre-existing default is replaced rather than mistaken for a newer
+        // operator choice.
+        const knownAtSave =
+          queryClient.getQueryData<ProviderProfile[]>(PROVIDER_PROFILE_QUERY_KEY) ?? [];
+        const priorDefaultProfileId =
+          knownAtSave.find(
+            (profile) =>
+              profile.runtime_id === savedProfile.runtime_id &&
+              profile.profile_id !== savedProfile.profile_id &&
+              profile.is_default,
+          )?.profile_id ?? null;
+        rememberDefaultIntent(savedProfile.profile_id, priorDefaultProfileId);
       }
       const guidedApiKeySetupPending =
         submission.setupAction === 'api_key' &&
@@ -2931,7 +3083,7 @@ export function ProviderProfilesManager({
         },
       );
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-      if (submissionOwnsCurrentForm(form, editingProfileId, submission)) {
+      if (submissionOwnsCurrentForm(form, editingProfileId, submission, tierDrafts, defaultTierClientId)) {
         // Only a form still owned by this submission is reset — a draft
         // opened or edited while the request was pending is left untouched.
         // The reset always targets a genuinely new default form with matching
@@ -3217,7 +3369,7 @@ export function ProviderProfilesManager({
       }
       return { profileId, sessionId };
     },
-    onSuccess: ({ profileId, sessionId }) => {
+    onSuccess: async ({ profileId, sessionId }) => {
       setOauthSessions((current) => ({
         ...current,
         [profileId]: { ...current[profileId], sessionId, profileId, status: 'succeeded' },
@@ -3226,8 +3378,11 @@ export function ProviderProfilesManager({
         current?.sessionId === sessionId ? { ...current, status: 'succeeded' } : current,
       );
       queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
-      onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
-      void applyPendingDefaultIntent(profileId);
+      // The deferred default intent owns the final notice when it fires.
+      const defaultNoticePosted = await applyPendingDefaultIntent(profileId);
+      if (!defaultNoticePosted) {
+        onNotice({ level: 'ok', text: `OAuth session for "${profileId}" finalized.` });
+      }
     },
     onError: (error: Error) => {
       onNotice({ level: 'error', text: error.message });

@@ -84,13 +84,22 @@ class GenericOmnigentHostJanitor:
 
     async def run(self) -> dict[str, Any]:
         stale_before = datetime.now(UTC) - timedelta(seconds=self._stale_after)
-        bindings = await self._runtime_bindings.list_recoverable(
-            stale_before=stale_before
-        )
-        leases = await self._host_leases.list_recoverable(stale_before=stale_before)
+        failures: list[dict[str, str]] = []
+        snapshots = []
+        for name, repository in (
+            ("runtimeBindings", self._runtime_bindings),
+            ("hostLeases", self._host_leases),
+        ):
+            try:
+                snapshots.append(
+                    await repository.list_recoverable(stale_before=stale_before)
+                )
+            except Exception as exc:
+                snapshots.append([])
+                failures.append({"stage": name, "reason": type(exc).__name__})
+        bindings, leases = snapshots
         reconciled = 0
         conflicts = 0
-        failures: list[dict[str, str]] = []
         examined_bindings = {binding.bindingId for binding in bindings}
         for binding in bindings:
             try:
@@ -116,16 +125,16 @@ class GenericOmnigentHostJanitor:
         for lease in leases:
             if lease.runtimeBindingId in examined_bindings:
                 continue
-            binding = await self._runtime_bindings.get(lease.runtimeBindingId)
-            if binding is None:
-                failures.append(
-                    {
-                        "hostLeaseRef": lease.leaseRef,
-                        "reason": "runtime_binding_missing",
-                    }
-                )
-                continue
             try:
+                binding = await self._runtime_bindings.get(lease.runtimeBindingId)
+                if binding is None:
+                    failures.append(
+                        {
+                            "hostLeaseRef": lease.leaseRef,
+                            "reason": "runtime_binding_missing",
+                        }
+                    )
+                    continue
                 if await self._owner_has_closed(binding) is not True:
                     conflicts += 1
                     continue
@@ -153,9 +162,12 @@ class GenericOmnigentHostJanitor:
             "conflicts": conflicts,
             "failures": failures,
         }
-        machine = await self._reconcile_machine_capacity()
-        if machine is not None:
-            result["machineCapacity"] = machine
+        try:
+            machine = await self._reconcile_machine_capacity()
+            if machine is not None:
+                result["machineCapacity"] = machine
+        except Exception as exc:
+            failures.append({"stage": "machineCapacity", "reason": type(exc).__name__})
         return result
 
 

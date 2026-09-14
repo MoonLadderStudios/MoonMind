@@ -4,6 +4,21 @@
 The selector is intentionally conservative: empty input, CI/test/dependency
 changes, main branch pushes, scheduled runs, and manual dispatches all select
 the full backend path.
+
+MoonLadderStudios/MoonMind#3950 R6 infra-boundary ownership: the hermetic
+unit suites selected here (SQLite/in-memory/mocked lanes, e.g.
+tests/unit/omnigent/test_concurrency_qualification.py and
+tests/unit/omnigent/test_shared_host_conformance.py) are NOT evidence of the
+PostgreSQL/Temporal/Docker infrastructure boundaries. Those boundaries are
+owned by MoonLadderStudios/MoonMind#3885 (docs/Omnigent/ConcurrencyQualification.md,
+.github/workflows/omnigent-concurrency-qualification.yml with its exact-Docker
+executor tests/integration/omnigent/test_exact_docker_n_way_concurrency.py and
+protected-live tests/provider/omnigent/test_omnigent_concurrency.py) and
+MoonLadderStudios/MoonMind#3832 (docs/Omnigent/SharedHostImage.md,
+moonmind/omnigent/harness_platform/shared_host_conformance.py, qualified on a
+real host through the protected-live runners). Qualified run artifact refs for
+those programs must be recorded separately from hermetic unit evidence; no such
+qualified run is executed from this selector.
 """
 
 from __future__ import annotations
@@ -176,6 +191,10 @@ INTEGRATION_CI_EXCLUDED_PREFIXES = ("tests/integration/reliability/",)
 UNIT_SLOW_PREFIXES = ("tests/unit/api/routers/test_agent_runs.py",)
 
 RELIABILITY_JOURNEY_EXACT = {
+    "api_service/main.py",
+    "api_service/services/recurring_workflows_service.py",
+    "api_service/api/routers/recurring_workflows.py",
+    "frontend/src/entrypoints/schedules.tsx",
     ".github/workflows/pytest-unit-tests.yml",
     "api_service/Dockerfile",
     "docker-compose.test.yaml",
@@ -188,6 +207,8 @@ RELIABILITY_JOURNEY_EXACT = {
 }
 
 RELIABILITY_JOURNEY_PREFIXES = (
+    "moonmind/workflows/skills/deployment_",
+    "tests/fixtures/reliability/",
     ".agents/skills/",
     "api_service/docker/",
     "api_service/api/routers/workflows",
@@ -226,6 +247,10 @@ PROFILE_AUTHORING_EXACT = {
     "api_service/services/omnigent_execution_plan_service.py",
     "moonmind/workflows/executions/runtime_target_selection.py",
     "tests/unit/api/routers/test_profile_first_authoring.py",
+    # MoonLadderStudios/MoonMind#3950 R3: the second #4033 regression half
+    # lives at tests/unit/api_service/ (not routers/). A change to it must
+    # select the same renderer+admission pair as the first half.
+    "tests/unit/api_service/test_profile_execution_selection.py",
     "frontend/src/runtime/fixtures/profile-first-authoring.json",
 }
 PROFILE_AUTHORING_PREFIXES = (
@@ -339,6 +364,13 @@ OMNIGENT_FACADE_EXACT = {
     "moonmind/omnigent/native_ui_compat.py",
     "moonmind/omnigent/workflow_chat_facade.py",
     "moonmind/omnigent/native_outbound_scan.py",
+    # MoonLadderStudios/MoonMind#3950 R5 journey B: the versioned network-
+    # surface compatibility map (compatibility.py) and the capability
+    # inventory it gates (effective_capabilities.py) own the compiled native
+    # UI/facade behavior alongside native_ui_compat.py. A change there must
+    # additionally exercise the compiled production browser suite.
+    "moonmind/omnigent/compatibility.py",
+    "moonmind/omnigent/effective_capabilities.py",
     "api_service/api/routers/omnigent_native_ui.py",
     "api_service/api/routers/omnigent_catalog.py",
     "frontend/src/entrypoints/WorkflowChatNative.tsx",
@@ -670,7 +702,7 @@ def select_suites(
                 prefixes=RELIABILITY_JOURNEY_PREFIXES,
                 globs=RELIABILITY_JOURNEY_GLOBS,
             )
-            for path in backend_paths
+            for path in paths
         ),
         # Computed over every path (not just backend paths): dependency locks
         # and frontend Dockerfiles are non-backend but still change the
