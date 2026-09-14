@@ -1783,6 +1783,55 @@ async def test_strictly_newer_timestamp_replaces_without_run_link(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_stale_observation_preserves_current_result_attribution(tmp_path):
+    """REQ-05 (SQLite substitute for integration proof): a stale observation
+    must not promote historical input/plan refs to the current result."""
+    from api_service.db.models import Base
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 5, tzinfo=UTC)
+            canonical, projection = _seed_execution(
+                session, "mm:stale-attribution", run_id="run-2",
+                updated_at=stored_at, refs=["art_current"], version=4,
+            )
+            canonical.input_ref = "input-current"
+            projection.input_ref = "input-current"
+            await session.commit()
+
+            older = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            desc = _temporal_desc(
+                workflow_id="mm:stale-attribution",
+                run_id="run-1",
+                updated_at=older,
+                memo={"entry": "run", "owner_id": "owner-1", "owner_type": "user",
+                      "input_ref": "input-stale-historical"},
+            )
+            payload = await map_temporal_state_to_projection(desc)
+            payload["artifact_refs"] = ["art_stale_historical"]
+            loaded = bool(payload.pop("_temporal_memo_loaded", False)) and bool(payload.get("memo"))
+            from api_service.core.sync import mutate_execution_projection
+
+            refreshed = await mutate_execution_projection(
+                session, workflow_id="mm:stale-attribution", payload=payload,
+                owner="temporal", metadata_loaded=loaded,
+            )
+            await session.commit()
+            await session.refresh(refreshed)
+
+            assert refreshed.run_id == "run-2"
+            assert refreshed.input_ref == "input-current"
+            assert refreshed.artifact_refs == ["art_current"]
+            assert refreshed.sync_state is TemporalExecutionProjectionSyncState.STALE
+            assert refreshed.projection_version == 4
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_continued_as_new_successor_advances_without_logical_completion(tmp_path):
     """REQ-03: a CONTINUED_AS_NEW predecessor close never reads as logical
     completion; the successor run advances the one logical-workflow projection."""
