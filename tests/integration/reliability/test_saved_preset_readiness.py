@@ -63,6 +63,25 @@ async def boundary(tmp_path, monkeypatch):
                 annotations=seed.get("annotations", {}),
             )
         )
+        for shared_slug in (
+            "issue-implement-assessment",
+            "issue-implement-work-pr",
+        ):
+            shared = yaml.safe_load(
+                Path(f"api_service/data/presets/{shared_slug}.yaml").read_text()
+            )
+            session.add(
+                Preset(
+                    slug=shared["slug"],
+                    scope_type=PresetScopeType.GLOBAL,
+                    title=shared["title"],
+                    description=shared["description"],
+                    required_capabilities=shared.get("requiredCapabilities", []),
+                    steps=shared["steps"],
+                    inputs_schema=shared.get("inputs", []),
+                    annotations=shared.get("annotations", {}),
+                )
+            )
         await session.commit()
 
     @asynccontextmanager
