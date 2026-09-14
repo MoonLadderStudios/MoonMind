@@ -141,7 +141,20 @@ def require_secure_transport(
 
 def detail_url(base_url: str, workflow_id: str) -> str:
     """Build the dashboard detail URL without embedding credentials."""
-    return f"{base_url.rstrip('/')}/workflows/{workflow_id}"
+    try:
+        parts = urlsplit(base_url.rstrip("/"))
+        if parts.username or parts.password:
+            # Never copy URL userinfo (credentials) into terminal/JSON output.
+            hostname = parts.hostname or ""
+            netloc = hostname
+            if parts.port is not None:
+                netloc = f"{hostname}:{parts.port}"
+            base_url = parts._replace(netloc=netloc).geturl().rstrip("/")
+        else:
+            base_url = base_url.rstrip("/")
+    except ValueError:
+        base_url = base_url.rstrip("/")
+    return f"{base_url}/workflows/{workflow_id}"
 
 
 def sanitize_terminal_text(value: str, *, max_chars: int = _MAX_OUTPUT_CHARS) -> str:
@@ -196,6 +209,8 @@ def validate_repository(value: str | None) -> str | None:
                 "Pass owner/repo or a backend-admitted URL, or omit it."
             )
     except OSError:
+        # Best-effort local-path guard only: an unreadable filesystem must not
+        # mask the backend-admitted source validation below.
         pass
     raise WorkflowCliError(
         f"repository {redact_sensitive_text(candidate)!r} is not a backend-admitted "
@@ -257,6 +272,12 @@ def build_execution_payload(
             "provide --instructions, --preset, or --skill so the server has a "
             "plan source for MoonMind.UserWorkflow."
         )
+    # A preset-only submission carries no instructions/skill plan source, which
+    # the server rejects with 422 before preset expansion. Preserve the preset
+    # provenance while giving the server an explicit goal so the request is
+    # admitted and expanded server-side instead of rejected.
+    if preset_slug and not text and not skill_name:
+        text = f"Run preset {preset_slug}"
     repo = validate_repository(repository)
     task: dict[str, Any] = {}
     if text:
@@ -269,9 +290,17 @@ def build_execution_payload(
     if repo:
         task["repository"] = repo
     if agent_profile and agent_profile.strip():
-        task["agentProfile"] = {"ref": agent_profile.strip()}
+        # Canonical agent-profile selector is {"profileId": ...} at the
+        # top-level payload and runtime locations; keep the task copy for
+        # backward compatibility with readers of the task envelope.
+        task["agentProfile"] = {"profileId": agent_profile.strip()}
     if provider_profile and provider_profile.strip():
+        # Canonical provider-profile aliases recognized by the executions
+        # router and runtime selection; populate every alias so the explicit
+        # selection reaches the worker instead of falling back to default.
         task["providerProfileRef"] = provider_profile.strip()
+        task["profileId"] = provider_profile.strip()
+        task["providerProfile"] = provider_profile.strip()
     if publish_mode is not None:
         normalized_publish = publish_mode.strip().lower()
         if normalized_publish not in {"auto", "none", "branch", "pr"}:
@@ -279,12 +308,29 @@ def build_execution_payload(
                 f"invalid --publish-mode {redact_sensitive_text(publish_mode)!r}; "
                 "use auto, none, branch, or pr."
             )
+        # Canonical publication contract is task.publish.mode (plus the
+        # top-level aliases); keep the legacy task.publishMode copy.
         task["publishMode"] = normalized_publish
+        task["publish"] = {"mode": normalized_publish}
     for key, value in dict(extra_params or {}).items():
         task.setdefault(key, value)
+    initial_parameters: dict[str, Any] = {"task": task}
+    # Mirror explicit selectors at the initialParameters level as well: the
+    # executions router and runtime selection read provider/agent profiles and
+    # publication intent from task, runtime, and top-level locations, and the
+    # thin CreateExecutionRequest path never normalizes task-only fields.
+    if task.get("agentProfile") is not None:
+        initial_parameters["agentProfile"] = dict(task["agentProfile"])
+    for alias in ("providerProfileRef", "profileId", "providerProfile"):
+        if task.get(alias) is not None:
+            initial_parameters[alias] = task[alias]
+    if task.get("publish") is not None:
+        initial_parameters["publish"] = dict(task["publish"])
+    if task.get("publishMode") is not None:
+        initial_parameters["publishMode"] = task["publishMode"]
     payload: dict[str, Any] = {
         "workflowType": "MoonMind.UserWorkflow",
-        "initialParameters": {"task": task},
+        "initialParameters": initial_parameters,
     }
     if title and title.strip():
         payload["title"] = title.strip()
@@ -337,12 +383,17 @@ class WorkflowApiClient:
         # Redirects are intentionally not followed automatically so a bearer
         # credential is never forwarded across hosts. A 3xx becomes an
         # actionable error naming the location without echoing secrets.
+        # trust_env=False keeps credentialed loopback requests from being
+        # routed through an environment-configured HTTP(S) proxy (which would
+        # disclose the bearer token to that proxy); explicit proxy use stays
+        # opt-in via transport configuration, not ambient env vars.
         self._client = httpx.Client(
             base_url=self.base_url.rstrip("/"),
             timeout=self.timeout_seconds,
             headers=headers,
             transport=self.transport,
             follow_redirects=False,
+            trust_env=False,
         )
 
     def close(self) -> None:
@@ -445,6 +496,7 @@ class WorkflowApiClient:
         intent — so at-most-one workflow is admitted per intent.
         """
         assert self._client is not None
+        request_key = str(dict(payload).get("idempotencyKey") or "").strip()
         try:
             response = self._client.post("/api/executions", json=dict(payload))
         except httpx.RequestError as exc:
@@ -452,6 +504,13 @@ class WorkflowApiClient:
                 "the submission POST lost its acknowledgment "
                 f"({type(exc).__name__}); retry the identical command with the "
                 "same --request-id to reconcile before minting a new request."
+                + (
+                    f" The generated request-id for this attempt was {request_key}; "
+                    "re-run with --request-id "
+                    f"{request_key} to reconcile."
+                    if request_key
+                    else ""
+                )
             ) from exc
         self._raise_for_status(response, action="workflow submission")
         try:
