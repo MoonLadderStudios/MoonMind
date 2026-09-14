@@ -993,6 +993,35 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         ),
     ),
     LegacyPathRecord(
+        pathId="omnigent.legacy.first_run_dead_configuration",
+        owner="omnigent-deployment",
+        description=(
+            "First-run configuration identities removed by the #3941 consumer "
+            "inventory because no Compose, Dockerfile, shell, Python, or "
+            "settings-catalog consumer reads them. Removed identities fail at "
+            "API and worker startup through OBSOLETE_CONFIGURATION instead of "
+            "being silently ignored."
+        ),
+        family=ComponentFamily.ENVIRONMENT_AND_PERSISTED_BOOTSTRAP,
+        generation=RuntimeGeneration.SHARED_LEGACY_SUBSTRATE,
+        retirementClass=RetirementClass.ELIGIBLE_FOR_REMOVAL,
+        machineCheckableRef=(
+            "python:moonmind.omnigent.legacy_retirement:OBSOLETE_CONFIGURATION"
+        ),
+        surfaces=(
+            "python:moonmind.omnigent.legacy_retirement:OBSOLETE_CONFIGURATION",
+            "file:.env-template",
+            "file:tools/config_consumer_inventory.py",
+            "file:config/consumer_inventory.json",
+        ),
+        applicableCriteria=_BASE_CRITERIA,
+        earliestRemovalStage=RemovalStage.STARTUP_AND_COMPOSE,
+        removalGuardTest=(
+            "tests/unit/omnigent/test_firstrun_obsolete_configuration.py::"
+            "test_removed_first_run_key_fails_startup"
+        ),
+    ),
+    LegacyPathRecord(
         pathId="omnigent.legacy.persisted_bootstrap_image_fields",
         owner="omnigent-deployment",
         description=(
@@ -1398,6 +1427,67 @@ OBSOLETE_CONFIGURATION: tuple[ObsoleteConfiguration, ...] = (
         variable="OMNIGENT_PI_HOST_IMAGE_REF",
         retirementPathId="omnigent.legacy.pi_host_image_alias",
         replacement="OMNIGENT_SHARED_HOST_IMAGE_REF",
+    ),
+    # MoonLadderStudios/MoonMind#3941: the consumer inventory
+    # (tools/config_consumer_inventory.py, config/consumer_inventory.json)
+    # proves these identities have no Compose, Dockerfile, shell, Python, or
+    # settings-catalog consumer. LocalData was never read anywhere, so a
+    # non-empty value is rejected outright; the remaining identities shipped
+    # with live template defaults, so they warn through their deprecation
+    # window instead of breaking copied-template deployments on upgrade.
+    ObsoleteConfiguration(
+        variable="LocalData",
+        retirementPathId="omnigent.legacy.first_run_dead_configuration",
+        replacement="(none - delete the variable; it was never consumed)",
+        deprecated=True,
+        removed=True,
+        guidance=(
+            "Remove LocalData from the environment. It has no consumer and "
+            "is no longer documented in .env-template."
+        ),
+    ),
+    ObsoleteConfiguration(
+        variable="TEMPORAL_POSTGRES_VERSION",
+        retirementPathId="omnigent.legacy.first_run_dead_configuration",
+        replacement="(none - delete the variable; temporal images track POSTGRES_VERSION)",
+        deprecated=True,
+        guidance=(
+            "Remove TEMPORAL_POSTGRES_VERSION from the environment. "
+            "Compose resolves postgres images from POSTGRES_VERSION."
+        ),
+    ),
+    ObsoleteConfiguration(
+        variable="MOONMIND_GEMINI_CAPACITY_RETRY_MAX_ATTEMPTS",
+        retirementPathId="omnigent.legacy.first_run_dead_configuration",
+        replacement="(none - delete the variable; capacity retry is admission-driven)",
+        deprecated=True,
+        guidance=(
+            "Remove MOONMIND_GEMINI_CAPACITY_RETRY_MAX_ATTEMPTS from the "
+            "environment. Capacity retry budgets are admission-driven, not "
+            "environment-driven."
+        ),
+    ),
+    ObsoleteConfiguration(
+        variable="MOONMIND_GEMINI_CAPACITY_RETRY_BASE_DELAY_SECONDS",
+        retirementPathId="omnigent.legacy.first_run_dead_configuration",
+        replacement="(none - delete the variable; capacity retry is admission-driven)",
+        deprecated=True,
+        guidance=(
+            "Remove MOONMIND_GEMINI_CAPACITY_RETRY_BASE_DELAY_SECONDS from "
+            "the environment. Capacity retry budgets are admission-driven, "
+            "not environment-driven."
+        ),
+    ),
+    ObsoleteConfiguration(
+        variable="MOONMIND_GEMINI_CAPACITY_RETRY_MAX_DELAY_SECONDS",
+        retirementPathId="omnigent.legacy.first_run_dead_configuration",
+        replacement="(none - delete the variable; capacity retry is admission-driven)",
+        deprecated=True,
+        guidance=(
+            "Remove MOONMIND_GEMINI_CAPACITY_RETRY_MAX_DELAY_SECONDS from "
+            "the environment. Capacity retry budgets are admission-driven, "
+            "not environment-driven."
+        ),
     ),
 )
 
