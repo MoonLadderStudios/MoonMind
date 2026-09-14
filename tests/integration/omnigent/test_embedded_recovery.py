@@ -472,21 +472,54 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
             return None
 
     class TemporalAdapter:
+        # MoonLadderStudios/MoonMind#1089: the janitor completes owned hosts
+        # through verified teardown, quoting the manager's fenced cleanup
+        # claim. This fake publishes one stable claim per acquired lease so
+        # the production janitor path is exercised end to end.
+        acquired_lease_ids: list[str] = []
+
         async def get_client(self):
             return TemporalClient()
 
+        async def get_workflow_handle(self, _workflow_id):
+            adapter = self
+
+            class _Handle:
+                async def query(self, name):
+                    assert name == "get_state"
+                    return {
+                        "cleanup_obligations": [
+                            {
+                                "lease_id": lease_id,
+                                "profile_id": "codex",
+                                "fencing_generation": 7,
+                                "claim_id": f"{lease_id}:7",
+                                "runId": "run-admitted-1",
+                                "evidenceIdentity": "evidence-admitted-1",
+                            }
+                            for lease_id in adapter.acquired_lease_ids
+                        ]
+                    }
+
+            return _Handle()
+
         async def update_workflow(self, _workflow_id, _name, payload):
+            lease_id = (
+                f"provider-lease:{payload['execution_profile_ref']}:"
+                f"{payload['requester_workflow_id']}"
+            )
+            self.acquired_lease_ids.append(lease_id)
             return {
                 "profile_id": payload["execution_profile_ref"],
-                "lease_id": (
-                    f"provider-lease:{payload['execution_profile_ref']}:"
-                    f"{payload['requester_workflow_id']}"
-                ),
+                "lease_id": lease_id,
                 "already_held": False,
             }
 
         async def signal_workflow(self, _workflow_id, name, payload):
-            assert name == "release_slot"
+            assert name == "report_cleanup_verified"
+            assert int(payload.get("fencing_generation") or 0) == 7
+            evidence = payload.get("teardown_evidence") or {}
+            assert evidence.get("consumer_stopped") is True
             command_order.append("provider_released")
             release_times.append(datetime.now(UTC))
             release_signals.append(dict(payload))

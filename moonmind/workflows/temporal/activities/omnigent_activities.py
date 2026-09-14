@@ -1134,9 +1134,23 @@ async def _reconcile_oauth_hosts(
                 )
             return result
         try:
+            raw_runtime_ids = (request or {}).get("runtime_ids")
+            if raw_runtime_ids is None:
+                raw_runtime_ids = (request or {}).get("runtime_id")
+            if isinstance(raw_runtime_ids, str):
+                runtime_ids = [raw_runtime_ids]
+            elif isinstance(raw_runtime_ids, list):
+                runtime_ids = [str(item) for item in raw_runtime_ids]
+            else:
+                runtime_ids = []
+            # MoonLadderStudios/MoonMind#1089: the janitor drains the
+            # manager's published cleanup_obligations for these runtimes
+            # (plus any runtime observed on cleaned bindings) and completes
+            # each owned claim through report_cleanup_verified.
             result = await janitor.run(
                 profile_id=str((request or {}).get("profile_id") or "").strip() or None,
                 force=bool((request or {}).get("force", False)),
+                runtime_ids=runtime_ids or None,
             )
         except Exception as exc:
             control_plane_metrics.increment(
@@ -1206,6 +1220,7 @@ async def omnigent_oauth_host_janitor_activity(
                     machine_capacity=services.machine_capacity,
                     machine_backend_ref=services.machine_backend_ref,
                     container_inventory=services.owned_container_inventory,
+                    cpu_pool=services.cpu_pool,
                 ).run()
         except Exception as exc:
             generic_result = {

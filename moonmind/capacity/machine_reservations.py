@@ -1066,6 +1066,7 @@ class MachineCapacityLedger:
         *,
         request: ReservationRequest,
         budget: MachineResourceBudget,
+        minimum_memory_mib: int | None = None,
         now: datetime | None = None,
     ) -> ReservationOutcome:
         """Count and reserve in the caller's transaction.
@@ -1112,6 +1113,31 @@ class MachineCapacityLedger:
         holds_compute = (
             existing is not None and str(existing.state) in COMPUTE_ACCOUNTED_STATES
         )
+        if minimum_memory_mib is not None:
+            if not 16 <= minimum_memory_mib <= request.demand.memory_mib:
+                raise ValueError("invalid memory allocation range")
+            if holds_compute:
+                memory_mib = existing.memory_mib
+            elif adopted is not None:
+                memory_mib = adopted.memory_mib
+            else:
+                usage = await self.usage_within(
+                    session, backend_ref=request.backend_ref, now=observed_at
+                )
+                memory_mib = max(
+                    minimum_memory_mib,
+                    min(
+                        request.demand.memory_mib,
+                        budget.memory_mib - usage.reserved_memory_mib,
+                    ),
+                )
+            if not minimum_memory_mib <= memory_mib <= request.demand.memory_mib:
+                raise MachineCapacityConflict(
+                    "retained allocation differs from the authorized memory range"
+                )
+            request = replace(
+                request, demand=replace(request.demand, memory_mib=memory_mib)
+            )
         if holds_compute:
             # This attempt already holds its reservation. Reconcile the retry
             # with the existing allocation rather than taking a second one, and
@@ -1325,11 +1351,16 @@ class MachineCapacityLedger:
         *,
         request: ReservationRequest,
         budget: MachineResourceBudget,
+        minimum_memory_mib: int | None = None,
         now: datetime | None = None,
     ) -> ReservationOutcome:
         async with self._factory()() as session:
             outcome = await self.reserve_within(
-                session, request=request, budget=budget, now=now
+                session,
+                request=request,
+                budget=budget,
+                now=now,
+                minimum_memory_mib=minimum_memory_mib,
             )
             await session.commit()
             return outcome

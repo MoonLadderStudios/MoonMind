@@ -146,18 +146,46 @@ class _DockerMaterializerBackendMixin:
         # Fail closed on digest-pinned writers: the selected Host Class image
         # is immutable launch authority, and a mutable-tag fallback would grant
         # a different image read-write access to persistent OAuth credentials.
-        # Return the exact ref so a missing local image fails with an actionable
-        # Docker error instead of silently substituting another image.
+        # A missing digest-pinned image is recovered by pulling that exact
+        # digest (immutable, so no substitution); only a pull failure or a
+        # mutable ref falls through to the previous fail-closed behavior.
         code, _, _ = await self._backend.run(
             ["docker", "image", "inspect", ref, "--format", "{{.Id}}"]
         )
         if code == 0:
             return ref
         if "@sha256:" in ref:
+            try:
+                pull_code, pull_out, pull_err = await self._backend.run(
+                    ["docker", "pull", ref],
+                    timeout_seconds=120.0,
+                )
+            except TimeoutError as exc:
+                raise HarnessPlatformError(
+                    f"digest-pinned writer image pull timed out: {ref}; "
+                    "pull the selected Host Class image instead of substituting "
+                    "a mutable tag",
+                    code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                ) from exc
+            if pull_code != 0:
+                detail = (pull_err or pull_out).decode("utf-8", errors="replace")[
+                    :512
+                ]
+                raise HarnessPlatformError(
+                    f"digest-pinned writer image pull failed for {ref}: {detail}; "
+                    "pull the selected Host Class image instead of substituting "
+                    "a mutable tag",
+                    code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+                )
+            retry_code, _, _ = await self._backend.run(
+                ["docker", "image", "inspect", ref, "--format", "{{.Id}}"]
+            )
+            if retry_code == 0:
+                return ref
             raise HarnessPlatformError(
-                f"digest-pinned writer image is not present locally: {ref}; "
-                "pull the selected Host Class image instead of substituting "
-                "a mutable tag",
+                f"digest-pinned writer image is not present locally after pull: "
+                f"{ref}; pull the selected Host Class image instead of "
+                "substituting a mutable tag",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
             )
         return ref
@@ -652,6 +680,7 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                     'assert d["providers"]["moonmind"]["kind"]=="key"\'',
                 )
             )
+            writer_ref = await self._resolve_writer_ref(context.writer_image_ref)
             await self._run(
                 [
                     "docker",
@@ -670,7 +699,7 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                     f"type=volume,src={volume_name},dst=/credential",
                     "--entrypoint",
                     "/bin/sh",
-                    context.writer_image_ref,
+                    writer_ref,
                     "-ceu",
                     writer_script,
                     "--",
@@ -691,7 +720,7 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                     f"type=volume,src={volume_name},dst=/credential,readonly",
                     "--entrypoint",
                     "/bin/sh",
-                    context.writer_image_ref,
+                    writer_ref,
                     "-ceu",
                     verify_config_script,
                     "--",

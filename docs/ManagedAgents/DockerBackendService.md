@@ -798,6 +798,49 @@ same deployment-owned ledger (`machine_capacity_reservations`,
 `moonmind.capacity`). Enforcing a container-job-private ceiling would let two
 full workload classes still oversubscribe one machine.
 
+New container jobs and supported bootstrap on-demand agents share a
+kernel-enforced CPU pool. Bootstrap probes the selected daemon and immutable
+helper authority before activating shared agent defaults; unsupported or
+temporarily unreadable backends keep their fixed 2000-millicpu stock policies
+and retry the probe at the next bootstrap reconciliation.
+The default pool ceiling is 70% of the CPU count reported by the selected
+Docker daemon, less reservations held by existing fixed-CPU hosts. Thus a
+six-CPU daemon provides up to 4.2 CPUs to the workload pool. Equal CPU weights
+let an active test use CPU that an idle agent is not using. `cpuMillis: 0`
+(also the default for an omitted container-job CPU limit) selects sharing up to
+the deployment's per-job CPU ceiling. A positive job CPU value retains that
+maximum within the pool. Positive host policies and historical workflow
+admissions retain their fixed allocation semantics.
+
+The pool reserves its CPU ceiling once in the shared ledger. Its cgroup v2
+parent enforces the aggregate cap; CPU weights alone are insufficient to
+protect control-plane headroom. This path requires rootful Docker with cgroup
+v2 and the `cgroupfs` or `systemd` driver. A bounded deployment helper uses the
+trusted worker's immutable image to configure the parent. It receives no
+workspace, credentials, network access, or Docker socket. The existing host
+janitor and historical fixed-job admission release the pool reservation only
+when kernel evidence proves no consumers remain. Fixed jobs therefore need not
+wait for the periodic janitor after the last shared workload exits. No
+permanently running service is added.
+
+Memory remains reserved and hard-limited per container. A caller may specify
+`minimumMemoryMiB` alongside its preferred `memoryMiB`; admission atomically
+grants the largest available value in that range and preserves the grant on
+retry. Omission keeps an exact memory request. Both Python-test entrypoints
+prefer 4096 MiB and accept at least 2048 MiB, so larger deployments keep their
+existing test allowance. The actual grant is recorded in runtime diagnostics.
+Pytest's automatic worker count accounts for container memory and CPU, leaving
+512 MiB for its controller and at least 1 GiB per worker; explicit pytest worker
+overrides retain precedence.
+
+Temporary shortages put new jobs in `waiting_for_capacity`, using Temporal
+timers within the original job timeout. They preserve the job identity and
+workspace instead of becoming a test failure and another implementation
+attempt. An impossible minimum fails with resource diagnostics. An exhausted
+wait reports that testing did not start. Agent memory is not reclaimed merely
+because its CPU usage is low: an idle process can retain live RAM. This policy
+does not implement memory overcommit or suspend and resize a running agent.
+
 #### Accounting boundary: which launch classes reserve
 
 `moonmind.capacity.docker_inventory` holds the registry of every MoonMind-owned
@@ -815,6 +858,7 @@ invisibly.
 | Managed session | `moonmind.kind=managed-session` | Observed |
 | Session Docker sidecar | `moonmind.kind=session-docker-sidecar` | Observed |
 | Workload / bounded service | `moonmind.kind=workload`, `moonmind.kind=bounded_service` | Observed |
+| Resource helper | `moonmind.resource-helper=true` | Observed; bounded setup or reconciliation |
 
 **Reserving** classes take a durable reservation before they launch and are
 refused when the machine is full. A running container of a reserving class with

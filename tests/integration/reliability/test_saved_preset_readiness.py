@@ -63,6 +63,25 @@ async def boundary(tmp_path, monkeypatch):
                 annotations=seed.get("annotations", {}),
             )
         )
+        for shared_slug in (
+            "issue-implement-assessment",
+            "issue-implement-work-pr",
+        ):
+            shared = yaml.safe_load(
+                Path(f"api_service/data/presets/{shared_slug}.yaml").read_text()
+            )
+            session.add(
+                Preset(
+                    slug=shared["slug"],
+                    scope_type=PresetScopeType.GLOBAL,
+                    title=shared["title"],
+                    description=shared["description"],
+                    required_capabilities=shared.get("requiredCapabilities", []),
+                    steps=shared["steps"],
+                    inputs_schema=shared.get("inputs", []),
+                    annotations=shared.get("annotations", {}),
+                )
+            )
         await session.commit()
 
     @asynccontextmanager
@@ -287,7 +306,13 @@ async def test_new_current_include_capabilities_require_refresh(boundary, includ
     workflow, calls, sessions = boundary
     saved = parameters()
     async with sessions() as session:
-        root = (await session.execute(select(Preset))).scalar_one()
+        root = (
+            await session.execute(
+                select(Preset).where(
+                    Preset.slug == "github-issue-search-and-implement"
+                )
+            )
+        ).scalar_one()
         root.required_capabilities = ["git", "gh"]
         root.steps = (
             [{"kind": "include", "slug": "new-child", "alias": "new-child"}]
@@ -334,7 +359,13 @@ async def test_new_current_include_capabilities_require_refresh(boundary, includ
 async def test_invalid_current_include_graph_never_launches_work(boundary, invalid):
     workflow, _, sessions = boundary
     async with sessions() as session:
-        root = (await session.execute(select(Preset))).scalar_one()
+        root = (
+            await session.execute(
+                select(Preset).where(
+                    Preset.slug == "github-issue-search-and-implement"
+                )
+            )
+        ).scalar_one()
         root.required_capabilities = ["git", "gh"]
         root.steps = [
             {

@@ -811,12 +811,13 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
 ):
     seeds = tmp_path / "seeds"
     seeds.mkdir()
-    shutil.copy(
-        Path(__file__).resolve().parents[3]
-        / "api_service/data/presets"
-        / f"{PRESET}.yaml",
-        seeds,
-    )
+    preset_dir = Path(__file__).resolve().parents[3] / "api_service/data/presets"
+    for filename in (
+        f"{PRESET}.yaml",
+        "issue-implement-assessment.yaml",
+        "issue-implement-work-pr.yaml",
+    ):
+        shutil.copy(preset_dir / filename, seeds / filename)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/catalog.db")
     try:
         async with engine.begin() as connection:
@@ -1161,12 +1162,13 @@ async def test_finalize_with_mixed_labels_and_published_pr_ends_degraded_complet
 async def _synced_catalog_session(tmp_path, session_factory_holder=None):
     seeds = tmp_path / "seeds"
     seeds.mkdir(exist_ok=True)
-    shutil.copy(
-        Path(__file__).resolve().parents[3]
-        / "api_service/data/presets"
-        / f"{PRESET}.yaml",
-        seeds,
-    )
+    preset_dir = Path(__file__).resolve().parents[3] / "api_service/data/presets"
+    for filename in (
+        f"{PRESET}.yaml",
+        "issue-implement-assessment.yaml",
+        "issue-implement-work-pr.yaml",
+    ):
+        shutil.copy(preset_dir / filename, seeds / filename)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/catalog.db")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
