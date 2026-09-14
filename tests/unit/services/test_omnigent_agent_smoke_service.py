@@ -474,6 +474,8 @@ async def test_smoke_admission_uses_actual_host_instead_of_expired_catalog(sessi
                     "failureCode": None,
                     "serverImageRef": server_ref,
                     "hostImageRef": host_ref,
+                    "hostBuildDigest": "sha256:" + "9" * 64,
+                    "hostVersion": "0.11.9",
                 }
             },
         ),

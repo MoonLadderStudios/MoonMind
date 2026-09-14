@@ -6464,8 +6464,10 @@ async def _execute_brief_admission_claim(
     if stopped is not None:
         return stopped
     service = github_service_factory()
-    await IssueClaimStore().start_announcement(receipt.owner, receipt.attempt_id)
-    async with IssueClaimStore().locked(receipt.owner) as row:
+    store = IssueClaimStore()
+    async with store.locked(receipt.owner) as row:
+        if row.attempt_id != receipt.attempt_id:
+            raise ActiveIssueClaimConflict("claim_changed: stale reservation cannot announce")
         receipt = ClaimReceipt.from_row(row)
         if (receipt.repository, receipt.issue_number) != (repository.casefold(), issue_number):
             raise ValueError("claim_changed: stale reservation cannot mutate a different candidate")
@@ -6474,6 +6476,10 @@ async def _execute_brief_admission_claim(
             return {"executed": False, "blocked": True, "reasonCode": "read_failure"}
         comment_id = inspect_claim_comments(receipt, listed["comments"])
         if not comment_id:
+            # Validate before recording intent, then retain serialization across
+            # the durable commit and remote write. A rejected pre-POST read can
+            # abandon a fresh reservation; an older uncertain intent survives.
+            await store.start_announcement(row)
             created = await service.create_issue_comment(repo=repository, issue_number=issue_number, body=receipt.comment_body)
             # Always reread, including a lost create acknowledgment. Never infer
             # absence from a transport error and issue a second create here.
@@ -6516,9 +6522,15 @@ async def _prepare_github_issue_claim(*, inputs, context, repository, issue_numb
         inputs={**inputs, "attemptId": attempt_id, "workflowId": owner},
         context=context, pull_request_url="",
     )
-    return await IssueClaimStore().prepare(owner=owner, repository=repository,
+    values = dict(owner=owner, repository=repository,
         issue_number=issue_number, attempt_id=attempt_id, actor_id=actor["actorId"],
         comment_body=render_attempt_comment(handoff))
+    # Remote attempts survive deployment replacement and may have no local SQL
+    # receipt or in-progress label. Check the same authoritative comment rules
+    # before reserving this candidate so a search can continue without effects.
+    await verify_claim(ClaimReceipt(**values, comment_id=None, confirmed=False,
+        pending_comment_body=None, released=False), service)
+    return await IssueClaimStore().prepare(**values)
 
 
 async def _apply_brief_claim_labels(

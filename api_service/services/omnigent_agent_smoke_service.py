@@ -469,7 +469,6 @@ async def _run_v2_profile_readiness_checks(
                 OmnigentHostClassSelector().select(
                     harness=harness,
                     omnigent_version=authority.omnigentVersion,
-                    omnigent_build_digest=authority.omnigentBuildDigest,
                     integration_mode=harness.capabilities.integrationMode
                     or "native-server",
                     materializer_refs=[materializer_ref],

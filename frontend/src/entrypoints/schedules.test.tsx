@@ -408,6 +408,57 @@ describe("SchedulesPage", () => {
     expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
   });
 
+  it.each(['list', 'detail'])('reuses a valid UUID on %s HTTP-origin retries', async (page) => {
+    const originalUUID = Object.getOwnPropertyDescriptor(crypto, 'randomUUID');
+    Object.defineProperty(crypto, 'randomUUID', { configurable: true, value: undefined });
+    try {
+      const keys: string[] = [];
+      fetchSpy.mockImplementation(async (input, init) => {
+        const url = String(input);
+        if (init?.method === 'POST') {
+          keys.push((init.headers as Record<string, string>)['Idempotency-Key']!);
+          if (keys.length === 1) throw new Error('response lost');
+          return { ok: true, json: async () => detailRuns.items[0] } as Response;
+        }
+        return { ok: true, json: async () => url.includes('/runs') ? detailRuns
+          : url.startsWith('/console/schedules/schedule-alpha') ? detailSchedule
+            : { items: [detailSchedule] } } as Response;
+      });
+      renderWithClient(<SchedulesPage payload={page === 'detail' ? detailPayload : mockPayload} />);
+      const button = await screen.findByRole('button', { name: page === 'detail' ? 'Run now' : 'Run Nightly detail sweep now' });
+      fireEvent.click(button);
+      await waitFor(() => expect(page === 'detail' ? screen.queryByText('response lost') : button.getAttribute('title')).toBeTruthy());
+      fireEvent.click(button);
+      await waitFor(() => expect(keys).toHaveLength(2));
+      expect(keys[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(keys[1]).toBe(keys[0]);
+    } finally {
+      if (originalUUID) Object.defineProperty(crypto, 'randomUUID', originalUUID);
+      else Reflect.deleteProperty(crypto, 'randomUUID');
+    }
+  });
+
+  it('polls a pending row request until its durable execution is observed', async () => {
+    const pending = { ...detailRuns.items[0], id: 'pending-row', trigger: 'manual',
+      outcome: 'pending_dispatch', temporalWorkflowId: null, temporalRunId: null };
+    let observations = 0;
+    fetchSpy.mockImplementation(async (input, init) => {
+      if (init?.method === 'POST') return { ok: true, json: async () => pending } as Response;
+      if (String(input).includes('/runs')) {
+        observations += 1;
+        return { ok: true, json: async () => ({ items: [observations === 1 ? pending
+          : { ...pending, outcome: 'enqueued', temporalWorkflowId: 'observed-row', temporalRunId: 'exact-run' }] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ items: [detailSchedule] }) } as Response;
+    });
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Run Nightly detail sweep now' }));
+    await screen.findByRole('link', { name: 'Waiting for execution evidence' });
+    const link = await screen.findByRole('link', { name: 'Execution started' }, { timeout: 7000 });
+    expect(observations).toBe(2);
+    expect(link.getAttribute('href')).toBe('/workflows/observed-row?source=temporal');
+  }, 10000);
+
   it("surfaces a failed run-now row action as a button tooltip", async () => {
     const listResponse = {
       items: [
@@ -1355,6 +1406,52 @@ describe("SchedulesPage", () => {
       "/workflows/workflow-from-schedule?source=temporal",
     );
     expect(screen.getAllByText("schedule-alpha").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it.each([
+    ['enqueued', 'Execution started', 'workflow-new'],
+    ['skipped', 'Already running; no new execution started', 'workflow-active'],
+    ['pending_dispatch', 'Waiting for execution evidence', null],
+    ['dispatch_error', 'Request unconfirmed; check schedule history before retrying', null],
+  ])('shows truthful %s Run now evidence and links', async (outcome, label, workflowId) => {
+    mockScheduleDetailFetch(fetchSpy);
+    const fallback = fetchSpy.getMockImplementation()!;
+    fetchSpy.mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/run') && init?.method === 'POST') {
+        expect((init.headers as Record<string, string>)['Idempotency-Key']).toBeTruthy();
+        return { ok: true, json: async () => ({ ...detailRuns.items[0], id: 'observed-manual',
+          outcome, message: null, temporalWorkflowId: workflowId, trigger: 'manual' }) } as Response;
+      }
+      return fallback(input, init);
+    });
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+    await screen.findByRole('heading', { name: 'Nightly detail sweep' });
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+    const link = await screen.findByRole('link', { name: label! });
+    expect(link.getAttribute('href')).toBe(workflowId
+      ? `/workflows/${workflowId}?source=temporal` : '/schedules/schedule-alpha');
+  });
+
+  it('reuses the same request identity after an uncertain HTTP response', async () => {
+    mockScheduleDetailFetch(fetchSpy);
+    const fallback = fetchSpy.getMockImplementation()!;
+    const keys: string[] = [];
+    fetchSpy.mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/run') && init?.method === 'POST') {
+        const key = (init.headers as Record<string, string>)['Idempotency-Key'];
+        expect(key).toBeTruthy();
+        keys.push(key!);
+        if (keys.length === 1) throw new Error('response lost');
+      }
+      return fallback(input, init);
+    });
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+    await screen.findByRole('heading', { name: 'Nightly detail sweep' });
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+    await screen.findByText('response lost');
+    fireEvent.click(screen.getByRole('button', { name: 'Run now' }));
+    await waitFor(() => expect(keys).toHaveLength(2));
+    expect(keys[0]).toBe(keys[1]);
   });
 
   it("disables pause and resume while editing schedule configuration", async () => {

@@ -399,3 +399,19 @@ def test_readmission_credential_identity_preserves_retry_and_historical_authorit
     assert credential_runtime_identity(acquired, materializer) == second
     acquired.admission_epoch = 3
     assert credential_runtime_identity(acquired, materializer) not in (historical, second)
+
+
+@pytest.mark.parametrize(
+    "materializer",
+    ["opencode-auth-json@1", "omnigent-provider-config@1", CODEX_REF, CLAUDE_REF,
+     "none@1", "host-owned-auth@1"],
+)
+def test_reset_run_cannot_reuse_previous_credential_lifecycle(materializer):
+    acquired = _acquired()
+    acquired.admission_epoch = 1
+    acquired.admission_run_id = "original-run"
+    original = credential_runtime_identity(acquired, materializer)
+    acquired.admission_run_id = "reset-run"
+    reset = credential_runtime_identity(acquired, materializer)
+    assert reset != original
+    assert credential_runtime_identity(acquired, materializer) == reset

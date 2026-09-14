@@ -871,6 +871,8 @@ runtime.omnigent.control_audit.jsonl
 
 Optional resource artifacts include changed-file, workspace-file, session-file, diff, patch-unavailable, and child-session indexes.
 
+Artifact references preserve their content across attempts, including when a new admission publishes the same evidence filename. The local gateway derives its object path from content and metadata; the durable gateway retains its service-owned artifact identity. Previously returned local references remain readable at their original paths.
+
 Generic-host runs additionally publish `generic-host-cleanup.json` (`evidence.cleanup`): the fenced cleanup results for the provider session, host container, volumes, and credentials. Before the ephemeral host container is removed, cleanup captures a bounded, redacted tail of its stdout/stderr (last 2000 lines, of which the final 64 KiB is retained, so the newest output is always kept) and publishes it as `generic-host-logs.txt` (`evidence.host_logs`), linked from the cleanup evidence as `results.host.hostLogsRef`. The same tail is captured when the host runtime removes a host that failed registration or attestation; that evidence travels on the failure to the realizer's single publication point so it is published with the cleanup evidence rather than lost with the container. The runner and harness inside that container are the only source for why a provider dropped or rejected a turn; capture failures are recorded as `hostLogsCaptureError` and never block or fail cleanup. Janitor recovery of a stale binding has no admitted request and publishes no evidence artifacts.
 
 ---

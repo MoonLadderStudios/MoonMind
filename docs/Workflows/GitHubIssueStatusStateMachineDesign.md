@@ -4,7 +4,7 @@
 **Viewpoint:** System / Feature Design View  
 **Status:** Proposed (legacy cutover §12 implemented; remainder desired behavior)  
 **Owners:** MoonMind Platform + Workflow Runtime + GitHub Integration  
-**Updated:** 2026-09-09  
+**Updated:** 2026-09-13
 **Audience:** Workflow, preset, GitHub adapter, recovery, and dashboard contributors and operators  
 **Authority:** GitHub issue lifecycle labels, selection eligibility, attempt handoffs, and cross-deployment recovery behavior. Existing execution, checkpoint, publishing, and merge contracts retain their respective authority.  
 **Owning Surface:** Trusted GitHub issue operations and workflow terminal/reconciliation boundaries  
@@ -107,6 +107,14 @@ A marker and body do not authenticate themselves. The integration validates comm
 Progress updates are coalesced and rate-bounded rather than emitted on every runtime poll. Activity timestamps support observation, not expiring ownership.
 
 Comment creation and updates are serialized per attempt within the owning deployment. A retried create first checks for the same attempt marker. A lost HTTP response is an unknown result, not proof that the operation failed. Duplicate comments with the same attempt identity are one logical attempt, not extra retry allowance. Conflicting copies require reconciliation, not choosing whichever timestamp is newest.
+
+Before announcement, the owning deployment validates live comment evidence
+under its claim lock. PostgreSQL connection-scoped serialization remains held
+across the durable POST-intent commit, remote write, and receipt readback.
+A rejected read before intent leaves a fresh reservation abandonable; an
+existing intent is never cleared by this path because a prior write may be
+unknown. Selection can skip a conflicting remote candidate before reservation.
+This local serialization does not fence a writer in another deployment.
 
 A terminal handoff records a proposed disposition before removing blocking labels. It becomes released only after the writer is stopped, preservation is verified or explicitly absent, pending shared mutations are settled, and the intended label transition has been observed.
 

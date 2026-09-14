@@ -1402,7 +1402,7 @@ def test_import_lock_mutual_exclusion_and_takeover(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dangling_staged_symlink_fails_closed(tmp_path):
+async def test_contained_dangling_symlink_preserves_link_text(tmp_path):
     payload = _tar_bytes(
         [
             ("real.txt", b"data\n", "file"),
@@ -1412,7 +1412,33 @@ async def test_dangling_staged_symlink_fails_closed(tmp_path):
     service = FakeArtifactService({"checkpoint": payload})
     workspace = tmp_path / "ws"
     workspace.mkdir()
-    with pytest.raises(WorkspaceArtifactProjectionError, match="unresolvable"):
+    evidence = await WorkspaceArtifactProjector(service).project(
+        workspace,
+        checkpoint_ref="artifact://checkpoint",
+        checkpoint_digest=_digest(payload),
+        workflow_id="workflow-1",
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+        strict_admission=True,
+    )
+    assert (workspace / "real.txt").read_bytes() == b"data\n"
+    assert (workspace / "dangling.txt").is_symlink()
+    assert os.readlink(workspace / "dangling.txt") == "removed.txt"
+    assert not (workspace / "dangling.txt").exists()
+    assert evidence["checkpointManifest"]["symlinkCount"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("indirect", [False, True])
+async def test_cyclic_staged_symlink_fails_before_promotion(tmp_path, indirect):
+    entries = [("loop", b"", "symlink", "other" if indirect else "loop")]
+    if indirect:
+        entries.append(("other", b"", "symlink", "loop"))
+    payload = _tar_bytes(entries)
+    service = FakeArtifactService({"checkpoint": payload})
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    with pytest.raises(WorkspaceArtifactProjectionError, match="unresolvable:") as exc:
         await WorkspaceArtifactProjector(service).project(
             workspace,
             checkpoint_ref="artifact://checkpoint",
@@ -1422,7 +1448,45 @@ async def test_dangling_staged_symlink_fails_closed(tmp_path):
             runtime_gid=os.getgid(),
             strict_admission=True,
         )
+    assert str(exc.value) in {
+        f"workspace checkpoint symlink is unresolvable: {entry[0]}" for entry in entries
+    }
     assert not any(workspace.iterdir())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target_exists", [False, True])
+async def test_dangling_overlay_link_cannot_gain_external_destination_authority(
+    tmp_path, target_exists
+):
+    payload = _tar_bytes([("nested/link", b"", "symlink", "../runtime/input.txt")])
+    service = FakeArtifactService({"checkpoint": payload})
+    workspace_id = _workspace_id()
+    workspace = tmp_path / "temporal_sandbox" / workspace_id / "repo"
+    workspace.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if target_exists:
+        (outside / "input.txt").write_text("outside authority\n")
+    (workspace / "runtime").symlink_to(outside, target_is_directory=True)
+    spec = _authored_checkpoint_spec(workspace_id, payload, overlayPolicy="additive")
+
+    with pytest.raises(HarnessPlatformError, match="escapes workspace"):
+        await OmnigentWorkspaceMaterializer(
+            command_runner=_never_clone,
+            workspace_root=tmp_path,
+            artifact_service=service,
+        ).materialize(
+            _request(spec),
+            runtime_uid=os.getuid(),
+            runtime_gid=os.getgid(),
+        )
+
+    assert not SandboxWorkspaceRecordStore(tmp_path).is_materialized(workspace_id)
+    if target_exists:
+        assert (outside / "input.txt").read_text() == "outside authority\n"
+    else:
+        assert not (outside / "input.txt").exists()
 
 
 @pytest.mark.asyncio

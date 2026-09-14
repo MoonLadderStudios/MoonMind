@@ -1,0 +1,12 @@
+{
+  "failureShapeId": "force-cancel-orphan",
+  "incidentDate": "2026-09-13",
+  "failure": "A graceful request was stored as CANCELED while Temporal remained RUNNING with no worker. The terminal record hid Force cancel and made the service return without terminating the execution.",
+  "test": "tests/integration/reliability/test_force_cancel_orphan.py",
+  "requiredEvidence": [
+    "Authenticated HTTP force cancellation terminates parent and child without a workflow worker and persists terminal state across reconciliation and retries.",
+    "An absent Temporal run can be closed through the same endpoint, including projection-only orphan records, without weakening ownership.",
+    "An already completed run keeps its actual outcome and a reused workflow ID is not terminated.",
+    "Parent and child terminal histories replay."
+  ]
+}

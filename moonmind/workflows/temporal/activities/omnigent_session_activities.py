@@ -433,7 +433,40 @@ async def omnigent_admit_generic_host_capacity_activity(
     admission = GenericHostCapacityAdmission.from_environment(
         session_factory=async_session_maker
     )
-    decision = await admission.evaluate(already_allocated=already_allocated)
+    demand = budget = None
+    if not already_allocated:
+        from moonmind.capacity import ResourceDemand
+        from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+        from moonmind.omnigent.production import (
+            build_generic_omnigent_execution_services,
+        )
+
+        plan_ref = str(payload.get("executionPlanRef") or "").strip()
+        plan = await DbExecutionPlanStore(async_session_maker).load(plan_ref)
+        if plan is None or plan.payload.hostClassRef != payload.get("hostClassRef"):
+            raise ValueError(
+                "host admission requires its exact committed execution plan"
+            )
+        services = build_generic_omnigent_execution_services(
+            session_factory=async_session_maker
+        )
+        _, policy = await services.planned_host_resolver(plan)
+        demand = ResourceDemand.from_launch_policy_limits(policy.limits)
+        from moonmind.capacity import MachineCapacityUnavailable
+
+        try:
+            budget = await services.machine_budget_provider()
+        except MachineCapacityUnavailable:
+            return {
+                "admitted": False,
+                "alreadyAllocated": False,
+                "retryAfterSeconds": 30,
+                "unsatisfiable": False,
+                "waitingReason": "Waiting for the machine capacity owner to observe the container backend.",
+            }
+    decision = await admission.evaluate(
+        already_allocated=already_allocated, demand=demand, budget=budget
+    )
     return {
         **decision.as_payload(),
         "alreadyAllocated": already_allocated,

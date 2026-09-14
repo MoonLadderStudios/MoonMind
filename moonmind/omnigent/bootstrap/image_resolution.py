@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
+from moonmind.omnigent.compatibility import versions_compatible
 
 _DIGEST_RE = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -260,7 +261,11 @@ async def _image_omnigent_version(image_ref: str) -> str | None:
     if code != 0:
         return None
     match = _OMNIGENT_VERSION_RE.search(stdout.strip())
-    return match.group(1) if match is not None else None
+    return (
+        match.group(1)
+        if match is not None and versions_compatible(match.group(1), stdout.strip())
+        else None
+    )
 
 
 @dataclass(frozen=True)
@@ -291,8 +296,8 @@ async def _evaluate_opencode_host(
 ) -> _OpenCodeHostVerdict:
     """Judge one host image against the running server's build identity.
 
-    The ladder is the paired-runtime contract: shared build identity, equal
-    executable Omnigent versions, then the release bootstrap probe. Every
+    Compatibility requires the same executable major.minor release series
+    and the release bootstrap probe. Digests retain provenance. Every
     candidate passes through the same ladder, so the admitted host is always
     the one that proved compatibility with the server actually running.
     """
@@ -306,11 +311,9 @@ async def _evaluate_opencode_host(
         failure = "omnigent_host_build_identity_unavailable"
     elif configured_build_digest and configured_build_digest != build_digest:
         failure = "omnigent_operator_host_build_mismatch"
-    elif not configured_build_digest and server_image_digest != build_digest:
-        failure = "omnigent_server_host_build_mismatch"
     elif server_version is None or version is None:
         failure = "omnigent_server_host_version_probe_failed"
-    elif server_version != version:
+    elif not versions_compatible(server_version, version):
         failure = "omnigent_server_host_version_mismatch"
     elif not await _image_opencode_bootstrap_ready(image_ref):
         failure = "omnigent_host_bootstrap_contract_missing"
@@ -475,10 +478,9 @@ async def resolve_omnigent_images(
     if not shared_ref and previous and previous.shared_host_image_ref:
         shared_ref = previous.shared_host_image_ref
 
-    # The default release embeds the exact server repository digest as its
-    # paired runtime-pack identity. It is distinct from the custom host image's
-    # own repository digest. An operator may instead provide an explicit shared
-    # build identity for an independently paired server and host.
+    # Server and host build digests retain independent provenance. An explicit
+    # operator build pin still requires that exact host label; default server
+    # compatibility is decided by major.minor and the bootstrap contract.
     if not server_image_digest and server_ref:
         server_image_digest = _extract_digest(server_ref)
     configured_build_digest = str(source.get("OMNIGENT_BUILD_DIGEST") or "").strip()
@@ -486,7 +488,7 @@ async def resolve_omnigent_images(
         raise ValueError("OMNIGENT_BUILD_DIGEST must be an exact sha256 identity")
     server_version = (
         await _image_omnigent_version(server_ref)
-        if server_ref and host_candidates
+        if server_ref
         else None
     )
     if host_candidates and (not server_ref or not server_image_digest):
@@ -544,30 +546,29 @@ async def resolve_omnigent_images(
         # digest instead of launching a mismatched host for Codex or Claude.
         shared_ref = opencode_ref
 
-    if compatibility_failure:
-        # Keep the current server as catalog authority while quarantining the
-        # incompatible runtime pack. The selector consumes this same verdict,
-        # so existing signed qualification evidence cannot launch the stale
-        # image while the registry catches up.
-        omnigent_build_digest = configured_build_digest or server_image_digest
-        build_identity_source = (
-            "operator-quarantine"
-            if configured_build_digest
-            else "server-image-quarantine"
-        )
-    elif configured_build_digest:
-        omnigent_build_digest = configured_build_digest
-        build_identity_source = "operator"
-    elif host_build_digest:
-        omnigent_build_digest = host_build_digest
-        build_identity_source = "opencode-host-label"
-    elif previous and previous.omnigent_build_digest:
-        omnigent_build_digest = previous.omnigent_build_digest
-        build_identity_source = "persisted"
-    else:
-        # Legacy Codex-only deployments do not select the OpenCode Host Class.
-        omnigent_build_digest = server_image_digest
-        build_identity_source = "server-image-digest"
+    # Catalog/plan authority always identifies the actual server image. The
+    # optional operator host-build pin remains a separate admission constraint.
+    omnigent_build_digest = server_image_digest
+    build_identity_source = (
+        "server-image-quarantine" if compatibility_failure else "server-image-digest"
+    )
+
+    # Persist provenance for every distinct selected image. Shared and Pi hosts
+    # can be built independently of the OpenCode image and of the server.
+    host_provenance = {}
+    observed_verdicts = {verdict.image_ref: verdict for verdict in verdicts}
+    for image_ref in sorted({ref for ref in (opencode_ref, pi_ref, shared_ref) if ref}):
+        verdict = observed_verdicts.get(image_ref)
+        host_provenance[image_ref] = {
+            "buildDigest": (
+                verdict.build_digest
+                if verdict
+                else await _image_build_identity(image_ref)
+            ),
+            "version": (
+                verdict.version if verdict else await _image_omnigent_version(image_ref)
+            ),
+        }
 
     # Architecture detection
     arch = "linux/amd64"
@@ -595,6 +596,7 @@ async def resolve_omnigent_images(
         source="auto",
         details={
             "serverImageDigest": server_image_digest,
+            "hostImageProvenance": host_provenance,
             "buildIdentitySource": build_identity_source,
             "opencodeHostCompatibility": {
                 "status": "blocked" if compatibility_failure else "ready",
@@ -640,7 +642,6 @@ async def _image_opencode_bootstrap_ready(image_ref: str) -> bool:
 # writes, captured once at their operator-supplied values.
 _PUBLISHED_IMAGE_KEYS = (
     "OMNIGENT_IMAGE_REF",
-    "OMNIGENT_BUILD_DIGEST",
     "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
     "OMNIGENT_PI_HOST_IMAGE_REF",
     "OMNIGENT_SHARED_HOST_IMAGE_REF",
@@ -703,7 +704,6 @@ async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
     save_resolved_state(state)
     exported = {
         "OMNIGENT_IMAGE_REF": state.server_image_ref,
-        "OMNIGENT_BUILD_DIGEST": state.omnigent_build_digest,
         "OMNIGENT_OPENCODE_HOST_IMAGE_REF": state.opencode_host_image_ref,
         "OMNIGENT_PI_HOST_IMAGE_REF": state.pi_host_image_ref,
         "OMNIGENT_SHARED_HOST_IMAGE_REF": state.shared_host_image_ref,
@@ -728,11 +728,6 @@ def resolved_opencode_image_ref(state: ResolvedOmnigentDeploymentState | None) -
 
 
 def resolved_build_digest(state: ResolvedOmnigentDeploymentState | None) -> str:
-    if state and state.omnigent_build_digest:
-        return state.omnigent_build_digest
-    bd = os.getenv("OMNIGENT_BUILD_DIGEST", "").strip()
-    if bd and _SHA256_RE.fullmatch(bd):
-        return bd
     ref = resolved_server_image_ref(state)
     if ref:
         d = _extract_digest(ref)

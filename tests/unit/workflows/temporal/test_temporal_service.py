@@ -387,6 +387,51 @@ async def test_exact_rerun_rejects_plan_for_replaced_server_before_creation(
     load.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable", [None, OSError("catalog offline")])
+async def test_exact_rerun_preserves_plan_through_catalog_recovery(monkeypatch, unavailable):
+    from copy import deepcopy
+    from moonmind.omnigent.bootstrap import store
+
+    parameters = _historical_omnigent_rerun_parameters()
+    original = deepcopy(parameters)
+    payload = SimpleNamespace(
+        executionRealizerRef="generic-omnigent-host@1",
+        endpointRef="default", harnessCatalogRef="admitted-catalog",
+        supportIdentity=SimpleNamespace(omnigentServerBuildRef="sha256:" + "a" * 64),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.stores.SessionExecutionPlanStore",
+        lambda _: SimpleNamespace(load=AsyncMock(return_value=SimpleNamespace(payload=payload))),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.deployment_identity.resolve_deployed_server_build_digest",
+        lambda: "sha256:" + "b" * 64,
+    )
+    catalog = SimpleNamespace(snapshot=SimpleNamespace(
+        catalogRef="admitted-catalog", endpointRef="default",
+        omnigentBuildDigest="sha256:" + "a" * 64, omnigentVersion="0.13.0",
+    ))
+    lookup = AsyncMock(side_effect=[unavailable, catalog])
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.catalog_service.DbHarnessCatalogRepository.load", lookup,
+    )
+    monkeypatch.setattr(store, "load_resolved_state", lambda: SimpleNamespace(details={
+        "opencodeHostCompatibility": {
+            "serverVersion": "0.13.9", "serverBuildDigest": "sha256:" + "b" * 64,
+        },
+    }))
+    service = TemporalExecutionService(SimpleNamespace())
+    with pytest.raises(TemporalExecutionRerunPlanError) as error:
+        await service.validate_exact_rerun_execution_plan(parameters=parameters)
+    assert error.value.detail["code"] == "exact_rerun_deployment_not_ready"
+    assert error.value.detail["nextAction"] == "retry"
+    assert parameters == original
+    await service.validate_exact_rerun_execution_plan(parameters=parameters)
+    assert parameters == original
+    assert lookup.await_count == 2
+
+
 def test_visibility_helpers_ignore_empty_parameters() -> None:
     assert _visibility_runtime_from_parameters(None) is None
     assert _visibility_runtime_from_parameters({}) is None
@@ -3465,6 +3510,9 @@ async def test_record_terminal_state_updates_projection_only_child_workflow(
 async def test_record_terminal_state_preserves_existing_terminal_summary(
     tmp_path, mock_client_adapter
 ):
+    mock_client_adapter.describe_workflow.return_value = SimpleNamespace(
+        status=WorkflowExecutionStatus.CANCELED
+    )
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
 
@@ -4361,10 +4409,11 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
             idempotency_key=None,
         )
 
-        await service.cancel_execution(
+        await service.record_terminal_state(
             workflow_id=created.workflow_id,
-            reason="done",
-            graceful=True,
+            state="canceled",
+            close_status="canceled",
+            summary="done",
         )
         service._client_adapter.update_workflow.reset_mock()
 
@@ -4432,10 +4481,11 @@ async def test_request_rerun_pins_patch_recovery_to_terminal_source_execution(
             initial_parameters={"workflow": {"instructions": "Original task"}},
             idempotency_key=None,
         )
-        await service.cancel_execution(
+        await service.record_terminal_state(
             workflow_id=created.workflow_id,
-            reason="done",
-            graceful=True,
+            state="canceled",
+            close_status="canceled",
+            summary="done",
         )
 
         source_workflow_id = created.workflow_id
@@ -5592,10 +5642,11 @@ async def test_request_rerun_bounds_fresh_execution_idempotency_key(
             initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
-        await service.cancel_execution(
+        await service.record_terminal_state(
             workflow_id=created.workflow_id,
-            reason="done",
-            graceful=True,
+            state="canceled",
+            close_status="canceled",
+            summary="done",
         )
 
         long_idempotency_key = "k" * 128
@@ -6452,6 +6503,9 @@ async def test_signal_execution_rejects_unknown_signal_name(tmp_path):
 async def test_cancel_marks_terminal_state_and_close_status(
     tmp_path, mock_client_adapter
 ):
+    mock_client_adapter.describe_workflow.return_value = SimpleNamespace(
+        status=WorkflowExecutionStatus.CANCELED
+    )
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
         service._client_adapter = mock_client_adapter
@@ -6519,6 +6573,9 @@ async def test_cancel_execution_terminal_record_skips_temporal_call(
 async def test_cancel_execution_records_reject_audit_action(
     tmp_path, mock_client_adapter
 ):
+    mock_client_adapter.describe_workflow.return_value = SimpleNamespace(
+        status=WorkflowExecutionStatus.CANCELED
+    )
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
         service._client_adapter = mock_client_adapter
@@ -6559,6 +6616,9 @@ async def test_cancel_execution_records_reject_audit_action(
 async def test_cancel_execution_accepts_projection_only_child_workflow(
     tmp_path, mock_client_adapter
 ):
+    mock_client_adapter.describe_workflow.return_value = SimpleNamespace(
+        status=WorkflowExecutionStatus.CANCELED
+    )
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
         service._client_adapter = mock_client_adapter
@@ -6797,13 +6857,17 @@ async def test_cancel_execution_dispatches_temporal_cancel_before_session_cleanu
 
         assert cancel_dispatched.is_set()
         assert cleanup_started.is_set()
-        assert canceled.state is MoonMindWorkflowState.CANCELED
+        assert canceled.state is MoonMindWorkflowState.INITIALIZING
+        assert canceled.close_status is None
 
 
 @pytest.mark.asyncio
 async def test_cancel_execution_terminal_retry_retries_managed_session_cleanup(
     tmp_path, mock_client_adapter, monkeypatch
 ):
+    mock_client_adapter.describe_workflow.return_value = SimpleNamespace(
+        status=WorkflowExecutionStatus.CANCELED
+    )
     async with temporal_db(tmp_path) as session:
         monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "agent_jobs"))
         service = TemporalExecutionService(session)
@@ -7061,6 +7125,7 @@ async def test_forced_cancel_without_reason_uses_force_specific_audit_summary(
         mock_client_adapter.terminate_workflow.assert_called_once_with(
             created.workflow_id,
             reason="Force canceled by operator.",
+            run_id=created.run_id,
         )
 
 @pytest.mark.asyncio
@@ -7902,10 +7967,11 @@ async def test_mark_execution_succeeded_rejects_terminal_execution(
             idempotency_key=None,
         )
 
-        await service.cancel_execution(
+        await service.record_terminal_state(
             workflow_id=created.workflow_id,
-            reason="stop",
-            graceful=True,
+            state="canceled",
+            close_status="canceled",
+            summary="stop",
         )
 
         with pytest.raises(TemporalExecutionValidationError):

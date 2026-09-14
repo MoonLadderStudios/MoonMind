@@ -7636,6 +7636,11 @@ export interface components {
              */
             canCancel: boolean;
             /**
+             * Canforcecancel
+             * @default false
+             */
+            canForceCancel: boolean;
+            /**
              * Canreject
              * @default false
              */
@@ -19123,7 +19128,9 @@ export interface operations {
     run_recurring_workflow_now_api_recurring_workflows__definition_id__run_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "idempotency-key"?: string | null;
+            };
             path: {
                 definition_id: string;
             };

@@ -754,6 +754,76 @@ def test_injected_adapter_preserves_transport_statics_and_sendwatch(
     )
 
 
+def test_mutated_adapter_without_static_preservation_fails_transport_regression(
+    tmp_path,
+) -> None:
+    """Bounded fault-injection for MoonLadderStudios/MoonMind#3950 R4.
+
+    Drop both ``Object.setPrototypeOf`` static-preservation lines from the
+    emitted adapter and prove the executable transport regression fails.
+    The production adapter is untouched; only this test's in-memory copy is
+    mutated, so guards are exercised without being weakened.
+    """
+
+    node = shutil.which("node")
+    if node is None:  # pragma: no cover - CI provides node; local may not.
+        import pytest
+
+        pytest.skip("node is required to execute the injected adapter")
+
+    base = scoped_ui_base(_BINDING)
+    bootstrap = build_chat_bootstrap(
+        chat_binding_id=_BINDING,
+        mode="embedded",
+        read_only=False,
+        capabilities=_capabilities(read_only=False),
+        state="available",
+    )
+    document = render_native_ui_document(
+        _INDEX_HTML, bootstrap=bootstrap, scoped_base=base
+    )
+    match = _ADAPTER_SCRIPT_RE.search(document)
+    assert match is not None, "injected adapter script missing from document"
+    adapter_src = match.group(1)
+    assert "Object.setPrototypeOf(window.WebSocket, NativeWebSocket)" in adapter_src
+    assert "Object.setPrototypeOf(window.EventSource, NativeEventSource)" in (
+        adapter_src
+    )
+
+    mutated = adapter_src.replace(
+        "Object.setPrototypeOf(window.WebSocket, NativeWebSocket);", ""
+    ).replace(
+        "Object.setPrototypeOf(window.EventSource, NativeEventSource);", ""
+    )
+    assert mutated != adapter_src
+
+    adapter_path = tmp_path / "adapter-mutated.js"
+    harness_path = tmp_path / "harness.js"
+    adapter_path.write_text(mutated, encoding="utf-8")
+    harness_path.write_text(_NODE_ADAPTER_HARNESS, encoding="utf-8")
+
+    completed = subprocess.run(
+        [node, str(harness_path), str(adapter_path)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode != 0, (
+        "mutated adapter without static preservation must fail the "
+        f"transport regression:\nstdout: {completed.stdout}\n"
+        f"stderr: {completed.stderr}"
+    )
+    assert (
+        "adapter must preserve WebSocket constructor statics" in completed.stderr
+        or "adapter must preserve EventSource constructor statics"
+        in completed.stderr
+        or "WebSocket.OPEN" in completed.stderr
+        or "EventSource" in completed.stderr
+    ), (
+        f"mutation failure must name the lost statics:\n{completed.stderr}"
+    )
+
+
 def test_injected_adapter_waits_for_authorized_render_and_reports_handled_failures(
     tmp_path,
 ) -> None:

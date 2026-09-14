@@ -45,6 +45,19 @@ Examples:
 - optimistic race conditions
 - short-lived transport timeouts
 
+The `repo.create_pr` Activity preserves this classification across its service
+result: HTTP 5xx, HTTP 429, rate-limited HTTP 403, and transport failures produce a retryable
+`GitHubTransientError`, consumed by the existing bounded Temporal retry policy.
+Each attempt reads the exact repository/head/base before mutation and adopts a
+matching PR after a lost acknowledgment. An unavailable lookup is not evidence
+of absence and must not authorize a create call. Authentication and validation
+rejections retain their distinct non-transient result; no credential or publish
+intent substitution is a recovery strategy. Rate-limited attempts carry the
+provider cooldown into Temporal; `Retry-After` and primary reset metadata take
+precedence over the bounded retry policy’s interval. Without those hints, a
+rate-limited attempt waits at least one minute, following the
+[GitHub REST rate-limit contract](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api#exceeding-the-rate-limit).
+
 ### 2.2 Do not retry invalid business input
 
 A failure is **non-retryable** when the request is malformed, unsupported, or structurally invalid.

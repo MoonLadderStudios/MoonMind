@@ -34,7 +34,8 @@ def _pi_plan_payload(
     return payload
 
 
-def test_plan_deployment_identity_accepts_exact_server_build(
+@pytest.mark.asyncio
+async def test_plan_deployment_identity_accepts_exact_server_build(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     digest = "sha256:" + "a" * 64
@@ -44,12 +45,13 @@ def test_plan_deployment_identity_accepts_exact_server_build(
         lambda: digest,
     )
 
-    deployment_identity.assert_plan_matches_deployed_runtime(
+    await deployment_identity.assert_plan_matches_deployed_runtime(
         _generic_plan_payload(digest)
     )
 
 
-def test_plan_deployment_identity_rejects_stale_server_before_launch(
+@pytest.mark.asyncio
+async def test_plan_deployment_identity_rejects_stale_server_before_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -62,12 +64,13 @@ def test_plan_deployment_identity_rejects_stale_server_before_launch(
         deployment_identity.OmnigentDeploymentIdentityConflict,
         match="no longer deployed",
     ):
-        deployment_identity.assert_plan_matches_deployed_runtime(
+        await deployment_identity.assert_plan_matches_deployed_runtime(
             _generic_plan_payload("sha256:" + "a" * 64)
         )
 
 
-def test_plan_deployment_identity_rejects_stale_opencode_host_before_launch(
+@pytest.mark.asyncio
+async def test_plan_deployment_identity_rejects_stale_opencode_host_before_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.omnigent.harness_platform import host_classes
@@ -90,12 +93,13 @@ def test_plan_deployment_identity_rejects_stale_opencode_host_before_launch(
         deployment_identity.OmnigentDeploymentIdentityConflict,
         match="host image that is no longer deployed",
     ):
-        deployment_identity.assert_plan_matches_deployed_runtime(
+        await deployment_identity.assert_plan_matches_deployed_runtime(
             _opencode_plan_payload(server_digest, stale_host)
         )
 
 
-def test_plan_deployment_identity_rejects_stale_pi_host_before_launch(
+@pytest.mark.asyncio
+async def test_plan_deployment_identity_rejects_stale_pi_host_before_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from moonmind.omnigent.harness_platform import host_classes
@@ -114,12 +118,13 @@ def test_plan_deployment_identity_rejects_stale_pi_host_before_launch(
         deployment_identity.OmnigentDeploymentIdentityConflict,
         match="host image that is no longer deployed",
     ):
-        deployment_identity.assert_plan_matches_deployed_runtime(
+        await deployment_identity.assert_plan_matches_deployed_runtime(
             _pi_plan_payload(server_digest, stale_host)
         )
 
 
-def test_non_generic_replay_does_not_consult_generic_server_identity(
+@pytest.mark.asyncio
+async def test_non_generic_replay_does_not_consult_generic_server_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def probe() -> str:
@@ -131,7 +136,7 @@ def test_non_generic_replay_does_not_consult_generic_server_identity(
         probe,
     )
 
-    deployment_identity.assert_plan_matches_deployed_runtime(
+    await deployment_identity.assert_plan_matches_deployed_runtime(
         SimpleNamespace(
             executionRealizerRef="codex-profile-bound@1",
             supportIdentity=None,

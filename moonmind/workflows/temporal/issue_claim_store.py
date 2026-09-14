@@ -11,8 +11,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import async_object_session
 from temporalio import activity
 
 from api_service.db.models import GitHubIssueClaim
@@ -156,14 +157,13 @@ class IssueClaimStore:
                 )
             row.pending_comment_body = body
 
-    async def start_announcement(self, owner: str, attempt_id: str) -> None:
-        """Commit POST intent before crossing GitHub's acknowledgement boundary."""
-        async with self.locked(owner) as row:
-            if row.attempt_id != attempt_id:
-                raise ActiveIssueClaimConflict(
-                    "claim_changed: stale reservation cannot announce"
-                )
-            row.announcement_started = True
+    async def start_announcement(self, row: GitHubIssueClaim) -> None:
+        """Commit validated POST intent without releasing claim serialization."""
+        session = async_object_session(row)
+        if session is None or session.info.get("locked_claim_owner") != row.owner:
+            raise ValueError("claim_lock_required: announcement must own the claim lock")
+        row.announcement_started = True
+        await session.commit()
 
     async def abandon_unannounced(self, owner: str, attempt_id: str) -> bool:
         """Release a reservation only while no external mutation was authorized."""
@@ -254,16 +254,43 @@ class IssueClaimStore:
 
     @asynccontextmanager
     async def locked(self, owner: str):
-        async with self.sessions() as session:
-            async with session.begin():
-                row = (
-                    await session.execute(
-                        select(GitHubIssueClaim)
-                        .where(GitHubIssueClaim.owner == owner)
-                        .with_for_update()
-                    )
-                ).scalar_one()
-                yield row
+        # The connection-scoped lock survives the intent commit. A transaction
+        # row lock alone would let another retry POST between that commit and
+        # readback. Pin the connection so the pool never receives a locked one.
+        async with self.sessions() as binding:
+            async with binding.bind.connect() as connection:
+                postgres = connection.dialect.name == "postgresql"
+                parameters = {"owner": f"moonmind:issue-claim:{owner}"}
+                try:
+                    if postgres:
+                        await connection.execute(text(
+                            "SELECT pg_advisory_lock(hashtextextended(:owner, 0))"
+                        ), parameters)
+                        await connection.commit()
+                    async with self.sessions(bind=connection) as session:
+                        session.info["locked_claim_owner"] = owner
+                        row = (
+                            await session.execute(
+                                select(GitHubIssueClaim)
+                                .where(GitHubIssueClaim.owner == owner)
+                                .with_for_update()
+                            )
+                        ).scalar_one()
+                        yield row
+                        await session.commit()
+                finally:
+                    if postgres and not connection.invalidated:
+                        try:
+                            await connection.rollback()
+                            await connection.execute(text(
+                                "SELECT pg_advisory_unlock(hashtextextended(:owner, 0))"
+                            ), parameters)
+                            await connection.commit()
+                        except BaseException:
+                            # Closing the physical connection releases its lock
+                            # even if cancellation interrupts explicit unlock.
+                            await connection.invalidate()
+                            raise
 
 
 def inspect_claim_comments(

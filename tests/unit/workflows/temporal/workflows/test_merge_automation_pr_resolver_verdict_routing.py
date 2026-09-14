@@ -215,14 +215,20 @@ class _Harness:
             ),
         )
         monkeypatch.setattr(
-            merge_automation_module.workflow, "patched", lambda _patch_id: True
+            merge_automation_module.workflow,
+            "patched",
+            lambda _patch_id: _patch_id
+            != merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH,
         )
 
 
 @pytest.fixture(autouse=True)
 def _default_patch_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        merge_automation_module.workflow, "patched", lambda _patch_id: True
+        merge_automation_module.workflow,
+        "patched",
+        lambda _patch_id: _patch_id
+        != merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH,
     )
     monkeypatch.setattr(
         merge_automation_module.workflow,
@@ -413,7 +419,10 @@ def test_run_workflow_projects_pr_resolver_verdict_for_owning_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        run_workflow_module.workflow, "patched", lambda _patch_id: True
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: _patch_id
+        != merge_automation_module.MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH,
     )
     workflow = run_workflow_module.MoonMindRunWorkflow()
     outputs = {

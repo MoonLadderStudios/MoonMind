@@ -3176,6 +3176,7 @@ class ExecutionActionCapabilityModel(BaseModel):
         default_factory=dict, alias="actionEvidence"
     )
     can_cancel: bool = Field(False, alias="canCancel")
+    can_force_cancel: bool = Field(False, alias="canForceCancel")
     can_reject: bool = Field(False, alias="canReject")
     can_send_message: bool = Field(False, alias="canSendMessage")
     can_bypass_dependencies: bool = Field(False, alias="canBypassDependencies")

@@ -45,6 +45,7 @@ export const ExecutionActionsSchema = z
       }).passthrough(),
     ).optional(),
     canCancel: z.boolean().optional(),
+    canForceCancel: z.boolean().optional(),
     canReject: z.boolean().optional(),
     canSendMessage: z.boolean().optional(),
     canBypassDependencies: z.boolean().optional(),
@@ -242,8 +243,8 @@ export function buildWorkflowActionMenuItems(
   addButton({
     id: 'force-cancel',
     label: 'Force cancel',
-    available: Boolean(actions.canCancel),
-    disabledReason: disabledReason('canCancel'),
+    available: Boolean(actions.canForceCancel),
+    disabledReason: disabledReason('canForceCancel'),
     danger: true,
     onSelect: handlers.onForceCancel,
   });

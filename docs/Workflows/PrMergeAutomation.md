@@ -4,7 +4,7 @@
 **Viewpoint:** System / Feature Design View  
 **Status:** Proposed  
 **Owner:** MoonMind Platform  
-**Updated:** 2026-09-06  
+**Updated:** 2026-09-13
 **Audience:** backend, workflow authors, API, Dashboard  
 **Authority:** Parent-owned PR readiness/review scheduling, resolver-child handoffs, finish-mode lifecycle, and post-merge tracker completion. Portable Skills own resolver semantics; Workflow Publishing and repository-provider contracts own publication policy and evidence.  
 **Owning Surface:** MoonMind.MergeAutomation and its UserWorkflow integration  
@@ -42,6 +42,16 @@ The compiler resolves a single authored policy and meaningful finish/review opti
 The gate waits for configured external review/check/Jira state, then starts an ordinary UserWorkflow resolver child. The child executes the pinned resolved Skill bundle in AgentRun. Its machine-readable result either completes the admitted objective, requests review for the exact head, re-enters a durable gate, or reports a blocker/failure.
 
 After verified merge/already-merged, required Jira/GitHub completion runs through trusted issue activities. Merge finish succeeds only after those required effects succeed or no-op. Fix-only finish succeeds at a verified clean gate without merging or post-merge issue completion. Blocked/failed/expired fail the parent; canceled cancels it.
+
+A resolver may repair and merge a newer head than the parent's original published
+candidate. On either merged disposition, the gate re-reads the same tracked PR
+through the existing repository readiness Activity before post-merge effects.
+That remote observation confirms the merge and supplies the current head; the
+resolver's success claim or an omitted/stale returned head cannot substitute for
+it. Issue finalization independently checks the exact repository, PR, head,
+branch, issue association, merge, and completion target. The refreshed handoff
+preserves those checks. Histories recorded before the additional read retain
+their original Activity sequence through a workflow patch.
 
 ## 6. Why This Uses Child Workflows
 

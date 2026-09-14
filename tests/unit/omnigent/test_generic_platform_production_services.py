@@ -721,11 +721,14 @@ def _exact_plan(model: str):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "policy_ref", ["omnigent-on-demand@1", "omnigent-on-demand@2"]
-)
+@pytest.mark.parametrize("policy_ref", ["omnigent-on-demand@1", "omnigent-on-demand@2"])
+@pytest.mark.parametrize("discovery", ["missing", "newer"])
+@pytest.mark.parametrize("defect", ["none", "missing-host-build", "changed-artifact"])
 async def test_planned_host_resolver_uses_exact_launch_artifact(
     policy_ref: str,
+    monkeypatch,
+    discovery,
+    defect,
 ) -> None:
     implementation = HarnessImplementationIdentity.model_validate(
         {
@@ -744,31 +747,6 @@ async def test_planned_host_resolver_uses_exact_launch_artifact(
                 "integrationMode": "native-server",
                 "authModel": "own-auth",
             },
-        }
-    )
-    current_host = HostClass.model_validate(
-        {
-            "hostClassId": "omnigent-opencode",
-            "version": 1,
-            "imageRef": "ghcr.io/example/current@sha256:" + "c" * 64,
-            "omnigentVersion": "1.0.0",
-            "omnigentBuildDigest": "sha256:" + "b" * 64,
-            "architectures": ["linux/amd64"],
-            "declaredHarnessImplementations": [
-                {
-                    "harnessId": "opencode-native",
-                    "implementationRef": implementation.implementation_ref(),
-                    "runtimeDependencies": [],
-                }
-            ],
-            "integrationModes": ["native-server"],
-            "materializerRefs": ["opencode-auth-json@1"],
-            "features": {
-                "readOnlyRoot": True,
-                "restrictedEgress": True,
-                "workspaceBind": True,
-            },
-            "runtime": {"uid": 2000, "gid": 2000, "home": "/home/app"},
         }
     )
     exact_image = "ghcr.io/example/admitted@sha256:" + "a" * 64
@@ -816,6 +794,41 @@ async def test_planned_host_resolver_uses_exact_launch_artifact(
         }
     )
     plan = create_execution_plan_envelope(payload)
+    plan = type(plan).model_validate_json(plan.model_dump_json(by_alias=True))
+    if defect == "missing-host-build":
+        plan = plan.model_copy(
+            update={
+                "payload": plan.payload.model_copy(
+                    update={"omnigentHostBuildDigest": None}
+                )
+            }
+        )
+
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.harness_platform.host_classes import (
+        OmnigentHostClassSelector,
+    )
+
+    newer_image = "new-host@sha256:" + "e" * 64
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: (
+            None
+            if discovery == "missing"
+            else SimpleNamespace(
+                opencode_host_image_ref=newer_image,
+                details={
+                    "hostImageProvenance": {
+                        newer_image: {
+                            "version": "2.0.0",
+                            "buildDigest": "sha256:" + "f" * 64,
+                        }
+                    }
+                },
+            )
+        ),
+    )
 
     class Catalogs:
         async def load(self, ref: str):
@@ -828,20 +841,27 @@ async def test_planned_host_resolver_uses_exact_launch_artifact(
                 )
             )
 
-    class Selector:
-        def select(self, **_kwargs):
-            return current_host
-
     class Artifacts:
         async def read_bytes(self, ref: str) -> bytes:
             assert ref == "artifact:launch-1"
-            return raw
+            return raw if defect != "changed-artifact" else raw + b"changed"
 
-    host, policy = await OmnigentPlannedHostResolver(
+    resolver = OmnigentPlannedHostResolver(
         catalog_repository=Catalogs(),
-        host_class_selector=Selector(),
+        host_class_selector=OmnigentHostClassSelector(environment={}),
         artifact_gateway=Artifacts(),
-    )(plan)
+    )
+    if defect != "none":
+        with pytest.raises(HarnessPlatformError) as failure:
+            await resolver(plan)
+        assert (
+            failure.value.code
+            == HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT
+        )
+        return
+    host, policy = await resolver(plan)
+    assert host.omnigentBuildDigest == plan.payload.omnigentHostBuildDigest
+    assert host.omnigentVersion == "1.0.0"
 
     assert host.imageRef == exact_image
     assert host.runtime["uid"] == 1000
@@ -2164,7 +2184,7 @@ async def _generic_publication_harness(
         workspace_publisher=WorkspacePublisher(),
         turn_command_service=TurnCommands(),
         execution_state_notifier=execution_state_notifier,
-        deployment_validator=lambda _payload: None,
+        deployment_validator=AsyncMock(return_value=None),
         heartbeat_interval_seconds=0.005,
         heartbeat_ttl_seconds=60,
     )
@@ -2411,12 +2431,15 @@ async def test_fresh_host_launch_checks_current_deployment_before_prepare() -> N
     )
 
     with pytest.raises(StaleDeployment, match="stale host image"):
-        await harness.realizer._execute_lifecycle(
+        await harness.realizer.execute(
             harness.publish_request,
             _plan("opencode-go/model"),
         )
 
     assert "host-inputs-prepared" not in harness.events
+    assert "provider-acquired" not in harness.events
+    assert "credentials-materialized" not in harness.events
+    assert "command-claimed" not in harness.events
 
 
 _PUSHED_PUBLICATION: dict[str, object] = {
@@ -3410,3 +3433,40 @@ async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
         == "/daemon/agent_workspaces/temporal_sandbox/granted-ws-1/repo"
     )
     assert read_only_attachment["accessMode"] == "read-only"
+
+
+@pytest.mark.asyncio
+async def test_ready_host_retry_preserves_materialized_input_paths(monkeypatch):
+    """Revoke the first Activity after host readiness, before sending its turn."""
+    from moonmind.omnigent.execute import _build_omnigent_first_message, _first_message_text
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _plan('opencode-go/model')
+    paths = {'gateResultPath': '.moonmind/attachments/gate',
+             'remainingWorkPath': '.moonmind/attachments/gate'}
+    original_realize = harness.realizer._host_runtime.realize
+
+    async def realized(**kwargs):
+        return {**await original_realize(**kwargs), 'materializedInputPaths': paths}
+
+    harness.realizer._host_runtime.realize = realized
+    original_drive = harness.realizer._drive_session
+    harness.realizer._drive_session = AsyncMock(side_effect=asyncio.CancelledError())
+    monkeypatch.setattr('moonmind.omnigent.activity_ownership.delivery_was_revoked', lambda: True)
+    with pytest.raises(asyncio.CancelledError):
+        await harness.realizer._execute_lifecycle(harness.publish_request, plan)
+    assert 'host-cleaned' not in harness.events
+    harness.realizer._drive_session = original_drive
+    original_session = harness.realizer._session_driver
+
+    async def resumed(request, **kwargs):
+        message = await _build_omnigent_first_message(request=request, prompt={'text': 'Remediate'}, artifact_gateway=None)
+        text = _first_message_text(message)
+        for name, path in paths.items():
+            assert f'- {name}: {path}' in text
+        return await original_session(request, **kwargs)
+
+    harness.realizer._session_driver = resumed
+    result = await harness.realizer._execute_lifecycle(harness.publish_request, plan)
+    assert result.summary == 'done'
+    assert harness.events.count('host-ready') == 1

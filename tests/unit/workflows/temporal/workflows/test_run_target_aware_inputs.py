@@ -152,6 +152,37 @@ def _task_payload() -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "jules", "omnigent"])
+@pytest.mark.parametrize("payload_key", ["workflow", "task"])
+@pytest.mark.parametrize("patched", [False, True])
+def test_prepared_inputs_survive_authored_and_retained_workflow_payloads(
+    runtime, payload_key, patched
+):
+    wf = MoonMindRunWorkflow()
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=_workflow_info(),
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=patched,
+        ),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": runtime}},
+            node_id="collect-evidence",
+            tool_name=runtime,
+            workflow_parameters={payload_key: _task_payload()},
+        )
+    metadata = request.parameters.get("metadata", {}).get("moonmind", {})
+    expected = payload_key == "task" or patched
+    assert ("preparedContext" in metadata) == expected
+    if request.agent_kind != "managed":
+        assert ("artifact://collect-notes" in request.input_refs) == expected
+        assert "artifact://report-notes" not in request.input_refs
+
+
 def _build_request_for_step(
     step_id: str,
     *,

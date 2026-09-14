@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from moonmind.omnigent.concurrency_qualification import (
@@ -684,7 +686,7 @@ def _build_realizer(
         workspace_publisher=WorkspacePublisher(),
         turn_command_service=TurnCommands(),
         host_capacity_admission=admission,
-        deployment_validator=lambda _payload: None,
+        deployment_validator=AsyncMock(return_value=None),
         heartbeat_interval_seconds=0.005,
         heartbeat_ttl_seconds=60,
     )

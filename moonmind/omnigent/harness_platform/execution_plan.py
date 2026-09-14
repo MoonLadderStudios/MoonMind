@@ -10,7 +10,14 @@ import hashlib
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from moonmind.omnigent.harness_platform.support import SupportKeyPayload
 
@@ -236,6 +243,10 @@ class OmnigentExecutionPlanPayload(BaseModel):
         default=None, alias="omnigentHostBuildDigest"
     )
     hostArchitecture: str | None = Field(default=None, alias="hostArchitecture")
+    # Read persisted plans written with this field, preserving their digest.
+    # New writers use harnessCatalogRef for version evidence so v1 readers do
+    # not need an additional payload field (including a null default).
+    omnigentVersion: str | None = Field(default=None, alias="omnigentVersion")
     launchPolicyRef: str = Field(alias="launchPolicyRef")
     executionRealizerRef: str = Field(alias="executionRealizerRef")
     modelConfig: ModelConfig = Field(alias="model")
@@ -273,8 +284,20 @@ class OmnigentExecutionPlanPayload(BaseModel):
         default=None, alias="runtimeProviderRollout"
     )
 
+    @model_serializer(mode="wrap")
+    def serialize_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        payload = handler(self)
+        if self.omnigentVersion is None:
+            payload.pop("omnigentVersion", None)
+        return payload
+
     @model_validator(mode="after")
     def validate_no_forbidden(self) -> "OmnigentExecutionPlanPayload":
+        if self.omnigentVersion is not None:
+            from moonmind.omnigent.compatibility import compatibility_series
+
+            if compatibility_series(self.omnigentVersion) is None:
+                raise ValueError("omnigentVersion must identify a release series")
         if self.supportIdentity is not None:
             if (
                 compute_support_combination_key(self.supportIdentity)
@@ -338,6 +361,7 @@ def canonical_payload_bytes(
         "hostImageRef",
         "omnigentHostBuildDigest",
         "hostArchitecture",
+        "omnigentVersion",
         "policySnapshotDigest",
         "effectiveLaunchSnapshotRef",
         "effectiveLaunchSnapshotDigest",

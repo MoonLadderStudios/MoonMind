@@ -45,12 +45,14 @@ _SERVER_IMAGE_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "6" * 64
 
 
 @pytest.fixture(autouse=True)
-def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     """Give OpenCode plan tests exact resolver evidence for selected refs."""
 
     from moonmind.omnigent.bootstrap import store
 
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", _SERVER_IMAGE_REF)
+
+    provenance = {"hostBuildDigest": "sha256:" + "b" * 64, "hostVersion": "0.10.0"}
 
     def load_state():
         import os
@@ -59,19 +61,24 @@ def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
         if not host_ref:
             return None
         return SimpleNamespace(
-            server_image_ref=_SERVER_IMAGE_REF,
+            server_image_ref=os.environ.get("OMNIGENT_IMAGE_REF", _SERVER_IMAGE_REF),
             opencode_host_image_ref=host_ref,
             details={
                 "opencodeHostCompatibility": {
                     "status": "ready",
                     "failureCode": None,
-                    "serverImageRef": _SERVER_IMAGE_REF,
+                    "serverImageRef": os.environ.get(
+                        "OMNIGENT_IMAGE_REF", _SERVER_IMAGE_REF
+                    ),
                     "hostImageRef": host_ref,
+                    **provenance,
                 }
             },
         )
 
     monkeypatch.setattr(store, "load_resolved_state", load_state)
+
+    return provenance
 
 
 class _LegacyClassAdmissionDecision(BaseModel):
@@ -576,6 +583,7 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
     monkeypatch,
     tmp_path,
     catalog_access,
+    _ready_opencode_image_pair,
 ) -> None:
     """Replay the catalog handoff that failed in mm:9b176122 at 2026-09-07T06:00Z.
 
@@ -583,8 +591,9 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
     must keep readable profile authority through refresh and worker dispatch.
     """
 
+    _ready_opencode_image_pair["hostVersion"] = "0.11.0"
     build_identity = "sha256:" + "b" * 64
-    monkeypatch.setenv("OMNIGENT_BUILD_DIGEST", build_identity)
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", "server@" + build_identity)
     implementation_digest = "sha256:" + "c" * 64
     authority_catalog = create_catalog_snapshot(
         endpointRef="default",
@@ -789,8 +798,10 @@ async def test_product_boundary_uses_profile_catalog_build_identity(
 @pytest.mark.asyncio
 async def test_product_boundary_rejects_revoked_freshness_trust(
     monkeypatch,
+    _ready_opencode_image_pair,
 ) -> None:
     """A matching fresh implementation cannot override its current denial."""
+    _ready_opencode_image_pair["hostVersion"] = "0.11.0"
 
     catalog = create_catalog_snapshot(
         endpointRef="default",

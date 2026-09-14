@@ -10,6 +10,7 @@ import hashlib
 import json
 import mimetypes
 import os.path
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -369,7 +370,12 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
     ) -> str:
         safe_correlation = _safe_artifact_segment(request.correlation_id)
         safe_name = _safe_artifact_name(name)
-        path = (self._root / safe_correlation / safe_name).resolve()
+        # Re-admissions publish the same named evidence for different attempts.
+        # A returned ref must keep its bytes and metadata after the next write.
+        object_digest = hashlib.sha256(
+            json.dumps([content_type, link_type]).encode("utf-8") + b"\0" + payload
+        ).hexdigest()
+        path = (self._root / safe_correlation / object_digest / safe_name).resolve()
         if not path.is_relative_to(self._root):
             raise OmnigentArtifactError("Omnigent artifact path escapes artifact root")
         digest = hashlib.sha256(payload).hexdigest()
@@ -393,13 +399,17 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
         # raw OSError escape the activity.
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(payload)
-            metadata_path.write_text(metadata_payload, encoding="utf-8")
+            with tempfile.TemporaryDirectory(dir=path.parent) as staging:
+                staged = Path(staging) / "content"
+                staged.write_bytes(payload)
+                os.replace(staged, path)
+                staged.write_text(metadata_payload, encoding="utf-8")
+                os.replace(staged, metadata_path)
         except OSError as exc:
             raise OmnigentArtifactError(
                 f"Unable to persist Omnigent artifact '{safe_name}': {exc}"
             ) from exc
-        return f"artifact://omnigent/{safe_correlation}/{safe_name}"
+        return f"artifact://omnigent/{safe_correlation}/{object_digest}/{safe_name}"
 
     async def read_text(self, artifact_ref: str) -> str:
         if artifact_ref in self._readable_refs:

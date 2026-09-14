@@ -1,11 +1,12 @@
 """Two workers race the default selector through real PostgreSQL and HTTP."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from temporalio import activity, workflow
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
@@ -17,6 +18,7 @@ from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # no
 from tests.unit.workflows.temporal.test_issue_claim_journey import (
     test_failed_brief_reads_release_only_unannounced_reservations as run_read_failure_journey,
     test_failed_finalization_releases_durable_claim_after_remote_confirmation as run_finalization_journey,
+    test_search_skips_remote_contender_before_authorizing_announcement as run_remote_contender_journey,
 )
 
 pytestmark = [
@@ -30,6 +32,15 @@ pytestmark = [
 @pytest.mark.parametrize("fault", ["lose_release_ack", "reject_release"])
 async def test_release_receipts_survive_unknown_github_effects(journey, fault):
     await run_finalization_journey(journey, fault)
+
+
+@pytest.mark.parametrize("journey", ["postgres"], indirect=True)
+@pytest.mark.parametrize("when", ["before_selection", "after_reservation", "before_locked_check"])
+@pytest.mark.parametrize("eligible_successor", [False, True])
+async def test_recurring_search_preserves_remote_owner_without_stranding_claim(
+    journey, monkeypatch, when, eligible_successor
+):
+    await run_remote_contender_journey(journey, monkeypatch, when, eligible_successor)
 
 
 @pytest.mark.parametrize("journey", ["postgres"], indirect=True)
@@ -84,6 +95,91 @@ async def test_concurrent_default_search_claims_one_owner_and_leaves_other_idle(
         resumed.outputs["attemptId"]
         == (await IssueClaimStore(sessions).get(owner)).attempt_id
     )
+
+
+@pytest.mark.parametrize("journey", ["postgres"], indirect=True)
+@pytest.mark.parametrize("lose_ack", [False, True])
+@pytest.mark.parametrize("cancel_retry", [False, True])
+async def test_same_owner_retry_cannot_cross_committed_intent_lock(
+    journey, monkeypatch, lose_ack, cancel_retry
+):
+    state, service, sessions = journey
+    state["lost_ack"] = lose_ack
+    inputs = {"repository": "example/repo", "issueNumber": 3970}
+    owner = "default/retried-announcement"
+    post_ready, allow_post, retry_waiting = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    create = service.create_issue_comment
+    locked = IssueClaimStore.locked
+
+    @asynccontextmanager
+    async def observe_retry(store, locked_owner):
+        if post_ready.is_set():
+            retry_waiting.set()
+        async with locked(store, locked_owner) as row:
+            yield row
+
+    async def paused_create(**kwargs):
+        # This read uses an independent connection: intent must already be
+        # durable while another invocation still cannot enter the write region.
+        receipt = await IssueClaimStore(sessions).get(owner)
+        assert receipt.announcement_started and receipt.comment_id is None
+        assert not await IssueClaimStore(sessions).abandon_unannounced(
+            owner, receipt.attempt_id
+        )
+        post_ready.set()
+        await asyncio.wait_for(allow_post.wait(), 10)
+        return await create(**kwargs)
+
+    monkeypatch.setattr(IssueClaimStore, "locked", observe_retry)
+    service.create_issue_comment = paused_create
+
+    async def execute():
+        return await tools.load_github_issue_preset_brief(
+            inputs, {"execution_owner": owner}, github_service_factory=lambda: service
+        )
+
+    first = asyncio.create_task(execute())
+    second = None
+    try:
+        await asyncio.wait_for(post_ready.wait(), 10)
+        second = asyncio.create_task(execute())
+        await asyncio.wait_for(retry_waiting.wait(), 10)
+        # Observe actual database contention before releasing the first POST.
+        # An event before lock acquisition alone would permit a false pass.
+        async with asyncio.timeout(5):
+            async with sessions() as session:
+                while not await session.scalar(text(
+                    "SELECT EXISTS (SELECT 1 FROM pg_locks, "
+                    "(SELECT hashtextextended(:owner, 0) AS key) AS claim "
+                    "WHERE locktype = 'advisory' AND NOT granted "
+                    "AND classid = ((key >> 32) & 4294967295)::oid "
+                    "AND objid = (key & 4294967295)::oid)"
+                ), {"owner": f"moonmind:issue-claim:{owner}"}):
+                    await asyncio.sleep(0.02)
+        if cancel_retry:
+            second.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await second
+        allow_post.set()
+        results = await asyncio.wait_for(
+            asyncio.gather(first) if cancel_retry else asyncio.gather(first, second), 15
+        )
+        assert all(result.status == "COMPLETED" for result in results), results
+        assert state["posts"] == 1
+        assert (await IssueClaimStore(sessions).get(owner)).confirmed
+        # An exception must also return a connection without a leaked lock.
+        with pytest.raises(RuntimeError, match="fixture interruption"):
+            async with IssueClaimStore(sessions).locked(owner):
+                raise RuntimeError("fixture interruption")
+        async with asyncio.timeout(5):
+            async with IssueClaimStore(sessions).locked(owner) as row:
+                assert row.confirmed
+    finally:
+        allow_post.set()
+        for task in (first, second):
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(*(task for task in (first, second) if task), return_exceptions=True)
 
 
 @workflow.defn

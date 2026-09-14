@@ -235,7 +235,7 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
     class Repository:
         stopped: list[str] = []
 
-        async def list_active_host_leases(self):
+        async def list_active_host_leases(self, *, failures=None):
             now = datetime.now(UTC)
             return [SimpleNamespace(
                 lease_id="host-lease-1", provider_profile_id="profile-1",

@@ -2733,7 +2733,16 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                     })}
               </ul>
               {sortedItems.length === 0 ? (
-                !hasPaginationContext ? (
+                data?.nextPageToken ? (
+                  // MoonLadderStudios/MoonMind#3947 (R2): an excluded-only page
+                  // legitimately returns zero product items with a continuation
+                  // token. This is not an empty repository or end of results —
+                  // the Next page control below stays enabled.
+                  <div className="card small workflow-list-empty-message">
+                    No product workflows on this page. More results may follow —{' '}
+                    use Next page to continue.
+                  </div>
+                ) : !hasPaginationContext ? (
                   <p className="small workflow-list-empty-message">
                     No workflows found for the current filters.{' '}
                     <a href="/workflows/new">Create a workflow</a>

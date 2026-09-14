@@ -299,10 +299,21 @@ async def test_failure_and_cancel_paths_keep_jules_normalization_compact(
             assert failed.memo["error_category"] == "integration_error"
             assert failed.integration_state["normalized_status"] == "failed"
 
-            canceled = await service.cancel_execution(
+            pending_cancel = await service.cancel_execution(
                 workflow_id=created.workflow_id,
                 reason="operator stop",
                 graceful=True,
             )
 
+            assert pending_cancel.state is MoonMindWorkflowState.EXECUTING
+            assert pending_cancel.close_status is None
+            assert pending_cancel.integration_state["normalized_status"] == "failed"
+
+            canceled = await service.record_terminal_state(
+                workflow_id=created.workflow_id,
+                state="canceled",
+                close_status="canceled",
+                summary="Execution canceled.",
+            )
             assert canceled.state is MoonMindWorkflowState.CANCELED
+            assert canceled.integration_state["normalized_status"] == "failed"
