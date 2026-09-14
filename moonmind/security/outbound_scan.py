@@ -78,13 +78,20 @@ class OutboundScanResult(BaseModel):
         this projection instead of the full model dump.
         """
 
+        sanitized_locations = [
+            _sanitize_scan_location(finding.location, default="outbound.text")
+            for finding in self.findings
+        ]
         return {
             "decision": self.decision,
             "highSecurityMode": self.high_security_mode,
             "scannerPolicyRef": OUTBOUND_SCAN_POLICY_REF,
             "findingCategories": sorted({finding.category for finding in self.findings}),
-            "findingLocations": [finding.location for finding in self.findings],
-            "sanitizedDiagnostics": list(self.sanitized_diagnostics),
+            "findingLocations": sanitized_locations,
+            "sanitizedDiagnostics": [
+                redact_sensitive_text(str(diagnostic))[:500]
+                for diagnostic in self.sanitized_diagnostics
+            ],
         }
 
 
@@ -110,6 +117,35 @@ _PRIVATE_KEY_PATTERN = re.compile(
 _REDACTED_SENTINEL_VALUE_PATTERN = re.compile(
     r"^\[REDACTED(?:_[A-Z0-9]+)?\]$", re.IGNORECASE
 )
+
+
+# Maximum characters kept from a caller-supplied scan location before it is
+# copied into findings, diagnostics, or audit metadata. Locations are
+# operator-controlled strings (file paths, ranges) but may contain sensitive
+# text; they are redacted and bounded so audit projections stay secret-safe.
+_MAX_SCAN_LOCATION_CHARS = 200
+
+
+def _sanitize_scan_location(value: str | None, *, default: str) -> str:
+    """Return a redacted, bounded location safe for findings and diagnostics."""
+    normalized = str(value or "").strip()
+    if not normalized:
+        return default
+    return redact_sensitive_text(normalized)[:_MAX_SCAN_LOCATION_CHARS]
+
+
+def is_binary_git_diff_marker(diff_text: str) -> bool:
+    """Return True when a git diff is an uninspected binary marker.
+
+    Git emits ``Binary files a/<path> and b/<path> differ`` instead of content
+    for binary blobs unless the diff was requested with ``--text``. Such a
+    marker is below every size bound and contains no detectable secret, so it
+    must be treated as enforcement-unavailable rather than a clean scan.
+    """
+    if not diff_text:
+        return False
+    first_line = diff_text.splitlines()[0] if diff_text.splitlines() else ""
+    return first_line.startswith("Binary files ") and first_line.endswith(" differ")
 
 
 def _credential_value_is_redacted_sentinel(match_text: str) -> bool:
@@ -273,7 +309,8 @@ def _result_for_findings(
         return _allow_result(high_security_mode=high_security_mode)
 
     diagnostics = [
-        f"Blocked outbound content: {finding.category} at {finding.location}"
+        f"Blocked outbound content: {finding.category} at "
+        f"{_sanitize_scan_location(finding.location, default='outbound.text')}"
         for finding in findings
     ]
     return OutboundScanResult(
@@ -295,20 +332,27 @@ def _coerce_bundle_item(
                 location=f"bundle.item[{index}]",
                 content=item.content,
             )
-        return item
-    location = str(item.get("location") or "").strip() or f"bundle.item[{index}]"
+        return OutboundBundleItem(
+            location=_sanitize_scan_location(
+                item.location, default=f"bundle.item[{index}]"
+            ),
+            content=item.content,
+        )
+    location = _sanitize_scan_location(
+        str(item.get("location") or ""), default=f"bundle.item[{index}]"
+    )
     return OutboundBundleItem(location=location, content=str(item.get("content") or ""))
 
 
 def _normalize_location(value: str | None, *, default: str) -> str:
-    normalized = str(value or "").strip()
-    return normalized or default
+    return _sanitize_scan_location(value, default=default)
 
 
 def _scan_text_for_findings(text: str, *, location: str) -> list[OutboundFinding]:
     if not text:
         return []
 
+    safe_location = _sanitize_scan_location(location, default="outbound.text")
     findings: list[OutboundFinding] = []
     for category, pattern in (
         ("private_key", _PRIVATE_KEY_PATTERN),
@@ -326,7 +370,7 @@ def _scan_text_for_findings(text: str, *, location: str) -> list[OutboundFinding
             findings.append(
                 OutboundFinding(
                     category=category,
-                    location=location,
+                    location=safe_location,
                     redacted_preview=redacted_preview,
                 )
             )
@@ -341,12 +385,15 @@ def push_scan_coverage_error(
     changed_file_count: int,
     max_changed_files: int,
     oversized_diff_path: str | None = None,
+    binary_diff_path: str | None = None,
 ) -> str | None:
     """Return a redacted fail-closed reason when push-scan input was truncated.
 
     A truncated prefix must never be reported as complete coverage: in
     enabled mode uninspectable required content is enforcement
-    unavailable, not a clean scan.
+    unavailable, not a clean scan. The same applies to a binary diff that
+    was not inspected as text: its marker is short, secret-free, and must
+    not be accepted as a clean scan.
     """
 
     if commit_metadata_len > max_commit_metadata_chars:
@@ -360,6 +407,13 @@ def push_scan_coverage_error(
             "outbound git push blocked: high security scan coverage "
             f"incomplete for {commit_range}: changed file list exceeds "
             f"{max_changed_files} entries"
+        )
+    if binary_diff_path:
+        return (
+            "outbound git push blocked: high security scan coverage "
+            f"incomplete for {commit_range}: diff for "
+            f"{redact_sensitive_text(binary_diff_path)[:200]} is binary "
+            "and was not inspected as text"
         )
     if oversized_diff_path:
         return (
