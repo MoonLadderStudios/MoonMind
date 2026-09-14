@@ -676,6 +676,98 @@ async def test_create_execution_snapshots_moonspec_environment_publish_action(
 
 
 @pytest.mark.asyncio
+async def test_create_execution_binds_effective_policy_snapshot_at_admission(
+    tmp_path, mock_client_adapter, monkeypatch: pytest.MonkeyPatch
+):
+    """REQ-04: admission binds the immutable effective-policy snapshot.
+
+    MoonLadderStudios/MoonMind#3941: the snapshot travels with the admitted
+    unit in memo (and into the Temporal start memo); a later settings change
+    is observable via snapshot_diff with its documented change class, while
+    the recorded snapshot and the admitted memo stay untouched — the active
+    execution retains its recorded policy.
+    """
+    from moonmind.config.effective_policy_snapshot import (
+        ADMISSION_MEMO_HASH_KEY,
+        ADMISSION_MEMO_SNAPSHOT_KEY,
+        EXECUTION_SENSITIVE_KEYS,
+        admission_snapshot_from_memo,
+        bind_admission_snapshot,
+        current_effective_response,
+        describe_admission_policy_drift,
+        snapshot_diff,
+        snapshot_matches,
+    )
+
+    # Executions admitted before snapshot binding carry no snapshot and stay
+    # readable (replay/in-flight compatibility).
+    assert admission_snapshot_from_memo({}) is None
+    assert admission_snapshot_from_memo(None) is None
+
+    monkeypatch.setenv("WORKFLOW_SKILLS_CANARY_PERCENT", "100")
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session, client_adapter=mock_client_adapter
+        )
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Policy snapshot run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key="create-policy-snapshot",
+        )
+
+        stored = admission_snapshot_from_memo(record.memo)
+        assert stored is not None
+        assert {entry.key for entry in stored.entries} == set(
+            EXECUTION_SENSITIVE_KEYS
+        )
+        assert record.memo[ADMISSION_MEMO_HASH_KEY] == stored.policy_hash
+        assert (
+            record.memo[ADMISSION_MEMO_SNAPSHOT_KEY]["policy_hash"]
+            == stored.policy_hash
+        )
+        by_key = {entry.key: entry for entry in stored.entries}
+        assert by_key["skills.canary_percent"].value == 100
+        # The Temporal start memo carries the same snapshot to the worker.
+        started_memo = mock_client_adapter.start_workflow.await_args.kwargs["memo"]
+        assert started_memo[ADMISSION_MEMO_HASH_KEY] == stored.policy_hash
+        assert (
+            started_memo[ADMISSION_MEMO_SNAPSHOT_KEY]["policy_hash"]
+            == stored.policy_hash
+        )
+
+        # A later UI save mutates current effective state ...
+        monkeypatch.setenv("WORKFLOW_SKILLS_CANARY_PERCENT", "25")
+        current = current_effective_response(scope="workspace")
+        assert snapshot_matches(stored, current) is False
+        assert snapshot_diff(stored, current) == ["skills.canary_percent"]
+        assert describe_admission_policy_drift(stored, current) == [
+            {
+                "key": "skills.canary_percent",
+                "change_class": "next_admission",
+                "requires_drain": False,
+            }
+        ]
+        assert (
+            bind_admission_snapshot(scope="workspace").policy_hash
+            != stored.policy_hash
+        )
+        # ... but the recorded snapshot and the admitted memo are untouched:
+        # the active execution retains its recorded policy.
+        assert (
+            admission_snapshot_from_memo(record.memo).policy_hash
+            == stored.policy_hash
+        )
+        assert by_key["skills.canary_percent"].value == 100
+
+
+@pytest.mark.asyncio
 async def test_create_execution_writes_runtime_and_primary_skill_search_attributes(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)

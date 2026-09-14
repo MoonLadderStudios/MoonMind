@@ -2292,6 +2292,30 @@ class TemporalExecutionService:
         )
 
         memo["workerCodeRevision"] = current_worker_code_revision()
+        # MoonLadderStudios/MoonMind#3941 REQ-04: bind the execution-sensitive
+        # effective policy at admission. The immutable snapshot travels with
+        # the admitted unit in memo; later UI saves, reloads, or restarts
+        # change current effective state but never mutate this recorded
+        # policy. Fail closed: admitting work without a recorded policy
+        # would let an active execution run under an unknown policy.
+        from moonmind.config.effective_policy_snapshot import (
+            ADMISSION_MEMO_HASH_KEY,
+            ADMISSION_MEMO_SNAPSHOT_KEY,
+            bind_admission_snapshot,
+            snapshot_to_storable_payload,
+        )
+
+        try:
+            _admission_policy_snapshot = bind_admission_snapshot(scope="workspace")
+        except Exception as exc:
+            raise TemporalExecutionValidationError(
+                "Cannot admit work without a recorded effective-policy "
+                f"snapshot (MoonLadderStudios/MoonMind#3941): {exc}"
+            ) from exc
+        memo[ADMISSION_MEMO_SNAPSHOT_KEY] = snapshot_to_storable_payload(
+            _admission_policy_snapshot
+        )
+        memo[ADMISSION_MEMO_HASH_KEY] = _admission_policy_snapshot.policy_hash
         if input_artifact_ref:
             memo["input_ref"] = input_artifact_ref
         if manifest_artifact_ref:
@@ -4542,6 +4566,40 @@ class TemporalExecutionService:
             source_record=record,
             parameters=params,
         )
+        # MoonLadderStudios/MoonMind#3941 REQ-04: gate rerun/replay on the
+        # recorded admission snapshot. The source execution keeps running
+        # under (or keeps, if finished, the evidence of) its recorded
+        # policy; the rerun below binds a fresh snapshot at admission via
+        # create_execution. Record the source hash and any current-vs-source
+        # drift (with documented change classes) on the rerun parameters so
+        # the replay decision is observable. Best-effort: diagnostics must
+        # never block the rerun itself.
+        try:
+            from moonmind.config.effective_policy_snapshot import (
+                admission_snapshot_from_memo,
+                current_effective_response,
+                describe_admission_policy_drift,
+            )
+
+            _source_policy_snapshot = admission_snapshot_from_memo(
+                record.memo or {}
+            )
+            if _source_policy_snapshot is not None:
+                params["rerunSourcePolicyHash"] = (
+                    _source_policy_snapshot.policy_hash
+                )
+                params["rerunSourcePolicyDrift"] = (
+                    describe_admission_policy_drift(
+                        _source_policy_snapshot,
+                        current_effective_response(scope="workspace"),
+                    )
+                )
+        except Exception:
+            logger.debug(
+                "Rerun policy-drift diagnostics unavailable for execution %s",
+                record.workflow_id,
+                exc_info=True,
+            )
 
         next_input_ref = input_artifact_ref or record.input_ref
         next_plan_ref = plan_artifact_ref or record.plan_ref

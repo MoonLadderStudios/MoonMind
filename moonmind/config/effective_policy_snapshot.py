@@ -232,14 +232,125 @@ def snapshot_matches(
     return not snapshot_diff(snapshot, effective_response)
 
 
+# Memo keys carrying the admission snapshot with the admitted unit of work.
+# The full storable payload (not just the hash) travels in memo so a later
+# replay/restart check can diff current effective state against the recorded
+# policy without re-resolving history; the hash key keeps the common
+# "which policy admitted this run" lookup cheap.
+ADMISSION_MEMO_SNAPSHOT_KEY = "effectivePolicySnapshot"
+ADMISSION_MEMO_HASH_KEY = "effectivePolicyHash"
+
+
+def bind_admission_snapshot(
+    *,
+    scope: str = "workspace",
+    settings: Any = None,
+    env: Mapping[str, str] | None = None,
+) -> EffectivePolicySnapshot:
+    """Bind the admission snapshot from ambient catalog effective state.
+
+    Used at work admission (``TemporalExecutionService.create_execution``):
+    resolves the current effective values through the existing typed
+    catalog/resolver and freezes the execution-sensitive keys. ``settings``
+    and ``env`` are test hooks; production callers leave them unset so the
+    ambient application settings and deployment environment apply.
+    """
+    return bind_effective_policy_snapshot(
+        current_effective_response(scope=scope, settings=settings, env=env)
+    )
+
+
+def current_effective_response(
+    *,
+    scope: str = "workspace",
+    settings: Any = None,
+    env: Mapping[str, str] | None = None,
+) -> Any:
+    """Resolve the current catalog effective response for drift checks.
+
+    Shares the :func:`bind_admission_snapshot` resolution path so replay /
+    restart comparisons observe exactly what a fresh admission would bind.
+    """
+    from api_service.services.settings_catalog import SettingsCatalogService
+
+    if settings is None and env is None:
+        service = SettingsCatalogService()
+    else:
+        service = SettingsCatalogService(settings=settings, env=env)
+    return service.effective_values(scope=scope)  # type: ignore[arg-type]
+
+
+def snapshot_to_storable_payload(snapshot: EffectivePolicySnapshot) -> dict[str, Any]:
+    """Serialize a snapshot into a JSON-safe memo/parameter payload."""
+    return snapshot.model_dump(mode="json")
+
+
+def snapshot_from_storable_payload(payload: Mapping[str, Any]) -> EffectivePolicySnapshot:
+    """Restore a snapshot previously stored with :func:`snapshot_to_storable_payload`."""
+    return EffectivePolicySnapshot.model_validate(dict(payload))
+
+
+def admission_snapshot_from_memo(
+    memo: Mapping[str, Any] | None,
+) -> EffectivePolicySnapshot | None:
+    """Restore the admission snapshot carried by an admitted unit, if any.
+
+    Returns ``None`` for executions admitted before snapshot binding existed
+    (replay/in-flight compatibility: old records stay readable and keep
+    running under whatever policy admitted them; only newly admitted work
+    carries a recorded snapshot).
+    """
+    if not isinstance(memo, Mapping):
+        return None
+    payload = memo.get(ADMISSION_MEMO_SNAPSHOT_KEY)
+    if not isinstance(payload, Mapping) or not payload:
+        return None
+    try:
+        return snapshot_from_storable_payload(payload)
+    except Exception:
+        return None
+
+
+def describe_admission_policy_drift(
+    snapshot: EffectivePolicySnapshot, effective_response: Any
+) -> list[dict[str, Any]]:
+    """Describe current-vs-recorded drift with the documented change class.
+
+    Each entry names the drifted key, its change class (live,
+    next_admission, worker_reload, process_restart, manual_operation,
+    credential_lifecycle) and whether a drain is required. An empty list
+    means the active execution still runs under its recorded policy.
+    """
+    drifted = snapshot_diff(snapshot, effective_response)
+    described: list[dict[str, Any]] = []
+    for key in drifted:
+        spec = EXECUTION_SENSITIVE_KEYS.get(key, {})
+        described.append(
+            {
+                "key": key,
+                "change_class": spec.get("change_class", "unknown"),
+                "requires_drain": bool(spec.get("requires_drain", False)),
+            }
+        )
+    return described
+
+
 __all__ = [
+    "ADMISSION_MEMO_HASH_KEY",
+    "ADMISSION_MEMO_SNAPSHOT_KEY",
     "EXECUTION_SENSITIVE_KEYS",
     "REDACTED_DIAGNOSTIC_KEYS",
     "SNAPSHOT_SCHEMA_VERSION",
     "EffectivePolicySnapshot",
     "SnapshotChangeClass",
     "SnapshotEntry",
+    "admission_snapshot_from_memo",
+    "bind_admission_snapshot",
     "bind_effective_policy_snapshot",
+    "current_effective_response",
+    "describe_admission_policy_drift",
     "snapshot_diff",
+    "snapshot_from_storable_payload",
     "snapshot_matches",
+    "snapshot_to_storable_payload",
 ]
