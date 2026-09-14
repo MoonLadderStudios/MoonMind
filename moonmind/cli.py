@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import typer
@@ -17,7 +18,7 @@ from moonmind.utils.logging import redact_sensitive_text
 
 app = typer.Typer(
     help=(
-        "MoonMind developer utilities (worker, container). "
+        "MoonMind developer utilities (worker, container, workflow). "
         "Application authentication is selected by AUTH_PROVIDER "
         "(accounts, oidc, header, disabled; retired keycloak/default/google/local "
         "selectors are rejected) — see "
@@ -27,13 +28,23 @@ app = typer.Typer(
         "path is rejected (410 worker_token_deprecated). The native "
         "Manifest/RAG ingestion product was retired "
         "(MoonLadderStudios/MoonMind#4192): there is no `manifest` command "
-        "group and no retrieval/embedding inspection command."
+        "group and no retrieval/embedding inspection command. "
+        "`workflow run/status/logs` is the thin authenticated client for "
+        "ordinary workflows (MoonLadderStudios/MoonMind#3939)."
     )
 )
 worker_app = typer.Typer(help="Worker runtime diagnostics.")
 container_app = typer.Typer(help="Run work through MoonMind's Docker backend.")
+workflow_app = typer.Typer(
+    help=(
+        "Submit and observe ordinary workflows through the public execution API. "
+        "Presets, defaults, model/profile selection, and publication "
+        "normalization remain server-owned. Only run/status/logs exist here."
+    )
+)
 app.add_typer(worker_app, name="worker")
 app.add_typer(container_app, name="container")
+app.add_typer(workflow_app, name="workflow")
 
 
 def _print_container_job_result(result: ContainerJobResult) -> None:
@@ -192,6 +203,359 @@ def worker_code_readiness(
     if stale:
         typer.secho(format_stale_code_message(stale), fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2)
+
+
+def _workflow_client(api_base: str | None = None):
+    """Build the thin executions client from protected configuration only."""
+    from moonmind.workflow_cli import (
+        WorkflowCliError,
+        WorkflowApiClient,
+        require_secure_transport,
+        resolve_api_base,
+        resolve_bearer_token,
+    )
+
+    env = dict(os.environ)
+    base = (api_base or "").strip() or resolve_api_base(env)
+    try:
+        token = resolve_bearer_token(env)
+    except WorkflowCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    try:
+        require_secure_transport(base, has_token=bool(token), env=env)
+    except WorkflowCliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    return WorkflowApiClient(base_url=base, bearer_token=token), base
+
+
+def _workflow_fail(message: str) -> None:
+    typer.secho(f"Error: {message}", fg=typer.colors.RED, err=True)
+    raise typer.Exit(code=1)
+
+
+@workflow_app.command(
+    "run",
+    help=(
+        "Submit one ordinary workflow via POST /api/executions and print the "
+        "admitted workflow ID plus dashboard detail URL. Preset expansion, "
+        "profile selection, authorization, and publication normalization are "
+        "server-owned. Pass either --preset (preset slug) or --skill (Skill "
+        "name), never both; identify Agent vs Provider profiles with "
+        "--agent-profile / --provider-profile (there is no --profile). "
+        "Secrets come from MOONMIND_API_TOKEN(_FILE) only. A lost POST "
+        "acknowledgment is reconciled by retrying with the same --request-id; "
+        "a new intentional request needs a fresh --request-id. Ctrl-C stops "
+        "local waiting only, never the remote workflow. "
+        "Exit codes: 0 admitted (or completed with --wait), "
+        "1 submission/auth/transport/usage error, 2 remote work failed/canceled, "
+        "3 still running after --wait timeout."
+    ),
+)
+def workflow_run(
+    instructions: str | None = typer.Option(
+        None, "--instructions", help="Task instructions/goal for the workflow."
+    ),
+    preset: str | None = typer.Option(
+        None, "--preset", help="Preset slug (distinct from a Skill name)."
+    ),
+    skill: str | None = typer.Option(
+        None, "--skill", help="Skill name (distinct from a preset slug)."
+    ),
+    title: str | None = typer.Option(None, "--title", help="Workflow title."),
+    repository: str | None = typer.Option(
+        None,
+        "--repository",
+        help="Backend-admitted source (owner/repo or https URL). Local paths are rejected.",
+    ),
+    agent_profile: str | None = typer.Option(
+        None, "--agent-profile", help="Agent Profile selector (not a provider profile)."
+    ),
+    provider_profile: str | None = typer.Option(
+        None, "--provider-profile", help="Provider Profile selector (not an agent profile)."
+    ),
+    publish_mode: str | None = typer.Option(
+        None, "--publish-mode", help="Publication intent: auto, none, branch, or pr."
+    ),
+    param: list[str] | None = typer.Option(
+        None, "--param", help="Extra task field as key=value (repeatable)."
+    ),
+    request_id: str | None = typer.Option(
+        None,
+        "--request-id",
+        help="Stable idempotency key; reuse after a lost acknowledgment, renew for a new intent.",
+    ),
+    api_base: str | None = typer.Option(
+        None, "--api-base", help="API base URL (default MOONMIND_API_BASE/MOONMIND_URL or local)."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON on stdout."),
+    wait: bool = typer.Option(False, "--wait", help="Wait (bounded) for terminal status."),
+    timeout_seconds: float = typer.Option(
+        300.0, "--timeout-seconds", min=1.0, max=86400.0, help="Bounded wait budget."
+    ),
+) -> None:
+    from moonmind.workflow_cli import (
+        EXIT_STILL_RUNNING,
+        WorkflowCliError,
+        build_execution_payload,
+        detail_url,
+        exit_code_for_status,
+        format_execution_json,
+        new_request_id,
+        parse_extra_params,
+        sanitize_terminal_text,
+        summarize_execution,
+        wait_for_terminal,
+    )
+
+    try:
+        extras = parse_extra_params(param)
+        effective_request_id = (request_id or "").strip() or new_request_id()
+        payload = build_execution_payload(
+            instructions=instructions,
+            preset=preset,
+            skill=skill,
+            title=title,
+            repository=repository,
+            agent_profile=agent_profile,
+            provider_profile=provider_profile,
+            publish_mode=publish_mode,
+            extra_params=extras,
+            idempotency_key=effective_request_id,
+        )
+    except WorkflowCliError as exc:
+        _workflow_fail(str(exc))
+        return
+    client, base = _workflow_client(api_base)
+    try:
+        try:
+            admitted = client.submit_execution(payload)
+        except WorkflowCliError as exc:
+            typer.secho(
+                f"Error: {exc} (requestId={payload.get('idempotencyKey', effective_request_id)}; "
+                "retry with the same --request-id to reconcile.)",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=1) from exc
+        summary = summarize_execution(admitted)
+        url = detail_url(base, summary.workflow_id)
+        if as_json:
+            typer.echo(
+                format_execution_json({**admitted, "detailUrl": url, "requestId": payload["idempotencyKey"]})
+            )
+        else:
+            typer.echo(f"workflow {summary.workflow_id}: {summary.status} (admitted)")
+            typer.echo(f"details: {url}")
+            typer.echo(f"requestId: {payload['idempotencyKey']}")
+            if summary.title:
+                typer.echo(f"title: {sanitize_terminal_text(summary.title, max_chars=500)}")
+        if not wait:
+            return
+        try:
+            observed = wait_for_terminal(
+                client, summary.workflow_id, timeout_seconds=timeout_seconds
+            )
+        except WorkflowCliError as exc:
+            typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+        except KeyboardInterrupt as exc:
+            typer.secho(
+                "Stopped following; the remote workflow continues (cancellation "
+                "requires an explicit authorized action).",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
+            raise typer.Exit(code=EXIT_STILL_RUNNING) from exc
+        final = summarize_execution(observed)
+        timed_out = final.status not in {"completed", "failed", "canceled"}
+        if as_json:
+            typer.echo(format_execution_json({**observed, "detailUrl": url}))
+        elif timed_out:
+            typer.secho(
+                f"workflow {final.workflow_id}: still {final.status} after bounded wait; "
+                "remote work continues.",
+                fg=typer.colors.YELLOW,
+            )
+        else:
+            typer.echo(f"workflow {final.workflow_id}: {final.status}")
+        raise typer.Exit(code=exit_code_for_status(final.status, timed_out=timed_out))
+    except KeyboardInterrupt as exc:
+        typer.secho(
+            "Stopped following; the remote workflow continues (cancellation "
+            "requires an explicit authorized action).",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        raise typer.Exit(code=EXIT_STILL_RUNNING) from exc
+    finally:
+        client.close()
+
+
+@workflow_app.command(
+    "status",
+    help=(
+        "Read one workflow via GET /api/executions/{workflowId}. Optional "
+        "bounded --wait polls the authorized read contract until terminal or "
+        "timeout. Stream loss is a read retry, never workflow failure. "
+        "Ctrl-C stops local following only. "
+        "Exit codes: 0 completed, 1 read/auth/transport error, "
+        "2 failed/canceled, 3 still running."
+    ),
+)
+def workflow_status(
+    workflow_id: str = typer.Argument(..., help="Workflow ID to describe."),
+    api_base: str | None = typer.Option(None, "--api-base", help="API base URL."),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    wait: bool = typer.Option(False, "--wait", help="Wait (bounded) for terminal status."),
+    timeout_seconds: float = typer.Option(300.0, "--timeout-seconds", min=1.0, max=86400.0),
+) -> None:
+    from moonmind.workflow_cli import (
+        EXIT_STILL_RUNNING,
+        WorkflowCliError,
+        exit_code_for_status,
+        format_execution_json,
+        sanitize_terminal_text,
+        summarize_execution,
+        wait_for_terminal,
+    )
+
+    client, base = _workflow_client(api_base)
+    try:
+        try:
+            if wait:
+                try:
+                    body = wait_for_terminal(
+                        client, workflow_id, timeout_seconds=timeout_seconds
+                    )
+                except KeyboardInterrupt as exc:
+                    typer.secho(
+                        "Stopped following; the remote workflow continues.",
+                        fg=typer.colors.YELLOW,
+                        err=True,
+                    )
+                    raise typer.Exit(code=EXIT_STILL_RUNNING) from exc
+            else:
+                body = client.describe_execution(workflow_id)
+        except WorkflowCliError as exc:
+            typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+        summary = summarize_execution(body)
+        timed_out = wait and summary.status not in {"completed", "failed", "canceled"}
+        if as_json:
+            from moonmind.workflow_cli import detail_url as _detail_url
+
+            typer.echo(
+                format_execution_json(
+                    {**body, "detailUrl": _detail_url(base, summary.workflow_id)}
+                )
+            )
+        else:
+            typer.echo(f"workflow {summary.workflow_id}: {summary.status} (state={summary.state})")
+            if summary.title:
+                typer.echo(f"title: {sanitize_terminal_text(summary.title, max_chars=500)}")
+            if timed_out:
+                typer.secho(
+                    "still running after bounded wait; remote work continues.",
+                    fg=typer.colors.YELLOW,
+                )
+        raise typer.Exit(code=exit_code_for_status(summary.status, timed_out=timed_out))
+    except KeyboardInterrupt as exc:
+        typer.secho(
+            "Stopped following; the remote workflow continues.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        raise typer.Exit(code=EXIT_STILL_RUNNING) from exc
+    finally:
+        client.close()
+
+
+@workflow_app.command(
+    "logs",
+    help=(
+        "Read available logs/evidence via GET /api/executions/{workflowId}/"
+        "captured-evidence and .../steps. Terminal evidence stays readable; "
+        "missing auxiliary logs are reported honestly and never become "
+        "workflow failure. Ctrl-C stops local following only."
+    ),
+)
+def workflow_logs(
+    workflow_id: str = typer.Argument(..., help="Workflow ID to read."),
+    api_base: str | None = typer.Option(None, "--api-base", help="API base URL."),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    follow: bool = typer.Option(False, "--follow", help="Follow until terminal or timeout."),
+    timeout_seconds: float = typer.Option(300.0, "--timeout-seconds", min=1.0, max=86400.0),
+    max_lines: int = typer.Option(200, "--max-lines", min=1, max=1000),
+) -> None:
+    import time as _time
+
+    from moonmind.workflow_cli import (
+        WorkflowCliError,
+        format_execution_json,
+        render_log_lines,
+        sanitize_terminal_text,
+        summarize_execution,
+    )
+
+    client, _base = _workflow_client(api_base)
+    try:
+        deadline = _time.monotonic() + max(1.0, timeout_seconds)
+        while True:
+            try:
+                evidence = client.captured_evidence(workflow_id)
+                ledger = client.step_ledger(workflow_id)
+                current: dict = {}
+                try:
+                    current = client.describe_execution(workflow_id)
+                    summary = summarize_execution(current)
+                    terminal = summary.status in {"completed", "failed", "canceled"}
+                except WorkflowCliError:
+                    summary = None
+                    terminal = True
+            except WorkflowCliError as exc:
+                typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+                raise typer.Exit(code=1) from exc
+            lines, gap = render_log_lines(evidence, ledger, max_lines=max_lines)
+            if as_json:
+                typer.echo(
+                    format_execution_json(
+                        {
+                            "workflowId": workflow_id.strip(),
+                            "lines": lines,
+                            "gap": gap,
+                            "status": summary.status if summary else "unknown",
+                        }
+                    )
+                )
+            else:
+                for line in lines:
+                    typer.echo(line)
+                if gap:
+                    typer.secho(
+                        f"Note: {sanitize_terminal_text(gap, max_chars=500)}",
+                        fg=typer.colors.YELLOW,
+                        err=True,
+                    )
+            if not follow or terminal or _time.monotonic() >= deadline:
+                if follow and not terminal:
+                    typer.secho(
+                        "Follow timeout reached; remote work continues.",
+                        fg=typer.colors.YELLOW,
+                        err=True,
+                    )
+                return
+            _time.sleep(2.0)
+    except KeyboardInterrupt as exc:
+        typer.secho(
+            "Stopped following; the remote workflow continues.",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+        raise typer.Exit(code=3) from exc
+    finally:
+        client.close()
 
 
 def main() -> None:
