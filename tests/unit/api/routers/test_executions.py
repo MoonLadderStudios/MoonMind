@@ -17718,7 +17718,10 @@ async def test_exact_rerun_reuses_source_task_input_snapshot_lineage() -> None:
         assert record.memo["task_input_snapshot_version"] == 1
         assert record.memo["task_input_snapshot_source_kind"] == "rerun"
         assert record.artifact_refs == ["artifact://snapshot/source"]
-    session.get.assert_awaited_once_with(
+    # Shared mutator adds locked canonical+projection fetches after the
+    # caller's plain canonical lookup.
+    assert session.get.await_count == 3
+    session.get.assert_any_await(
         TemporalExecutionCanonicalRecord,
         "mm:rerun",
     )
