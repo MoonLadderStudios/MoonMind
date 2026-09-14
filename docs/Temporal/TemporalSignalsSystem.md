@@ -317,9 +317,11 @@ These signals coordinate profile-slot allocation and rate-limit recovery for man
 #### To parent `MoonMind.UserWorkflow`
 
 - `child_state_changed`
-- `profile_assigned`
 
-These signals provide parent-visible execution state without requiring polling.
+This signal provides parent-visible execution state without requiring polling.
+Slot release is owned by the ProviderProfileManager through verified consumer
+teardown (MoonLadderStudios/MoonMind#1089); AgentRun no longer sends
+`profile_assigned` and the parent keeps no defensive release fallback.
 
 Desired-state rule:
 
