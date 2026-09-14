@@ -10,6 +10,7 @@ Data models for the step approval policy system:
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping
@@ -420,31 +421,60 @@ def parse_step_gate_result(
 
     confidence_raw = payload.get("confidence")
     confidence: float | str
+    confidence_invalid = False
     if isinstance(confidence_raw, str) and confidence_raw.strip().lower() in {
         "low",
         "medium",
         "high",
     }:
         confidence = confidence_raw.strip().lower()
+    elif isinstance(confidence_raw, str) and confidence_raw.strip().lower() in {
+        "nan", "+nan", "-nan", "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity",
+    }:
+        confidence = 0.0
+        confidence_invalid = True
     else:
         try:
-            confidence = float(confidence_raw or 0.0)
-            confidence = max(0.0, min(1.0, confidence))
+            confidence_value = float(confidence_raw or 0.0)
+            if not math.isfinite(confidence_value):
+                confidence = 0.0
+                confidence_invalid = True
+            else:
+                confidence = max(0.0, min(1.0, confidence_value))
         except (TypeError, ValueError):
             confidence = 0.0
+    if confidence_invalid:
+        invalid = True
+        degraded = True
 
     feedback = payload.get("feedback")
     if isinstance(feedback, str):
         feedback = feedback.strip() or None
     else:
         feedback = None
+    # Bounded-output ceilings at the canonical contract boundary (#3945):
+    # oversized findings/feedback can never authorize advancement. Truncation
+    # is incomplete review, not a positive verdict.
+    if isinstance(feedback, str) and len(feedback) > 4_000:
+        invalid = True
+        degraded = True
 
     issues_raw = payload.get("issues")
     issues: tuple[Mapping[str, Any], ...] = ()
     if isinstance(issues_raw, list):
+        if len(issues_raw) > 20:
+            invalid = True
+            degraded = True
         issues = tuple(
-            dict(issue) for issue in issues_raw if isinstance(issue, dict)
+            dict(issue) for issue in issues_raw[:20] if isinstance(issue, dict)
         )
+        for issue in issues:
+            for key in ("description", "evidence"):
+                text = issue.get(key)
+                if isinstance(text, str) and len(text) > 2_000:
+                    invalid = True
+                    degraded = True
+                    break
     validated_refs = payload.get("validatedRefs") or payload.get("validated_refs")
     invalidated_refs = payload.get("invalidatedRefs") or payload.get(
         "invalidated_refs"
