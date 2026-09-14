@@ -524,7 +524,7 @@ def test_no_second_event_store_or_background_service():
     import pathlib
     import re
 
-    source = pathlib.Path(__file__).parent.parent.parent.joinpath(
+    source = pathlib.Path(__file__).parent.parent.parent.parent.joinpath(
         "moonmind/schemas/agent_run_progress.py"
     ).read_text()
     # The guard tuple names the forbidden infrastructure so architecture
@@ -629,7 +629,7 @@ def test_retirement_inventory_keeps_compat_and_control_classified():
 def test_module_preserves_authority_separation_in_prose():
     import pathlib
 
-    source = pathlib.Path(__file__).parent.parent.parent.joinpath(
+    source = pathlib.Path(__file__).parent.parent.parent.parent.joinpath(
         "moonmind/schemas/agent_run_progress.py"
     ).read_text()
     assert "AgentRunResult" in source
