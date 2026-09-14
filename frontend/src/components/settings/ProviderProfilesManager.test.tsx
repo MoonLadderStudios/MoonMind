@@ -21,6 +21,8 @@ import {
   loadPersistedDefaultIntents,
   persistDefaultIntents,
   isLostSaveAcknowledgment,
+  AmbiguousSaveAcknowledgmentError,
+  resolveAdvancedRecommendedText,
   PENDING_DEFAULT_INTENT_STORAGE_KEY,
   ProviderProfileRequestError,
 } from './ProviderProfilesManager';
@@ -2988,6 +2990,14 @@ describe('MoonLadderStudios/MoonMind#4002 truthful creation actions', () => {
     expect(waiting.reason).toContain('Waiting for the backend creation preset');
     const loading = resolveCreationAction({ ...base, presetLoading: true, presetSupported: null });
     expect(loading.disabled).toBe(true);
+    // A completed preset failure surfaces its error instead of the waiting state.
+    const failed = resolveCreationAction({
+      ...base,
+      presetSupported: null,
+      presetError: 'Failed to load the Provider Profile creation preset.',
+    });
+    expect(failed.disabled).toBe(true);
+    expect(failed.reason).toBe('Failed to load the Provider Profile creation preset.');
     const unsupported = resolveCreationAction({
       ...base,
       presetSupported: false,
@@ -3051,6 +3061,16 @@ describe('MoonLadderStudios/MoonMind#4002 immutable submitted operation', () => 
     expect(
       submissionOwnsCurrentForm({ ...submission.formSnapshot }, null, submission),
     ).toBe(true);
+    // Untouched draft with matching tier snapshots: still owned.
+    expect(
+      submissionOwnsCurrentForm(
+        { ...submission.formSnapshot },
+        null,
+        submission,
+        submission.tierDraftsSnapshot.map((tier) => ({ ...tier })),
+        submission.defaultTierClientIdSnapshot,
+      ),
+    ).toBe(true);
     // Draft B edited while A was pending: A no longer owns the form.
     const editedB = { ...submission.formSnapshot, accountLabel: 'B edits' };
     expect(submissionOwnsCurrentForm(editedB, null, submission)).toBe(false);
@@ -3060,11 +3080,43 @@ describe('MoonLadderStudios/MoonMind#4002 immutable submitted operation', () => 
     );
   });
 
+  it('loses ownership when tier drafts change after submit', () => {
+    const submission = submissionFor();
+    const retiered = submission.tierDraftsSnapshot.map((tier) => ({
+      ...tier,
+      model: 'other-model',
+    }));
+    expect(
+      submissionOwnsCurrentForm(
+        { ...submission.formSnapshot },
+        null,
+        submission,
+        retiered,
+        submission.defaultTierClientIdSnapshot,
+      ),
+    ).toBe(false);
+    expect(
+      submissionOwnsCurrentForm(
+        { ...submission.formSnapshot },
+        null,
+        submission,
+        submission.tierDraftsSnapshot,
+        'another-default-tier',
+      ),
+    ).toBe(false);
+  });
+
   it('classifies lost acknowledgments without swallowing server validation', () => {
     expect(isLostSaveAcknowledgment(new TypeError('Failed to fetch'))).toBe(true);
     expect(isLostSaveAcknowledgment(new Error('NetworkError when attempting to fetch resource.'))).toBe(
       true,
     );
+    // A 2xx with an undecodable body may already have committed the profile.
+    expect(
+      isLostSaveAcknowledgment(
+        new AmbiguousSaveAcknowledgmentError('Save confirmed but unreadable.'),
+      ),
+    ).toBe(true);
     expect(
       isLostSaveAcknowledgment(
         new ProviderProfileRequestError('Profile ID is required.', 'validation', null),
@@ -3151,6 +3203,54 @@ describe('MoonLadderStudios/MoonMind#4002 collapsed advanced summary', () => {
     expect(summary.text).not.toContain('db://');
     expect(summary.text).not.toContain('OPENAI_API_KEY');
   });
+
+  it('keeps identity-only edits out of the advanced summary', () => {
+    const baseline = defaultFormState('codex_cli');
+    // Account label renders in the always-visible Identity fieldset.
+    const identityOnly = { ...baseline, accountLabel: 'team account' };
+    expect(collectAdvancedControlDeviations(identityOnly, baseline)).toEqual([]);
+  });
+
+  it('counts provider label and execution configuration as advanced overrides', () => {
+    const baseline = defaultFormState('codex_cli');
+    const labeled = { ...baseline, providerLabel: 'Preferred provider' };
+    expect(collectAdvancedControlDeviations(labeled, baseline)).toEqual(['provider label']);
+    const configured = {
+      ...baseline,
+      executionConfiguration: JSON.stringify({ profileId: 'p', version: 2, digest: 'd' }),
+    };
+    expect(collectAdvancedControlDeviations(configured, baseline)).toEqual([
+      'execution configuration',
+    ]);
+  });
+
+  it('reports manual creation state instead of recommended settings', () => {
+    const recommended = 'Using recommended API key launch settings';
+    expect(
+      resolveAdvancedRecommendedText({
+        manualCreationAllowed: true,
+        isEditing: false,
+        presetReady: true,
+        recommendedLaunchSettingsText: recommended,
+      }),
+    ).toBe('Manual creation — profile will be saved disabled');
+    expect(
+      resolveAdvancedRecommendedText({
+        manualCreationAllowed: false,
+        isEditing: true,
+        presetReady: false,
+        recommendedLaunchSettingsText: recommended,
+      }),
+    ).toBe('Preserving the existing launch contract');
+    expect(
+      resolveAdvancedRecommendedText({
+        manualCreationAllowed: false,
+        isEditing: false,
+        presetReady: true,
+        recommendedLaunchSettingsText: recommended,
+      }),
+    ).toBe(recommended);
+  });
 });
 
 describe('MoonLadderStudios/MoonMind#4002 deferred default intent storage', () => {
@@ -3170,13 +3270,34 @@ describe('MoonLadderStudios/MoonMind#4002 deferred default intent storage', () =
   it('round-trips pending intents and tolerates corrupt or missing storage', () => {
     const storage = memoryStorage();
     expect(loadPersistedDefaultIntents(storage)).toEqual([]);
-    persistDefaultIntents(['profile-a', 'profile-b', 'profile-a'], storage);
-    expect(loadPersistedDefaultIntents(storage)).toEqual(['profile-a', 'profile-b']);
+    persistDefaultIntents(
+      [
+        { profileId: 'profile-a', priorDefaultProfileId: 'profile-old' },
+        { profileId: 'profile-b', priorDefaultProfileId: null },
+        { profileId: 'profile-a', priorDefaultProfileId: 'profile-old' },
+      ],
+      storage,
+    );
+    expect(loadPersistedDefaultIntents(storage)).toEqual([
+      { profileId: 'profile-a', priorDefaultProfileId: 'profile-old' },
+      { profileId: 'profile-b', priorDefaultProfileId: null },
+    ]);
     expect(storage.getItem(PENDING_DEFAULT_INTENT_STORAGE_KEY)).not.toContain('secret');
     storage.setItem(PENDING_DEFAULT_INTENT_STORAGE_KEY, 'not-json{{{');
     expect(loadPersistedDefaultIntents(storage)).toEqual([]);
     expect(loadPersistedDefaultIntents(null)).toEqual([]);
-    persistDefaultIntents(['x'], null);
+    persistDefaultIntents([{ profileId: 'x', priorDefaultProfileId: null }], null);
+  });
+
+  it('reads legacy string-only intents without a captured prior default', () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      PENDING_DEFAULT_INTENT_STORAGE_KEY,
+      JSON.stringify(['legacy-a', '  ', 42, null]),
+    );
+    expect(loadPersistedDefaultIntents(storage)).toEqual([
+      { profileId: 'legacy-a', priorDefaultProfileId: null },
+    ]);
   });
 });
 
@@ -3888,7 +4009,9 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
       });
     });
     // Truthful pending state: the intent survives the failure with a retry remedy.
-    expect(loadPersistedDefaultIntents(window.localStorage)).toContain('default-fail-profile');
+    expect(
+      loadPersistedDefaultIntents(window.localStorage).map((intent) => intent.profileId),
+    ).toContain('default-fail-profile');
     const failureCall = onNotice.mock.calls
       .map(([arg]) => arg as { level: string; text: string } | null)
       .find((arg) => arg !== null && arg.level === 'error' && arg.text.includes('was not applied'));
@@ -3900,7 +4023,7 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
     window.localStorage.clear();
   });
 
-  it('R6: a newer explicit default is never silently undone and reload never re-applies stale intent', async () => {
+  it('R6: a pre-existing default is replaced, not mistaken for a newer choice', async () => {
     window.localStorage.clear();
     const savedNewer: ProviderProfile = { ...remediationSavedBase, profile_id: 'newer-intent-profile' };
     const currentDefault: ProviderProfile = {
@@ -3908,6 +4031,86 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
       profile_id: 'operator-default',
       is_default: true,
     };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return { ok: true, json: async () => remediationCreationCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => remediationPreset() } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        return { ok: true, json: async () => savedNewer } as Response;
+      }
+      if (
+        url === '/api/v1/provider-profiles/newer-intent-profile/credentials/api-key' &&
+        (init as RequestInit | undefined)?.method === 'POST'
+      ) {
+        return {
+          ok: true,
+          json: async () => ({
+            status: 'ready',
+            status_label: 'OpenAI API key ready',
+            readiness: { connected: true },
+          }),
+        } as Response;
+      }
+      if (
+        url === '/api/v1/provider-profiles/newer-intent-profile' &&
+        (init as RequestInit | undefined)?.method === 'PATCH'
+      ) {
+        return { ok: true, json: async () => ({ ...savedNewer, is_default: true }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { onNotice } = renderProviderProfilesManagerWithQuery([currentDefault, savedNewer]);
+    await fillCreateForm('newer-intent-profile');
+    fireEvent.click(screen.getByLabelText('Runtime default'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'sk-newer-intent' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenAI API key' }));
+    // The default observed at submission is the intent's replacement target.
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(
+          ([url, init]) =>
+            String(url) === '/api/v1/provider-profiles/newer-intent-profile' &&
+            (init as RequestInit | undefined)?.method === 'PATCH',
+        ),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'ok',
+        text: expect.stringContaining('is now the runtime default'),
+      });
+    });
+    // The intent's own notice owns the final slot: no enrollment notice on top.
+    expect(onNotice).not.toHaveBeenCalledWith({
+      level: 'ok',
+      text: expect.stringContaining('enrollment completed'),
+    });
+    const cached = window.localStorage.getItem(PENDING_DEFAULT_INTENT_STORAGE_KEY) ?? '';
+    expect(cached).not.toContain('newer-intent-profile');
+    window.localStorage.clear();
+  });
+
+  it('R6: a genuinely newer default is never silently undone', async () => {
+    window.localStorage.clear();
+    const savedNewer: ProviderProfile = { ...remediationSavedBase, profile_id: 'newer-intent-profile' };
+    const currentDefault: ProviderProfile = {
+      ...remediationSavedBase,
+      profile_id: 'operator-default',
+      is_default: true,
+    };
+    const thirdProfile: ProviderProfile = {
+      ...remediationSavedBase,
+      profile_id: 'third-profile',
+      is_default: false,
+    };
+    // A stale page-local intent from before this run: reload performs no
+    // silent PATCH on mount.
     window.localStorage.setItem(
       PENDING_DEFAULT_INTENT_STORAGE_KEY,
       JSON.stringify(['newer-intent-profile']),
@@ -3938,7 +4141,11 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
-    const { onNotice } = renderProviderProfilesManagerWithQuery([currentDefault, savedNewer]);
+    const { onNotice, queryClient } = renderProviderProfilesManagerWithQuery([
+      currentDefault,
+      savedNewer,
+      thirdProfile,
+    ]);
     // Reload with a stale pending intent performs no silent PATCH on mount.
     expect(
       fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH'),
@@ -3948,6 +4155,12 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'sk-newer-intent' } });
+    // While setup is pending the operator explicitly defaults another profile.
+    queryClient.setQueryData<ProviderProfile[]>(PROVIDER_PROFILE_QUERY_KEY, [
+      { ...currentDefault, is_default: false },
+      savedNewer,
+      { ...thirdProfile, is_default: true },
+    ]);
     fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenAI API key' }));
     await waitFor(() => {
       expect(onNotice).toHaveBeenCalledWith({
@@ -3955,6 +4168,10 @@ describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
         text: expect.stringContaining('is now the default'),
       });
     });
+    const blockedCall = onNotice.mock.calls
+      .map(([arg]) => arg as { level: string; text: string } | null)
+      .find((arg) => arg !== null && arg.level === 'error' && arg.text.includes('is now the default'));
+    expect(blockedCall?.text).toContain('third-profile');
     // The newer operator choice wins: no PATCH against it, intent cleared, never undone.
     expect(
       fetchSpy.mock.calls.some(
