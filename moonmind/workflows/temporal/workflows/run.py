@@ -35,6 +35,15 @@ with workflow.unsafe.imports_passed_through():
         provider_profile_launch_ready_from_payload,
     )
     from moonmind.schemas.agent_skill_models import ResolvedSkillSet, SkillSelector
+    from moonmind.schemas.agent_run_progress import (
+        AGENT_RUN_PROGRESS_PATCH_ID,
+        STEP_WAITING_REASONS,
+        TERMINAL_PROGRESS_STATES,
+        apply_agent_run_progress,
+        assert_classified_child_signal,
+        new_progress_parent_state,
+        reduce_progress_to_step,
+    )
     from moonmind.schemas.container_job_models import (
         ContainerJobState,
         ContainerJobSubmitRequest,
@@ -1460,6 +1469,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._assigned_runtime_id: Optional[str] = None
         self._active_agent_child_workflow_id: Optional[str] = None
         self._active_agent_id: Optional[str] = None
+        # MoonLadderStudios/MoonMind#1088: accepted typed AgentRun progress
+        # projections keyed by child workflow ID. Each entry is the single
+        # parent reducer state for that child (expected identity, accepted
+        # source/revision/digest, terminal seal). Detailed events stay in
+        # the existing timeline; the validated AgentRunResult keeps
+        # terminal authority.
+        self._agent_run_progress_by_child: dict[str, dict[str, Any]] = {}
         self._last_publish_repair_request: AgentExecutionRequest | None = None
         self._last_publish_repair_node_id: str | None = None
         self._codex_session_handle: Any | None = None
@@ -24359,6 +24375,101 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "Failed to upsert memo",
                 extra={"error": str(exc)},
             )
+
+    @workflow.signal(name="agent_run_progress")
+    def agent_run_progress(self, payload: dict) -> None:
+        """Apply one typed AgentRun product-progress projection.
+
+        MoonLadderStudios/MoonMind#1088: the sole normal product-progress
+        projection for new histories. Old histories ignore it and retain
+        ``child_state_changed``; continuation, chat, and cleanup support
+        are untouched. A terminal child result seals the product outcome
+        and takes precedence over late or disagreeing progress.
+        """
+
+        try:
+            assert_classified_child_signal("agent_run_progress")
+        except ValueError:
+            return
+        if not workflow.patched(AGENT_RUN_PROGRESS_PATCH_ID):
+            # Old history: retain required legacy behavior.
+            return
+        if not isinstance(payload, Mapping):
+            self._get_logger().warning(
+                "Ignoring non-mapping agent_run_progress payload"
+            )
+            return
+        child_id = str(payload.get("agentRunWorkflowId") or "").strip()
+        active_child = str(self._active_agent_child_workflow_id or "").strip()
+        assigned_child = str(self._assigned_child_workflow_id or "").strip()
+        if (
+            not child_id
+            or (child_id != active_child and child_id != assigned_child)
+        ):
+            # Fence: only the known awaited/assigned child is observed.
+            # Payload identity fields are fences, not proof of sender
+            # permission; sender authorization stays with the authorized
+            # signal ingress and execution ownership checks.
+            self._get_logger().warning(
+                "Ignoring agent_run_progress for unexpected child %s",
+                child_id or "?",
+            )
+            return
+        state = self._agent_run_progress_by_child.get(child_id)
+        if state is None:
+            step_id = str(payload.get("stepExecutionId") or "").strip()
+            if not step_id:
+                self._get_logger().warning(
+                    "Ignoring agent_run_progress without Step identity"
+                )
+                return
+            state = new_progress_parent_state(
+                expected_agent_run_workflow_id=child_id,
+                expected_step_execution_id=step_id,
+            )
+            self._agent_run_progress_by_child[child_id] = state
+        outcome = apply_agent_run_progress(
+            state,
+            payload,
+            terminal_sealed=self._state == STATE_COMPLETED,
+        )
+        if outcome.disposition != "accepted" or outcome.accepted_state is None:
+            self._get_logger().debug(
+                "agent_run_progress %s: %s",
+                outcome.disposition,
+                outcome.diagnostics,
+            )
+            return
+        accepted = outcome.accepted_state
+        if str(accepted.get("state") or "") in TERMINAL_PROGRESS_STATES:
+            # Terminal progress seals the projection; the validated
+            # AgentRunResult keeps product authority, so no Step state
+            # moves here. Preserve the defensive cleanup the legacy
+            # terminal branch performed for the same outcome.
+            if workflow.patched(
+                RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH
+            ):
+                self._release_slot_defensive()
+            return
+        if self._state == STATE_COMPLETED:
+            return
+        view = reduce_progress_to_step(accepted)
+        if view.waiting_reason is not None:
+            self._waiting_reason = view.waiting_reason
+            self._set_state(STATE_AWAITING_SLOT, summary=view.summary)
+        else:
+            if self._waiting_reason in (
+                "provider_profile_slot",
+                *STEP_WAITING_REASONS,
+            ):
+                self._waiting_reason = None
+            if workflow.patched(RUN_REAL_STARTED_AT_PATCH):
+                self._mark_real_work_started()
+            self._set_state(STATE_EXECUTING, summary=view.summary)
+        if view.attention_required:
+            self._attention_required = True
+        elif self._waiting_reason != "operator_paused":
+            self._attention_required = False
 
     @workflow.signal
     def child_state_changed(self, new_state: str, reason: str) -> None:
