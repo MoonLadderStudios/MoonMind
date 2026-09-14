@@ -1447,6 +1447,52 @@ class MoonMindAgentRun:
             return None
         return dict(self._provider_wait_state)
 
+    def _close_provider_wait_on_grant(
+        self,
+        *,
+        runtime_id: str,
+        request: AgentExecutionRequest,
+    ) -> None:
+        """Close the current wait best-effort after a slot grant.
+
+        MoonLadderStudios/MoonMind#1130: the slot grant ends the current
+        wait. Record grant/resume so the timeline closes without inventing
+        transitions when nothing was observed; failures here must not fail
+        admission that already succeeded.
+        """
+        try:
+            if self._provider_wait_state is not None:
+                stored_flags = self._provider_wait_state or {}
+                self._record_provider_wait_observation(
+                    runtime_id=runtime_id,
+                    requester_workflow_id=workflow.info().workflow_id,
+                    profile_ref=str(request.execution_profile_ref or ""),
+                    reason=str(
+                        (self._provider_wait_state or {}).get(
+                            "reason", "awaiting_provider_capacity"
+                        )
+                    ),
+                    cooldown_until=(self._provider_wait_state or {}).get(
+                        "cooldown_until"
+                    ),
+                    queue_position=(self._provider_wait_state or {}).get(
+                        "queue_position"
+                    ),
+                    queue_ordered=stored_flags.get("queue_ordered")
+                    if isinstance(stored_flags.get("queue_ordered"), bool)
+                    else None,
+                    queue_fresh=stored_flags.get("queue_fresh")
+                    if isinstance(stored_flags.get("queue_fresh"), bool)
+                    else None,
+                    next_check=(self._provider_wait_state or {}).get("next_check"),
+                    revision=(self._provider_wait_state or {}).get("revision"),
+                    granted=True,
+                )
+        except Exception:
+            # Grant observation is best-effort timeline telemetry;
+            # admission already succeeded so failures must not fail it.
+            pass
+
     async def _signal_provider_slot_wait(
         self,
         parent_info: Any,
@@ -7022,47 +7068,10 @@ class MoonMindAgentRun:
 
                     self._awaiting_slot_reason_override = None
                     self._slot_wait_timeout_override_seconds = None
-
-                    # MoonLadderStudios/MoonMind#1130: the slot grant ends the
-                    # current wait. Record grant/resume best-effort so the
-                    # timeline closes the wait without inventing transitions
-                    # when nothing was observed; failures here must not fail
-                    # admission that already succeeded.
-                    try:
-                        if self._provider_wait_state is not None:
-                            stored_flags = self._provider_wait_state or {}
-                            self._record_provider_wait_observation(
-                                runtime_id=runtime_id,
-                                requester_workflow_id=workflow.info().workflow_id,
-                                profile_ref=str(request.execution_profile_ref or ""),
-                                reason=str(
-                                    (self._provider_wait_state or {}).get(
-                                        "reason", "awaiting_provider_capacity"
-                                    )
-                                ),
-                                cooldown_until=(self._provider_wait_state or {}).get(
-                                    "cooldown_until"
-                                ),
-                                queue_position=(self._provider_wait_state or {}).get(
-                                    "queue_position"
-                                ),
-                                queue_ordered=stored_flags.get("queue_ordered")
-                                if isinstance(stored_flags.get("queue_ordered"), bool)
-                                else None,
-                                queue_fresh=stored_flags.get("queue_fresh")
-                                if isinstance(stored_flags.get("queue_fresh"), bool)
-                                else None,
-                                next_check=(self._provider_wait_state or {}).get(
-                                    "next_check"
-                                ),
-                                revision=(self._provider_wait_state or {}).get("revision"),
-                                granted=True,
-                            )
-                    except Exception:
-                        # Grant observation is best-effort timeline telemetry;
-                        # admission already succeeded so failures must not fail it.
-                        pass
-
+                    self._close_provider_wait_on_grant(
+                        runtime_id=runtime_id,
+                        request=request,
+                    )
                     if self._paused:
                         await workflow.wait_condition(lambda: not self._paused)
 
