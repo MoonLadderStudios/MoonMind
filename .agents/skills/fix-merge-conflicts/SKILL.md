@@ -52,12 +52,13 @@ Fetch the latest PR base branch from origin for `inputs.base`, merge `origin/<ba
 ## Workflow
 
 0. Ensure git identity is available locally before merge/commit:
-- Resolve required identity from env (repository-local > env-provided) and write it into local git config if missing.
+- Use only the repository's existing authorized identity configuration (repository-local config or environment-provided identity for this run).
+- If no usable `user.name`/`user.email` is configured, stop as blocked with reason `git_identity_unavailable`; do not invent an author/email to bypass the block.
 ```bash
 git_local_name="$(git config --local --get user.name || true)"
 git_local_email="$(git config --local --get user.email || true)"
-git_env_name="${GIT_AUTHOR_NAME:-${GIT_COMMITTER_NAME:-${MOONMIND_GIT_USER_NAME:-MoonMind}}}"
-git_env_email="${GIT_AUTHOR_EMAIL:-${GIT_COMMITTER_EMAIL:-${MOONMIND_GIT_USER_EMAIL:-noreply@moonmind.local}}}"
+git_env_name="${GIT_AUTHOR_NAME:-${GIT_COMMITTER_NAME:-${MOONMIND_GIT_USER_NAME:-}}}"
+git_env_email="${GIT_AUTHOR_EMAIL:-${GIT_COMMITTER_EMAIL:-${MOONMIND_GIT_USER_EMAIL:-}}}"
 
 if [ -z "$git_local_name" ] || [ -z "$git_local_email" ]; then
   if [ -z "$git_env_name" ] || [ -z "$git_env_email" ]; then
@@ -85,7 +86,8 @@ fi
 - Remove `<<<<<<<`, `=======`, and `>>>>>>>` blocks.
 - Keep the correct merged content.
 - Preserve project conventions and existing architecture.
-- Stage resolved files with `git add <file>` or `git add -A`.
+- Stage only resolved files with `git add <file>`. Never use `git add -A` or stage unrelated changes.
+- Validate the merged content semantically for the touched behavior, not only by absence of marker strings.
 - Complete the merge commit with `git commit` (or `git commit -m "Merge origin/<base> and resolve conflicts"`).
 
 4. Validate resolution completeness.
@@ -98,7 +100,7 @@ fi
 - If checks cannot run locally, record that clearly.
 
 6. Commit and push.
-- If the merge was a fast-forward, no merge commit is created. Commit any other local changes before pushing.
+- If the merge was a fast-forward, no merge commit is created. Commit only intentional task changes (the merge result and conflict resolutions); preserve pre-existing unrelated staged, unstaged, and untracked work without committing it.
 - Push current branch: `git push`
 - After push, record local `HEAD` with `git rev-parse HEAD` and verify the exact same SHA is visible on the remote branch with `git ls-remote origin refs/heads/<current-branch>` or an equivalent trusted GitHub path.
 - If there was nothing to commit, still verify the current local `HEAD` exactly matches the remote branch head.

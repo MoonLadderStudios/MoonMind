@@ -1,4 +1,5 @@
-"""Regression coverage for epic #4264 (packages #4266 + #4275 + model-neutral).
+"""Regression coverage for epic #4264 (packages #4266 + #4275 + model-neutral,
+plus bounded #4270/#4271/#4272/#4273 slices).
 
 Covers the bounded slice implemented in this change:
 
@@ -158,3 +159,53 @@ def test_fix_comments_pr_failure_is_portable_and_preserves_branch_authority():
     assert "only when it was supplied as a scope constraint" in text
     assert "successfully refreshed" in text
     assert "Do not continue from pre-fetched or stale comments" in text
+
+
+def test_fix_merge_conflicts_preserves_exact_base_and_task_only_changes():
+    text = _read_skill("fix-merge-conflicts")
+    assert "or `git add -A`" not in text
+    assert "Never use `git add -A`" in text
+    assert "Commit any other local changes" not in text
+    assert "Commit only intentional task changes" in text
+    assert "preserve pre-existing unrelated" in text.lower()
+    assert "base_unavailable" in text
+    assert "Never silently substitute a default branch" in text
+    assert "git_identity_unavailable" in text
+    assert "do not invent an author/email" in text.lower()
+
+
+def test_jira_verify_posts_comment_before_status_transition():
+    text = _read_skill("jira-verify")
+    assert "evidence-first" in text.lower()
+    assert "before any status transition" in text.lower() or "before any completion transition" in text.lower()
+    assert "If posting fails" in text
+    assert "do not attempt a completion transition" in text.lower() or "do not claim Jira was updated" in text
+
+
+def test_jira_issue_creator_distinguishes_draft_from_write_intent():
+    text = _read_skill("jira-issue-creator")
+    assert "strictly non-mutating" in text.lower()
+    assert "explicit write intent" in text.lower()
+    assert "raw credentials" in text.lower() or "less-constrained" in text.lower()
+    assert "POST /rest/api/3/issue" not in text
+
+
+def test_document_health_update_selects_dedicated_skills():
+    preset = (PRESETS_ROOT / "document-health-update.yaml").read_text(encoding="utf-8")
+    assert "id: auto" not in preset
+    assert "id: document-health-review" in preset
+    assert "id: document-health-remediate" in preset
+
+
+def test_code_improvement_proposal_has_no_mandatory_manual_smoke_test():
+    text = _read_skill("code-improvement-proposal")
+    assert "Manual smoke test" not in text
+    assert "not a mandatory human smoke test" in text.lower() or "executable acceptance" in text.lower()
+    assert "no_findings" in text.lower()
+
+
+def test_jira_breakdown_presets_use_provider_neutral_issue_creation():
+    for slug in ("jira-breakdown-implement.yaml", "jira-breakdown-orchestrate.yaml"):
+        preset = (PRESETS_ROOT / slug).read_text(encoding="utf-8")
+        assert "issueCreation.action" in preset
+        assert "jiraCreation.action" not in preset
