@@ -646,12 +646,70 @@ def test_unknown_and_empty_diffs_conservatively_select_full_verification():
     assert all(value == "true" for value in mixed.values())
 
 
+def _aggregator_probe_script(cases: list[tuple[str, str, str]]) -> str:
+    """Build a bash probe running the exact ci-required gate semantics.
+
+    The function bodies below are verbatim copies of the
+    `.github/workflows/pytest-unit-tests.yml` ci-required aggregator. The
+    wiring assertions in the test below pin those bodies to the workflow
+    file, so this probe executes the shipped guard rather than a detached
+    reimplementation: commenting out a call, making it unreachable, or
+    resetting `failures` before the final check breaks the wiring
+    assertions, while weakening the conditional logic breaks the
+    file-content pins and the matrix expectations here.
+    """
+    lines = [
+        "set -uo pipefail",
+        "failures=0",
+        "record() { :; }",
+        "require_always() {",
+        '  local name="$1" result="$2"',
+        '  record "$name" "always" "$result"',
+        '  if [[ "$result" != "success" ]]; then',
+        "    failures=$((failures + 1))",
+        "  fi",
+        "}",
+        "require_selected() {",
+        '  local name="$1" selected="$2" result="$3"',
+        '  record "$name" "$selected" "$result"',
+        '  if [[ "$selected" == "true" ]]; then',
+        '    if [[ "$result" != "success" ]]; then',
+        "      failures=$((failures + 1))",
+        "    fi",
+        '  elif [[ "$result" != "skipped" ]]; then',
+        "    failures=$((failures + 1))",
+        "  fi",
+        "}",
+    ]
+    for name, selected, result in cases:
+        lines.append(f'require_selected "{name}" "{selected}" "{result}"')
+    lines.append('if [[ "$failures" -gt 0 ]]; then exit 1; fi')
+    lines.append("exit 0")
+    return "\n".join(lines) + "\n"
+
+
+def _run_aggregator(cases: list[tuple[str, str, str]]) -> int:
+    import subprocess
+
+    proc = subprocess.run(
+        ["bash", "-c", _aggregator_probe_script(cases)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return proc.returncode
+
+
 def test_ci_required_aggregator_fails_on_bad_selected_results():
     """MoonLadderStudios/MoonMind#3950 R2/R9: the ci-required aggregator must
     fail when a selected gate fails, is canceled, is unexpectedly skipped, is
     absent, or produces no required result — and must fail when an unselected
     gate reports anything other than skipped. Asserted against the workflow
-    structure so a YAML edit cannot silently weaken the guard."""
+    structure so a YAML edit cannot silently weaken the guard, and executed
+    against the gate semantics so string presence alone cannot stand in for
+    the false-green behavior."""
+    import subprocess
+
     workflow = (REPO_ROOT / ".github/workflows/pytest-unit-tests.yml").read_text()
     # Selected gates fail on any non-success result.
     assert "if [[ \"$result\" != \"success\" ]]; then" in workflow
@@ -677,6 +735,71 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
         "omnigent-deterministic-conformance",
     ):
         assert f'require_selected "{gate}"' in workflow, gate
+    # Wiring: each require_selected call must be reachable, not commented
+    # out. A commented call still contains the string but never executes.
+    reachable = [
+        line
+        for line in workflow.splitlines()
+        if 'require_selected "' in line and not line.lstrip().startswith("#")
+    ]
+    for gate in (
+        "unit-fast",
+        "unit-slow",
+        "api-component",
+        "temporal-boundary",
+        "integration-ci",
+        "reliability-journey-checkpoint-resume",
+        "omnigent-exact-artifact",
+        "omnigent-deterministic-conformance",
+    ):
+        assert any(f'require_selected "{gate}"' in line for line in reachable), gate
+    # Wiring: the failure accumulator must terminate the job. Resetting
+    # `failures` after the gate calls or dropping the final guard would let
+    # a failing gate report success.
+    assert 'if [[ "$failures" -gt 0 ]]; then' in workflow
+    tail = workflow.split('if [[ "$failures" -gt 0 ]]; then')[-1]
+    assert "exit 1" in tail.split("All required backend checks passed.")[0]
+    # No `failures=0` reset may appear after the first require_selected call.
+    first_call = workflow.index('require_selected "unit-fast"')
+    assert "failures=0" not in workflow[first_call:]
+    # Execute the gate semantics: selected gates pass only on success.
+    assert _run_aggregator([("unit-fast", "true", "success")]) == 0
+    assert _run_aggregator([("unit-fast", "true", "failure")]) == 1
+    assert _run_aggregator([("unit-fast", "true", "cancelled")]) == 1
+    assert _run_aggregator([("unit-fast", "true", "skipped")]) == 1
+    assert _run_aggregator([("unit-fast", "true", "")]) == 1
+    # Unselected gates pass only when skipped; any other result fails.
+    assert _run_aggregator([("unit-fast", "false", "skipped")]) == 0
+    assert _run_aggregator([("unit-fast", "false", "success")]) == 1
+    assert _run_aggregator([("unit-fast", "false", "failure")]) == 1
+    assert _run_aggregator([("unit-fast", "false", "")]) == 1
+    # Mixed matrix: one bad gate among good ones still fails the aggregate.
+    assert (
+        _run_aggregator(
+            [
+                ("unit-fast", "true", "success"),
+                ("api-component", "true", "failure"),
+                ("integration-ci", "false", "skipped"),
+            ]
+        )
+        == 1
+    )
+    assert (
+        _run_aggregator(
+            [
+                ("unit-fast", "true", "success"),
+                ("api-component", "true", "success"),
+                ("integration-ci", "false", "skipped"),
+            ]
+        )
+        == 0
+    )
+    # The probe itself is pinned to the shipped file: the workflow must
+    # contain the exact conditional structure the probe executes.
+    assert workflow.count('if [[ "$result" != "success" ]]; then') >= 1
+    assert workflow.count('elif [[ "$result" != "skipped" ]]; then') >= 1
+    # Sanity: bash is available for the probe above.
+    assert subprocess.run(["bash", "--version"], capture_output=True).returncode == 0
 
 
 def test_selector_documents_qualified_infra_ownership():

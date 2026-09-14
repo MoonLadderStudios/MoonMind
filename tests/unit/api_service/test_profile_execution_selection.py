@@ -284,8 +284,10 @@ def test_mixed_harness_authored_pin_is_rejected() -> None:
 
     An opencode Profile must not resolve through a codex-harness
     configuration, even when the caller explicitly pins that foreign
-    identity. The mixed-harness label mutation must fail at the
-    selection boundary.
+    identity. The provider requirements stay compatible so the harness
+    identity itself is the exercised boundary: a ready document retaining
+    the opencode requirements but carrying a codex harness must fail at
+    the selection boundary.
     """
     from api_service.services.profile_execution_selection import (
         validate_execution_configuration_expectation,
@@ -293,9 +295,11 @@ def test_mixed_harness_authored_pin_is_rejected() -> None:
 
     opencode_provider = provider()
     codex_row, codex_version = configuration("team-codex")
-    codex_version.document["providerRequirements"]["runtimeId"] = "codex_cli"
-    codex_version.document["providerRequirements"]["providerIds"] = ["openai"]
-    # Sanity: the foreign document is incompatible with the opencode Profile.
+    # Keep the legacy provider requirements compatible with the opencode
+    # Profile; only the harness names the foreign codex target.
+    codex_version.document["harness"] = "codex"
+    # Sanity: the foreign harness is incompatible with the opencode Profile,
+    # even though the provider requirements still match.
     assert not configuration_accepts_profile(
         codex_version.document, opencode_provider
     )
