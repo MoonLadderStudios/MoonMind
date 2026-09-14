@@ -15,7 +15,7 @@ For now, MoonMind is focused on software engineering use cases, but it can be us
 
 MoonMind coordinates provider-maintained coding agents with security, durable execution, and inspectable results. It is built for engineers who want to direct an agent (Codex, Claude Code, OpenCode, or a future approved harness) without handing it ambient credentials, the host Docker socket, or an unscoped network.
 
-The supported first path is local-first: `docker compose up -d`, open the dashboard at `http://localhost:7000`, add a provider credential to a Provider Profile, then create a workflow and submit it. The full steps are in [Quick Start](#quick-start), and the combined MoonMind plus Omnigent check is in [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md).
+The supported first path is local-first: `docker compose up -d`, open the dashboard at `http://localhost:7000`, add a provider credential to a Provider Profile, then create a workflow and submit it. The first result appears as outputs and artifacts on the Workflow Detail page (`/workflows/{workflowId}`), with logs and diagnostics alongside it. The full steps are in [Quick Start](#quick-start), and the combined MoonMind plus Omnigent check is in [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md).
 
 Main controls per run: one Provider Profile (runtime, credential reference, model and policy), an authorized workspace, mounted Skills and tools, an enforced egress profile, and immutable artifacts carrying step evidence. See [Authentication Contracts](docs/Security/AuthenticationContracts.md), [Restricted egress](docs/Security/RestrictedEgress.md), and the [Secrets System](docs/Security/SecretsSystem.md).
 
@@ -35,12 +35,12 @@ See the [Omnigent module entrypoint](docs/Omnigent/README.md), the canonical [Om
 
 ## Quick Start
 
-1. [Install Docker Desktop](https://docs.docker.com/get-started/get-docker/)
+1. [Install Docker Desktop](https://docs.docker.com/get-started/get-docker/) (includes Compose V2)
 2. Install git
 3. `git clone https://github.com/MoonLadderStudios/MoonMind.git`
-4. `cd MoonMind && git submodule update --init --recursive`. This initializes submodules such as Omnigent.
-5. Run `docker compose up -d` to start the service (infrastructure startup; no mandatory `.env` on a fresh install)
-6. Open [http://localhost:7000](http://localhost:7000). For combined MoonMind plus Omnigent validation, see [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md).
+4. `cd MoonMind && git submodule update --init --recursive`. This initializes submodules such as Omnigent, and it is required: the stack references submodule content at startup.
+5. Run `docker compose up -d` to start the services (infrastructure startup; no mandatory `.env` on a fresh install). Images are pulled from their configured registries (GHCR by default); nothing is built locally on this path. To prefetch without starting, run `docker compose pull` first.
+6. Wait until the control plane is ready: the dashboard loads at [http://localhost:7000](http://localhost:7000) **and** `curl -fsS http://localhost:7000/healthz` succeeds. For combined MoonMind plus Omnigent validation, see [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md). Control-plane health means the API and dashboard are up; it does not mean a run is ready — model eligibility and source access below are separate checks.
 7. Complete protected operator setup: a zero-config `docker compose up` ships
    the explicit local default (`AUTH_PROVIDER=${AUTH_PROVIDER:-disabled}` in
    `docker-compose.yaml`), which seeds the stable default user for the
@@ -59,15 +59,32 @@ See the [Omnigent module entrypoint](docs/Omnigent/README.md), the canonical [Om
    (`accounts` | `oidc` | `header` | explicitly restricted local `disabled`).
    Application login is separate from the source credentials and model
    eligibility below.
-9. In Settings, add source credentials for the work itself:
-    - Add a GitHub personal access token
-    - Add an API key or use OAuth to authenticate a Provider Profile
-    - Configure any other secrets or settings needed for the first workflow
-10. Check model eligibility, then click Create, select Runtime and one Profile,
-    and submit a workflow. The Profile resolves its execution configuration;
-    readiness and rollout policy validate the resulting plan.
+9. Make one Provider Profile launch-ready for the work itself (model eligibility, separate from application login and source access above):
+     - Add a provider API key to the profile, or use OAuth: in Settings click OAuth next to the profile, follow the instructions on the new tab, then return to Settings and click Finalize.
+     - If no profile is launch-ready, the run fails closed with an actionable error instead of silently switching to another profile or model.
+10. For repository-backed work, add source credentials for the work itself:
+     - Add a GitHub personal access token.
+     - Configure any other secrets or settings needed for the first workflow.
+11. Check model eligibility, then click Create, select the Runtime and Profile combination the Create page marks as the default for new work (see [Create Page](docs/UI/CreatePage.md)), and submit a workflow.
+12. Open the resulting Workflow Detail page (`/workflows/{workflowId}`) and inspect its outputs and artifacts, with logs and diagnostics alongside. That inspectable terminal evidence is the end of the first path: a loading dashboard or an accepted submission is not the result.
 
 `.env` is optional for normal local startup. Use `.env-template` only when you want to override defaults or preconfigure advanced settings before launch. The template's `AUTH_PROVIDER` comments describe the same selector, fresh-install, existing-database, and retired-selector behavior summarized above; the canonical contract remains [Authentication Contracts](docs/Security/AuthenticationContracts.md).
+
+### Source access, publication, and repository-free work
+
+Infrastructure startup (steps 1–8), model eligibility (step 9), source access (step 10), and optional publication (this section) are independent concerns. Having no `.env` does not mean every workload is credential-free: repository-backed work currently requires the source authority in step 10.
+
+A PAT-free scratch/anonymous save-only path is [proposed, not shipped](docs/RepositoryAccessAndWorkspaceDesign.md): that design's Status is Proposed, and it becomes the documented default only when its admission, workspace, terminal evidence, and durability handoff pass. Until then, repository work requires the source credentials above. An immediate PR result additionally requires an explicit publication selection that authorizes repository mutation; saving outputs as artifacts without publishing needs no such authorization (see [Workflow Publishing](docs/Workflows/WorkflowPublishing.md)).
+
+### If the model step cannot run
+
+Free or anonymous model availability depends on third-party providers and is not a product guarantee. Eligibility is decided per model from observed catalog data: candidates must have known zero cost across the relevant billing dimensions, the required capabilities, availability, and acceptable data-use terms — unknown price or terms are ineligible. When no model satisfies the policy, the run reports `no_eligible_free_model` with separate reason axes (availability, pricing, privacy) and points at the configured-provider path in step 9 instead.
+
+MoonMind never silently substitutes a paid or keyed profile when the free path is unavailable, and it never infers contributor or training-data consent from a convenience default: data-use terms require explicit acceptance. See [Repository Access and Workspace Design §11](docs/RepositoryAccessAndWorkspaceDesign.md) for the owning contract.
+
+### Troubleshooting the first path
+
+Start with non-destructive checks: `docker compose ps`, `docker compose logs <service>`, and the health endpoints in step 6. The [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md) guide owns the full startup, validation, rollback, and troubleshooting behavior: normal rollback preserves PostgreSQL, MoonMind, Omnigent, OAuth, and artifact data, and destructive cleanup (removing volumes) is a separate opt-in step for confirmed-disposable data or a tested backup — never the first response to a failed startup. Do not disable safety gates to make startup pass; an unhealthy dependency must be fixed, not skipped.
 
 ### Access through a host name, LAN, or VPN
 
@@ -197,7 +214,7 @@ Other platforms make you rebuild agents in their SDK. MoonMind operates at a hig
 
 ## Architecture
 
-MoonMind runs as a set of decoupled containers from a single `docker-compose.yaml`:
+MoonMind's architecture is a set of conceptual components; several Compose services can implement one component. The table below is that conceptual map, not a one-row-per-container inventory:
 
 | Component | Role |
 | --- | --- |
@@ -216,6 +233,12 @@ database, embedding credentials, or retrieval-index configuration. PostgreSQL
 persists relational records, Temporal persists durable execution state, and
 MinIO persists artifacts. There is no MoonMind-managed vector service, profile,
 extension, or index, and no implicit external replacement.
+
+The operational counterpart of the conceptual table — every Compose service,
+its published ports and profiles, and whether it is steady-state, init/one-shot,
+optional, or worker-created on-demand — is derived in the [First-run service
+inventory](docs/FirstRunServiceInventory.md), validated against the rendered
+`docker-compose.yaml`.
 
 ## Contributing
 
