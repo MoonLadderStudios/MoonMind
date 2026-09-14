@@ -188,7 +188,6 @@ from moonmind.workflows.skills.approval_policy import (
     gate_transition_allows_review_retry,
     inject_review_feedback_into_inputs,
     merge_accepted_output_evidence,
-    merge_direct_output_evidence,
     review_gate_budget_metadata,
     review_gate_retry_allowed,
     review_gate_verdict_made_progress,
@@ -9119,13 +9118,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             ledger_output_refs=row_outputs,
         )
         return logical_step_success_allowed(outputs=merged_outputs)
-
-    @staticmethod
-    def _merge_direct_output_evidence(
-        merged_outputs: dict[str, Any],
-        outputs: Mapping[str, Any],
-    ) -> None:
-        merge_direct_output_evidence(merged_outputs, outputs)
 
     def _inject_review_feedback_into_inputs(
         self,
