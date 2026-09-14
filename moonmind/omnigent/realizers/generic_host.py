@@ -121,7 +121,7 @@ class GenericOmnigentHostRealizer:
         host_capacity_admission: Any | None = None,
         execution_state_notifier: Callable[[str, str, str], Awaitable[None]]
         | None = None,
-        deployment_validator: Callable[[Any], None] | None = None,
+        deployment_validator: Callable[[Any], Awaitable[None]] | None = None,
         execution_owner: Callable[[], dict[str, str] | None] | None = None,
         heartbeat_interval_seconds: float = 60.0,
         heartbeat_ttl_seconds: int = 900,
@@ -212,7 +212,7 @@ class GenericOmnigentHostRealizer:
         # delivery-unknown and prohibit a safe retry after discovery recovers.
         # An owned host retains its recorded attestation/reattachment authority.
         if completed is None or not completed.hostLeaseRef:
-            self._deployment_validator(plan.payload)
+            await self._deployment_validator(plan.payload)
 
         return await deliver_canonical_turn(
             self._turn_commands,

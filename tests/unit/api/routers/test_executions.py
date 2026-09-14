@@ -15058,8 +15058,9 @@ def test_exact_rerun_rejects_incomplete_dynamic_skill_snapshot(
     ] == "art_old_skill_snapshot"
 
 
+@pytest.mark.parametrize("retryable", [False, True])
 def test_exact_rerun_returns_actionable_stale_plan_conflict(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, retryable: bool,
 ) -> None:
     app = FastAPI()
     app.include_router(router)
@@ -15083,7 +15084,7 @@ def test_exact_rerun_returns_actionable_stale_plan_conflict(
     service.update_execution.side_effect = TemporalExecutionRerunPlanError(
         "Exact rerun preserves the original Omnigent execution plan, but that "
         "plan targets a server build that is no longer deployed. Use Edit for "
-        "rerun to compile fresh runtime authority."
+        "rerun to compile fresh runtime authority.", retryable=retryable,
     )
     app.dependency_overrides[_get_service] = lambda: service
     _override_temporal_client(app)
@@ -15114,12 +15115,13 @@ def test_exact_rerun_returns_actionable_stale_plan_conflict(
             "that plan targets a server build that is no longer deployed. Use "
             "Edit for rerun to compile fresh runtime authority."
         ),
-        "nextAction": "edit_for_rerun",
+        "nextAction": "retry" if retryable else "edit_for_rerun",
     }
 
 
+@pytest.mark.parametrize("retryable", [False, True])
 def test_direct_rerun_rejects_stale_plan_before_execution_creation(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, retryable: bool,
 ) -> None:
     app = FastAPI()
     app.include_router(router)
@@ -15147,7 +15149,8 @@ def test_direct_rerun_rejects_stale_plan_before_execution_creation(
         TemporalExecutionRerunPlanError(
             "Exact rerun preserves the original Omnigent execution plan, but "
             "that plan targets a server build that is no longer deployed. Use "
-            "Edit for rerun to compile fresh runtime authority."
+            "Edit for rerun to compile fresh runtime authority.",
+            retryable=retryable,
         )
     )
     app.dependency_overrides[_get_service] = lambda: service
@@ -15168,6 +15171,7 @@ def test_direct_rerun_rejects_stale_plan_before_execution_creation(
         "exact_rerun_execution_plan_stale"
     )
     service.validate_exact_rerun_execution_plan.assert_awaited_once()
+    assert response.json()["detail"]["nextAction"] == ("retry" if retryable else "edit_for_rerun")
     service.create_execution.assert_not_awaited()
 
 

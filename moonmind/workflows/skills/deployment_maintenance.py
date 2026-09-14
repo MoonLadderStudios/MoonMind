@@ -10,6 +10,7 @@ from moonmind.workflows.skills.deployment_release import (
     ReleaseCohort,
     docker,
     inspect_owned,
+    launch_updater,
     state_root,
     write_record,
 )
@@ -41,14 +42,15 @@ async def reconcile_release(directory, runner, client):
             if delivery_file.exists()
             else 1
         )
-        if observed and deliveries < 3 and time.time() < request["deadline"]:
+        if deliveries < 3 and time.time() < request["deadline"]:
             write_record(delivery_file, {"count": deliveries + 1})
-            await docker("start", updater)
+            if observed is None:
+                await launch_updater(runner, directory, request)
+            else:
+                await docker("start", updater)
             result["resumed"] = True
             return result
-        result["pending"].append(
-            "execution_budget_exhausted" if observed else "owner_missing"
-        )
+        result["pending"].append("execution_budget_exhausted")
 
     routing_file = directory / "routing.json"
     if not routing_file.exists():

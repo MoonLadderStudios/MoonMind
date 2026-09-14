@@ -779,7 +779,7 @@ class WorkspaceArtifactProjector:
 
     @staticmethod
     def _verify_staged_links(staging: Path) -> None:
-        """Re-verify every staged link against the materialized tree."""
+        """Re-verify link containment without requiring exported referents."""
 
         staging_root = staging.resolve()
         for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
@@ -788,21 +788,27 @@ class WorkspaceArtifactProjector:
                 if not target.is_symlink():
                     continue
                 try:
-                    # Strict resolution: a link whose target is absent or
-                    # was removed by neutralization must fail here. The
-                    # default non-strict resolve is purely lexical and
-                    # would promote dangling links as verified.
-                    resolved = target.resolve(strict=True)
+                    try:
+                        resolved = target.resolve(strict=True)
+                    except FileNotFoundError:
+                        # Capture preserves link text but excludes runtime
+                        # inputs and empty directories. A missing referent is
+                        # valid repository data, not authority outside the
+                        # workspace. Resolve existing ancestors and the absent
+                        # suffix, then apply the same containment check.
+                        resolved = target.resolve(strict=False)
                 except (OSError, RuntimeError) as exc:
                     raise WorkspaceArtifactProjectionError(
-                        "workspace checkpoint symlink is unresolvable",
+                        "workspace checkpoint symlink is unresolvable: "
+                        + target.relative_to(staging_root).as_posix(),
                         code="WORKSPACE_AUTHORITY_MISMATCH",
                     ) from exc
                 if resolved != staging_root and not resolved.is_relative_to(
                     staging_root
                 ):
                     raise WorkspaceArtifactProjectionError(
-                        "workspace checkpoint symlink escapes workspace",
+                        "workspace checkpoint symlink escapes workspace: "
+                        + target.relative_to(staging_root).as_posix(),
                         code="WORKSPACE_AUTHORITY_MISMATCH",
                     )
 
