@@ -1,21 +1,26 @@
 """Hermetic tests for the bounded @mm PR-command vocabulary (#763).
 
 Covers the deterministic parser fixture matrix, event eligibility, the
-authorization gate, preflight (including the non-main-base contract),
-stable command identity/redelivery, revalidation, competing-run resolution,
-Skill delegation (resolve grants no merge permission), loop-safe redacted
-feedback, and the portable fix-merge-conflicts Skill regression.
+authorization gate, preflight (including the non-main-base contract and
+fail-closed capability evidence), stable command identity/redelivery,
+revalidation (full authorization/preflight re-run), competing-run
+resolution, Skill delegation (resolve grants no merge permission, bindings
+carry only the canonical skill-name identity), loop-safe redacted feedback
+with canonical outbound-scan blocking, the serialized verified-event
+payload shape the #3967 activity wrapper receives, and the portable
+fix-merge-conflicts Skill regression.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
 from moonmind.workflows.adapters.github_pr_commands import (
     AuthorizationRequest,
     CommandJourneyResult,
     PreflightRequest,
+    SkillBinding,
     VerifiedCommandEvent,
     build_feedback_body,
     classify_feedback_write_outcome,
@@ -33,6 +38,7 @@ from moonmind.workflows.adapters.github_pr_commands import (
     resolve_skill_binding,
     revalidate_before_mutation,
     scan_for_secrets,
+    verified_command_event_from_mapping,
 )
 
 
@@ -242,6 +248,23 @@ def test_preflight_blocks_before_paid_work():
     )
 
 
+def test_preflight_capability_evidence_defaults_to_denied():
+    """An omitted capability flag is unproven capability: fail closed."""
+    omitted = _ready_preflight()
+    assert omitted.skill_capability_supported is True  # explicit evidence
+    denied = PreflightRequest(
+        skill_id="fix-merge-conflicts",
+        pr_base_ref="main",
+        pr_base_sha="b" * 40,
+        pr_head_sha="a" * 40,
+        branch_write_authorized=True,
+    )
+    assert denied.skill_capability_supported is False
+    decision = evaluate_command_preflight(denied)
+    assert decision.ready is False
+    assert decision.reason_code == "unsupported_skill_capability"
+
+
 # ---------------------------------------------------------------------------
 # R4/R10: stable identity, redelivery, revalidation, competing runs
 # ---------------------------------------------------------------------------
@@ -303,6 +326,25 @@ def test_classify_redelivery_reuse_new_and_edited():
     )
 
 
+def _frozen_preflight(**overrides) -> PreflightRequest:
+    return _ready_preflight(**overrides)
+
+
+def _revalidate(
+    *,
+    frozen_authz=None,
+    current_authz=None,
+    frozen_pf=None,
+    current_pf=None,
+):
+    return revalidate_before_mutation(
+        frozen_authorization=frozen_authz or _authorized(),
+        current_authorization=current_authz or _authorized(),
+        frozen_preflight=frozen_pf or _frozen_preflight(),
+        current_preflight=current_pf or _frozen_preflight(),
+    )
+
+
 def test_freeze_and_revalidate_single_mutation_owner():
     frozen = freeze_command_dispatch(
         identity_key="key",
@@ -317,47 +359,96 @@ def test_freeze_and_revalidate_single_mutation_owner():
         connection_id="conn-1",
     )
     assert frozen.skill_snapshot_ref == "snapshot-1"
-    fresh = revalidate_before_mutation(
-        frozen_head_sha="a" * 40,
-        frozen_base_sha="b" * 40,
-        frozen_actor_authorized=True,
-        current_head_sha="a" * 40,
-        current_base_sha="b" * 40,
-        current_actor_authorized=True,
-    )
-    assert fresh.fresh is True
+    assert _revalidate().fresh is True
     assert (
-        revalidate_before_mutation(
-            frozen_head_sha="a" * 40,
-            frozen_base_sha="b" * 40,
-            frozen_actor_authorized=True,
-            current_head_sha="c" * 40,
-            current_base_sha="b" * 40,
-            current_actor_authorized=True,
-        ).reason_code
+        _revalidate(current_pf=_frozen_preflight(pr_head_sha="c" * 40)).reason_code
         == "stale_head"
     )
     assert (
-        revalidate_before_mutation(
-            frozen_head_sha="a" * 40,
-            frozen_base_sha="b" * 40,
-            frozen_actor_authorized=True,
-            current_head_sha="a" * 40,
-            current_base_sha="d" * 40,
-            current_actor_authorized=True,
+        _revalidate(current_pf=_frozen_preflight(pr_base_sha="d" * 40)).reason_code
+        == "stale_base"
+    )
+    assert (
+        _revalidate(
+            current_pf=_frozen_preflight(pr_base_ref="other", pr_base_sha="d" * 40)
         ).reason_code
         == "stale_base"
     )
     assert (
-        revalidate_before_mutation(
-            frozen_head_sha="a" * 40,
-            frozen_base_sha="b" * 40,
-            frozen_actor_authorized=True,
-            current_head_sha="a" * 40,
-            current_base_sha="b" * 40,
-            current_actor_authorized=False,
+        _revalidate(
+            current_pf=_frozen_preflight(skill_id="fix-comments")
         ).reason_code
-        == "authz_revoked"
+        == "stale_skill_binding"
+    )
+
+
+def test_revalidate_reruns_full_authorization_contract():
+    """Recovery re-runs every revocable authority fact, not just head/base."""
+    assert (
+        _revalidate(
+            current_authz=replace(_authorized(), actor_authorized=False)
+        ).reason_code
+        == "actor_not_authorized"
+    )
+    assert (
+        _revalidate(
+            current_authz=replace(_authorized(), repository_opted_in=False)
+        ).reason_code
+        == "repository_not_opted_in"
+    )
+    assert (
+        _revalidate(
+            current_authz=replace(_authorized(), connection_available=False)
+        ).reason_code
+        == "connection_unavailable"
+    )
+    assert (
+        _revalidate(
+            current_authz=replace(_authorized(), budget_available=False)
+        ).reason_code
+        == "budget_exceeded"
+    )
+    assert (
+        _revalidate(
+            current_authz=replace(_authorized(), publication_allowed=False)
+        ).reason_code
+        == "publication_blocked"
+    )
+    assert (
+        _revalidate(
+            frozen_authz=replace(_authorized(), transport_verified=False)
+        ).reason_code
+        == "transport_unverified"
+    )
+
+
+def test_revalidate_reruns_full_preflight_contract():
+    """Recovery re-runs write authority and capability evidence."""
+    assert (
+        _revalidate(
+            current_pf=_frozen_preflight(branch_write_authorized=False)
+        ).reason_code
+        == "branch_write_unavailable"
+    )
+    assert (
+        _revalidate(
+            current_pf=_frozen_preflight(
+                is_fork=True, fork_write_permitted=False
+            )
+        ).reason_code
+        == "fork_write_unavailable"
+    )
+    assert (
+        _revalidate(
+            current_pf=_frozen_preflight(permissions_revoked=True)
+        ).reason_code
+        == "permission_revoked"
+    )
+    assert (
+        _revalidate(
+            current_pf=_frozen_preflight(skill_capability_supported=False)
+        ).reason_code
+        == "unsupported_skill_capability"
     )
 
 
@@ -386,6 +477,15 @@ def test_skill_bindings_use_existing_identities_without_merge_grant():
     assert binding.grants_merge_permission is False
     assert binding.requires_publication_evidence is True
     assert resolve_skill_binding("frobnicate") is None
+    # Bindings carry only the canonical skill-name identity: task presets are
+    # identified by preset-slug through a separate catalog, so no preset
+    # alias may be stored here.
+    assert {f.name for f in fields(SkillBinding)} == {
+        "skill_id",
+        "grants_merge_permission",
+        "requires_publication_evidence",
+    }
+    assert not hasattr(binding, "preset")
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +507,7 @@ def test_feedback_body_carries_state_and_workflow_link_safely():
 
 def test_feedback_states_are_distinct_and_safe_default():
     for state in (
+        "requested",
         "queued",
         "running",
         "blocked",
@@ -450,6 +551,31 @@ def test_feedback_write_failures_are_auxiliary():
     assert classify_feedback_write_outcome(False) == "feedback_auxiliary_failure"
 
 
+def test_feedback_withholds_detail_on_credential_findings():
+    """Credential-bearing detail blocks instead of publishing redaction."""
+    atlassian = build_feedback_body(
+        command_label="@mm fix comments",
+        skill_id="fix-comments",
+        state="requested",
+        workflow_ref="run-1",
+        detail="provider error ATATT12345678901234567890 retry later",
+    )
+    assert "ATATT12345678901234567890" not in atlassian
+    assert "blocked" in atlassian
+    assert "withheld by outbound scan" in atlassian
+    assert scan_for_secrets(atlassian) == []
+    assert feedback_triggers_bot(atlassian) is False
+
+    workflow_leak = build_feedback_body(
+        command_label="@mm resolve",
+        skill_id="pr-resolver",
+        state="requested",
+        workflow_ref="run-1 token=supersecret-value",
+    )
+    assert "supersecret-value" not in workflow_leak
+    assert "withheld by outbound scan" in workflow_leak
+
+
 # ---------------------------------------------------------------------------
 # R14: portable Skill regression (no silent origin/main)
 # ---------------------------------------------------------------------------
@@ -475,17 +601,20 @@ def test_fix_merge_conflicts_skill_has_no_silent_main_substitution():
 
 
 # ---------------------------------------------------------------------------
-# R6/R8/R10: hermetic per-command journey (transport receipt -> feedback)
+# R6/R8/R10: hermetic per-command journey (verified event -> requested)
 # ---------------------------------------------------------------------------
 #
-# This is the complete production-boundary journey for this issue's
+# This is the hermetic command-semantics contract for this issue's
 # "parsing and command semantics, not another executor" scope: the #3967
 # transport receiver and Temporal dispatch/recovery workflow bind to
-# handle_verified_command_event as their handoff contract. Durability
-# (idempotency store, redelivery, restart recovery) lives with #3967,
-# which stores the stable identity_key, reuses the existing
-# dispatch/result on redelivery_reuse, and re-runs revalidation plus
-# competing-run resolution before mutation.
+# handle_verified_command_event as their handoff contract, coercing the
+# serialized activity payload through verified_command_event_from_mapping.
+# Scheduling and execution live with #3967, which stores the stable
+# identity_key, transitions to queued feedback only after objective
+# Temporal accept evidence, reuses the existing dispatch/result on
+# redelivery_reuse, and re-runs revalidation plus competing-run resolution
+# before mutation. These tests pin the hermetic contract and the exact
+# serialized invocation shape; they do not claim Temporal scheduling.
 
 
 def _journey_event(
@@ -502,6 +631,9 @@ def _journey_event(
         "pr_base_sha": "b" * 40,
         "pr_head_sha": "a" * 40,
         "branch_write_authorized": True,
+        # Affirmative capability evidence: the transport proved a compatible
+        # runtime can execute the resolved Skill. Omitted flags fail closed.
+        "skill_capability_supported": True,
         "skill_snapshot_ref": "snapshot-1",
         "connection_id": "conn-1",
         "workflow_ref": "https://workflows.example/runs/1",
@@ -518,7 +650,8 @@ def test_journey_each_canonical_command_reaches_skill_dispatch():
     ]
     for body, skill_id in cases:
         result = handle_verified_command_event(_journey_event(body))
-        assert result.outcome == "dispatched"
+        assert result.outcome == "dispatch_ready"
+        assert result.reason_code == "dispatch_ready_awaiting_temporal_accept"
         assert result.skill_id == skill_id
         assert result.dispatch is not None
         assert result.dispatch.skill_id == skill_id
@@ -528,8 +661,10 @@ def test_journey_each_canonical_command_reaches_skill_dispatch():
         # Non-main base is preserved end to end, never silent main.
         assert result.dispatch.merge_target_ref == "origin/release/2.x"
         assert result.identity_key == result.dispatch.identity_key
-        # Queued feedback carries the workflow link and cannot retrigger.
-        assert "queued" in result.feedback_body
+        # Requested feedback carries the workflow link, claims no scheduling,
+        # and cannot retrigger.
+        assert "requested" in result.feedback_body
+        assert "queued" not in result.feedback_body
         assert "https://workflows.example/runs/1" in result.feedback_body
         assert feedback_triggers_bot(result.feedback_body) is False
         # resolve preserves the declared publication policy: no merge grant.
@@ -537,6 +672,14 @@ def test_journey_each_canonical_command_reaches_skill_dispatch():
         assert binding is not None
         assert binding.grants_merge_permission is False
         assert binding.requires_publication_evidence is True
+
+
+def test_journey_capability_evidence_omitted_fails_closed():
+    event = _journey_event("@mm fix comments", skill_capability_supported=False)
+    result = handle_verified_command_event(event)
+    assert result.outcome == "blocked"
+    assert result.reason_code == "unsupported_skill_capability"
+    assert result.dispatch is None
 
 
 def test_journey_negative_paths_never_dispatch():
@@ -574,7 +717,7 @@ def test_journey_recovery_redelivery_reuse_and_stale_head_block():
     result = handle_verified_command_event(
         _journey_event("@mm fix comments")
     )
-    assert result.outcome == "dispatched"
+    assert result.outcome == "dispatch_ready"
     assert result.dispatch is not None
     # Redelivery of the same comment body reuses the existing dispatch.
     redelivered = handle_verified_command_event(
@@ -604,16 +747,23 @@ def test_journey_recovery_redelivery_reuse_and_stale_head_block():
         )
         == "redelivery_reuse"
     )
-    # After a restart the dispatcher revalidates before mutation: a moved
-    # head blocks instead of silently becoming a new billable request.
+    # After a restart the dispatcher revalidates the full
+    # authorization/preflight contract before mutation: a moved head blocks
+    # instead of silently becoming a new billable request.
     assert (
         revalidate_before_mutation(
-            frozen_head_sha=result.dispatch.pr_head_sha,
-            frozen_base_sha=result.dispatch.pr_base_sha,
-            frozen_actor_authorized=True,
-            current_head_sha="c" * 40,
-            current_base_sha=result.dispatch.pr_base_sha,
-            current_actor_authorized=True,
+            frozen_authorization=_authorized(),
+            current_authorization=_authorized(),
+            frozen_preflight=_ready_preflight(
+                pr_base_ref="release/2.x",
+                pr_base_sha=result.dispatch.pr_base_sha,
+                pr_head_sha=result.dispatch.pr_head_sha,
+            ),
+            current_preflight=_ready_preflight(
+                pr_base_ref="release/2.x",
+                pr_base_sha=result.dispatch.pr_base_sha,
+                pr_head_sha="c" * 40,
+            ),
         ).reason_code
         == "stale_head"
     )
@@ -624,3 +774,94 @@ def test_journey_recovery_redelivery_reuse_and_stale_head_block():
         == "conflicting"
     )
     assert isinstance(result, CommandJourneyResult)
+
+
+def _serialized_journey_payload(**overrides):
+    import json
+
+    payload = {
+        "comment_body": "@mm fix comments",
+        "installation_id": "123",
+        "repository": "MoonLadderStudios/MoonMind",
+        "pr_number": 42,
+        "comment_id": "999",
+        "authorization": {
+            "transport_verified": True,
+            "repository_opted_in": True,
+            "actor_authorized": True,
+            "connection_available": True,
+            "budget_available": True,
+            "publication_allowed": True,
+        },
+        "pr_base_ref": "release/2.x",
+        "pr_base_sha": "b" * 40,
+        "pr_head_sha": "a" * 40,
+        "branch_write_authorized": True,
+        "skill_capability_supported": True,
+        "skill_snapshot_ref": "snapshot-1",
+        "connection_id": "conn-1",
+        "workflow_ref": "https://workflows.example/runs/1",
+    }
+    payload.update(overrides)
+    # Cross the same JSON boundary the Temporal activity payload crosses.
+    return json.loads(json.dumps(payload))
+
+
+def test_serialized_payload_reaches_journey_through_documented_shape():
+    """The activity-wire mapping coerces to the tested journey contract."""
+    event = verified_command_event_from_mapping(_serialized_journey_payload())
+    result = handle_verified_command_event(event)
+    assert result.outcome == "dispatch_ready"
+    assert result.skill_id == "fix-comments"
+    assert result.dispatch is not None
+    assert result.dispatch.merge_target_ref == "origin/release/2.x"
+    assert "requested" in result.feedback_body
+    # Unknown future fields are ignored for forward compatibility.
+    event = verified_command_event_from_mapping(
+        _serialized_journey_payload(newly_introduced_field="whatever")
+    )
+    assert handle_verified_command_event(event).outcome == "dispatch_ready"
+
+
+def test_serialized_payload_degraded_inputs_fail_closed():
+    """Blank, unknown, missing, and malformed wire inputs never dispatch."""
+    blank = verified_command_event_from_mapping(
+        _serialized_journey_payload(comment_body="   ")
+    )
+    assert handle_verified_command_event(blank).outcome == "ignored"
+
+    unknown = verified_command_event_from_mapping(
+        _serialized_journey_payload(comment_body="@mm frobnicate")
+    )
+    assert handle_verified_command_event(unknown).outcome == "help"
+
+    # Missing authorization facts deny; missing capability evidence denies.
+    missing_authz = _serialized_journey_payload()
+    del missing_authz["authorization"]
+    assert (
+        handle_verified_command_event(
+            verified_command_event_from_mapping(missing_authz)
+        ).outcome
+        == "blocked"
+    )
+    missing_capability = _serialized_journey_payload()
+    del missing_capability["skill_capability_supported"]
+    denied = handle_verified_command_event(
+        verified_command_event_from_mapping(missing_capability)
+    )
+    assert denied.outcome == "blocked"
+    assert denied.reason_code == "unsupported_skill_capability"
+
+    # Malformed wire types raise before any paid work.
+    import pytest
+
+    with pytest.raises(ValueError):
+        verified_command_event_from_mapping("not-a-mapping")
+    with pytest.raises(ValueError):
+        verified_command_event_from_mapping(
+            _serialized_journey_payload(authorization="yes-trust-me")
+        )
+    with pytest.raises(ValueError):
+        verified_command_event_from_mapping(
+            _serialized_journey_payload(is_edited="false")
+        )
