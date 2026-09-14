@@ -9,6 +9,7 @@ feedback, and the portable fix-merge-conflicts Skill regression.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from moonmind.workflows.adapters.github_pr_commands import (
@@ -142,12 +143,12 @@ def test_authorization_gate_allows_only_fully_authorized():
 def test_authorization_gate_fails_closed_per_fact():
     base = _authorized()
     cases = [
-        (base.__class__(**{**base.__dict__, "transport_verified": False}), "transport_unverified"),
-        (base.__class__(**{**base.__dict__, "repository_opted_in": False}), "repository_not_opted_in"),
-        (base.__class__(**{**base.__dict__, "actor_authorized": False}), "actor_not_authorized"),
-        (base.__class__(**{**base.__dict__, "connection_available": False}), "connection_unavailable"),
-        (base.__class__(**{**base.__dict__, "budget_available": False}), "budget_exceeded"),
-        (base.__class__(**{**base.__dict__, "publication_allowed": False}), "publication_blocked"),
+        (replace(base, transport_verified=False), "transport_unverified"),
+        (replace(base, repository_opted_in=False), "repository_not_opted_in"),
+        (replace(base, actor_authorized=False), "actor_not_authorized"),
+        (replace(base, connection_available=False), "connection_unavailable"),
+        (replace(base, budget_available=False), "budget_exceeded"),
+        (replace(base, publication_allowed=False), "publication_blocked"),
     ]
     for request, reason in cases:
         decision = evaluate_dispatch_authorization(request)
@@ -455,13 +456,18 @@ def test_feedback_write_failures_are_auxiliary():
 
 
 def test_fix_merge_conflicts_skill_has_no_silent_main_substitution():
-    skill_path = (
-        Path(__file__).resolve().parents[5]
-        / ".agents"
-        / "skills"
-        / "fix-merge-conflicts"
-        / "SKILL.md"
+    candidate_roots = [Path(__file__).resolve().parents[4]] + list(
+        Path(__file__).resolve().parents
     )
+    skill_path = None
+    for root in candidate_roots:
+        candidate = (
+            root / ".agents" / "skills" / "fix-merge-conflicts" / "SKILL.md"
+        )
+        if candidate.is_file():
+            skill_path = candidate
+            break
+    assert skill_path is not None, "fix-merge-conflicts SKILL.md not found"
     text = skill_path.read_text(encoding="utf-8")
     assert "origin/main" not in text
     assert "inputs.base" in text
@@ -550,9 +556,7 @@ def test_journey_negative_paths_never_dispatch():
     )
     assert edited.outcome == "blocked"
     assert edited.dispatch is None
-    revoked_authz = _authorized().__class__(
-        **{**_authorized().__dict__, "actor_authorized": False}
-    )
+    revoked_authz = replace(_authorized(), actor_authorized=False)
     revoked = handle_verified_command_event(
         _journey_event("@mm fix comments", authorization=revoked_authz)
     )
