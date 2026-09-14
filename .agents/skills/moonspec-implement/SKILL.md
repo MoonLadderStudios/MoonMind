@@ -107,7 +107,16 @@ Report a table:
 | requirements.md | 12 | 12 | 0 | PASS |
 ```
 
-If any checklist has incomplete items, stop and ask whether to proceed. Continue only when the user explicitly says yes, proceed, or continue.
+Treat an incomplete item as a repairable gap, not an automatic approval stop.
+Repair requirements, checklist, task, and fixture inconsistencies within the
+requested scope and existing authority: reconcile the artifacts, add the missing
+test fixture or requirement mapping, preserve completed work, and continue
+independent safe tasks. Never fabricate an approving user message and never
+mark an item complete without its required evidence. Request an actual decision
+only when the gap needs information or authority that cannot be obtained safely,
+or when resolving it would change product scope, security, or source authority;
+in that case preserve the exact remaining decision, complete unrelated safe
+work, and report the blocker with its evidence.
 
 ## Load Context
 
@@ -135,17 +144,22 @@ If the spec contains multiple stories, stop and tell the user to split the desig
 
 ## Project Setup Verification
 
-Before story work, create or verify ignore files based on the actual repository:
+Limit setup changes to prerequisites required by the selected story. Verify
+ignore coverage only for generated outputs this story actually produces, and
+only when the repository owns the corresponding ignore file:
 
-- If `git rev-parse --git-dir` succeeds, ensure `.gitignore` exists and covers generated outputs, dependencies, local env files, logs, caches, and test artifacts.
-- If Dockerfiles or Docker usage are present, create or verify `.dockerignore`.
-- If ESLint legacy config exists, create or verify `.eslintignore`; if `eslint.config.*` exists, ensure `ignores` covers required generated paths.
-- If Prettier config exists, create or verify `.prettierignore`.
-- If package publishing is present, create or verify `.npmignore`.
-- If Terraform files exist, create or verify `.terraformignore`.
-- If Helm charts exist, create or verify `.helmignore`.
+- If `git rev-parse --git-dir` succeeds and the story generates outputs,
+  dependencies, local env files, logs, caches, or test artifacts, check that the
+  existing `.gitignore` covers those paths.
+- Check `.dockerignore`, `.eslintignore`/`eslint.config.*` ignores,
+  `.prettierignore`, `.npmignore`, `.terraformignore`, or `.helmignore` only
+  when the story touches that toolchain and the repository already uses it.
 
-Append only missing critical patterns. Do not rewrite existing ignore files wholesale.
+Append only missing critical patterns for the selected story. Do not rewrite
+existing ignore files wholesale, create ignore files for unrelated toolchains,
+add toolchains, scaffold architecture, or update persistent agent guidance
+simply because a stack was detected. Preserve unrelated worktree changes and
+protected/local files.
 
 Common patterns by stack:
 
@@ -187,7 +201,13 @@ Rules:
 - Keep implementation and test evidence mapped to `FR-*`, acceptance scenarios, success criteria, and source design IDs.
 - Do not mark a task complete until the work is actually done and any required command has passed or has a documented blocker.
 - Mark completed tasks as `[X]` in `tasks.md`.
-- Halt on failed non-parallel tasks. For failed parallel tasks, continue successful independent work and report the failures clearly.
+- On a failed task, diagnose within existing authority and retry through the
+  authorized tools when recovery is safe: fix the repairable cause, re-run the
+  failed command, and continue independent work. A failed command, an
+  unsupported substrate, budget exhaustion, and a human-owned authority decision
+  are distinct outcomes — do not loop endlessly on denied authority or an
+  exhausted budget. For failed parallel tasks, continue successful independent
+  work and report the failures clearly with their evidence.
 
 ## Implementation Rules
 
