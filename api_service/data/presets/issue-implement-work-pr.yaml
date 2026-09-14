@@ -77,7 +77,13 @@ inputs:
 steps:
 - title: Implement the issue
   instructions: |-
-    Use the carried assessmentVerdict and briefArtifactRef refs from the assess step; reread {{ inputs.assessment_artifact_path }} or {{ inputs.brief_artifact_path }} only when identity or freshness requires it (new candidate, retry, or carried ref mismatch). When {{ inputs.issue_ref }} is empty, resolve the identity from trusted previous step context or the brief artifact with provenance checks; never infer it from arbitrary prose, and reject missing identity instead of proceeding.
+    Use the carried assessmentVerdict and briefArtifactRef refs from the assess step; reread {{ inputs.assessment_artifact_path }} or {{ inputs.brief_artifact_path }} only when identity or freshness requires it (new candidate, retry, or carried ref mismatch). When {{ inputs.issue_ref }} is empty, resolve the identity from trusted previous step context or the brief artifact with provenance checks; never infer it from arbitrary prose, and reject missing identity instead of proceeding. Read {{ inputs.assessment_artifact_path }} as initial process context when the carried refs do not include the assessment's requirement rows, evidence, or bounded backlog; the compact handoff alone never substitutes for that verification map.
+
+    If the recorded verdict is FULLY_IMPLEMENTED, make no code changes and report that implementation is skipped because the issue is already implemented in the current repository state.
+
+    If the recorded verdict is BLOCKED, stop without changing code and report the blocking evidence from the assessment.
+
+    When the existing-PR resolution step produced an exact existing PR and validated current head, continue that same PR from its validated head: prepare the workspace from the existing head, implement only the remaining requirements, and update that PR. Preserve the resolved issue and predecessor across replay/retry. Never repeat search during recovery of an already selected issue, reset a continuation to the base branch, or create a second PR just because the preset normally produces one. Keep internal remediation within this one issue attempt.
 
     If the recorded verdict is FULLY_IMPLEMENTED, make no code changes and report that implementation is skipped because the issue is already implemented in the current repository state.
 
@@ -218,6 +224,8 @@ steps:
     issueImplementRole: pull-request-handoff
   instructions: |-
     Use the carried assessmentVerdict and controlling verifier refs; reread {{ inputs.assessment_artifact_path }} only when identity or freshness requires it.
+
+    When {{ inputs.issue_ref }} is empty, resolve the selected issue identity from trusted previous step context or the brief artifact at {{ inputs.brief_artifact_path }} with provenance checks before publication; never infer it from arbitrary prose, and reject missing identity instead of publishing with an empty reference, title, or `Closes ` line. Bind the trusted selection output into the runtime PR inputs so the pull request reliably closes and records the selected issue.
 
     Skip publication only when objective acceptance evidence satisfies the freshly resolved intended completion target under the shared policy. A FULLY_IMPLEMENTED initial assessment alone cannot skip the PR. A later FULLY_IMPLEMENTED verifier result approves candidate work for review; it does not rewrite the initial assessment or prove landing. Publish candidate-only work through the existing PR path even when the worktree is clean and commits are already pushed. Reuse an exact existing PR for the same candidate when available.
 
