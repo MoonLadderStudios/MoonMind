@@ -25,6 +25,7 @@ class _FakeServer:
         self.current = ""
         self.conflict_token = b"token-0"
         self.versions = {}
+        self.pollers = {}
         self.set_current_calls = []
         self.canaries_started = []
         self.on_canary_start = None
@@ -37,6 +38,24 @@ class _FakeServer:
             "queues": set(queues),
         }
         return version
+
+    def add_poller(
+        self, build, queue, kind, *, identity="worker@abc123", live_for_calls=None
+    ):
+        version = f"{self.deployment}.{build}"
+        key = (queue, kind, version)
+        poller = SimpleNamespace(
+            deployment_options=SimpleNamespace(
+                deployment_name=self.deployment, build_id=build
+            ),
+            identity=identity,
+            last_access_time=SimpleNamespace(
+                ToDatetime=lambda tzinfo=None: datetime.now(timezone.utc)
+            ),
+        )
+        self.pollers.setdefault(key, []).append(
+            {"poller": poller, "remaining": live_for_calls}
+        )
 
     def deployment_snapshot(self):
         deployment_name, _, build_id = self.current.partition(".")
@@ -62,7 +81,10 @@ class _FakeServer:
         ]
         return SimpleNamespace(
             worker_deployment_version_info=SimpleNamespace(
-                create_time=state["create_time"], task_queue_infos=infos
+                create_time=state["create_time"],
+                task_queue_infos=infos,
+                deployment_version=SimpleNamespace(deployment_name=self.deployment),
+                deployment_name=self.deployment,
             )
         )
 
@@ -85,6 +107,35 @@ class _FakeWorkflowService:
 
     async def describe_worker_deployment_version(self, request):
         return self._server.version_snapshot(request.version)
+
+    async def describe_task_queue(self, request):
+        name = request.task_queue.name
+        kind = request.task_queue_type
+        pollers = []
+        for (queue, queue_kind, _version), entries in self._server.pollers.items():
+            if queue != name or queue_kind != kind:
+                continue
+            live = []
+            for entry in entries:
+                if entry["remaining"] is not None:
+                    if entry["remaining"] <= 0:
+                        continue
+                    entry["remaining"] -= 1
+                live.append(entry["poller"])
+            entries[:] = [
+                entry
+                for entry in entries
+                if entry["remaining"] is None or entry["remaining"] > 0
+            ]
+            pollers.extend(live)
+        return SimpleNamespace(
+            pollers=pollers,
+            stats=SimpleNamespace(
+                approximate_backlog_age=SimpleNamespace(
+                    ToTimedelta=lambda: timedelta(0)
+                )
+            ),
+        )
 
     async def set_worker_deployment_current_version(self, request):
         self._server.promote(request.version, request.conflict_token)
@@ -151,7 +202,8 @@ async def test_steward_promotes_abandoned_current(monkeypatch):
     assert result == {"status": "current", "currentVersion": new}
     assert server.current == new
     assert server.set_current_calls == [new]
-    assert len(server.canaries_started) == 1
+    # One qualification canary plus one ordinary-traffic canary per promotion.
+    assert len(server.canaries_started) == 2
 
 
 @pytest.mark.asyncio
@@ -164,11 +216,76 @@ async def test_steward_parks_when_current_is_newer(monkeypatch):
         "status": "awaiting_promotion",
         "currentVersion": new,
         "candidateVersion": f"{server.deployment}.old",
-        "owner": new,
+        "recoveryOwner": "deployment-control",
     }
     assert server.canaries_started == []
     assert server.set_current_calls == []
     assert server.current == new
+
+
+@pytest.mark.asyncio
+async def test_steward_preserves_live_current_route(monkeypatch):
+    """The unpromoted-installed-fix replay: live pollers keep the route.
+
+    An older recorded current version with live workers must never be
+    displaced by a newer restarted image; qualification and promotion stay
+    with the authorized release controller.
+    """
+    from moonmind.workflows.temporal import release_routing
+
+    async def _no_sleep(delay):
+        return None
+
+    monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    # Shorten the re-verification window; the fake pollers below never expire.
+    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_TIMEOUT_SECONDS", 3)
+    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_POLL_SECONDS", 1)
+    server, old, new = _server_with_current_old_new()
+    queue = "mm.workflow.user.v2"
+    server.add_poller("old", queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW)
+    server.add_poller("old", queue, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY)
+    result = await bootstrap_version_routing(_FakeClient(server), _spec("new"))
+    assert result == {
+        "status": "awaiting_promotion",
+        "currentVersion": old,
+        "candidateVersion": new,
+        "recoveryOwner": "deployment-control",
+    }
+    assert server.canaries_started == []
+    assert server.set_current_calls == []
+    assert server.current == old
+
+
+@pytest.mark.asyncio
+async def test_steward_promotes_after_restart_in_flight_dies(monkeypatch):
+    """Fresh pollers from a stopping fleet must not park startup forever.
+
+    The previous fleet's last polls look live for a bounded window after a
+    rolling restart. Once they expire with no replacement, the deployed
+    release is promoted instead of waiting indefinitely.
+    """
+    from moonmind.workflows.temporal import release_routing
+
+    async def _no_sleep(delay):
+        return None
+
+    monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_TIMEOUT_SECONDS", 30)
+    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_POLL_SECONDS", 1)
+    server, _old, new = _server_with_current_old_new()
+    queue = "mm.workflow.user.v2"
+    server.add_poller(
+        "old", queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW, live_for_calls=3
+    )
+    server.add_poller(
+        "old", queue, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY, live_for_calls=3
+    )
+    result = await bootstrap_version_routing(_FakeClient(server), _spec("new"))
+    assert result == {"status": "current", "currentVersion": new}
+    assert server.current == new
+    assert server.set_current_calls == [new]
 
 
 @pytest.mark.asyncio
@@ -181,8 +298,12 @@ async def test_steward_parks_when_own_version_unregistered(monkeypatch):
     server, old, new = _server_with_current_old_new()
     del server.versions[new]
     result = await bootstrap_version_routing(_FakeClient(server), _spec("new"))
-    assert result["status"] == "awaiting_promotion"
-    assert result["owner"] == old
+    assert result == {
+        "status": "awaiting_promotion",
+        "currentVersion": old,
+        "candidateVersion": new,
+        "recoveryOwner": "deployment-control",
+    }
     assert server.canaries_started == []
     assert server.set_current_calls == []
 
@@ -210,7 +331,7 @@ async def test_steward_parks_on_lost_promotion_race(monkeypatch):
         "status": "awaiting_promotion",
         "currentVersion": rival,
         "candidateVersion": new,
-        "owner": rival,
+        "recoveryOwner": "deployment-control",
     }
     # The losing compare-and-set attempt must not move routing itself.
     assert server.current == rival

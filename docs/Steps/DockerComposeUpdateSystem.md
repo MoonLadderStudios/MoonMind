@@ -786,12 +786,18 @@ also qualifies a candidate API's health, dashboard, assets and read-only API.
 Temporal's compare-and-set routing update promotes only that candidate. A lost
 response reuses the same canary run and verifies the server's current decision.
 
-A plain restart that replaces the fleet image without a managed update must
-still converge: when the recorded current version is older than the deployed
-release, the starting workflow fleet runs the same pinned canary and
-compare-and-set promotion itself instead of waiting for an update owner. A
-newer recorded current version keeps its authority, so deliberate downgrades
-stay on the managed update path.
+A plain restart onto a never-promoted release with no live route left to
+preserve must still converge: when the recorded current version has no live
+pollers on any of its queues and the deployed release is not older than it,
+the starting workflow fleet runs the same pinned canary and compare-and-set
+promotion itself instead of waiting for an update owner. This is the disjoint
+complement of the row above: whenever the current version still serves
+traffic, or the deployed release is older, startup preserves the route and
+leaves qualification and promotion to the authorized release controller.
+Local presence alone grants nothing; only the canary identity proof, the
+compare-and-set, and the proven absence of any serving capability authorize
+the handoff. A newer recorded current version keeps its authority, so
+deliberate downgrades stay on the managed update path.
 
 Before promotion, the controller retains pollers from the exact previous image.
 Pinned work remains owned by that version after normal Compose services change.
