@@ -12872,6 +12872,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                         ),
                                     )
                             except Exception:
+                                # Progress sealing is best-effort telemetry;
+                                # admission already succeeded so failures here
+                                # must not fail the step.
                                 pass
                         except Exception as exc:
                             if self._should_propagate_agent_child_cancellation(exc):
