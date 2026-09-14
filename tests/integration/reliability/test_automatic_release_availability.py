@@ -54,11 +54,14 @@ pytestmark = [
     ],
 )
 async def test_background_owner_restores_authoritative_missing_image(
-    tmp_path, monkeypatch, record_source, versioning
+    tmp_path, monkeypatch, caplog, record_source, versioning
 ):
     retained_only = record_source == "retained"
     replay = json.loads(
         (Path(__file__).parent / "replays" / "serving-image-not-recorded" / "manifest.json").read_text()
+    )
+    drift_replay = json.loads(
+        (Path(__file__).parent / "replays" / "unpromoted-installed-fix" / "manifest.json").read_text()
     )
     client = await connect()
     key = uuid4().hex
@@ -351,6 +354,25 @@ async def test_background_owner_restores_authoritative_missing_image(
             if item["version"] == f"{deployment}.{digest}"
         )
         assert recovered["phase"] == "available"
+        routing = metadata["releaseAvailability"]["routing"]
+        assert routing == metadata["releaseRouting"]
+        assert routing == json.loads((record_root / "availability.json").read_text())[
+            "routing"
+        ]
+        assert routing["candidateVersion"] == f"{deployment}.{newer['digest']}"
+        if retained_only:
+            assert routing["status"] == "current"
+            assert "recoverySkill" not in routing
+        else:
+            assert routing["status"] == drift_replay["expectedRoutingStatus"]
+            assert routing["currentVersion"] == f"{deployment}.{digest}"
+            assert routing["recoverySkill"] == drift_replay["recoverySkill"]
+            assert "Docker Compose replacement alone does not promote routing" in (
+                routing["message"]
+            )
+            assert "The installed release is not the current Temporal route" in (
+                caplog.text
+            )
         if not retained_only:
             assert recovered["ordinaryTraffic"]["status"] == "verified"
         # Process replacement resumes the durable owner and original cohort.

@@ -10,6 +10,7 @@ import asyncio
 import fcntl
 import hashlib
 import json
+import logging
 import time
 from dataclasses import replace
 from moonmind.utils.logging import redact_sensitive_text
@@ -29,6 +30,9 @@ from moonmind.workflows.temporal.release_routing import (
     version_drained,
     verify_ordinary_route,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 async def reconcile_availability(client, *, deployment, runner, root):
@@ -227,6 +231,7 @@ async def supervise_availability(client, spec, metadata, *, stop=None):
     )
 
     stop = stop or asyncio.Event()
+    last_routing = None
     while not stop.is_set():
         try:
             executor = _build_deployment_update_executor()
@@ -247,16 +252,40 @@ async def supervise_availability(client, spec, metadata, *, stop=None):
                     client, deployment=spec.deployment_id, runner=runner, root=root
                 )
                 observed = metadata["releaseAvailability"]["current"]
-                metadata["releaseRouting"] = {
+                candidate = f"{spec.deployment_id}.{spec.build_id}"
+                routing = {
                     "status": (
                         "current"
-                        if observed == f"{spec.deployment_id}.{spec.build_id}"
+                        if observed == candidate
                         else "awaiting_promotion"
                     ),
                     "currentVersion": observed,
-                    "candidateVersion": f"{spec.deployment_id}.{spec.build_id}",
+                    "candidateVersion": candidate,
                     "recoveryOwner": "deployment-control",
                 }
+                if observed != candidate:
+                    routing.update(
+                        recoverySkill="update-moonmind",
+                        message=(
+                            "The installed release is not the current Temporal route. "
+                            "Ordinary workflows still use that release's behavior, "
+                            "even when retained workers are available. "
+                            "Resume the authorized release submission or run "
+                            "bash tools/update-moonmind.sh --branch <selected-branch> "
+                            "to qualify and promote the intended release. "
+                            "Docker Compose replacement alone does not promote routing."
+                        ),
+                    )
+                    if last_routing != (observed, candidate):
+                        logger.warning(
+                            "%s Current version: %s; installed version: %s",
+                            routing["message"], observed, candidate,
+                        )
+                last_routing = (observed, candidate)
+                metadata["releaseRouting"] = routing
+                # Retained pollers prove availability of the current route, not
+                # activation of the installed fix. Preserve both facts durably.
+                metadata["releaseAvailability"]["routing"] = routing
                 write_record(
                     root / "availability.json", metadata["releaseAvailability"]
                 )
