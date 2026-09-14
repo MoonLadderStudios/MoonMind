@@ -731,6 +731,144 @@ def canonical_waiting_reason(
         return f"{normalized}; queue_position={queue_position}"
     return normalized
 
+
+def build_provider_wait_identity(
+    *,
+    runtime_id: str,
+    requester_workflow_id: str,
+    profile_ref: str,
+) -> str:
+    """Return a stable, secret-free wait identity for one waiter.
+
+    MoonLadderStudios/MoonMind#1130: repeated identical observations must not
+    append timeline events. The identity binds the requesting workflow to its
+    selected profile/scope so cross-attempt or late observations cannot
+    retarget the displayed profile. Only safe routing ids enter the identity.
+    """
+
+    runtime = str(runtime_id or "").strip()
+    requester = str(requester_workflow_id or "").strip()
+    profile = str(profile_ref or "").strip()
+    return f"provider-wait:{runtime}:{requester}:{profile}"
+
+
+def next_provider_wait_transition(
+    *,
+    previous: Mapping[str, Any] | None,
+    wait_id: str,
+    revision: int | None,
+    reason: str,
+    cooldown_until: str | None = None,
+    queue_position: int | None = None,
+    terminal: bool = False,
+    canceled: bool = False,
+    granted: bool = False,
+) -> dict[str, Any] | None:
+    """Decide whether one wait observation appends a timeline transition.
+
+    MoonLadderStudios/MoonMind#1130: emit changes, not polling noise. Returns
+    None when nothing should be appended. A new current snapshot never
+    reopens completed work, retargets another wait identity, or reorders on
+    a stale revision. Callers own persistence through the existing
+    timeline/progress pipeline; this helper creates no store.
+    """
+
+    wait_id = str(wait_id or "").strip()
+    if not wait_id:
+        return None
+    normalized_reason = str(reason or "").strip() or "awaiting_provider_capacity"
+    normalized_cooldown = str(cooldown_until or "").strip() or None
+    normalized_queue = queue_position if isinstance(queue_position, int) and queue_position > 0 else None
+    normalized_revision = revision if isinstance(revision, int) and revision >= 0 else None
+    if previous is not None and not isinstance(previous, Mapping):
+        previous = None
+    if previous is not None and previous.get("completed") is True:
+        # Completed work stays completed; late observations are auxiliary.
+        return None
+    if previous is not None:
+        previous_id = str(previous.get("wait_id") or "").strip()
+        if previous_id and previous_id != wait_id:
+            return None
+        previous_revision = previous.get("revision")
+        if (
+            isinstance(previous_revision, int)
+            and normalized_revision is not None
+            and normalized_revision < previous_revision
+        ):
+            return None
+        if (
+            previous.get("reason") == normalized_reason
+            and (previous.get("cooldown_until") or None) == normalized_cooldown
+            and (previous.get("queue_position") or None) == normalized_queue
+            and previous.get("canceled", False) is False
+            and not granted
+            and not canceled
+            and not terminal
+        ):
+            return None
+    if canceled:
+        transition: str = "cancellation"
+    elif granted or terminal:
+        transition = "grant_resume"
+    elif previous is None:
+        transition = "wait_entered"
+    elif (previous.get("reason") if previous else None) != normalized_reason:
+        transition = "reason_changed"
+    elif (previous.get("cooldown_until") if previous else None) != normalized_cooldown:
+        transition = "deadline_extended"
+    elif (previous.get("queue_position") if previous else None) != normalized_queue:
+        transition = "reason_changed"
+    else:
+        transition = "wait_entered"
+    return {
+        "wait_id": wait_id,
+        "revision": normalized_revision,
+        "reason": normalized_reason,
+        "cooldown_until": normalized_cooldown,
+        "queue_position": normalized_queue,
+        "transition": transition,
+    }
+
+
+def format_provider_wait_timing(
+    *,
+    queue_position: int | None = None,
+    queue_ordered: bool = False,
+    queue_fresh: bool = False,
+    cooldown_until: str | None = None,
+    next_check: str | None = None,
+) -> dict[str, str | None]:
+    """Render honest wait timing labels without implying an ETA.
+
+    MoonLadderStudios/MoonMind#1130: queue position appears only from a
+    meaningful ordered scoped snapshot; cooldown renders only an
+    authoritative deadline when present; next-check timing is labeled as
+    such, never promised start time. Zero/missing deadlines never mean
+    immediate admission.
+    """
+
+    queue_label: str | None = None
+    if (
+        queue_ordered
+        and queue_fresh
+        and isinstance(queue_position, int)
+        and queue_position > 0
+    ):
+        queue_label = f"Queue position {queue_position} (ordered snapshot)"
+    cooldown_label: str | None = None
+    deadline = str(cooldown_until or "").strip()
+    if deadline:
+        cooldown_label = f"Cooldown until {deadline}"
+    next_check_label: str | None = None
+    check = str(next_check or "").strip()
+    if check:
+        next_check_label = f"Next check {check} (not a promised start time)"
+    return {
+        "queue_label": queue_label,
+        "cooldown_label": cooldown_label,
+        "next_check_label": next_check_label,
+    }
+
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
     @staticmethod
@@ -1328,16 +1466,56 @@ class MoonMindAgentRun:
         except Exception:
             use_canonical = False
         if use_canonical:
+            # MoonLadderStudios/MoonMind#1130: map only evidence-backed
+            # conditions to the canonical wait vocabulary. An explicit
+            # missing profile is a validation/setup condition, never another
+            # account's capacity. Maintenance, cleanup-pending and cooldown
+            # each require their owning observation; unknown remains without
+            # a fabricated capacity claim at the detail layer below.
+            if manager_state.get("requested_profile_missing") is True:
+                return canonical_waiting_reason(
+                    "awaiting_provider_validation", queue_position=queue_number
+                )
             profile = manager_state.get("requested_profile")
             if isinstance(profile, Mapping):
-                if str(profile.get("cooldown_until") or "").strip():
-                    return canonical_waiting_reason(
-                        "provider_cooldown", queue_position=queue_number
-                    )
                 if profile.get("enabled") is False or profile.get("launch_ready") is False:
                     return canonical_waiting_reason(
                         "awaiting_provider_validation", queue_position=queue_number
                     )
+                maintenance_waiters = profile.get("maintenance_waiters")
+                if profile.get("maintenance_waiter_position") is not None or (
+                    isinstance(maintenance_waiters, int) and maintenance_waiters > 0
+                ):
+                    return canonical_waiting_reason(
+                        "awaiting_profile_maintenance", queue_position=queue_number
+                    )
+                if (
+                    profile.get("requester_cleanup_requested") is True
+                    or profile.get("requester_unresolved_release") is True
+                    or manager_state.get("requester_cleanup_requested") is True
+                    or manager_state.get("requester_unresolved_release") is True
+                    or (
+                        isinstance(profile.get("profile_cleanup_pending_count"), int)
+                        and profile.get("profile_cleanup_pending_count") > 0
+                    )
+                    or (
+                        isinstance(profile.get("profile_unresolved_release_count"), int)
+                        and profile.get("profile_unresolved_release_count") > 0
+                    )
+                ):
+                    return canonical_waiting_reason(
+                        "cleanup_pending", queue_position=queue_number
+                    )
+                if str(profile.get("cooldown_until") or "").strip():
+                    return canonical_waiting_reason(
+                        "provider_cooldown", queue_position=queue_number
+                    )
+                scope = profile.get("capacity_scope")
+                if isinstance(scope, Mapping) and profile.get("scope_known") is True:
+                    if str(scope.get("cooldown_until") or "").strip():
+                        return canonical_waiting_reason(
+                            "provider_cooldown", queue_position=queue_number
+                        )
             return canonical_waiting_reason(
                 "awaiting_provider_capacity", queue_position=queue_number
             )
