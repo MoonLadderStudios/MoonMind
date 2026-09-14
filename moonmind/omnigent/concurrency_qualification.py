@@ -341,6 +341,11 @@ CONCURRENCY_SCENARIO_CATALOG: tuple[ScenarioOwner, ...] = (
         escaped_regressions=("MoonLadderStudios/MoonMind#3884",),
         required_in_ci=True,
     ),
+    _owner(
+        _F.host_and_transport_pressure,
+        _L.exact_docker,
+        "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py",
+    ),
     # 5. Failure at authority handoffs.
     _owner(
         _F.failure_at_authority_handoffs,
