@@ -107,6 +107,14 @@ controller. Its durable updater qualifies all worker queues and the candidate
 API, promotes Temporal routing, and replaces the normal fleet. Previous workers
 remain available until Temporal confirms their version has drained.
 
+Use this updater for upgrades, including after a direct Compose replacement.
+`docker compose pull` and `docker compose up -d` can install new code while
+Temporal continues sending workflows to retained workers from the previous
+release. Check the current and candidate versions in
+`deploy/state/release-jobs/availability.json`; an available old route does not
+mean the installed fix is active. Resume an interrupted submission with the
+updater's `--resume <submission-id>` option.
+
 The controller compares installed API bindings, networks and access settings
 with the candidate before replacement, preserving deployment-owned `.env` and
 Compose overrides. It records a resumable submission instead of resetting the
