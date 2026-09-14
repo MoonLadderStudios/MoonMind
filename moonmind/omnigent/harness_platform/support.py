@@ -74,6 +74,55 @@ DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS = frozenset(
     {"modelConfigDigest", "requiredCapabilitiesDigest"}
 )
 
+# none@1 fast-path: credentialless runs mount no secret (target kind none,
+# cleanup none). Build digests, harness implementation, vendor runtime, and
+# agent source churn on every release/upgrade but are already gated elsewhere
+# (catalog sync, trust record, launch preflight). For none@1 only, deployment
+# qualification keeps the isolation-relevant triple — credential class,
+# image/host/launch policy, provider route, realizer — and ignores the
+# volatile build fields so routine upgrades don't force manual requalification.
+# Auth-bearing materializers stay exact: a secret mount must never silently
+# qualify across builds.
+NONE_DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS = frozenset(
+    {
+        "omnigentServerBuildRef",
+        "omnigentHostBuildRef",
+        "harnessImplementationRef",
+        "vendorRuntimeRefs",
+        "agentSourceRef",
+    }
+)
+
+
+def _materializer_refs_of(payload: SupportKeyPayload | dict[str, Any]) -> tuple[str, ...]:
+    if isinstance(payload, SupportKeyPayload):
+        return tuple(payload.materializerRefs)
+    if isinstance(payload, dict):
+        refs = payload.get("materializerRefs")
+        if isinstance(refs, (list, tuple)):
+            return tuple(str(v) for v in refs)
+    return ()
+
+
+def is_none_materializer_identity(payload: SupportKeyPayload | dict[str, Any]) -> bool:
+    """Whether this identity uses the credentialless none@1 fast-path."""
+    return _materializer_refs_of(payload) == ("none@1",)
+
+
+def deployment_excluded_fields_for(
+    payload: SupportKeyPayload | dict[str, Any],
+) -> frozenset[str]:
+    """Excluded fields for deployment matching of one identity.
+
+    Auth-bearing identities stay exact (minus per-run model/capabilities).
+    none@1 additionally ignores volatile build digests.
+    """
+    if is_none_materializer_identity(payload):
+        return DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS | (
+            NONE_DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS
+        )
+    return DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS
+
 
 def compute_deployment_qualification_key(
     payload: SupportKeyPayload | dict[str, Any],
@@ -84,16 +133,21 @@ def compute_deployment_qualification_key(
     host, image, realizer, and credential class. It deliberately excludes
     per-run model/options and capability variance so ordinary default-profile
     workflows are admissible without manual requalification.
+
+    For the credentialless none@1 fast-path it additionally ignores volatile
+    build digests (server/host builds, harness impl, vendor runtime, agent
+    source); those are covered by catalog/trust/preflight and otherwise force
+    manual requalification on every upgrade. Auth-bearing identities stay
+    exact.
     """
 
     if isinstance(payload, SupportKeyPayload):
         data = payload.model_dump(by_alias=True, mode="json")
     else:
         data = dict(payload)
+    excluded = deployment_excluded_fields_for(payload)
     projected = {
-        key: value
-        for key, value in data.items()
-        if key not in DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS
+        key: value for key, value in data.items() if key not in excluded
     }
     canonical = json.dumps(
         projected, sort_keys=True, separators=(",", ":"), default=str
