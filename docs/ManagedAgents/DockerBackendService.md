@@ -798,8 +798,12 @@ same deployment-owned ledger (`machine_capacity_reservations`,
 `moonmind.capacity`). Enforcing a container-job-private ceiling would let two
 full workload classes still oversubscribe one machine.
 
-New container jobs and bootstrap on-demand agents share a kernel-enforced CPU
-pool. The default pool ceiling is 70% of the CPU count reported by the selected
+New container jobs and supported bootstrap on-demand agents share a
+kernel-enforced CPU pool. Bootstrap probes the selected daemon and immutable
+helper authority before activating shared agent defaults; unsupported or
+temporarily unreadable backends keep their fixed 2000-millicpu stock policies
+and retry the probe at the next bootstrap reconciliation.
+The default pool ceiling is 70% of the CPU count reported by the selected
 Docker daemon, less reservations held by existing fixed-CPU hosts. Thus a
 six-CPU daemon provides up to 4.2 CPUs to the workload pool. Equal CPU weights
 let an active test use CPU that an idle agent is not using. `cpuMillis: 0`
@@ -814,8 +818,10 @@ protect control-plane headroom. This path requires rootful Docker with cgroup
 v2 and the `cgroupfs` or `systemd` driver. A bounded deployment helper uses the
 trusted worker's immutable image to configure the parent. It receives no
 workspace, credentials, network access, or Docker socket. The existing host
-janitor releases the pool reservation only when kernel evidence proves no
-consumers remain. No permanently running service is added.
+janitor and historical fixed-job admission release the pool reservation only
+when kernel evidence proves no consumers remain. Fixed jobs therefore need not
+wait for the periodic janitor after the last shared workload exits. No
+permanently running service is added.
 
 Memory remains reserved and hard-limited per container. A caller may specify
 `minimumMemoryMiB` alongside its preferred `memoryMiB`; admission atomically

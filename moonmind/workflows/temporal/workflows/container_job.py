@@ -207,6 +207,8 @@ class MoonMindContainerJobWorkflow:
                                 timeout=timedelta(seconds=30),
                             )
                         except TimeoutError:
+                            # The polling interval elapsed; retry admission
+                            # under the existing overall job timeout.
                             pass
                         if not self._cancel_requested:
                             await self._project(request, ContainerJobState.STARTING)

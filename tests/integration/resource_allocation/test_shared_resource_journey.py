@@ -414,3 +414,99 @@ print(json.dumps({'cpu': cpu, 'elapsed': time.monotonic() - start}))
     assert ratio > 1.1, measurement
     await checked("rm", name)
     assert await s.pool.reconcile()
+
+
+async def test_historical_job_reclaims_idle_pool_before_fixed_cpu_admission(
+    substrate, tmp_path, monkeypatch
+):
+    from temporalio import workflow
+
+    s = substrate
+    agent, reservation = await start_agent(s)
+    await remove_agent(s, agent, reservation)
+    # Shared cleanup has removed the last consumer, but the automatic janitor
+    # has not yet observed that the full CPU reservation can be released.
+    assert (
+        await s.ledger.usage(backend_ref=s.backend_ref)
+    ).reserved_cpu_millis == s.budget.cpu_millis
+    workspace = tmp_path / "historical-workspace"
+    workspace.mkdir()
+    (workspace / "candidate.txt").write_text("saved candidate\n")
+    published = {}
+
+    async def publish(request, name, body):
+        assert request.wait_for_capacity is False
+        published[name] = body
+        return "artifact:" + uuid4().hex
+
+    projected = []
+
+    async def project(request):
+        projected.append(request.state)
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=docker,
+        backend_ref=s.backend_ref,
+        machine_capacity=s.ledger,
+        cpu_pool=s.pool,
+        evidence_publisher=publish,
+        projection_writer=project,
+    )
+    raw = _workflow_input(
+        "container-job:" + uuid4().hex, "python:3.12-alpine", workspace
+    )
+    raw["request"]["spec"].update(
+        resources={"cpuMillis": 1000, "memoryMiB": 512, "pids": 64},
+        command=["python", "-c", "print('historical tests executed')"],
+        timeoutSeconds=120,
+    )
+    # Produce the historical fixed-CPU command stream, then replay it using
+    # the current patch implementation after restoring workflow.patched.
+    patched = workflow.patched
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda marker: (
+            False
+            if marker == "container-job-shared-capacity-wait-v1"
+            else patched(marker)
+        ),
+    )
+    runtime = TemporalAgentRuntimeActivities(container_job_backend=backend)
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with AsyncExitStack() as stack:
+            queue = "historical-resources-" + uuid4().hex
+            await stack.enter_async_context(
+                Worker(
+                    env.client,
+                    task_queue=queue,
+                    workflows=[MoonMindContainerJobWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                )
+            )
+            await stack.enter_async_context(
+                Worker(
+                    env.client,
+                    task_queue=settings.temporal.activity_agent_runtime_task_queue,
+                    activities=_registered_activities(runtime),
+                )
+            )
+            handle = await env.client.start_workflow(
+                MoonMindContainerJobWorkflow.run,
+                raw,
+                id="historical-resources-" + uuid4().hex,
+                task_queue=queue,
+            )
+            result = await handle.result()
+            history = await handle.fetch_history()
+        monkeypatch.setattr(workflow, "patched", patched)
+        await Replayer(
+            workflows=[MoonMindContainerJobWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(history)
+    assert result["state"] == "succeeded", result
+    assert "waiting_for_capacity" not in projected
+    assert any(b"historical tests executed" in body for body in published.values())
+    assert (workspace / "candidate.txt").read_text() == "saved candidate\n"
+    assert (await s.ledger.usage(backend_ref=s.backend_ref)).reserved_cpu_millis == 0
