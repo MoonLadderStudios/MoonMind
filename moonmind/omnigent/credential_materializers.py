@@ -220,9 +220,11 @@ def credential_runtime_identity(
             materializer_ref,
         )
     )
-    # Keep historical/first-admission identities stable. A later admitted
-    # attempt must not resurrect credential volumes or cleanup tombstones
-    # owned by the earlier attempt, even when the provider lease owner repeats.
+    # The capacity owner survives reset; the credential lifecycle cannot. The
+    # admitted run is already durable input, so Activity redelivery is stable.
+    # Retained tickets without it keep their historical identity.
+    if getattr(acquired, "admission_run_id", None):
+        canonical += f"\0run:{acquired.admission_run_id}"
     if acquired.admission_epoch > 1:
         canonical += f"\0admission:{acquired.admission_epoch}"
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()

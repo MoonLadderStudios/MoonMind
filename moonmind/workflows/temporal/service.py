@@ -2681,6 +2681,63 @@ class TemporalExecutionService:
             return candidate
         raise TemporalExecutionValidationError("workflowId is required")
 
+    async def read_scheduled_execution_source(
+        self, projection: TemporalExecutionRecord
+    ) -> TemporalExecutionCanonicalRecord:
+        """Build a read-only recovery source from the admitted Temporal run.
+
+        Schedules have no API source row. Their compact Visibility parameters
+        cannot authorize recovery: the exact run's start input owns that intent.
+        This detached view preserves observed outcomes and never backfills a
+        second database authority or edits the source execution.
+        """
+        if (
+            projection.source_mode
+            != TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+            or not projection.run_id
+            or projection.workflow_type is not TemporalWorkflowType.USER_WORKFLOW
+        ):
+            raise TemporalExecutionValidationError(
+                "Recovery requires a Temporal-authoritative UserWorkflow run"
+            )
+        try:
+            admitted = await self._client_adapter.read_workflow_start_input(
+                projection.workflow_id, run_id=projection.run_id
+            )
+        except Exception as exc:
+            raise TemporalExecutionValidationError(
+                "The admitted source inputs are unavailable; retry when Temporal history is readable"
+            ) from exc
+        parameters = admitted.get("initial_parameters")
+        if (
+            str(admitted.get("owner_user_id") or "") != str(projection.owner_id or "")
+            or admitted.get("workflow_type") != projection.workflow_type.value
+            or not isinstance(parameters, Mapping)
+        ):
+            raise TemporalExecutionValidationError(
+                "The admitted source inputs do not match the execution owner and workflow type"
+            )
+        values = self._projection_payload_from_source(projection)
+        values["parameters"] = dict(parameters)
+        # The projection owns current plan/checkpoint/outcome evidence; the
+        # start input owns immutable launch and task-snapshot authority.
+        values["input_ref"] = admitted.get("input_artifact_ref")
+        plan = parameters.get("omnigentExecutionPlan")
+        if isinstance(plan, Mapping):
+            from moonmind.schemas.agent_runtime_models import (
+                OmnigentExecutionPlanBinding,
+            )
+
+            binding = OmnigentExecutionPlanBinding.model_validate(plan)
+            values["memo"].update(
+                task_input_snapshot_ref=binding.task_input_snapshot_ref,
+                task_input_snapshot_digest=binding.task_input_snapshot_digest,
+                omnigent_execution_plan_ref=binding.plan_ref,
+                omnigent_execution_plan_digest=binding.plan_digest,
+                omnigent_execution_plan_artifact_ref=binding.plan_artifact_ref,
+            )
+        return TemporalExecutionCanonicalRecord(**values)
+
     async def validate_exact_rerun_skill_snapshot(
         self,
         *,
