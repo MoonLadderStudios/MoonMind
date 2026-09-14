@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -11,11 +12,11 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass
+from moonmind.omnigent.host_ports import HostLaunchSpec
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.omnigent.host_services.github_credentials import (
     github_repository_from_request,
 )
-from moonmind.omnigent.host_ports import HostLaunchSpec
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.security.egress import (
     OMNIGENT_EGRESS_PROFILE,
@@ -40,6 +41,7 @@ _OPENCODE_APP_SERVER_IMPORT = (
 # authoritative contract status.
 _PROBE_SUBSTRATE_UNAVAILABLE_EXIT_CODE = 97
 _PROBE_SUBSTRATE_UNAVAILABLE_MARKER = "moonmind-attestation-substrate-unavailable"
+_MODEL_ATTESTATION_MAX_ATTEMPTS = 3
 
 
 def _substrate_guarded_probe(body: str) -> str:
@@ -937,19 +939,75 @@ class DockerOmnigentHostAttestor:
                 "exact host restricted-egress attachment could not be attested",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             ) from exc
-        model_options, model_options_source = await _read_exact_host_model_options(
-            backend=self._backend,
-            client=self._client,
-            container_name=launch_result["containerName"],
-            omnigent_host_id=host_id,
-            harness_id=plan.payload.harnessId,
-        )
         selected_model = plan.payload.modelConfig.qualifiedId
-        if selected_model not in _model_ids(model_options):
-            raise HarnessPlatformError(
-                f"selected model {selected_model} is unavailable on the exact host",
+        model_evidence: dict[str, Any] = {
+            "omnigentHostId": host_id,
+            "harnessId": plan.payload.harnessId,
+            "selectedModel": selected_model,
+            "attempts": [],
+        }
+        # A cold catalog is an observation, not permanent model authority.
+        # OpenCode can exit zero with its bundled catalog after a failed
+        # refresh. Re-read before releasing this exact host/credential lease;
+        # do not substitute a model or re-admit another host to recover a read.
+        for attempt in range(1, _MODEL_ATTESTATION_MAX_ATTEMPTS + 1):
+            observation: dict[str, Any] = {
+                "attempt": attempt,
+                "selectedModelPresent": False,
+            }
+            try:
+                model_options, model_options_source = (
+                    await _read_exact_host_model_options(
+                        backend=self._backend,
+                        client=self._client,
+                        container_name=launch_result["containerName"],
+                        omnigent_host_id=host_id,
+                        harness_id=plan.payload.harnessId,
+                    )
+                )
+                available_models = sorted(_model_ids(model_options))
+                observation.update(
+                    availableModels=available_models,
+                    source=model_options_source,
+                    selectedModelPresent=selected_model in available_models,
+                )
+                model_evidence.update(
+                    availableModels=available_models, source=model_options_source
+                )
+            except HarnessPlatformError as exc:
+                if exc.code != HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE:
+                    raise
+                # Do not retain raw provider CLI diagnostics in evidence.
+                observation["errorCode"] = exc.code
+            model_evidence["attempts"].append(observation)
+            if observation["selectedModelPresent"]:
+                break
+            if attempt < _MODEL_ATTESTATION_MAX_ATTEMPTS:
+                await asyncio.sleep(attempt)
+
+        async def write_model_evidence() -> str:
+            return await self._artifacts.write_json(
+                request=request,
+                name="generic-host-model-options.json",
+                payload=model_evidence,
+                link_type="evidence.model_options",
+            )
+
+        if not model_evidence["attempts"][-1]["selectedModelPresent"]:
+            failure = HarnessPlatformError(
+                f"selected model {selected_model} could not be confirmed on the exact host "
+                f"after {_MODEL_ATTESTATION_MAX_ATTEMPTS} catalog reads",
                 code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
             )
+            try:
+                await write_model_evidence()
+            except Exception:  # noqa: BLE001 - preserve primary validation failure
+                # Evidence storage is auxiliary to the primary validation
+                # failure. The runtime still owns fenced host cleanup.
+                logging.getLogger(__name__).warning(
+                    "Failed to retain exhausted exact-host model catalog evidence"
+                )
+            raise failure
         host_evidence = {
             "schemaVersion": "moonmind.omnigent-exact-host-attestation.v1",
             "containerId": str(container.get("Id") or ""),
@@ -986,18 +1044,7 @@ class DockerOmnigentHostAttestor:
             payload=host_evidence,
             link_type="evidence.host_attestation",
         )
-        model_ref = await self._artifacts.write_json(
-            request=request,
-            name="generic-host-model-options.json",
-            payload={
-                "omnigentHostId": host_id,
-                "harnessId": plan.payload.harnessId,
-                "selectedModel": selected_model,
-                "availableModels": sorted(_model_ids(model_options)),
-                "source": model_options_source,
-            },
-            link_type="evidence.model_options",
-        )
+        model_ref = await write_model_evidence()
         return {
             "hostHarnessAttestationRef": host_ref,
             "modelOptionAttestationRef": model_ref,
