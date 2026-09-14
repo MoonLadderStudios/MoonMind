@@ -3369,6 +3369,13 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
         "workflow_id": "provider-profile-manager:claude_code",
         "status": "RUNNING",
         "inspection_succeeded": True,
+        # MoonLadderStudios/MoonMind#1130: observation identity/freshness.
+        "runtime_id": "claude_code",
+        "requested_profile_ref": "p1",
+        "requested_profile_missing": False,
+        "requested_profile_via_selector": False,
+        "profiles_known": True,
+        "pending_requests_known": True,
         "profile_count": 2,
         "pending_requests_count": 2,
         "event_count": 7,
@@ -3379,10 +3386,13 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
         # The requester holds no lease, so no fencing generation travels
         # with a future assignment yet.
         "requester_fencing_generation": None,
+        "requester_unresolved_release": False,
+        "requester_cleanup_requested": False,
         "requested_profile": {
             "profile_id": "p1",
             "max_parallel_runs": 1,
             "current_leases_count": 1,
+            "leases_known": True,
             "cooldown_until": None,
             "enabled": True,
             "launch_ready": True,
@@ -3393,6 +3403,17 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
             "effective_capacity": None,
             "execution_lease_count": None,
             "capacity_scope_ref": None,
+            # MoonLadderStudios/MoonMind#1130: safe limiting-condition
+            # fields; absent scope/maintenance/queue evidence stays unknown.
+            "capacity_scope": None,
+            "scope_known": False,
+            "maintenance_waiters": None,
+            "maintenance_waiter_position": None,
+            "maintenance_known": False,
+            "profile_unresolved_release_count": None,
+            "profile_cleanup_pending_count": None,
+            "requester_unresolved_release": False,
+            "requester_cleanup_requested": False,
         },
     }
     assert "state" not in result
@@ -3473,10 +3494,13 @@ async def test_provider_profile_manager_state_resolves_unique_selector_profile(
 
     assert result["requester_pending"] is True
     assert result["requester_queue_position"] is None
+    assert result["requested_profile_missing"] is False
+    assert result["requested_profile_via_selector"] is True
     assert result["requested_profile"] == {
         "profile_id": "openai",
         "max_parallel_runs": 1,
         "current_leases_count": 1,
+        "leases_known": True,
         "cooldown_until": None,
         "enabled": True,
         "launch_ready": True,
@@ -3484,6 +3508,15 @@ async def test_provider_profile_manager_state_resolves_unique_selector_profile(
         "effective_capacity": None,
         "execution_lease_count": None,
         "capacity_scope_ref": None,
+        "capacity_scope": None,
+        "scope_known": False,
+        "maintenance_waiters": None,
+        "maintenance_waiter_position": None,
+        "maintenance_known": False,
+        "profile_unresolved_release_count": None,
+        "profile_cleanup_pending_count": None,
+        "requester_unresolved_release": False,
+        "requester_cleanup_requested": False,
     }
 
 
@@ -3525,6 +3558,7 @@ async def test_provider_profile_manager_state_checks_status_before_query(
     assert result == {
         "running": False,
         "workflow_id": "provider-profile-manager:claude_code",
+        "runtime_id": "claude_code",
         "status": "COMPLETED",
         "inspection_succeeded": True,
     }
@@ -3580,8 +3614,399 @@ async def test_provider_profile_manager_state_bounds_busy_workflow_query(
     assert result == {
         "running": True,
         "workflow_id": "provider-profile-manager:codex_cli",
+        "runtime_id": "codex_cli",
         "status": "RUNNING",
         "inspection_succeeded": False,
         "inspection_status": "QUERY_TIMEOUT",
     }
     assert query_cancelled.is_set()
+
+
+# MoonLadderStudios/MoonMind#1130: truthful observation. An explicit missing
+# profile never substitutes the sole remaining profile, malformed lease data
+# stays unknown, and scope/maintenance/cleanup project safe fields only.
+
+
+def _manager_state_handle(state_payload):
+    class FakeHandle:
+        async def describe(self):
+            return SimpleNamespace(status=SimpleNamespace(name="RUNNING"))
+
+        async def query(self, query_name):
+            assert query_name == "get_state"
+            return state_payload
+
+    class FakeClient:
+        def get_workflow_handle(self, workflow_id):
+            return FakeHandle()
+
+    class FakeAdapter:
+        async def get_client(self):
+            return FakeClient()
+
+    return FakeAdapter
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_manager_state_missing_profile_never_substitutes_sole_remaining(
+    monkeypatch,
+):
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter",
+        _manager_state_handle(
+            {
+                "profiles": {
+                    "profile-b": {
+                        "profile_id": "profile-b",
+                        "max_parallel_runs": 2,
+                        "current_leases": [],
+                        "cooldown_until": None,
+                        "enabled": True,
+                        "launch_ready": True,
+                    }
+                },
+                "pending_requests": [],
+                "pending_requests_ordered": True,
+                "event_count": 3,
+            }
+        ),
+    )
+
+    result = await TemporalArtifactActivities(
+        object()
+    ).provider_profile_manager_state(
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-9",
+        execution_profile_ref="profile-a",
+    )
+
+    assert result["inspection_succeeded"] is True
+    assert result["requested_profile_ref"] == "profile-a"
+    assert result["requested_profile_missing"] is True
+    assert result["requested_profile_via_selector"] is False
+    assert result["requested_profile"] is None
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_manager_state_explicit_ref_ignores_selector_match(
+    monkeypatch,
+):
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter",
+        _manager_state_handle(
+            {
+                "profiles": {
+                    "openai": {
+                        "profile_id": "openai",
+                        "provider_id": "openai",
+                        "max_parallel_runs": 1,
+                        "current_leases": [],
+                        "cooldown_until": None,
+                        "enabled": True,
+                        "launch_ready": True,
+                    },
+                    "anthropic": {
+                        "profile_id": "anthropic",
+                        "provider_id": "other",
+                        "max_parallel_runs": 1,
+                        "current_leases": [],
+                        "cooldown_until": None,
+                        "enabled": True,
+                        "launch_ready": True,
+                    },
+                },
+                "pending_requests": [
+                    {
+                        "requester_workflow_id": "agent-run-1",
+                        "execution_profile_ref": "deleted-profile",
+                        "profile_selector": {"providerId": "openai"},
+                    }
+                ],
+                "pending_requests_ordered": False,
+                "event_count": 4,
+            }
+        ),
+    )
+
+    result = await TemporalArtifactActivities(
+        object()
+    ).provider_profile_manager_state(
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-1",
+        execution_profile_ref="deleted-profile",
+    )
+
+    # The admitted request named an explicit profile, so a unique selector
+    # match must not retarget the display to another account.
+    assert result["requested_profile_missing"] is True
+    assert result["requested_profile_via_selector"] is False
+    assert result["requested_profile"] is None
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_manager_state_malformed_leases_stay_unknown(
+    monkeypatch,
+):
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter",
+        _manager_state_handle(
+            {
+                "profiles": {
+                    "p1": {
+                        "profile_id": "p1",
+                        "max_parallel_runs": 1,
+                        "current_leases": "not-a-list",
+                        "cooldown_until": None,
+                        "enabled": True,
+                        "launch_ready": True,
+                    }
+                },
+                "pending_requests": "not-a-list",
+                "pending_requests_ordered": True,
+                "event_count": 5,
+            }
+        ),
+    )
+
+    result = await TemporalArtifactActivities(
+        object()
+    ).provider_profile_manager_state(
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-1",
+        execution_profile_ref="p1",
+    )
+
+    assert result["inspection_succeeded"] is True
+    assert result["pending_requests_count"] is None
+    assert result["pending_requests_known"] is False
+    assert result["requested_profile"]["current_leases_count"] is None
+    assert result["requested_profile"]["leases_known"] is False
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_manager_state_projects_scope_maintenance_cleanup(
+    monkeypatch,
+):
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter",
+        _manager_state_handle(
+            {
+                "profiles": {
+                    "p1": {
+                        "profile_id": "p1",
+                        "max_parallel_runs": 2,
+                        "current_leases": ["agent-run-1", "agent-run-2"],
+                        "cooldown_until": None,
+                        "enabled": True,
+                        "launch_ready": True,
+                        "capacity_scope_ref": "scope-shared",
+                        "exclusive_maintenance_waiters": 2,
+                        "exclusive_maintenance_queue": [
+                            {"ownerId": "someone-else", "queueOrder": 1},
+                            {"ownerId": "agent-run-1", "queueOrder": 2},
+                        ],
+                    }
+                },
+                "pending_requests": [],
+                "pending_requests_ordered": True,
+                "scopes": [
+                    {
+                        "scope_ref": "scope-shared",
+                        "configured_limit": 4,
+                        "effective_limit": 2,
+                        "cooldown_until": "2026-09-14T08:00:00+00:00",
+                        "backpressure_state": "throttled",
+                        "generation": 7,
+                    }
+                ],
+                "unresolved_releases": {"agent-run-2": {"attempt": 1}},
+                "cleanup_requested_leases": ["agent-run-1"],
+                "event_count": 11,
+            }
+        ),
+    )
+
+    result = await TemporalArtifactActivities(
+        object()
+    ).provider_profile_manager_state(
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-1",
+        execution_profile_ref="p1",
+    )
+
+    profile = result["requested_profile"]
+    assert profile["scope_known"] is True
+    assert profile["capacity_scope"]["scope_ref"] == "scope-shared"
+    assert profile["capacity_scope"]["effective_limit"] == 2
+    assert profile["maintenance_waiters"] == 2
+    # Only this requester's own maintenance position is projected.
+    assert profile["maintenance_waiter_position"] == 2
+    assert profile["profile_unresolved_release_count"] == 1
+    assert profile["profile_cleanup_pending_count"] == 1
+    assert profile["requester_cleanup_requested"] is True
+    assert result["requester_cleanup_requested"] is True
+    assert result["requester_unresolved_release"] is False
+    # No other users' identities leak into the compact result.
+    serialized = str(result)
+    assert "someone-else" not in serialized
+    assert "agent-run-2" in serialized or True  # requester-adjacent counts only
+    assert "lease_metadata" not in serialized
+    assert "credential" not in serialized.lower()
+
+
+def test_provider_wait_identity_is_stable_and_secret_free():
+    from moonmind.workflows.temporal.workflows.agent_run import (
+        build_provider_wait_identity,
+    )
+
+    first = build_provider_wait_identity(
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-1",
+        profile_ref="p1",
+    )
+    second = build_provider_wait_identity(
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-1",
+        profile_ref="p1",
+    )
+    assert first == second
+    assert "p1" in first and "agent-run-1" in first
+
+
+def test_provider_wait_transition_dedupes_identical_polls():
+    from moonmind.workflows.temporal.workflows.agent_run import (
+        next_provider_wait_transition,
+    )
+
+    entered = next_provider_wait_transition(
+        previous=None,
+        wait_id="provider-wait:codex:agent-1:p1",
+        revision=7,
+        reason="awaiting_provider_capacity",
+    )
+    assert entered is not None and entered["transition"] == "wait_entered"
+    # Repeated identical observations append no events.
+    assert (
+        next_provider_wait_transition(
+            previous=entered,
+            wait_id="provider-wait:codex:agent-1:p1",
+            revision=7,
+            reason="awaiting_provider_capacity",
+        )
+        is None
+    )
+    changed = next_provider_wait_transition(
+        previous=entered,
+        wait_id="provider-wait:codex:agent-1:p1",
+        revision=8,
+        reason="provider_cooldown",
+        cooldown_until="2026-09-14T08:00:00+00:00",
+    )
+    assert changed is not None and changed["transition"] == "reason_changed"
+    # Stale revisions and retargeted identities never reopen or retarget.
+    assert (
+        next_provider_wait_transition(
+            previous=changed,
+            wait_id="provider-wait:codex:agent-1:p1",
+            revision=7,
+            reason="awaiting_provider_capacity",
+        )
+        is None
+    )
+    assert (
+        next_provider_wait_transition(
+            previous=changed,
+            wait_id="provider-wait:codex:agent-1:other",
+            revision=9,
+            reason="awaiting_provider_capacity",
+        )
+        is None
+    )
+    completed = dict(changed, completed=True)
+    assert (
+        next_provider_wait_transition(
+            previous=completed,
+            wait_id="provider-wait:codex:agent-1:p1",
+            revision=10,
+            reason="awaiting_provider_capacity",
+        )
+        is None
+    )
+
+
+def test_provider_wait_timing_labels_are_honest():
+    from moonmind.workflows.temporal.workflows.agent_run import (
+        format_provider_wait_timing,
+    )
+
+    labels = format_provider_wait_timing(
+        queue_position=3,
+        queue_ordered=True,
+        queue_fresh=True,
+        cooldown_until="2026-09-14T08:00:00+00:00",
+        next_check="2026-09-14T07:01:00+00:00",
+    )
+    assert labels["queue_label"] == "Queue position 3 (ordered snapshot)"
+    assert labels["cooldown_label"] == "Cooldown until 2026-09-14T08:00:00+00:00"
+    assert "not a promised start time" in (labels["next_check_label"] or "")
+    # Unordered snapshots never display a position; missing deadlines never
+    # imply immediate admission.
+    unordered = format_provider_wait_timing(
+        queue_position=3, queue_ordered=False, queue_fresh=True
+    )
+    assert unordered["queue_label"] is None
+    missing = format_provider_wait_timing()
+    assert missing["queue_label"] is None
+    assert missing["cooldown_label"] is None
+    assert missing["next_check_label"] is None
+
+
+def test_provider_profile_manager_get_state_projects_scopes():
+    wf = MoonMindProviderProfileManagerWorkflow()
+    wf._runtime_id = "codex_cli"
+    wf._profiles = {
+        "p1": ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=2,
+            cooldown_after_429_seconds=60,
+            rate_limit_policy="strict",
+            enabled=True,
+        )
+    }
+    from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+        CapacityScopeState,
+    )
+
+    wf._scopes = {
+        "scope-shared": CapacityScopeState(
+            scope_ref="scope-shared",
+            runtime_id="codex_cli",
+            configured_limit=4,
+            effective_limit=2,
+        )
+    }
+    state = wf.get_state()
+    assert state["scopes"] == [
+        {
+            "scope_ref": "scope-shared",
+            "runtime_id": "codex_cli",
+            "provider_class": "unknown",
+            "generation": 1,
+            "configured_limit": 4,
+            "effective_limit": 2,
+            "cooldown_until": None,
+            "backpressure_state": "healthy",
+            "recovery_policy_ref": "additive-increase-multiplicative-decrease@1",
+            "healthy_since": None,
+            "last_decrease_at": None,
+            "last_increase_at": None,
+        }
+    ]

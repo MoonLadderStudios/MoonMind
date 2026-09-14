@@ -5267,6 +5267,7 @@ class TemporalArtifactActivities:
             return {
                 "running": False,
                 "workflow_id": workflow_id,
+                "runtime_id": runtime_id,
                 "status": f"RPC_ERROR_{exc.status.name}",
                 "inspection_succeeded": False,
                 "error_type": type(exc).__name__,
@@ -5278,6 +5279,7 @@ class TemporalArtifactActivities:
             return {
                 "running": False,
                 "workflow_id": workflow_id,
+                "runtime_id": runtime_id,
                 "status": status_name,
                 "inspection_succeeded": True,
             }
@@ -5291,6 +5293,7 @@ class TemporalArtifactActivities:
             return {
                 "running": True,
                 "workflow_id": workflow_id,
+                "runtime_id": runtime_id,
                 "status": status_name,
                 "inspection_succeeded": False,
                 "inspection_status": "QUERY_TIMEOUT",
@@ -5299,6 +5302,7 @@ class TemporalArtifactActivities:
             return {
                 "running": True,
                 "workflow_id": workflow_id,
+                "runtime_id": runtime_id,
                 "status": status_name,
                 "inspection_succeeded": False,
                 "inspection_status": f"RPC_ERROR_{exc.status.name}",
@@ -5310,6 +5314,7 @@ class TemporalArtifactActivities:
             return {
                 "running": True,
                 "workflow_id": workflow_id,
+                "runtime_id": runtime_id,
                 "status": status_name,
                 "inspection_succeeded": False,
                 "inspection_status": "INVALID_QUERY_PAYLOAD",
@@ -5337,20 +5342,40 @@ class TemporalArtifactActivities:
                     break
 
         requested_profile_ref = str(execution_profile_ref or "").strip()
+        explicit_profile_ref = requested_profile_ref
         if not requested_profile_ref and requester_request is not None:
             requested_profile_ref = str(
                 requester_request.get("execution_profile_ref") or ""
             ).strip()
+        # MoonLadderStudios/MoonMind#1130: an explicit profile selection is an
+        # observation identity. A missing/deleted selection must never display
+        # another account's capacity as its own.
+        explicit_ref_requested = bool(explicit_profile_ref) or bool(
+            requested_profile_ref
+            and requester_request is not None
+            and str(requester_request.get("execution_profile_ref") or "").strip()
+        )
         requested_profile: dict[str, Any] | None = None
+        requested_profile_missing = False
+        requested_profile_via_selector = False
         if isinstance(profiles, dict):
-            raw_profile = profiles.get(requested_profile_ref)
+            raw_profile = profiles.get(requested_profile_ref) if requested_profile_ref else None
             profile_selector = (
                 requester_request.get("profile_selector")
                 if requester_request is not None
                 else None
             )
-            if not isinstance(raw_profile, dict) and isinstance(
-                profile_selector, dict
+            # Selector-based diagnostic matching may report a unique match only
+            # where the admitted request actually used that selector: no
+            # explicit profile ref was admitted, and the pending request
+            # carries a selector. An explicit ref never falls back to a
+            # selector match, and display fallback is never execution
+            # authority.
+            if (
+                not isinstance(raw_profile, dict)
+                and not explicit_ref_requested
+                and not requested_profile_ref
+                and isinstance(profile_selector, dict)
             ):
                 matching_profiles = [
                     profile
@@ -5381,19 +5406,91 @@ class TemporalArtifactActivities:
                 ]
                 if len(matching_profiles) == 1:
                     raw_profile = matching_profiles[0]
-            if not isinstance(raw_profile, dict) and len(profiles) == 1:
-                only_profile = next(iter(profiles.values()))
-                raw_profile = only_profile if isinstance(only_profile, dict) else None
+                    requested_profile_via_selector = True
+            # No sole-remaining-profile substitution: an explicit missing
+            # profile returns missing/unavailable, never the other profile.
+            if not isinstance(raw_profile, dict):
+                if requested_profile_ref:
+                    requested_profile_missing = True
             if isinstance(raw_profile, dict):
                 current_leases = raw_profile.get("current_leases")
+                # MoonLadderStudios/MoonMind#1130: absent observation is not
+                # proof of idle capacity. A missing/malformed lease list
+                # yields an unknown count (None), never a fabricated zero.
+                leases_known = isinstance(current_leases, list)
+                # Shared-scope projection: only the scope for this profile,
+                # safe aggregate fields only, no other users' identities.
+                scope_ref = str(raw_profile.get("capacity_scope_ref") or "").strip()
+                if not scope_ref:
+                    profile_id_hint = str(raw_profile.get("profile_id") or requested_profile_ref)
+                    scope_ref = f"provider-profile:{profile_id_hint}" if profile_id_hint else ""
+                scope_record: dict[str, Any] | None = None
+                scope_known = False
+                raw_scopes = state.get("scopes")
+                if scope_ref and isinstance(raw_scopes, list):
+                    for entry in raw_scopes:
+                        if isinstance(entry, dict) and str(entry.get("scope_ref") or "") == scope_ref:
+                            scope_record = {
+                                "scope_ref": str(entry.get("scope_ref") or scope_ref),
+                                "configured_limit": entry.get("configured_limit"),
+                                "effective_limit": entry.get("effective_limit"),
+                                "cooldown_until": entry.get("cooldown_until"),
+                                "backpressure_state": entry.get("backpressure_state"),
+                                "generation": entry.get("generation"),
+                            }
+                            scope_known = True
+                            break
+                # Maintenance wait: counts plus this requester's own position
+                # only. Other owners' identities are never projected.
+                maintenance_waiters = raw_profile.get("exclusive_maintenance_waiters")
+                maintenance_waiters = (
+                    maintenance_waiters if isinstance(maintenance_waiters, int) else None
+                )
+                maintenance_queue = raw_profile.get("exclusive_maintenance_queue")
+                maintenance_waiter_position: int | None = None
+                if requester_workflow_id and isinstance(maintenance_queue, list):
+                    for index, entry in enumerate(maintenance_queue):
+                        if isinstance(entry, dict) and entry.get("ownerId") == requester_workflow_id:
+                            maintenance_waiter_position = index + 1
+                            break
+                maintenance_known = (
+                    maintenance_waiters is not None or isinstance(maintenance_queue, list)
+                )
+                # Pending cleanup/release: bounded counts plus this
+                # requester's own flags only. A cleanup request is not
+                # cleanup success.
+                unresolved_releases = state.get("unresolved_releases")
+                cleanup_requested = state.get("cleanup_requested_leases")
+                profile_leases = current_leases if isinstance(current_leases, list) else []
+                if isinstance(unresolved_releases, dict):
+                    profile_unresolved_count: int | None = sum(
+                        1 for lease_id in profile_leases if lease_id in unresolved_releases
+                    )
+                else:
+                    profile_unresolved_count = None
+                if isinstance(cleanup_requested, list):
+                    cleanup_set = set(cleanup_requested)
+                    profile_cleanup_count: int | None = sum(
+                        1 for lease_id in profile_leases if lease_id in cleanup_set
+                    )
+                else:
+                    cleanup_set = set()
+                    profile_cleanup_count = None
+                requester_unresolved = (
+                    bool(requester_workflow_id)
+                    and isinstance(unresolved_releases, dict)
+                    and requester_workflow_id in unresolved_releases
+                )
+                requester_cleanup = bool(requester_workflow_id) and requester_workflow_id in cleanup_set
                 requested_profile = {
                     "profile_id": str(
                         raw_profile.get("profile_id") or requested_profile_ref
                     ),
                     "max_parallel_runs": raw_profile.get("max_parallel_runs"),
                     "current_leases_count": (
-                        len(current_leases) if isinstance(current_leases, list) else 0
+                        len(current_leases) if isinstance(current_leases, list) else None
                     ),
+                    "leases_known": leases_known,
                     "cooldown_until": raw_profile.get("cooldown_until"),
                     "enabled": raw_profile.get("enabled"),
                     "launch_ready": raw_profile.get("launch_ready"),
@@ -5406,7 +5503,23 @@ class TemporalArtifactActivities:
                         "execution_lease_count"
                     ),
                     "capacity_scope_ref": raw_profile.get("capacity_scope_ref"),
+                    # MoonLadderStudios/MoonMind#1130: safe limiting-condition
+                    # fields derived from the owning queues/scopes.
+                    "capacity_scope": scope_record,
+                    "scope_known": scope_known,
+                    "maintenance_waiters": maintenance_waiters,
+                    "maintenance_waiter_position": maintenance_waiter_position,
+                    "maintenance_known": maintenance_known,
+                    "profile_unresolved_release_count": profile_unresolved_count,
+                    "profile_cleanup_pending_count": profile_cleanup_count,
+                    "requester_unresolved_release": requester_unresolved,
+                    "requester_cleanup_requested": requester_cleanup,
                 }
+        elif requested_profile_ref:
+            # Profiles collection itself is unknown/malformed: an explicit
+            # ref cannot be resolved, so mark it missing rather than
+            # substituting another profile.
+            requested_profile_missing = True
 
         # Which profile, if any, this requester already holds a lease on. The
         # Omnigent pre-Activity admission path reads this to recognize a grant
@@ -5434,20 +5547,45 @@ class TemporalArtifactActivities:
                         requester_fencing_generation = generation or None
                     break
 
+        # MoonLadderStudios/MoonMind#1130: requester-level cleanup/release
+        # flags without leaking other users' identities. An empty returned
+        # collection after inspection failure is never reported here because
+        # this path only runs after a successful get_state query.
+        unresolved_state = state.get("unresolved_releases")
+        cleanup_state = state.get("cleanup_requested_leases")
+        cleanup_ids: set[str] = set(cleanup_state) if isinstance(cleanup_state, list) else set()
+        top_requester_unresolved = bool(
+            requester_workflow_id
+            and isinstance(unresolved_state, dict)
+            and requester_workflow_id in unresolved_state
+        )
+        top_requester_cleanup = bool(requester_workflow_id) and requester_workflow_id in cleanup_ids
+
         return {
             "running": True,
             "workflow_id": workflow_id,
             "status": status_name,
             "inspection_succeeded": True,
-            "profile_count": len(profiles) if isinstance(profiles, dict) else 0,
+            # MoonLadderStudios/MoonMind#1130: observation identity and
+            # freshness so callers can reject mismatched or stale results.
+            # event_count is the monotonic manager revision.
+            "runtime_id": runtime_id,
+            "requested_profile_ref": requested_profile_ref,
+            "requested_profile_missing": requested_profile_missing,
+            "requested_profile_via_selector": requested_profile_via_selector,
+            "profiles_known": isinstance(profiles, dict),
+            "pending_requests_known": isinstance(pending_requests, list),
+            "profile_count": len(profiles) if isinstance(profiles, dict) else None,
             "pending_requests_count": (
-                len(pending_requests) if isinstance(pending_requests, list) else 0
+                len(pending_requests) if isinstance(pending_requests, list) else None
             ),
             "event_count": event_count if isinstance(event_count, int) else None,
             "requester_pending": requester_pending,
             "requester_queue_position": requester_queue_position,
             "requester_profile_id": requester_profile_id,
             "requester_fencing_generation": requester_fencing_generation,
+            "requester_unresolved_release": top_requester_unresolved,
+            "requester_cleanup_requested": top_requester_cleanup,
             "requested_profile": requested_profile,
         }
 
