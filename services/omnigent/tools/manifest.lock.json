@@ -28,10 +28,10 @@
       "sourcePath": "../scripts/moonmind-container-cli.py",
       "platforms": {
         "linux/amd64": {
-          "executableSha256": "07ce7b030a15b58ec6be85e527d2767e4013badb7ebef984cdf1afb45cc5244e"
+          "executableSha256": "fd32b322e9157f4225aa99dfad72a9310ddcb5c8e2a79bf7be99b42c1c655248"
         },
         "linux/arm64": {
-          "executableSha256": "07ce7b030a15b58ec6be85e527d2767e4013badb7ebef984cdf1afb45cc5244e"
+          "executableSha256": "fd32b322e9157f4225aa99dfad72a9310ddcb5c8e2a79bf7be99b42c1c655248"
         }
       },
       "path": "bin/moonmind",

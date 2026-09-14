@@ -498,12 +498,6 @@ jobs:
             -m reliability_journey \
             -q --durations=25 \
             --junitxml=artifacts/pytest-reliability-journey.xml
-      - name: Qualify shared resources through real Docker and Temporal
-        env:
-          MOONMIND_TEST_RESOURCE_DOCKER: "1"
-          MOONMIND_TEST_DISPOSABLE_RUNNER: "1"
-          MOONMIND_FORCE_LOCAL_TESTS: "1"
-        run: python -m pytest tests/integration/resource_allocation -q --junitxml=artifacts/pytest-resource-allocation.xml
       - name: Collect reliability journey diagnostics
         if: failure()
         run: |

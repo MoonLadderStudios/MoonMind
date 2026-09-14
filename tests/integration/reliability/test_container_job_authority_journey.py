@@ -19,7 +19,6 @@ from temporalio import activity
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from moonmind.capacity import OWNED_LAUNCH_CLASSES
 from moonmind.config.settings import settings
 from moonmind.schemas.container_job_models import ContainerJobWorkflowInput
 from moonmind.workflows.temporal.activity_runtime import TemporalAgentRuntimeActivities
@@ -233,14 +232,18 @@ async def test_public_and_dotnet_jobs_cross_one_authority_path_and_reuse_image(
     assert all("/var/run/docker.sock" not in " ".join(command) for command in creates)
     assert all("DOCKER_HOST" not in " ".join(command) for command in daemon.commands)
     assert not any(command[0] == "rmi" for command in daemon.commands)
-    # MoonLadderStudios/MoonMind#3881: each launch probes the machine once and
-    # enumerates the owned containers once. The enumeration queries every
-    # registered owner label, so its cost is the registry's size, not a
-    # per-launch constant that would drift silently as launch classes are added.
-    assert sum(command[0] == "info" for command in daemon.commands) == 3
-    assert sum(command[0] == "ps" for command in daemon.commands) == 3 * len(
-        OWNED_LAUNCH_CLASSES
+    # Plan A: no machine-budget probe and no resource-ledger write. Each start
+    # performs exactly one daemon-side slot enumeration; fixed limits reach
+    # Docker verbatim.
+    assert not any(command[0] == "info" for command in daemon.commands)
+    assert sum(command[0] == "ps" for command in daemon.commands) == 3
+    assert all("--cpus" in command for command in creates)
+    assert all("0.5" in command for command in creates)
+    assert all("--memory" in command and "512m" in command for command in creates)
+    assert all(
+        "--pids-limit" in command and "64" in command for command in creates
     )
+    assert not any("--cgroup-parent" in command for command in creates)
     assert {job_id for job_id, state in projected if state == "succeeded"} == {
         "container-job:" + "1" * 32,
         "container-job:" + "2" * 32,

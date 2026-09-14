@@ -576,20 +576,10 @@ class LaunchPolicy(BaseModel):
         if set(self.limits) != required_limits:
             raise ValueError(f"limits must contain {required_limits}")
         if any(
-            not isinstance(value, int)
-            or isinstance(value, bool)
-            or value
-            < (
-                0
-                if key == "cpuMillis"
-                and self.hostMode in {"on-demand", "on_demand_docker"}
-                else 1
-            )
+            not isinstance(value, int) or isinstance(value, bool) or value < 1
             for key, value in self.limits.items()
         ):
-            raise ValueError(
-                "limits must be positive ints; cpuMillis may be zero for shared CPU"
-            )
+            raise ValueError("limits must be positive ints")
         return self
 
     @property

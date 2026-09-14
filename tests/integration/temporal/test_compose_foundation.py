@@ -308,7 +308,7 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
         "environment"
     ]
     assert any(
-        item.startswith("MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB=")
+        item.startswith("MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_JOBS=")
         for item in agent_runtime_environment
     )
 

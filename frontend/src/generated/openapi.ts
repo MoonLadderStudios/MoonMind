@@ -12260,7 +12260,7 @@ export interface components {
         ResourceLimits: {
             /**
              * Cpumillis
-             * @default 0
+             * @default 2000
              */
             cpuMillis: number;
             /** Memorymib */
