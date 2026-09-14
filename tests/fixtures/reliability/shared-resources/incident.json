@@ -1,0 +1,12 @@
+{
+  "workflows": [
+    "mm:68d074f1-1e17-401d-8f03-1818f38ad17f-2026-09-14T04:00:00Z",
+    "mm:68d074f1-1e17-401d-8f03-1818f38ad17f-2026-09-14T05:30:00Z"
+  ],
+  "machine": {"cpuMillis": 6000, "memoryMiB": 9934},
+  "agent": {"cpuMillis": 2000, "memoryMiB": 4096},
+  "test": {"cpuMillis": 4000, "memoryMiB": 4096},
+  "failureClass": "resource_limit_exceeded",
+  "boundary": "container_job.start_container",
+  "testProcessStarted": false
+}

@@ -1,6 +1,3 @@
-[submodule "open-webui"]
-	path = open-webui
-	url = https://github.com/open-webui/open-webui.git
 [submodule "moonspec"]
 	path = moonspec
 	url = https://github.com/MoonLadderStudios/MoonSpec.git

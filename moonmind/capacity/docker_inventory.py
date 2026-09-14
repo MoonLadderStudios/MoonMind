@@ -104,6 +104,7 @@ OWNED_LAUNCH_CLASSES: tuple[OwnedLaunchClass, ...] = (
     OwnedLaunchClass("session_docker_sidecar", "moonmind.kind=session-docker-sidecar"),
     OwnedLaunchClass("workload", "moonmind.kind=workload"),
     OwnedLaunchClass("bounded_service", "moonmind.kind=bounded_service"),
+    OwnedLaunchClass("resource_helper", "moonmind.resource-helper=true"),
     # A deployment handover is control-plane recovery, not a new workload
     # admission. Observe its inherited Compose resource limits while both
     # releases coexist so these containers cannot read as free capacity.
@@ -207,7 +208,7 @@ class OwnedContainerInventory:
 
 _INSPECT_FORMAT = (
     "{{.Name}}\t{{.HostConfig.Memory}}\t{{.HostConfig.NanoCpus}}"
-    "\t{{.HostConfig.PidsLimit}}"
+    "\t{{.HostConfig.PidsLimit}}\t{{.HostConfig.CgroupParent}}"
 )
 
 #: How a daemon renders a ``HostConfig`` limit the container never declared.
@@ -293,9 +294,16 @@ async def probe_owned_containers(
         if not line.strip():
             continue
         parts = line.split("\t")
-        if len(parts) != 4:
+        if len(parts) not in {4, 5}:
             return None
-        name, raw_memory, raw_cpu, raw_pids = parts
+        name, raw_memory, raw_cpu, raw_pids = parts[:4]
+        # Pool CPU is counted once by its durable owner. A child's quota is
+        # still enforced, but is not another exclusive machine reservation.
+        import re
+
+        shared_cpu = len(parts) == 5 and bool(
+            re.fullmatch(r"/?moonmindcpu[0-9a-f]{24}\.slice", parts[4])
+        )
         try:
             memory_bytes = _declared_limit(raw_memory)
             nano_cpus = _declared_limit(raw_cpu)
@@ -311,7 +319,7 @@ async def probe_owned_containers(
             return None
         observed[container_ref] = OwnedContainer(
             demand=ResourceDemand(
-                cpu_millis=(nano_cpus or 0) // 1_000_000,
+                cpu_millis=0 if shared_cpu else (nano_cpus or 0) // 1_000_000,
                 memory_mib=((memory_bytes or 0) + _MIB - 1) // _MIB,
                 processes=pids or 0,
             ),
@@ -319,7 +327,7 @@ async def probe_owned_containers(
             undeclared_limits=frozenset(
                 resource
                 for resource, declared in (
-                    (LIMITING_RESOURCE_CPU, nano_cpus),
+                    (LIMITING_RESOURCE_CPU, 1 if shared_cpu else nano_cpus),
                     (LIMITING_RESOURCE_MEMORY, memory_bytes),
                     (LIMITING_RESOURCE_PROCESSES, pids),
                 )

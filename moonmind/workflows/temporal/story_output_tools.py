@@ -5336,13 +5336,29 @@ async def resolve_pull_request_target(
         inputs.get("repository") or inputs.get("repo")
     )
     selector = _string(inputs.get("pullRequest") or inputs.get("pull_request"))
-    if not repository or not selector:
+    if not repository:
         return ToolResult(
             status="FAILED",
             outputs={
                 "summary": (
                     "Pull request target resolution requires a repository and a "
                     "pull request number, URL, or head branch."
+                ),
+            },
+        )
+    if not selector:
+        # Best-effort continuation: a fresh search run carries no prior-work
+        # PR selector. Report a successful skip so the workflow runner does
+        # not treat an ordinary fresh run as a failure that stops
+        # implementation and all remaining nodes.
+        return ToolResult(
+            status="COMPLETED",
+            outputs={
+                "repository": repository,
+                "skipped": True,
+                "summary": (
+                    "No prior-work pull request selector was supplied; "
+                    "existing-PR resolution skipped without failure."
                 ),
             },
         )
