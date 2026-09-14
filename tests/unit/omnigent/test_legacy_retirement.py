@@ -534,6 +534,96 @@ def test_runtime_selection_consults_the_retirement_class(monkeypatch) -> None:
     )
 
 
+def test_retired_default_cannot_enter_a_retired_path_and_generations_stay_independent(
+    monkeypatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#3925 REQ-03: a default is new admission too.
+
+    The live API, schedule, and preset entrypoints resolve unauthored defaults
+    through the same :func:`select_runtime` boundary as explicit selections
+    (#3835 required work section 2). Closing one direct generation must reject
+    both an explicit target and a default that resolves into it, while a
+    sibling generation stays independently decidable.
+    """
+
+    from moonmind.omnigent import legacy_retirement
+    from moonmind.omnigent.cutover import CutoverPhase, select_runtime
+
+    record = get_retirement_record("omnigent.legacy.direct_codex_launch")
+    closed = record.model_copy(
+        update={
+            "retirement_class": RetirementClass.NEW_ADMISSION_DISABLED,
+            "new_admission_source": "",
+        }
+    )
+    monkeypatch.setitem(
+        legacy_retirement._INVENTORY_BY_SURFACE, "runtime-strategy:codex_cli", closed
+    )
+    monkeypatch.setitem(
+        legacy_retirement._INVENTORY_BY_ID,
+        "omnigent.legacy.direct_codex_launch",
+        closed,
+    )
+
+    # At OPT_IN the create default does not promote, so an unauthored default
+    # of ``codex_cli`` is a new admission into the retired path and must fail
+    # exactly like the explicit target.
+    with pytest.raises(ValueError, match="runtime_new_admission_disabled:codex_cli"):
+        select_runtime(
+            authored_runtime=None,
+            configured_default="codex_cli",
+            phase=CutoverPhase.OPT_IN,
+            submission_kind="create",
+        )
+    with pytest.raises(ValueError, match="runtime_new_admission_disabled:codex_cli"):
+        select_runtime(
+            authored_runtime=None,
+            configured_default="codex_cli",
+            phase=CutoverPhase.OPT_IN,
+            submission_kind="schedule",
+        )
+
+    # Sibling generations are independently decidable: closing direct Codex
+    # never closes direct Claude.
+    assert (
+        select_runtime(
+            authored_runtime="claude_code",
+            configured_default="codex_cli",
+            phase=CutoverPhase.OPT_IN,
+        ).runtime_id
+        == "claude_code"
+    )
+
+    # A rollback-only row fails closed at this one-shot boundary, which
+    # carries no scoped rollback-exercise evidence. Rollback re-admission is
+    # evaluated only at plan compilation with an exactly-scoped exercise, so
+    # rollback never silently substitutes a runtime here.
+    rollback_only = record.model_copy(
+        update={
+            "retirement_class": RetirementClass.ROLLBACK_ONLY,
+            "new_admission_source": "operator rollback generation",
+            "rollback_generations": frozenset({"gen-rollback-1"}),
+        }
+    )
+    monkeypatch.setitem(
+        legacy_retirement._INVENTORY_BY_SURFACE,
+        "runtime-strategy:codex_cli",
+        rollback_only,
+    )
+    monkeypatch.setitem(
+        legacy_retirement._INVENTORY_BY_ID,
+        "omnigent.legacy.direct_codex_launch",
+        rollback_only,
+    )
+    with pytest.raises(ValueError, match="runtime_new_admission_disabled:codex_cli"):
+        select_runtime(
+            authored_runtime="codex_cli",
+            configured_default="codex_cli",
+            phase=CutoverPhase.OPT_IN,
+            rollback_generation="gen-rollback-1",
+        )
+
+
 def test_legacy_rollback_generation_requires_the_explicit_control() -> None:
     class _Flags:
         omnigent_session_supervisor_rollback_mode = "none"
