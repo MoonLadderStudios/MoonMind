@@ -215,11 +215,16 @@ class WorkflowChatCombination:
 # Every combination MoonMind claims for native Workflow Chat, including the
 # host modes whose transport and cleanup behavior differ materially (on-demand
 # hosts are removed; static-connected hosts are drained and keep serving).
+# Codex combinations reference the resolvable product Host Class
+# ``omnigent-codex@1`` (MoonLadderStudios/MoonMind#3932). The formerly
+# unresolvable ``omnigent-codex-current@1`` class is retired and must not be
+# restored; retained history carrying it still decodes through the
+# bridge/historical-read path, never through these claimed combinations.
 WORKFLOW_CHAT_COMBINATIONS: tuple[WorkflowChatCombination, ...] = (
     WorkflowChatCombination(
         combination_id="codex-on-demand-through-omnigent",
         harness_id="codex-native",
-        host_class_ref="omnigent-codex-current@1",
+        host_class_ref="omnigent-codex@1",
         launch_policy_ref="codex-on-demand@1",
         execution_realizer_ref="codex-profile-bound@1",
         compose_profile="omnigent-host-codex",
@@ -233,7 +238,7 @@ WORKFLOW_CHAT_COMBINATIONS: tuple[WorkflowChatCombination, ...] = (
     WorkflowChatCombination(
         combination_id="codex-static-connected-through-omnigent",
         harness_id="codex-native",
-        host_class_ref="omnigent-codex-current@1",
+        host_class_ref="omnigent-codex@1",
         launch_policy_ref="codex-static@1",
         execution_realizer_ref="codex-profile-bound@1",
         compose_profile="omnigent-host-codex",
