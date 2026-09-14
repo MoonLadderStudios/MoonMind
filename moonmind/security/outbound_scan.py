@@ -141,6 +141,8 @@ def _operator_requires_enforcement() -> bool:
         if bool(SecuritySettings().high_security_mode):
             return True
     except Exception:
+        # Fresh SecuritySettings read unavailable in this environment;
+        # fall through to the import-time singleton below.
         pass
     try:
         return bool(app_settings.security.high_security_mode)
