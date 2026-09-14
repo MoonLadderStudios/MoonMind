@@ -2160,6 +2160,10 @@ class OmnigentOAuthHostRuntime:
         effective_launch: Mapping[str, Any],
         egress_attestation: EgressAttestation,
     ) -> None:
+        # An existing container for this lease recovers without re-admission:
+        # the run was already admitted under its persisted launch authority,
+        # so historical shared-CPU bindings keep their recovery path here.
+        # Only a recreation (absent container) requires explicit limits.
         if await self.container_exists(container_name):
             await self.assert_container_owned(
                 container_name=container_name, lease_id=host_lease.lease_id
@@ -2168,7 +2172,10 @@ class OmnigentOAuthHostRuntime:
         cpu_millis = int(effective_launch["limits"]["cpuMillis"])
         if cpu_millis < 1:
             raise OmnigentOAuthHostError(
-                "launch policy requires a positive explicit CPU limit",
+                "launch policy requires a positive explicit CPU limit; "
+                "historical shared-CPU (cpuMillis=0) bindings cannot be "
+                "recreated after their container is gone — migrate the "
+                "binding to a fixed-limit successor after its lease drains",
                 code="OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE",
             )
         cpu_args = ["--cpus", str(cpu_millis / 1000)]

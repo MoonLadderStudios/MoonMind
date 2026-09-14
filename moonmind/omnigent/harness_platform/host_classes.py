@@ -760,7 +760,7 @@ def launch_policy_from_effective_launch(
         )
     except (TypeError, ValueError) as exc:
         raise HarnessPlatformError(
-            "effective launch runtime policy is invalid",
+            f"effective launch runtime policy is invalid: {exc}",
             code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
         ) from exc
 
