@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Iterable, Mapping
 from enum import StrEnum
@@ -67,6 +69,31 @@ class OutboundScanResult(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    def audit_metadata(self) -> dict[str, Any]:
+        """Return secret-safe audit metadata, never including raw payloads.
+
+        ``original_content`` / ``original_bundle`` exist only for
+        disabled-mode passthrough and must never become audit evidence,
+        exception text, or Temporal history. Callers must persist or log
+        this projection instead of the full model dump.
+        """
+
+        sanitized_locations = [
+            _sanitize_scan_location(finding.location, default="outbound.text")
+            for finding in self.findings
+        ]
+        return {
+            "decision": self.decision,
+            "highSecurityMode": self.high_security_mode,
+            "scannerPolicyRef": OUTBOUND_SCAN_POLICY_REF,
+            "findingCategories": sorted({finding.category for finding in self.findings}),
+            "findingLocations": sanitized_locations,
+            "sanitizedDiagnostics": [
+                redact_sensitive_text(str(diagnostic))[:500]
+                for diagnostic in self.sanitized_diagnostics
+            ],
+        }
+
 
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b(?:token|password|secret|api[_-]?key|credential)\s*[:=]\s*"
@@ -92,6 +119,35 @@ _REDACTED_SENTINEL_VALUE_PATTERN = re.compile(
 )
 
 
+# Maximum characters kept from a caller-supplied scan location before it is
+# copied into findings, diagnostics, or audit metadata. Locations are
+# operator-controlled strings (file paths, ranges) but may contain sensitive
+# text; they are redacted and bounded so audit projections stay secret-safe.
+_MAX_SCAN_LOCATION_CHARS = 200
+
+
+def _sanitize_scan_location(value: str | None, *, default: str) -> str:
+    """Return a redacted, bounded location safe for findings and diagnostics."""
+    normalized = str(value or "").strip()
+    if not normalized:
+        return default
+    return redact_sensitive_text(normalized)[:_MAX_SCAN_LOCATION_CHARS]
+
+
+def is_binary_git_diff_marker(diff_text: str) -> bool:
+    """Return True when a git diff is an uninspected binary marker.
+
+    Git emits ``Binary files a/<path> and b/<path> differ`` instead of content
+    for binary blobs unless the diff was requested with ``--text``. Such a
+    marker is below every size bound and contains no detectable secret, so it
+    must be treated as enforcement-unavailable rather than a clean scan.
+    """
+    if not diff_text:
+        return False
+    first_line = diff_text.splitlines()[0] if diff_text.splitlines() else ""
+    return first_line.startswith("Binary files ") and first_line.endswith(" differ")
+
+
 def _credential_value_is_redacted_sentinel(match_text: str) -> bool:
     """Return True when a credential match value is only a redaction sentinel."""
     separator = max(match_text.rfind("="), match_text.rfind(":"))
@@ -104,24 +160,83 @@ def _credential_value_is_redacted_sentinel(match_text: str) -> bool:
     return bool(_REDACTED_SENTINEL_VALUE_PATTERN.match(value))
 
 
+def _operator_requires_enforcement() -> bool:
+    """Return True when operator env/config requires enforcement at call time.
+
+    ``app_settings`` is instantiated at import time, so reading it directly
+    goes stale when ``MOONMIND_HIGH_SECURITY_MODE`` changes after import
+    (for example under ``monkeypatch.setenv`` in tests or a reconfigured
+    operator environment). Constructing a fresh ``SecuritySettings`` re-reads
+    the current environment; fall back to the import-time singleton only when
+    that fresh read is unavailable.
+    """
+
+    try:
+        from moonmind.config.settings import SecuritySettings
+
+        if bool(SecuritySettings().high_security_mode):
+            return True
+    except Exception:
+        # Fresh SecuritySettings read unavailable in this environment;
+        # fall through to the import-time singleton below.
+        pass
+    try:
+        return bool(app_settings.security.high_security_mode)
+    except Exception:
+        return False
+
+
 def resolve_high_security_mode(
     explicit: bool | None = None,
     *,
     settings: object | None = None,
 ) -> bool:
-    """Resolve high-security mode using deterministic runtime precedence."""
+    """Resolve high-security mode using deterministic runtime precedence.
 
-    if explicit is not None:
-        return bool(explicit)
+    An operator-required ``True`` (supplied settings object or
+    environment/config-derived settings) is sticky: an explicit ``False``
+    from a workflow/message payload cannot downgrade it. An explicit
+    ``True`` always opts in. When no source requires enforcement the
+    result is ``False`` (disabled-mode passthrough).
+    """
+
+    if explicit is not None and bool(explicit):
+        return True
 
     security_settings = getattr(settings, "security", None)
     if security_settings is not None and hasattr(security_settings, "high_security_mode"):
-        return bool(getattr(security_settings, "high_security_mode"))
+        if bool(getattr(security_settings, "high_security_mode")):
+            return True
 
     if settings is not None and hasattr(settings, "high_security_mode"):
-        return bool(getattr(settings, "high_security_mode"))
+        if bool(getattr(settings, "high_security_mode")):
+            return True
 
-    return bool(app_settings.security.high_security_mode)
+    return _operator_requires_enforcement()
+
+
+def canonical_outbound_digest(body: Any) -> str:
+    """Return a stable sha256 digest binding a scan decision to one payload.
+
+    Non-native MoonMind-owned senders must recompute this over the exact
+    outbound payload before each side effect and must not reuse an earlier
+    allow after mutation, changed-content retry, or an alternate route. The
+    native facade binds the same digest plus the idempotency key in
+    ``NativeScanEvidence``; this helper gives every other boundary the same
+    canonical construction without duplicating serialization rules.
+    """
+
+    try:
+        serialized = json.dumps(
+            body,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+    except (TypeError, ValueError):
+        serialized = "\x00unserializable"
+    return hashlib.sha256(serialized.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def scan_outbound_text(
@@ -194,7 +309,8 @@ def _result_for_findings(
         return _allow_result(high_security_mode=high_security_mode)
 
     diagnostics = [
-        f"Blocked outbound content: {finding.category} at {finding.location}"
+        f"Blocked outbound content: {finding.category} at "
+        f"{_sanitize_scan_location(finding.location, default='outbound.text')}"
         for finding in findings
     ]
     return OutboundScanResult(
@@ -216,20 +332,27 @@ def _coerce_bundle_item(
                 location=f"bundle.item[{index}]",
                 content=item.content,
             )
-        return item
-    location = str(item.get("location") or "").strip() or f"bundle.item[{index}]"
+        return OutboundBundleItem(
+            location=_sanitize_scan_location(
+                item.location, default=f"bundle.item[{index}]"
+            ),
+            content=item.content,
+        )
+    location = _sanitize_scan_location(
+        str(item.get("location") or ""), default=f"bundle.item[{index}]"
+    )
     return OutboundBundleItem(location=location, content=str(item.get("content") or ""))
 
 
 def _normalize_location(value: str | None, *, default: str) -> str:
-    normalized = str(value or "").strip()
-    return normalized or default
+    return _sanitize_scan_location(value, default=default)
 
 
 def _scan_text_for_findings(text: str, *, location: str) -> list[OutboundFinding]:
     if not text:
         return []
 
+    safe_location = _sanitize_scan_location(location, default="outbound.text")
     findings: list[OutboundFinding] = []
     for category, pattern in (
         ("private_key", _PRIVATE_KEY_PATTERN),
@@ -247,8 +370,55 @@ def _scan_text_for_findings(text: str, *, location: str) -> list[OutboundFinding
             findings.append(
                 OutboundFinding(
                     category=category,
-                    location=location,
+                    location=safe_location,
                     redacted_preview=redacted_preview,
                 )
             )
     return findings
+
+
+def push_scan_coverage_error(
+    *,
+    commit_range: str,
+    commit_metadata_len: int,
+    max_commit_metadata_chars: int,
+    changed_file_count: int,
+    max_changed_files: int,
+    oversized_diff_path: str | None = None,
+    binary_diff_path: str | None = None,
+) -> str | None:
+    """Return a redacted fail-closed reason when push-scan input was truncated.
+
+    A truncated prefix must never be reported as complete coverage: in
+    enabled mode uninspectable required content is enforcement
+    unavailable, not a clean scan. The same applies to a binary diff that
+    was not inspected as text: its marker is short, secret-free, and must
+    not be accepted as a clean scan.
+    """
+
+    if commit_metadata_len > max_commit_metadata_chars:
+        return (
+            "outbound git push blocked: high security scan coverage "
+            f"incomplete for {commit_range}: commit metadata exceeds "
+            f"{max_commit_metadata_chars} chars"
+        )
+    if changed_file_count > max_changed_files:
+        return (
+            "outbound git push blocked: high security scan coverage "
+            f"incomplete for {commit_range}: changed file list exceeds "
+            f"{max_changed_files} entries"
+        )
+    if binary_diff_path:
+        return (
+            "outbound git push blocked: high security scan coverage "
+            f"incomplete for {commit_range}: diff for "
+            f"{redact_sensitive_text(binary_diff_path)[:200]} is binary "
+            "and was not inspected as text"
+        )
+    if oversized_diff_path:
+        return (
+            "outbound git push blocked: high security scan coverage "
+            f"incomplete for {commit_range}: diff for "
+            f"{redact_sensitive_text(oversized_diff_path)[:200]} exceeds size bound"
+        )
+    return None

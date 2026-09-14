@@ -945,13 +945,11 @@ async def test_agent_run_reports_managed_429_retry_summary_to_parent():
                 )
                 manager_handle = env.client.get_workflow_handle(manager_id)
 
+                # NOTE: AgentRun no longer sends profile_assigned to its parent
+                # (MoonLadderStudios/MoonMind#1089 R8); slot assignment is
+                # observed through the manager, and retry readiness through the
+                # cooldown/report loop below.
                 parent_state = {}
-                for _ in range(30):
-                    parent_state = await parent_handle.query(TestAgentRunParent.get_state)
-                    if parent_state.get("profile_assignments"):
-                        break
-                    await asyncio.sleep(0.1)
-
                 manager_state = {}
                 for _ in range(60):
                     parent_state = await parent_handle.query(TestAgentRunParent.get_state)

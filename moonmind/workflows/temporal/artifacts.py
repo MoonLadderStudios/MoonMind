@@ -5267,6 +5267,7 @@ class TemporalArtifactActivities:
             return {
                 "running": False,
                 "workflow_id": workflow_id,
+                "runtime_id": runtime_id,
                 "status": f"RPC_ERROR_{exc.status.name}",
                 "inspection_succeeded": False,
                 "error_type": type(exc).__name__,
@@ -5278,6 +5279,7 @@ class TemporalArtifactActivities:
             return {
                 "running": False,
                 "workflow_id": workflow_id,
+                "runtime_id": runtime_id,
                 "status": status_name,
                 "inspection_succeeded": True,
             }
@@ -5291,6 +5293,7 @@ class TemporalArtifactActivities:
             return {
                 "running": True,
                 "workflow_id": workflow_id,
+                "runtime_id": runtime_id,
                 "status": status_name,
                 "inspection_succeeded": False,
                 "inspection_status": "QUERY_TIMEOUT",
@@ -5299,6 +5302,7 @@ class TemporalArtifactActivities:
             return {
                 "running": True,
                 "workflow_id": workflow_id,
+                "runtime_id": runtime_id,
                 "status": status_name,
                 "inspection_succeeded": False,
                 "inspection_status": f"RPC_ERROR_{exc.status.name}",
@@ -5310,6 +5314,7 @@ class TemporalArtifactActivities:
             return {
                 "running": True,
                 "workflow_id": workflow_id,
+                "runtime_id": runtime_id,
                 "status": status_name,
                 "inspection_succeeded": False,
                 "inspection_status": "INVALID_QUERY_PAYLOAD",
@@ -5337,20 +5342,40 @@ class TemporalArtifactActivities:
                     break
 
         requested_profile_ref = str(execution_profile_ref or "").strip()
+        explicit_profile_ref = requested_profile_ref
         if not requested_profile_ref and requester_request is not None:
             requested_profile_ref = str(
                 requester_request.get("execution_profile_ref") or ""
             ).strip()
+        # MoonLadderStudios/MoonMind#1130: an explicit profile selection is an
+        # observation identity. A missing/deleted selection must never display
+        # another account's capacity as its own.
+        explicit_ref_requested = bool(explicit_profile_ref) or bool(
+            requested_profile_ref
+            and requester_request is not None
+            and str(requester_request.get("execution_profile_ref") or "").strip()
+        )
         requested_profile: dict[str, Any] | None = None
+        requested_profile_missing = False
+        requested_profile_via_selector = False
         if isinstance(profiles, dict):
-            raw_profile = profiles.get(requested_profile_ref)
+            raw_profile = profiles.get(requested_profile_ref) if requested_profile_ref else None
             profile_selector = (
                 requester_request.get("profile_selector")
                 if requester_request is not None
                 else None
             )
-            if not isinstance(raw_profile, dict) and isinstance(
-                profile_selector, dict
+            # Selector-based diagnostic matching may report a unique match only
+            # where the admitted request actually used that selector: no
+            # explicit profile ref was admitted, and the pending request
+            # carries a selector. An explicit ref never falls back to a
+            # selector match, and display fallback is never execution
+            # authority.
+            if (
+                not isinstance(raw_profile, dict)
+                and not explicit_ref_requested
+                and not requested_profile_ref
+                and isinstance(profile_selector, dict)
             ):
                 matching_profiles = [
                     profile
@@ -5381,19 +5406,91 @@ class TemporalArtifactActivities:
                 ]
                 if len(matching_profiles) == 1:
                     raw_profile = matching_profiles[0]
-            if not isinstance(raw_profile, dict) and len(profiles) == 1:
-                only_profile = next(iter(profiles.values()))
-                raw_profile = only_profile if isinstance(only_profile, dict) else None
+                    requested_profile_via_selector = True
+            # No sole-remaining-profile substitution: an explicit missing
+            # profile returns missing/unavailable, never the other profile.
+            if not isinstance(raw_profile, dict):
+                if requested_profile_ref:
+                    requested_profile_missing = True
             if isinstance(raw_profile, dict):
                 current_leases = raw_profile.get("current_leases")
+                # MoonLadderStudios/MoonMind#1130: absent observation is not
+                # proof of idle capacity. A missing/malformed lease list
+                # yields an unknown count (None), never a fabricated zero.
+                leases_known = isinstance(current_leases, list)
+                # Shared-scope projection: only the scope for this profile,
+                # safe aggregate fields only, no other users' identities.
+                scope_ref = str(raw_profile.get("capacity_scope_ref") or "").strip()
+                if not scope_ref:
+                    profile_id_hint = str(raw_profile.get("profile_id") or requested_profile_ref)
+                    scope_ref = f"provider-profile:{profile_id_hint}" if profile_id_hint else ""
+                scope_record: dict[str, Any] | None = None
+                scope_known = False
+                raw_scopes = state.get("scopes")
+                if scope_ref and isinstance(raw_scopes, list):
+                    for entry in raw_scopes:
+                        if isinstance(entry, dict) and str(entry.get("scope_ref") or "") == scope_ref:
+                            scope_record = {
+                                "scope_ref": str(entry.get("scope_ref") or scope_ref),
+                                "configured_limit": entry.get("configured_limit"),
+                                "effective_limit": entry.get("effective_limit"),
+                                "cooldown_until": entry.get("cooldown_until"),
+                                "backpressure_state": entry.get("backpressure_state"),
+                                "generation": entry.get("generation"),
+                            }
+                            scope_known = True
+                            break
+                # Maintenance wait: counts plus this requester's own position
+                # only. Other owners' identities are never projected.
+                maintenance_waiters = raw_profile.get("exclusive_maintenance_waiters")
+                maintenance_waiters = (
+                    maintenance_waiters if isinstance(maintenance_waiters, int) else None
+                )
+                maintenance_queue = raw_profile.get("exclusive_maintenance_queue")
+                maintenance_waiter_position: int | None = None
+                if requester_workflow_id and isinstance(maintenance_queue, list):
+                    for index, entry in enumerate(maintenance_queue):
+                        if isinstance(entry, dict) and entry.get("ownerId") == requester_workflow_id:
+                            maintenance_waiter_position = index + 1
+                            break
+                maintenance_known = (
+                    maintenance_waiters is not None or isinstance(maintenance_queue, list)
+                )
+                # Pending cleanup/release: bounded counts plus this
+                # requester's own flags only. A cleanup request is not
+                # cleanup success.
+                unresolved_releases = state.get("unresolved_releases")
+                cleanup_requested = state.get("cleanup_requested_leases")
+                profile_leases = current_leases if isinstance(current_leases, list) else []
+                if isinstance(unresolved_releases, dict):
+                    profile_unresolved_count: int | None = sum(
+                        1 for lease_id in profile_leases if lease_id in unresolved_releases
+                    )
+                else:
+                    profile_unresolved_count = None
+                if isinstance(cleanup_requested, list):
+                    cleanup_set = set(cleanup_requested)
+                    profile_cleanup_count: int | None = sum(
+                        1 for lease_id in profile_leases if lease_id in cleanup_set
+                    )
+                else:
+                    cleanup_set = set()
+                    profile_cleanup_count = None
+                requester_unresolved = (
+                    bool(requester_workflow_id)
+                    and isinstance(unresolved_releases, dict)
+                    and requester_workflow_id in unresolved_releases
+                )
+                requester_cleanup = bool(requester_workflow_id) and requester_workflow_id in cleanup_set
                 requested_profile = {
                     "profile_id": str(
                         raw_profile.get("profile_id") or requested_profile_ref
                     ),
                     "max_parallel_runs": raw_profile.get("max_parallel_runs"),
                     "current_leases_count": (
-                        len(current_leases) if isinstance(current_leases, list) else 0
+                        len(current_leases) if isinstance(current_leases, list) else None
                     ),
+                    "leases_known": leases_known,
                     "cooldown_until": raw_profile.get("cooldown_until"),
                     "enabled": raw_profile.get("enabled"),
                     "launch_ready": raw_profile.get("launch_ready"),
@@ -5406,7 +5503,23 @@ class TemporalArtifactActivities:
                         "execution_lease_count"
                     ),
                     "capacity_scope_ref": raw_profile.get("capacity_scope_ref"),
+                    # MoonLadderStudios/MoonMind#1130: safe limiting-condition
+                    # fields derived from the owning queues/scopes.
+                    "capacity_scope": scope_record,
+                    "scope_known": scope_known,
+                    "maintenance_waiters": maintenance_waiters,
+                    "maintenance_waiter_position": maintenance_waiter_position,
+                    "maintenance_known": maintenance_known,
+                    "profile_unresolved_release_count": profile_unresolved_count,
+                    "profile_cleanup_pending_count": profile_cleanup_count,
+                    "requester_unresolved_release": requester_unresolved,
+                    "requester_cleanup_requested": requester_cleanup,
                 }
+        elif requested_profile_ref:
+            # Profiles collection itself is unknown/malformed: an explicit
+            # ref cannot be resolved, so mark it missing rather than
+            # substituting another profile.
+            requested_profile_missing = True
 
         # Which profile, if any, this requester already holds a lease on. The
         # Omnigent pre-Activity admission path reads this to recognize a grant
@@ -5434,37 +5547,81 @@ class TemporalArtifactActivities:
                         requester_fencing_generation = generation or None
                     break
 
+        # MoonLadderStudios/MoonMind#1130: requester-level cleanup/release
+        # flags without leaking other users' identities. An empty returned
+        # collection after inspection failure is never reported here because
+        # this path only runs after a successful get_state query.
+        unresolved_state = state.get("unresolved_releases")
+        cleanup_state = state.get("cleanup_requested_leases")
+        cleanup_ids: set[str] = set(cleanup_state) if isinstance(cleanup_state, list) else set()
+        top_requester_unresolved = bool(
+            requester_workflow_id
+            and isinstance(unresolved_state, dict)
+            and requester_workflow_id in unresolved_state
+        )
+        top_requester_cleanup = bool(requester_workflow_id) and requester_workflow_id in cleanup_ids
+
         return {
             "running": True,
             "workflow_id": workflow_id,
             "status": status_name,
             "inspection_succeeded": True,
-            "profile_count": len(profiles) if isinstance(profiles, dict) else 0,
+            # MoonLadderStudios/MoonMind#1130: observation identity and
+            # freshness so callers can reject mismatched or stale results.
+            # event_count is the monotonic manager revision.
+            "runtime_id": runtime_id,
+            "requested_profile_ref": requested_profile_ref,
+            "requested_profile_missing": requested_profile_missing,
+            "requested_profile_via_selector": requested_profile_via_selector,
+            "profiles_known": isinstance(profiles, dict),
+            "pending_requests_known": isinstance(pending_requests, list),
+            "profile_count": len(profiles) if isinstance(profiles, dict) else None,
             "pending_requests_count": (
-                len(pending_requests) if isinstance(pending_requests, list) else 0
+                len(pending_requests) if isinstance(pending_requests, list) else None
             ),
             "event_count": event_count if isinstance(event_count, int) else None,
             "requester_pending": requester_pending,
             "requester_queue_position": requester_queue_position,
             "requester_profile_id": requester_profile_id,
             "requester_fencing_generation": requester_fencing_generation,
+            "requester_unresolved_release": top_requester_unresolved,
+            "requester_cleanup_requested": top_requester_cleanup,
             "requested_profile": requested_profile,
+            # MoonLadderStudios/MoonMind#1089: surface the manager's stable
+            # per-slot cleanup claims (non-secret: lease/profile/fence,
+            # claim ID, reason, consumer, admitted run/evidence identity,
+            # attempt) so the existing AgentRun, runtime realizer, janitor,
+            # or operator can consume them and complete each claim through
+            # report_cleanup_verified.
+            "cleanup_obligations": state.get("cleanup_obligations") or [],
         }
 
     async def provider_profile_verify_lease_holders(
         self,
         *,
         workflow_ids: list[str],
+        run_ids: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Check whether each lease-holding workflow is still running.
 
         Uses the Temporal client to describe each workflow and determine if it
-        is in a terminal state. This allows the ProviderProfileManager to reclaim
-        slots from cancelled/terminated workflows without waiting for the
-        2-hour lease timeout.
+        is in a terminal state.
+
+        MoonLadderStudios/MoonMind#1089: a liveness observation is never
+        teardown evidence. A terminal status, a NOT_FOUND lookup, or an
+        unknown consumer state (including a run-ID mismatch against the
+        admitted run) only ever justifies a capacity-consuming cleanup
+        request while the slot stays spent — neither a closed workflow nor
+        a missing Temporal record proves that an external container, session,
+        or copied credential is no longer in use. Where the caller supplies
+        the admitted run ID for a workflow, the observation is bound to that
+        exact run; a different live run under the same workflow ID is
+        reported as ``RUN_ID_MISMATCH`` rather than as the admitted owner.
 
         Returns a dict mapping workflow_id -> {"running": bool, "status": str}.
-        Non-found workflows are counted as not running.
+        NOT_FOUND workflows are reported as not running so the manager
+        requests cleanup for them; that flag authorizes a cleanup request,
+        never a release.
         """
         from temporalio.client import RPCError
 
@@ -5472,6 +5629,7 @@ class TemporalArtifactActivities:
 
         adapter = TemporalClientAdapter()
         client = await adapter.get_client()
+        expected_runs = dict(run_ids or {})
 
         results: dict[str, dict[str, Any]] = {}
         for wf_id in workflow_ids:
@@ -5479,6 +5637,18 @@ class TemporalArtifactActivities:
                 handle = client.get_workflow_handle(wf_id)
                 desc = await handle.describe()
                 status_name = desc.status.name
+                expected_run = str(expected_runs.get(wf_id) or "").strip()
+                if expected_run:
+                    observed_run = str(getattr(desc, "run_id", "") or "").strip()
+                    if observed_run and observed_run != expected_run:
+                        # A replacement run now owns this workflow ID. It is
+                        # not the admitted consumer, so it cannot prove the
+                        # admitted consumer stopped.
+                        results[wf_id] = {
+                            "running": False,
+                            "status": "RUN_ID_MISMATCH",
+                        }
+                        continue
                 results[wf_id] = {
                     "running": status_name == "RUNNING",
                     "status": status_name,
@@ -6178,6 +6348,10 @@ class TemporalArtifactActivities:
                 expected_fence = _int_or_zero(payload.get("fencing_generation"))
                 row = await _lease_row(session, lease_id)
                 if row is None:
+                    # No durable authority exists under this identity, so
+                    # there is no spent slot to keep. This reconciles ledger
+                    # state only — a missing row is never positive evidence
+                    # that a physical consumer stopped.
                     return {
                         "outcome": LeaseTransitionOutcome.ALREADY_RELEASED.value,
                         "cleanup_requested": False,
@@ -6215,6 +6389,12 @@ class TemporalArtifactActivities:
                 }
 
             elif action == "release_one":
+                # MoonLadderStudios/MoonMind#1089: this transition serves the
+                # owner's own release (the holder stopping itself). It must
+                # not be used for terminal-owner reclamation: a terminal
+                # workflow or NOT_FOUND lookup is never teardown evidence, so
+                # the manager requests cleanup there and only completes the
+                # release through "release_verified" below.
                 payload = (leases or [{}])[0]
                 lease_id = str(payload.get("lease_id") or "").strip()
                 if not lease_id:
@@ -6265,6 +6445,99 @@ class TemporalArtifactActivities:
                     "outcome": LeaseTransitionOutcome.RELEASED.value,
                 }
 
+            elif action == "release_verified":
+                # MoonLadderStudios/MoonMind#1089: complete a durably
+                # requested cleanup from positive teardown evidence. Only a
+                # row already in the capacity-consuming ``cleanup_requested``
+                # state may transition here, quoting the acquired fence, with
+                # ``teardown_evidence.consumer_stopped`` asserted by the
+                # designated cleanup owner (the existing AgentRun, runtime
+                # realizer, or janitor — never a new cleanup engine). A
+                # database tombstone, an accepted cancellation, a lease
+                # timeout, a terminal workflow, or a cleared browser panel is
+                # not teardown evidence and cannot satisfy this transition.
+                payload = (leases or [{}])[0]
+                lease_id = str(payload.get("lease_id") or "").strip()
+                if not lease_id:
+                    return {"error": "release_verified requires lease_id"}
+                expected_fence = _int_or_zero(payload.get("fencing_generation"))
+                row = await _lease_row(session, lease_id)
+                if row is None:
+                    # The tombstone already came back through a prior
+                    # verified release. This reconciles ledger state, not
+                    # physical teardown: a missing row is never proof that a
+                    # consumer stopped.
+                    return {
+                        "released": True,
+                        "duplicate": True,
+                        "outcome": LeaseTransitionOutcome.ALREADY_RELEASED.value,
+                    }
+                if _transition_identity_conflict(row, payload):
+                    return {
+                        "released": False,
+                        "outcome": LeaseTransitionOutcome.CONFLICT.value,
+                        "error": "lease identity conflict",
+                    }
+                if expected_fence and _int_or_zero(row.fencing_generation) != expected_fence:
+                    return {
+                        "released": False,
+                        "stale": True,
+                        "outcome": LeaseTransitionOutcome.STALE.value,
+                    }
+                if _row_state(row) == DurableLeaseState.RELEASED.value:
+                    return {
+                        "released": True,
+                        "duplicate": True,
+                        "outcome": LeaseTransitionOutcome.ALREADY_RELEASED.value,
+                    }
+                if _row_state(row) != DurableLeaseState.CLEANUP_REQUESTED.value:
+                    # Releasing here would skip the cleanup-request ordering
+                    # and free a consumer that may still be running. The
+                    # holder stopping itself releases through "release_one".
+                    return {
+                        "released": False,
+                        "outcome": LeaseTransitionOutcome.CONFLICT.value,
+                        "error": "cleanup not requested",
+                    }
+                evidence = payload.get("teardown_evidence")
+                if (
+                    not isinstance(evidence, dict)
+                    or evidence.get("consumer_stopped") is not True
+                ):
+                    return {
+                        "released": False,
+                        "outcome": LeaseTransitionOutcome.CONFLICT.value,
+                        "error": "teardown evidence required",
+                    }
+                # Tombstone instead of deleting: the row's fencing generation
+                # remains the runtime's high-water evidence, so a fresh
+                # manager that finds no live rows still resumes above every
+                # number it ever issued. Tombstones are excluded from "load"
+                # and reaped by "purge_released" after the redelivery horizon.
+                row.lease_state = DurableLeaseState.RELEASED.value
+                row.released_at = datetime.now(timezone.utc)
+                metadata = dict(row.safe_metadata_json or {})
+                reason = str(payload.get("reason") or "").strip()
+                if reason:
+                    metadata["releaseReason"] = reason
+                # The verified-teardown marker is what lets "purge_released"
+                # tell a completed cleanup obligation from one whose physical
+                # teardown was never confirmed.
+                metadata["cleanupVerified"] = True
+                verified_by = (
+                    evidence.get("verified_by")
+                    if isinstance(evidence.get("verified_by"), str)
+                    else ""
+                )
+                if verified_by.strip():
+                    metadata["verifiedBy"] = verified_by.strip()
+                row.safe_metadata_json = metadata
+                await session.commit()
+                return {
+                    "released": True,
+                    "outcome": LeaseTransitionOutcome.RELEASED.value,
+                }
+
             elif action == "purge_released":
                 payload = (leases or [{}])[0]
                 try:
@@ -6276,9 +6549,17 @@ class TemporalArtifactActivities:
                 horizon = datetime.now(timezone.utc) - timedelta(
                     seconds=max(3600, older_than_seconds)
                 )
-                purged = (
+                # MoonLadderStudios/MoonMind#1089: a release tombstone that
+                # records an owed cleanup without a verified teardown is the
+                # only remaining evidence of an unresolved physical-cleanup
+                # obligation. Ordinary retention must not purge it — a missing
+                # row is never proof that a consumer stopped. Only tombstones
+                # whose cleanup was verified (or that never owed one) are
+                # reaped; the retained count is reported for operator
+                # diagnostics.
+                candidates = (
                     await session.execute(
-                        delete(ProviderProfileSlotLease).where(
+                        select(ProviderProfileSlotLease).where(
                             ProviderProfileSlotLease.runtime_id == runtime_id,
                             ProviderProfileSlotLease.lease_state
                             == DurableLeaseState.RELEASED.value,
@@ -6286,9 +6567,52 @@ class TemporalArtifactActivities:
                             ProviderProfileSlotLease.released_at < horizon,
                         )
                     )
-                ).rowcount or 0
-                await session.commit()
-                return {"purged": int(purged)}
+                ).scalars().all()
+                deletable_ids: list[Any] = []
+                retained_unresolved = 0
+                for candidate in candidates:
+                    # Re-check the horizon predicates in Python: the SELECT
+                    # already narrows to past-horizon tombstones, and the
+                    # partition below must never widen that set back out.
+                    if _row_state(candidate) != DurableLeaseState.RELEASED.value:
+                        continue
+                    candidate_released_at = getattr(
+                        candidate, "released_at", None
+                    )
+                    if candidate_released_at is None:
+                        continue
+                    if candidate_released_at.tzinfo is None:
+                        candidate_released_at = candidate_released_at.replace(
+                            tzinfo=timezone.utc
+                        )
+                    if candidate_released_at >= horizon:
+                        continue
+                    candidate_metadata = getattr(
+                        candidate, "safe_metadata_json", None
+                    )
+                    if (
+                        isinstance(candidate_metadata, dict)
+                        and candidate_metadata.get("cleanupRequested")
+                        and not candidate_metadata.get("cleanupVerified")
+                    ):
+                        retained_unresolved += 1
+                        continue
+                    deletable_ids.append(candidate.id)
+                purged = 0
+                if deletable_ids:
+                    purged = (
+                        await session.execute(
+                            delete(ProviderProfileSlotLease).where(
+                                ProviderProfileSlotLease.runtime_id == runtime_id,
+                                ProviderProfileSlotLease.id.in_(deletable_ids),
+                            )
+                        )
+                    ).rowcount or 0
+                    await session.commit()
+                return {
+                    "purged": int(purged),
+                    "retained_unresolved_cleanup": int(retained_unresolved),
+                }
 
             elif action == "list_active":
                 scope_filter = None
