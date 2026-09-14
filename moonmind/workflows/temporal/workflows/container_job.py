@@ -32,6 +32,7 @@ _TERMINAL = frozenset({"succeeded", "failed", "canceled", "timed_out"})
 CONTAINER_JOB_TERMINAL_ROOT_CAUSE_MESSAGE_PATCH = (
     "container-job-terminal-root-cause-message-v1"
 )
+CONTAINER_JOB_CAPACITY_WAIT_PATCH = "container-job-shared-capacity-wait-v1"
 
 
 def _workflow_patch_enabled(patch_id: str) -> bool:
@@ -137,6 +138,7 @@ class MoonMindContainerJobWorkflow:
             ownershipToken=inp.ownership_token,
             request=inp.request,
             registryAuthorization=inp.registry_authorization,
+            waitForCapacity=_workflow_patch_enabled(CONTAINER_JOB_CAPACITY_WAIT_PATCH),
         )
         terminal_state = ContainerJobState.FAILED
         exit_code: int | None = None
@@ -179,6 +181,7 @@ class MoonMindContainerJobWorkflow:
                     request.egress_attestation_ref = created.diagnostics_ref
                     request.resolved_cache_refs = created.resolved_cache_refs
                     request.gpu_observation = created.gpu_observation
+                    request.resolved_resources = created.resolved_resources
                 else:
                     # A reconciled container skips create; recover its republished
                     # launch attestation ref so terminal evidence still correlates
@@ -189,6 +192,30 @@ class MoonMindContainerJobWorkflow:
                     started = await self._activity(
                         "container_job.start_container", request
                     )
+                    while (
+                        request.wait_for_capacity
+                        and started.capacity_wait
+                        and not self._cancel_requested
+                    ):
+                        request.message = started.capacity_wait
+                        await self._project(
+                            request, ContainerJobState.WAITING_FOR_CAPACITY
+                        )
+                        try:
+                            await workflow.wait_condition(
+                                lambda: self._cancel_requested,
+                                timeout=timedelta(seconds=30),
+                            )
+                        except TimeoutError:
+                            pass
+                        if not self._cancel_requested:
+                            await self._project(request, ContainerJobState.STARTING)
+                            started = await self._activity(
+                                "container_job.start_container", request
+                            )
+                    if not started.capacity_wait:
+                        request.message = None
+                        request.resolved_resources = started.resolved_resources
                     if started.gpu_observation is not None:
                         # Launch evidence supersedes the pre-create support
                         # report for the same requested resource.
@@ -235,8 +262,14 @@ class MoonMindContainerJobWorkflow:
             )
         except TimeoutError:
             terminal_state = ContainerJobState.TIMED_OUT
-            failure_class = ContainerJobFailureClass.TIMEOUT
-            message = "container job exceeded its timeout"
+            if self._state == ContainerJobState.WAITING_FOR_CAPACITY:
+                failure_class = ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+                message = f"container job exhausted its capacity wait budget; tests did not start: {request.message}"[
+                    :2048
+                ]
+            else:
+                failure_class = ContainerJobFailureClass.TIMEOUT
+                message = "container job exceeded its timeout"
         except Exception as exc:
             terminal_state = ContainerJobState.FAILED
             # Preserve the trusted backend's specific failure class (denied image

@@ -51,7 +51,8 @@ class HostPolicy(PolicySection):
 
 
 class ResourcePolicy(PolicySection):
-    cpu_millis: PositiveInt = Field(alias="cpuMillis")
+    # Zero selects the deployment's kernel-enforced shared CPU pool.
+    cpu_millis: int = Field(alias="cpuMillis", ge=0)
     memory_mib: PositiveInt = Field(alias="memoryMiB")
     processes: PositiveInt
     timeout_seconds: PositiveInt = Field(alias="timeoutSeconds")
@@ -190,6 +191,8 @@ class PolicyDocument(BaseModel):
 
     @model_validator(mode="after")
     def reject_ambient_authority(self) -> "PolicyDocument":
+        if self.host.mode == "static_compose" and self.resources.cpu_millis == 0:
+            raise ValueError("shared CPU requires an on-demand Docker host")
         forbidden_keys = {
             "password", "accesstoken", "authtoken", "refreshtoken",
             "secretbody", "credentialbody",

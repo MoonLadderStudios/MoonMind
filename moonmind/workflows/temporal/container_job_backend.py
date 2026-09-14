@@ -37,7 +37,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from logging import getLogger
 from pathlib import Path
-from typing import Awaitable, Callable, Protocol, Sequence, runtime_checkable
+from typing import Any, Awaitable, Callable, Protocol, Sequence, runtime_checkable
 
 from moonmind.capacity import (
     WORKLOAD_CLASS_CONTAINER_JOB,
@@ -485,6 +485,10 @@ class _OutputRejected(RuntimeError):
     """Internal signal that a declared output breaches a collection policy."""
 
 
+class _CapacityWait(RuntimeError):
+    """The durable workflow, rather than an Activity retry, owns this wait."""
+
+
 class DockerContainerJobBackend:
     """Thin, deployment-selected Docker CLI adapter with owned identities."""
 
@@ -504,6 +508,7 @@ class DockerContainerJobBackend:
         image_lock: ImageAcquisitionLock | None = None,
         capacity_lock: CapacityAdmissionLock | None = None,
         machine_capacity: MachineCapacityLedger | None = None,
+        cpu_pool: Any | None = None,
         image_lock_root: str | Path | None = None,
         pull_lease_ttl_seconds: float = 240.0,
         pull_lock_poll_seconds: float = 2.0,
@@ -549,6 +554,15 @@ class DockerContainerJobBackend:
         # still enforced from directly observed running containers, but a host
         # reservation that has not created its container yet is invisible.
         self._machine_capacity = machine_capacity
+        from moonmind.capacity.cpu_pool import DockerCpuPool
+
+        self._cpu_pool = cpu_pool or (
+            DockerCpuPool(
+                runner=self._runner, ledger=machine_capacity, backend_ref=backend_ref
+            )
+            if machine_capacity is not None
+            else None
+        )
         self._pull_lease_ttl_seconds = pull_lease_ttl_seconds
         self._pull_lock_poll_seconds = pull_lock_poll_seconds
         self._pull_lock_max_wait_seconds = pull_lock_max_wait_seconds
@@ -707,7 +721,11 @@ class DockerContainerJobBackend:
         ceilings = self._settings
         checks = (
             (spec.resources.cpu_millis, ceilings.max_cpu_millis, "cpuMillis"),
-            (spec.resources.memory_mib, ceilings.max_memory_mib, "memoryMiB"),
+            (
+                spec.resources.minimum_memory_mib or spec.resources.memory_mib,
+                ceilings.max_memory_mib,
+                "memoryMiB",
+            ),
             (spec.resources.pids, ceilings.max_pids, "pids"),
             (spec.timeout_seconds, ceilings.max_timeout_seconds, "timeoutSeconds"),
         )
@@ -907,6 +925,20 @@ class DockerContainerJobBackend:
             size_bytes = int(self._settings.shm_size_mib) * _MIB
         return (int(size_bytes) + _MIB - 1) // _MIB
 
+    def _shared_cpu(self, request: ContainerJobActivityRequest) -> bool:
+        return request.request.spec.resources.cpu_millis == 0 or (
+            request.wait_for_capacity and self._cpu_pool is not None
+        )
+
+    async def _cpu_limit(self, request: ContainerJobActivityRequest) -> int:
+        requested = request.request.spec.resources.cpu_millis
+        if not self._shared_cpu(request):
+            return requested
+        # Shared requests are maxima. Docker rejects quotas larger than the
+        # daemon's CPU count, so both deployment ceilings apply at creation.
+        budget = await self._machine_budget()
+        return min(requested or self._settings.max_cpu_millis, budget.cpu_millis)
+
     def _machine_reservation(
         self, request: ContainerJobActivityRequest, *, container_name: str | None = None
     ) -> ReservationRequest:
@@ -922,8 +954,12 @@ class DockerContainerJobBackend:
             # taking a second one.
             generation=1,
             demand=ResourceDemand(
-                cpu_millis=int(resources.cpu_millis),
-                memory_mib=int(resources.memory_mib),
+                cpu_millis=(
+                    0 if self._shared_cpu(request) else int(resources.cpu_millis)
+                ),
+                memory_mib=min(
+                    int(resources.memory_mib), self._settings.max_memory_mib
+                ),
                 processes=int(resources.pids),
                 # MoonLadderStudios/MoonMind#3881: ``--shm-size`` is RAM-backed
                 # tmpfs, which is exactly what the machine temporary-storage
@@ -990,16 +1026,20 @@ class DockerContainerJobBackend:
             backend_ref=self._backend_ref, inventory=inventory
         )
         outcome = await self._machine_capacity.reserve(
-            request=reservation, budget=budget
+            request=reservation,
+            budget=budget,
+            minimum_memory_mib=request.request.spec.resources.minimum_memory_mib,
         )
         self._record_machine_capacity(outcome.decision)
         if not outcome.admitted:
+            if request.wait_for_capacity and not outcome.unsatisfiable:
+                raise _CapacityWait(outcome.decision.reason)
             raise ContainerJobBackendError(
                 ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
                 "container-job machine admission refused: "
                 f"{outcome.decision.reason}",
             )
-        return reservation
+        return dataclasses.replace(reservation, demand=outcome.decision.demand)
 
     @staticmethod
     def _record_machine_capacity(decision: ResourceAdmissionDecision) -> None:
@@ -2092,6 +2132,7 @@ class DockerContainerJobBackend:
             raise RuntimeError("resolved workspace and image are required")
         self._enforce_resource_ceilings(request)
         spec = request.request.spec
+        cpu_limit = await self._cpu_limit(request)
         # Report the selected daemon's support for a caller-requested GPU
         # resource before anything is created, so an unsupported request never
         # reaches the caller's workload.
@@ -2182,10 +2223,8 @@ class DockerContainerJobBackend:
             "--network",
             network_mode,
             *structured_container_security_args(),
-            "--cpus",
-            str(spec.resources.cpu_millis / 1000),
             "--memory",
-            f"{spec.resources.memory_mib}m",
+            f"{min(spec.resources.memory_mib, self._settings.max_memory_mib)}m",
             "--shm-size",
             # The caller owns this resource once the deployment ceiling has
             # admitted it; the deployment default only applies when the request
@@ -2198,6 +2237,11 @@ class DockerContainerJobBackend:
             "--mount",
             workspace_mount,
         ]
+        if self._shared_cpu(request):
+            if self._cpu_pool is None:
+                raise RuntimeError("shared CPU requires the deployment resource owner")
+            args.extend(await self._cpu_pool.launch_args())
+        args.extend(("--cpus", str(cpu_limit / 1000)))
         if spec.resources.gpu is not None:
             # The caller owns the device request; the backend only realizes it as
             # the vendor's Docker device request after the deployment ceiling has
@@ -2288,6 +2332,10 @@ class DockerContainerJobBackend:
         return ContainerJobActivityResult(
             containerRef=name,
             diagnosticsRef=egress_evidence_ref,
+            resolvedResources=spec.resources.model_copy(update={
+                "cpu_millis": cpu_limit,
+                "memory_mib": min(spec.resources.memory_mib, self._settings.max_memory_mib),
+            }),
             resolvedCacheRefs=tuple(resolved_cache_refs),
             gpuObservation=resolved_gpu,
         )
@@ -2297,10 +2345,29 @@ class DockerContainerJobBackend:
         requested_gpu = request.request.spec.resources.gpu
         started_at = datetime.now(timezone.utc)
         capacity_lease = await self._acquire_capacity_lock()
+        pool_lease = None
         try:
-            reservation = await self._reserve_machine_capacity(
-                request, container_name=container_name
-            )
+            if self._shared_cpu(request):
+                if self._cpu_pool is None:
+                    raise RuntimeError(
+                        "shared CPU requires the deployment resource owner"
+                    )
+                from moonmind.capacity.cpu_pool import CpuPoolBusy
+
+                try:
+                    pool_lease = await self._cpu_pool.prepare(
+                        await self._machine_budget()
+                    )
+                except CpuPoolBusy as exc:
+                    if request.wait_for_capacity:
+                        return ContainerJobActivityResult(capacityWait=str(exc)[:2048])
+                    raise
+            try:
+                reservation = await self._reserve_machine_capacity(
+                    request, container_name=container_name
+                )
+            except _CapacityWait as exc:
+                return ContainerJobActivityResult(capacityWait=str(exc)[:2048])
             if reservation is not None and self._machine_capacity is not None:
                 # A read-only precheck is advisory. Re-verify the exact
                 # reservation fence immediately before the Docker mutation.
@@ -2313,6 +2380,25 @@ class DockerContainerJobBackend:
                         "container-job machine reservation no longer holds; "
                         "retry after another managed launch finishes",
                     )
+            if reservation is not None:
+                resources = request.request.spec.resources
+                request.resolved_resources = resources.model_copy(
+                    update={
+                        "memory_mib": reservation.demand.memory_mib,
+                        "cpu_millis": request.resolved_resources.cpu_millis
+                        if request.resolved_resources is not None
+                        else await self._cpu_limit(request),
+                    }
+                )
+                if resources.minimum_memory_mib is not None:
+                    await self._checked(
+                        "update",
+                        "--memory",
+                        f"{reservation.demand.memory_mib}m",
+                        container_name,
+                    )
+            if pool_lease is not None:
+                await self._cpu_pool.verify(pool_lease)
             code, _, start_stderr = await self._runner(("start", container_name))
             if code:
                 # The daemon resolves a device request when the container
@@ -2323,6 +2409,12 @@ class DockerContainerJobBackend:
                 )
                 detail = start_stderr.decode(errors="replace").strip()[:1000]
                 raise RuntimeError(f"docker start failed: {detail}")
+            if pool_lease is not None:
+                try:
+                    await self._cpu_pool.finish_launch(pool_lease, container_name)
+                except BaseException:
+                    await self._runner(("rm", "--force", container_name))
+                    raise
             if reservation is not None and self._machine_capacity is not None:
                 # The consumer now exists, so the reservation stops being
                 # clock-reclaimable and is discoverable from the container. A
@@ -2344,6 +2436,8 @@ class DockerContainerJobBackend:
                         "retry after another managed launch finishes",
                     ) from exc
         finally:
+            if pool_lease is not None:
+                await self._runner(("rm", "--force", pool_lease.holder))
             try:
                 await self._capacity_lock.release(capacity_lease)
             except Exception:  # noqa: BLE001 - OS releases locks on worker exit
@@ -2390,6 +2484,7 @@ class DockerContainerJobBackend:
         return ContainerJobActivityResult(
             containerRef=container_name,
             running=True,
+            resolvedResources=request.resolved_resources,
             diagnosticsRef=diagnostics_ref,
             gpuObservation=gpu_observation(
                 requested_gpu, backend_supported=True, launched=True
@@ -2919,6 +3014,14 @@ class DockerContainerJobBackend:
             egress_error = str(exc)[:512] or type(exc).__name__
         diagnostics = {
             "jobId": request.job_id,
+            "requestedResources": request.request.spec.resources.model_dump(
+                by_alias=True, exclude_none=True
+            ),
+            "resolvedResources": (
+                request.resolved_resources.model_dump(by_alias=True, exclude_none=True)
+                if request.resolved_resources
+                else None
+            ),
             "contractVersion": "v1",
             "terminalState": getattr(
                 request.terminal_state, "value", request.terminal_state
@@ -2928,12 +3031,10 @@ class DockerContainerJobBackend:
                 request.failure_class, "value", request.failure_class
             ),
             "message": request.message,
-            "startedAt": request.started_at.isoformat()
-            if request.started_at
-            else None,
-            "finishedAt": request.finished_at.isoformat()
-            if request.finished_at
-            else None,
+            "startedAt": request.started_at.isoformat() if request.started_at else None,
+            "finishedAt": (
+                request.finished_at.isoformat() if request.finished_at else None
+            ),
             "durationMs": request.duration_ms,
             "backendRef": self._backend_ref,
             "imageSourceRef": request.request.spec.image_source_ref,
