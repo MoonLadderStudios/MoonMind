@@ -4284,6 +4284,67 @@ export function parseProviderCooldownUntil(waitingReason: string | null | undefi
   return deadline ? deadline : null;
 }
 
+function parseProviderFlagFragment(waitingReason: string | null | undefined, name: string): boolean | null {
+  if (!waitingReason) return null;
+  const match = new RegExp(`${name}=(\\d+)`).exec(waitingReason);
+  if (!match) return null;
+  return match[1] === '1';
+}
+
+export function parseProviderQueueOrdered(waitingReason: string | null | undefined): boolean | null {
+  return parseProviderFlagFragment(waitingReason, 'queue_ordered');
+}
+
+export function parseProviderQueueFresh(waitingReason: string | null | undefined): boolean | null {
+  return parseProviderFlagFragment(waitingReason, 'queue_fresh');
+}
+
+export function parseProviderNextCheck(waitingReason: string | null | undefined): string | null {
+  if (!waitingReason) return null;
+  const match = /next_check=([^\s;,]+)/.exec(waitingReason);
+  if (!match) return null;
+  const check = (match[1] ?? '').trim().replace(/\.+$/, '');
+  return check ? check : null;
+}
+
+export function parseProviderWaitEnteredAt(waitingReason: string | null | undefined): string | null {
+  if (!waitingReason) return null;
+  const match = /wait_entered_at=([^\s;,]+)/.exec(waitingReason);
+  if (!match) return null;
+  const entered = (match[1] ?? '').trim().replace(/\.+$/, '');
+  return entered ? entered : null;
+}
+
+export function formatWaitElapsedSince(enteredAt: string | null | undefined, nowMs?: number): string | null {
+  if (!enteredAt) return null;
+  const startMs = Date.parse(enteredAt);
+  if (!Number.isFinite(startMs)) return null;
+  const endMs = typeof nowMs === 'number' && Number.isFinite(nowMs) ? nowMs : Date.now();
+  const elapsedMs = endMs - startMs;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return null;
+  const totalSeconds = Math.floor(elapsedMs / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) {
+    const seconds = totalSeconds % 60;
+    return seconds > 0 ? `${totalMinutes}m ${seconds}s` : `${totalMinutes}m`;
+  }
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
+// MoonLadderStudios/MoonMind#1130: documented new safe wait fields. The
+// step-ledger row schema is passthrough, so a future backend may attach
+// these structured observation fields beside waitingReason; the card reads
+// them when present and otherwise falls back to reason fragments. Unknown
+// stays unknown: absent fields render nothing.
+function readOptionalWaitField<T>(row: unknown, name: string): T | null {
+  if (!row || typeof row !== 'object') return null;
+  const value = (row as Record<string, unknown>)[name];
+  return value === null || value === undefined ? null : (value as T);
+}
+
 export function ProviderWaitDetails({
   waitingReason,
   cooldownUntil,
@@ -4291,35 +4352,52 @@ export function ProviderWaitDetails({
   queueOrdered,
   queueFresh,
   nextCheck,
+  waitEnteredAt,
   elapsedLabel,
 }: {
   waitingReason: string | null | undefined;
   cooldownUntil?: string | null;
   queuePosition?: number | null;
-  queueOrdered?: boolean;
-  queueFresh?: boolean;
+  queueOrdered?: boolean | null;
+  queueFresh?: boolean | null;
   nextCheck?: string | null;
+  waitEnteredAt?: string | null;
   elapsedLabel?: string | null;
 }) {
-  if (!waitingReason && !cooldownUntil && queuePosition == null && !nextCheck && !elapsedLabel) return null;
+  const parsedNextCheck = nextCheck ?? parseProviderNextCheck(waitingReason) ?? null;
+  const parsedEnteredAt = waitEnteredAt ?? parseProviderWaitEnteredAt(waitingReason) ?? null;
+  if (
+    !waitingReason
+    && !cooldownUntil
+    && queuePosition == null
+    && parsedNextCheck == null
+    && parsedEnteredAt == null
+    && !elapsedLabel
+  ) return null;
   // The canonical backend reason carries queue_position only from an
-  // ordered scoped snapshot (artifacts guard), so its presence implies the
-  // ordered-snapshot precondition. Structured cooldown/next-check render
-  // only from authoritative observation fields or an explicit legacy
-  // cooldown_until fragment; no deadline is invented here and no ETA is
+  // ordered scoped snapshot (artifacts guard), and newer reasons carry
+  // explicit queue_ordered/queue_fresh attestations. Explicit props win,
+  // then explicit fragments; legacy reasons without flag fragments keep
+  // the historical inference (position presence implies the ordered
+  // precondition) so retained history still renders. Structured
+  // cooldown/next-check render only from authoritative observation fields
+  // or explicit fragments; no deadline is invented here and no ETA is
   // ever derived from active-count arithmetic.
   const parsedPosition = queuePosition ?? parseProviderQueuePosition(waitingReason);
   const parsedCooldown = (cooldownUntil ?? parseProviderCooldownUntil(waitingReason) ?? '').trim() || null;
-  const ordered = queueOrdered ?? parsedPosition !== null;
-  const fresh = queueFresh ?? parsedPosition !== null;
+  const parsedOrdered = parseProviderQueueOrdered(waitingReason);
+  const parsedFresh = parseProviderQueueFresh(waitingReason);
+  const ordered = queueOrdered ?? parsedOrdered ?? parsedPosition !== null;
+  const fresh = queueFresh ?? parsedFresh ?? parsedPosition !== null;
   const { queueLabel, cooldownLabel, nextCheckLabel } = formatProviderWaitTiming({
     queuePosition: parsedPosition,
     queueOrdered: ordered,
     queueFresh: fresh,
     cooldownUntil: parsedCooldown,
-    nextCheck: nextCheck ?? null,
+    nextCheck: parsedNextCheck,
   });
-  const elapsed = (elapsedLabel ?? '').trim();
+  const elapsed = (elapsedLabel ?? '').trim()
+    || formatWaitElapsedSince(parsedEnteredAt) || '';
   return (
     <>
       {queueLabel ? <p className="small">{queueLabel} — not a promised start time.</p> : null}
@@ -5842,7 +5920,15 @@ function StepLedgerRowCard({
               <h4>Summary</h4>
               <p className="small">{row.summary || 'No step summary yet.'}</p>
               {row.waitingReason ? <p className="small">Waiting reason: {row.waitingReason}</p> : null}
-              <ProviderWaitDetails waitingReason={row.waitingReason} />
+              <ProviderWaitDetails
+                waitingReason={row.waitingReason}
+                queuePosition={readOptionalWaitField<number>(row, 'queuePosition')}
+                cooldownUntil={readOptionalWaitField<string>(row, 'cooldownUntil')}
+                queueOrdered={readOptionalWaitField<boolean>(row, 'queueOrdered')}
+                queueFresh={readOptionalWaitField<boolean>(row, 'queueFresh')}
+                nextCheck={readOptionalWaitField<string>(row, 'nextCheck')}
+                waitEnteredAt={readOptionalWaitField<string>(row, 'waitEnteredAt')}
+              />
               {row.preservedFrom ? (
                 <p className="small">
                   Preserved from source run <code>{row.preservedFrom.workflowId}</code> run{' '}
