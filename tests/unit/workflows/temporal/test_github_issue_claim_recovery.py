@@ -512,7 +512,8 @@ async def test_unannounced_tool_failure_still_releases_reservation(
     )
     assert result["released"] == 1, result
     assert result["results"][0]["reasonCode"] == "unannounced_reservation_released"
-    assert (await store.get("default/tool-fail")).released is True
+    # abandon_unannounced deletes the released reservation row.
+    assert await store.get("default/tool-fail") is None
 
 
 @pytest.mark.asyncio
