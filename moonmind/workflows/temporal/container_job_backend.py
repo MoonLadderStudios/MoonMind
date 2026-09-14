@@ -63,6 +63,7 @@ from moonmind.schemas.container_job_models import (
     GpuObservation,
     ImageObservation,
     gpu_observation,
+    is_historical_shared_or_adaptive,
     require_explicit_resources,
 )
 from moonmind.utils.logging import redact_sensitive_text
@@ -692,9 +693,26 @@ class DockerContainerJobBackend:
         try:
             require_explicit_resources(spec.resources)
         except ValueError as exc:
+            # Historical documents stay decodable for replay, but an unstarted
+            # historical request (shared-pool cpuMillis=0 or adaptive
+            # minimumMemoryMiB) has no executable successor: the shared pool
+            # and adaptive negotiation were retired, and the workflow only
+            # skips this guard when reconcile reattached an already-created
+            # container. Fail closed with an explicit replan disposition
+            # rather than silently substituting a new limit.
+            historical = ""
+            try:
+                if is_historical_shared_or_adaptive(spec.resources):
+                    historical = (
+                        " Retired shared-pool/adaptive semantics cannot be "
+                        "re-executed; replan the job with one fixed explicit "
+                        "cpuMillis/memoryMiB limit."
+                    )
+            except Exception:  # noqa: BLE001 - guidance only, never masks gate
+                historical = ""
             raise ContainerJobBackendError(
                 ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
-                f"container-job resources are not explicit: {exc}",
+                f"container-job resources are not explicit: {exc}.{historical}",
             ) from exc
         ceilings = self._settings
         checks = (
@@ -829,13 +847,18 @@ class DockerContainerJobBackend:
                 "container-job capacity admission remained busy",
             ) from exc
 
-    #: Container states that still hold a container-job slot. A created or
-    #: running container is launching or running work; an uncertain launch
-    #: outcome therefore never reads as a free slot. A stopped (exited/dead)
-    #: or removed container holds nothing: the slot is released once the
-    #: container is confirmed stopped.
+    #: Container states that still hold a container-job slot. Admission is
+    #: decided at ``start`` under the cross-worker capacity lock, so a merely
+    #: created container has not yet claimed a slot: counting it would
+    #: deadlock N+1 created waiters at a limit of N, with each waiter seeing
+    #: the others as full and none ever starting. Only a container the daemon
+    #: reports as started (restarting/running/paused) or being removed holds
+    #: a slot. A stopped (exited/dead) or removed container holds nothing:
+    #: the slot is released once the container is confirmed stopped. A created
+    #: container that never reaches start is reaped by the ordinary
+    #: stop/remove/cleanup path, never by the slot count.
     _SLOT_HOLDING_STATES = frozenset(
-        {"created", "restarting", "running", "paused", "removing"}
+        {"restarting", "running", "paused", "removing"}
     )
 
     async def _slot_holders(self) -> dict[str, str]:
@@ -843,9 +866,12 @@ class DockerContainerJobBackend:
 
         The daemon is the slot ledger: a container the daemon reports in a
         slot-holding state occupies a slot however the worker that launched it
-        fared, so a worker lost mid-launch can neither duplicate execution nor
-        free a slot whose outcome is uncertain. An unreadable daemon fails
-        closed rather than reading as an empty backend.
+        fared, so a worker lost after a successful start can neither duplicate
+        execution nor free a slot whose outcome is uncertain. Admission itself
+        runs at ``start`` under the cross-worker capacity lock, so a merely
+        created container has not yet claimed a slot and is not counted here.
+        An unreadable daemon fails closed rather than reading as an empty
+        backend.
         """
 
         code, stdout, stderr = await self._runner(
@@ -859,11 +885,20 @@ class DockerContainerJobBackend:
             )
         )
         if code:
-            detail = stderr.decode(errors="replace").strip()[:300]
+            # This message becomes the caller-visible terminal outcome, and the
+            # daemon's own connection diagnostic can name the deployment-owned
+            # endpoint, its TLS material, or credential-bearing connection
+            # detail. The caller contract stays a fixed string; the redacted
+            # diagnostic goes only to trusted backend logs.
+            logger.warning(
+                "Container-job slot inventory is unavailable: %s",
+                redact_sensitive_text(
+                    stderr.decode(errors="replace").strip()[:500]
+                ),
+            )
             raise ContainerJobBackendError(
                 ContainerJobFailureClass.INFRASTRUCTURE,
-                "container-job slot inventory is unavailable"
-                + (f": {detail}" if detail else ""),
+                "container-job slot inventory is unavailable",
             )
         holders: dict[str, str] = {}
         for line in stdout.decode(errors="replace").splitlines():
@@ -891,8 +926,10 @@ class DockerContainerJobBackend:
         operation: two workers racing for the final slot cannot both observe
         it free. A retry never acquires a second slot for the same job — a
         job whose own container is already running already holds its slot and
-        is admitted unconditionally, while a job that only created its
-        container still waits on the other holders. Agent hosts and their
+        is admitted unconditionally. A job whose container is only created has
+        not yet claimed a slot, so it is admitted on the same basis as a job
+        with no container yet; the lock serializes competing created waiters
+        so exactly one starts per free slot. Agent hosts and their
         subordinate test jobs use separate counts (host leases vs this job
         ledger), so an agent occupying the final host slot can still launch
         the test job it is waiting for.
