@@ -123,13 +123,28 @@ class OmnigentOAuthHostJanitor:
             ttl_seconds=int(self._heartbeat_timeout.total_seconds()),
         )
 
-    async def _release_provider_lease(self, *, binding: Any, lease: Any) -> bool:
+    async def _release_provider_lease(
+        self,
+        *,
+        binding: Any,
+        lease: Any,
+        fencing_generation: int | None = None,
+        run_id: str | None = None,
+        evidence_identity: str | None = None,
+    ) -> bool:
         """Release capacity only after the credential-bearing host is stopped.
 
-        Omnigent host leases are created exclusively for ``execution_omnigent``
-        capacity. The ProviderProfileManager deliberately uses the deterministic
-        owner token as its lease ID, so the durable ``provider_lease_id`` is also
-        the release authority needed after an activity process disappears.
+        MoonLadderStudios/MoonMind#1089: the janitor is the designated
+        executing owner for the hosts it stops. It completes the manager's
+        cleanup obligation through ``report_cleanup_verified`` with positive
+        teardown evidence (the stop above already succeeded), quoting the
+        acquired fence. A terminal workflow, a missing Temporal record, or a
+        database tombstone is never teardown evidence and never reaches the
+        ledger through this path. Omnigent host leases are created exclusively
+        for ``execution_omnigent`` capacity. The ProviderProfileManager
+        deliberately uses the deterministic owner token as its lease ID, so the
+        durable ``provider_lease_id`` is also the release authority needed
+        after an activity process disappears.
         """
 
         if self._lease_client is None:
@@ -142,6 +157,51 @@ class OmnigentOAuthHostJanitor:
             raise ValueError(
                 "host lease is missing Provider Profile release authority"
             )
+        resolved_fence = fencing_generation
+        resolved_run = run_id
+        resolved_identity = evidence_identity
+        if (
+            resolved_fence is None
+            or resolved_run is None
+            or resolved_identity is None
+        ) and hasattr(self._lease_client, "get_cleanup_obligations"):
+            try:
+                claims = await self._lease_client.get_cleanup_obligations(
+                    runtime_id=runtime_id
+                )
+            except Exception:
+                claims = []
+            for claim in claims:
+                if not isinstance(claim, dict):
+                    continue
+                if str(claim.get("lease_id") or "") != provider_lease_id:
+                    continue
+                if resolved_fence is None:
+                    try:
+                        resolved_fence = int(claim.get("fencing_generation") or 0) or None
+                    except (TypeError, ValueError):
+                        resolved_fence = None
+                if resolved_run is None:
+                    resolved_run = str(claim.get("runId") or "") or None
+                if resolved_identity is None:
+                    resolved_identity = str(claim.get("evidenceIdentity") or "") or None
+                break
+        report = getattr(self._lease_client, "report_cleanup_verified", None)
+        if callable(report):
+            await report(
+                CredentialLease(
+                    profile_id=lease.provider_profile_id,
+                    runtime_id=runtime_id,
+                    lease_id=provider_lease_id,
+                    owner_id=provider_lease_id,
+                    purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+                    fencing_generation=resolved_fence,
+                    evidence_identity=resolved_identity,
+                ),
+                run_id=resolved_run,
+                verified_by="omnigent-oauth-host-janitor",
+            )
+            return True
         await self._lease_client.release_lease(
             CredentialLease(
                 profile_id=lease.provider_profile_id,
@@ -152,6 +212,150 @@ class OmnigentOAuthHostJanitor:
             )
         )
         return True
+
+    async def drain_manager_cleanup_claims(
+        self,
+        runtime_id: str,
+        claims: list[dict[str, Any]],
+        *,
+        max_claims: int = 10,
+    ) -> dict[str, Any]:
+        """Complete manager cleanup claims whose host this janitor can stop.
+
+        MoonLadderStudios/MoonMind#1089: consumes the manager's published
+        ``cleanup_obligations`` (stable ``claim_id`` = lease ID + acquired
+        fence) using only the existing host-stop machinery. Each bounded claim
+        whose ``provider_lease_id`` maps to a host lease owned here is stopped
+        through the existing authority-checked path and completed through
+        ``report_cleanup_verified`` with the claim's fence and admitted
+        identity. Claims without a host lease here are left to their owning
+        AgentRun, realizer, or operator — a missing row is never proof that a
+        consumer stopped. Late or replacement claims never touch a new owner's
+        resources because the fence and identity are quoted back.
+        """
+
+        from moonmind.omnigent.oauth_hosts import deterministic_host_lease_id
+
+        actions: list[dict[str, Any]] = []
+        for claim in list(claims or [])[: max(1, int(max_claims))]:
+            if not isinstance(claim, dict):
+                continue
+            provider_lease_id = str(claim.get("lease_id") or "").strip()
+            claim_id = str(claim.get("claim_id") or "").strip() or (
+                f"{provider_lease_id}:{claim.get('fencing_generation') or 0}"
+            )
+            if not provider_lease_id:
+                continue
+            try:
+                fence_raw = claim.get("fencing_generation")
+                fence = int(fence_raw) if fence_raw is not None else None
+            except (TypeError, ValueError):
+                fence = None
+            host_lease_id = deterministic_host_lease_id(provider_lease_id)
+            try:
+                host_lease = await self._repository.get_host_lease(host_lease_id)
+            except Exception as exc:
+                actions.append(
+                    {
+                        "claimId": claim_id,
+                        "providerLeaseId": provider_lease_id,
+                        "action": "cleanup_claim_lookup_failed",
+                        "errorCode": type(exc).__name__,
+                    }
+                )
+                continue
+            if host_lease is None:
+                continue
+            if getattr(host_lease, "provider_profile_id", "") != claim.get("profile_id"):
+                # The claim moved to a replacement profile owner; never touch
+                # a new owner's resources from a stale claim.
+                actions.append(
+                    {
+                        "claimId": claim_id,
+                        "providerLeaseId": provider_lease_id,
+                        "action": "cleanup_claim_skipped_replacement_owner",
+                    }
+                )
+                continue
+            try:
+                binding = await self._repository.validate_binding(
+                    host_lease.binding_ref
+                )
+                runtime_binding_state = (
+                    await self._runtime_binding_cleanup_authority(
+                        binding=binding, lease=host_lease
+                    )
+                )
+                claimed = await self._claim_cleanup(host_lease)
+                if claimed is None:
+                    actions.append(
+                        {
+                            "claimId": claim_id,
+                            "providerLeaseId": provider_lease_id,
+                            "action": "cleanup_claim_deferred_contended",
+                        }
+                    )
+                    continue
+                host_lease = claimed
+                cleanup_evidence = await self._stop_host_with_authority(
+                    binding=binding, lease=host_lease
+                )
+                stopped_lease = await self._repository.mark_host_lease_stopped(
+                    host_lease.lease_id
+                )
+                if stopped_lease is not None:
+                    host_lease = stopped_lease
+                provider_released = await self._release_provider_lease(
+                    binding=binding,
+                    lease=host_lease,
+                    fencing_generation=fence,
+                    run_id=str(claim.get("runId") or "") or None,
+                    evidence_identity=str(claim.get("evidenceIdentity") or "") or None,
+                )
+                await self._record_terminal_cleanup(
+                    lease=host_lease,
+                    completed=True,
+                    cleanup_evidence=cleanup_evidence,
+                    lease_released=provider_released,
+                )
+                await self._complete_runtime_binding_cleanup(runtime_binding_state)
+                actions.append(
+                    {
+                        "claimId": claim_id,
+                        "providerLeaseId": provider_lease_id,
+                        "action": "cleanup_claim_completed_verified",
+                        "providerLeaseReleased": provider_released,
+                    }
+                )
+            except Exception as exc:
+                try:
+                    await self._record_terminal_cleanup(
+                        lease=host_lease,
+                        completed=False,
+                        error=exc,
+                        lease_released=False,
+                    )
+                except Exception:
+                    pass
+                actions.append(
+                    {
+                        "claimId": claim_id,
+                        "providerLeaseId": provider_lease_id,
+                        "action": "cleanup_claim_failed",
+                        "errorCode": str(
+                            getattr(exc, "code", "") or type(exc).__name__
+                        ),
+                    }
+                )
+        return {
+            "status": (
+                "degraded"
+                if any(item["action"].endswith("_failed") for item in actions)
+                else "completed"
+            ),
+            "actions": actions,
+            "count": len(actions),
+        }
 
     async def _cleanup_authority(self, lease: Any) -> dict[str, Any] | None:
         authority = None
@@ -427,9 +631,13 @@ class OmnigentOAuthHostJanitor:
         }
 
     async def run(
-        self, *, profile_id: str | None = None, force: bool = False
+        self, *, profile_id: str | None = None, force: bool = False,
+        runtime_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         actions: list[dict[str, Any]] = []
+        observed_runtime_ids: set[str] = {
+            str(runtime_id).strip() for runtime_id in (runtime_ids or []) if str(runtime_id).strip()
+        }
         if force and profile_id:
             binding = await self._repository.get_binding_for_profile(profile_id)
             if binding is not None and not binding.host_launch_profile_ref:
@@ -519,6 +727,14 @@ class OmnigentOAuthHostJanitor:
                 ):
                     continue
                 binding = await self._repository.validate_binding(lease.binding_ref)
+                try:
+                    observed_runtime_id = str(
+                        binding.credential_mount_ref.auth_volume_ref.runtime_id or ""
+                    ).strip()
+                except Exception:
+                    observed_runtime_id = ""
+                if observed_runtime_id:
+                    observed_runtime_ids.add(observed_runtime_id)
                 runtime_binding_state = await self._runtime_binding_cleanup_authority(
                     binding=binding, lease=lease
                 )
@@ -615,6 +831,44 @@ class OmnigentOAuthHostJanitor:
                         ),
                     }
                 )
+        # MoonLadderStudios/MoonMind#1089: drain manager cleanup obligations
+        # whose host this janitor can stop. Bounded per runtime; a lookup
+        # failure never fails the host cleanup above, and claims without a
+        # host lease here are left to their owning AgentRun, realizer, or
+        # operator.
+        if self._lease_client is not None and hasattr(
+            self._lease_client, "get_cleanup_obligations"
+        ):
+            for runtime_id in sorted(observed_runtime_ids):
+                try:
+                    claims = await self._lease_client.get_cleanup_obligations(
+                        runtime_id=runtime_id
+                    )
+                except Exception as exc:
+                    actions.append(
+                        {
+                            "runtimeId": runtime_id,
+                            "action": "cleanup_claim_drain_failed",
+                            "errorCode": type(exc).__name__,
+                        }
+                    )
+                    continue
+                if not claims:
+                    continue
+                try:
+                    drained = await self.drain_manager_cleanup_claims(
+                        runtime_id, claims, max_claims=10
+                    )
+                except Exception as exc:
+                    actions.append(
+                        {
+                            "runtimeId": runtime_id,
+                            "action": "cleanup_claim_drain_failed",
+                            "errorCode": type(exc).__name__,
+                        }
+                    )
+                    continue
+                actions.extend(drained.get("actions") or [])
         for container_name in await self._runtime.list_managed_containers():
             try:
                 if container_name in known_containers:

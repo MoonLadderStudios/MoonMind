@@ -983,3 +983,134 @@ def test_malformed_cleanup_lease_does_not_hide_independent_leases(monkeypatch):
     ]
     with pytest.raises(ValueError):
         repository._cleanup_lease_models([malformed, valid], None)
+
+
+class _VerifiedLeaseClient:
+    """Existing-owner client completing claims through verified teardown."""
+
+    def __init__(self, claims_by_runtime=None):
+        self.verified = []
+        self.claims_by_runtime = dict(claims_by_runtime or {})
+
+    async def get_cleanup_obligations(self, *, runtime_id):
+        return list(self.claims_by_runtime.get(runtime_id, []))
+
+    async def report_cleanup_verified(self, lease, **kwargs):
+        self.verified.append((lease, dict(kwargs)))
+
+
+def _drain_lease(*, provider_lease_id="provider-lease-1"):
+    from moonmind.omnigent.oauth_hosts import deterministic_host_lease_id
+
+    now = datetime.now(UTC)
+    return SimpleNamespace(
+        lease_id=deterministic_host_lease_id(provider_lease_id),
+        provider_profile_id="profile-1",
+        provider_lease_id=provider_lease_id,
+        binding_ref="binding-1",
+        container_name="host-1",
+        omnigent_session_id=None,
+        last_heartbeat_at=now - timedelta(seconds=3600),
+        expires_at=now - timedelta(seconds=60),
+        status="ready",
+    )
+
+
+@pytest.mark.asyncio
+async def test_release_uses_verified_teardown_with_claim_fence_and_identity() -> None:
+    """The janitor completes owned hosts via verified teardown, not raw release."""
+
+    lease = _drain_lease()
+    repository = _Repository(lease)
+    runtime = _Runtime()
+    lease_client = _VerifiedLeaseClient(
+        {
+            "codex_cli": [
+                {
+                    "lease_id": "provider-lease-1",
+                    "profile_id": "profile-1",
+                    "fencing_generation": 7,
+                    "claim_id": "provider-lease-1:7",
+                    "runId": "run-admitted-1",
+                    "evidenceIdentity": "evidence-admitted-1",
+                }
+            ]
+        }
+    )
+
+    janitor = OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        lease_client=lease_client,
+    )
+    binding = await repository.validate_binding("binding-1")
+    assert await janitor._release_provider_lease(binding=binding, lease=lease) is True
+
+    assert len(lease_client.verified) == 1
+    reported, kwargs = lease_client.verified[0]
+    assert reported.lease_id == "provider-lease-1"
+    assert reported.fencing_generation == 7
+    assert reported.evidence_identity == "evidence-admitted-1"
+    assert kwargs["run_id"] == "run-admitted-1"
+    assert kwargs["verified_by"] == "omnigent-oauth-host-janitor"
+
+
+@pytest.mark.asyncio
+async def test_drain_completes_owned_claim_and_leaves_foreign_claims() -> None:
+    """One stable claim per owned slot; unowned claims stay for their owner."""
+
+    from moonmind.omnigent.oauth_hosts import deterministic_host_lease_id
+
+    owned = _drain_lease(provider_lease_id="provider-lease-1")
+    repository = _Repository(owned)
+    runtime = _Runtime()
+    lease_client = _VerifiedLeaseClient()
+    janitor = OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        lease_client=lease_client,
+    )
+    foreign_id = deterministic_host_lease_id("provider-lease-foreign")
+
+    claims = [
+        {
+            "lease_id": "provider-lease-1",
+            "profile_id": "profile-1",
+            "fencing_generation": 7,
+            "claim_id": "provider-lease-1:7",
+            "reason": "owner_terminal",
+            "runId": "run-admitted-1",
+            "evidenceIdentity": "evidence-admitted-1",
+            "attempt": 1,
+        },
+        {
+            "lease_id": "provider-lease-foreign",
+            "profile_id": "profile-9",
+            "fencing_generation": 3,
+            "claim_id": "provider-lease-foreign:3",
+            "reason": "owner_terminal",
+            "runId": "run-foreign",
+            "evidenceIdentity": "evidence-foreign",
+            "attempt": 0,
+        },
+    ]
+
+    result = await janitor.drain_manager_cleanup_claims("codex_cli", claims)
+
+    completed = [a for a in result["actions"] if a["action"] == "cleanup_claim_completed_verified"]
+    assert len(completed) == 1
+    assert completed[0]["claimId"] == "provider-lease-1:7"
+    assert completed[0]["providerLeaseReleased"] is True
+    assert owned.status == "stopped"
+    assert runtime.stopped == 1
+    assert len(lease_client.verified) == 1
+    reported, kwargs = lease_client.verified[0]
+    assert reported.lease_id == "provider-lease-1"
+    assert reported.fencing_generation == 7
+    assert kwargs["run_id"] == "run-admitted-1"
+    # The foreign claim has no host lease here: left for its owning
+    # AgentRun, realizer, or operator, never invented as teardown.
+    assert all(a["providerLeaseId"] != "provider-lease-foreign" for a in result["actions"])
+    assert foreign_id != owned.lease_id
