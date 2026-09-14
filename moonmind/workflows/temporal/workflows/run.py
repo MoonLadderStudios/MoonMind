@@ -24425,7 +24425,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return
         child_id = str(payload.get("agentRunWorkflowId") or "").strip()
         active_child = str(self._active_agent_child_workflow_id or "").strip()
-        assigned_child = str(self._assigned_child_workflow_id or "").strip()
+        assigned_child = str(
+            getattr(self, "_assigned_child_workflow_id", None) or ""
+        ).strip()
         if (
             not child_id
             or (child_id != active_child and child_id != assigned_child)
@@ -24468,12 +24470,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if str(accepted.get("state") or "") in TERMINAL_PROGRESS_STATES:
             # Terminal progress seals the projection; the validated
             # AgentRunResult keeps product authority, so no Step state
-            # moves here. Preserve the defensive cleanup the legacy
-            # terminal branch performed for the same outcome.
+            # moves here. Slot release is owned by the
+            # ProviderProfileManager through verified consumer teardown
+            # (MoonLadderStudios/MoonMind#1089): record the deprecated
+            # marker as deprecated and emit no release.
             if workflow.patched(
                 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH
             ):
-                self._release_slot_defensive()
+                workflow.deprecate_patch(
+                    RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH
+                )
             return
         if self._state == STATE_COMPLETED:
             return
