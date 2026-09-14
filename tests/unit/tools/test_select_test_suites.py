@@ -829,3 +829,17 @@ def test_selector_documents_qualified_infra_ownership():
         "moonmind/omnigent/harness_platform/shared_host_conformance.py",
     ):
         assert (REPO_ROOT / owned).exists(), owned
+
+
+def test_shared_resource_changes_require_real_docker_journey():
+    from tools.select_test_suites import select_suites
+
+    for path in (
+        "moonmind/capacity/cpu_pool.py",
+        "moonmind/schemas/container_job_models.py",
+        "moonmind/container_job_cli.py",
+        "services/omnigent/scripts/moonmind-container-cli.py",
+        "tools/test_worker_count.py",
+        "tests/integration/resource_allocation/test_shared_resource_journey.py",
+    ):
+        assert select_suites([path]).reliability_journey, path
