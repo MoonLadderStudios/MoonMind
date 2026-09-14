@@ -236,13 +236,24 @@ async def remove_agent(s, name, reservation):
     )
 
 
-@pytest.mark.parametrize("wait_first", [False, True])
+@pytest.mark.parametrize(
+    "wait_first,agent_memory_mib", [(False, None), (True, None), (True, 512)]
+)
 async def test_default_job_runs_beside_agent_and_pool_recovers_after_worker_replacement(
-    substrate, tmp_path, wait_first
+    substrate, tmp_path, wait_first, agent_memory_mib
 ):
     s = substrate
-    agent, reservation = await start_agent(s)
-    blocker = await start_agent(s, memory_mib=1024) if wait_first else None
+    agent, reservation = await start_agent(s, memory_mib=agent_memory_mib)
+    # Leave less than the test's 2-GiB minimum even on a large CI runner.
+    # A fixed-size blocker can leave ample capacity and never exercise waiting.
+    blocker = (
+        await start_agent(
+            s,
+            memory_mib=s.budget.memory_mib - reservation.demand.memory_mib - 1024,
+        )
+        if wait_first
+        else None
+    )
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "result.txt").write_text("preserved candidate\n")
