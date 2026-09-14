@@ -84,6 +84,13 @@ with workflow.unsafe.imports_passed_through():
         build_default_activity_catalog,
     )
     from moonmind.config.settings import settings
+    from moonmind.schemas.agent_run_progress import (
+        AGENT_RUN_PROGRESS_PATCH_ID,
+        AGENT_RUN_PROGRESS_SIGNAL_NAME,
+        build_progress_projection,
+        child_source_generation,
+        coerce_legacy_progress_triple,
+    )
     from moonmind.workflows.temporal.runtime.store import ManagedRunStore
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
@@ -1116,6 +1123,14 @@ class MoonMindAgentRun:
         self.slot_assigned_event = asyncio.Event()
         self.run_status = RunStatus.queued
         self.final_result: AgentRunResult | None = None
+        # MoonLadderStudios/MoonMind#1088: deterministic emitter state for
+        # the typed ``agent_run_progress`` projection. Plain workflow state
+        # so replay re-derives identical routing decisions.
+        self._progress_step_execution_id: str | None = None
+        self._progress_attempt_index: int = 0
+        self._progress_generation: str | None = None
+        self._progress_next_revision: int = 1
+        self._progress_last_signature: tuple | None = None
         self.run_id: str | None = None
         self.agent_kind: str | None = None
         self._assigned_profile_id: str | None = None
@@ -1320,6 +1335,15 @@ class MoonMindAgentRun:
         new_state: str,
         reason: str,
     ) -> None:
+        # MoonLadderStudios/MoonMind#1088: new histories apply only the
+        # typed ``agent_run_progress`` projection; old histories retain the
+        # legacy ``child_state_changed`` signal. Compatibility, control, and
+        # replay messages are unaffected.
+        if self._workflow_patch_enabled(AGENT_RUN_PROGRESS_PATCH_ID):
+            await self._signal_parent_progress_projection(
+                parent_info, new_state, reason
+            )
+            return
         if not parent_info:
             return
         parent_handle = workflow.get_external_workflow_handle(
@@ -1337,6 +1361,133 @@ class MoonMindAgentRun:
                 parent_info.workflow_id,
                 exc,
             )
+
+    def _init_progress_identity(self, request: AgentExecutionRequest) -> None:
+        """Record the Step Execution/attempt identity for progress emission.
+
+        MoonLadderStudios/MoonMind#1088: the relevant identity is
+        established before any progress is accepted. The Step Execution
+        identity comes from the request envelope with the immutable
+        request idempotency key as the fallback for older direct callers;
+        the source generation is the workflow-owned AgentRun identity.
+        """
+
+        _, step_execution_id = self._omnigent_owner_identities(request)
+        self._progress_step_execution_id = (
+            str(step_execution_id or "").strip()
+            or str(request.idempotency_key or "").strip()
+        )
+        attempt_index = 0
+        if request.step_execution is not None:
+            try:
+                attempt_index = max(
+                    0, int(request.step_execution.execution_ordinal) - 1
+                )
+            except (TypeError, ValueError):
+                attempt_index = 0
+        self._progress_attempt_index = attempt_index
+        try:
+            child_workflow_id = str(workflow.info().workflow_id or "").strip()
+        except Exception:
+            child_workflow_id = ""
+        self._progress_generation = child_source_generation(
+            child_workflow_id or str(request.idempotency_key or "").strip()
+        )
+
+    async def _signal_parent_progress_projection(
+        self,
+        parent_info: Any,
+        new_state: str,
+        reason: str,
+    ) -> None:
+        """Emit one deterministic ``agent_run_progress`` projection.
+
+        MoonLadderStudios/MoonMind#1088: the sole normal product-progress
+        projection for new histories. Only meaningful state/reason changes
+        are emitted (repeated observations are coalesced so heartbeats and
+        provider events never grow parent history). Invalid input yields
+        bounded safe diagnostics; parent closure or temporary delivery
+        failure keeps the same pending revision for a bounded retry and
+        never cancels agent work or erases terminal evidence.
+        """
+
+        if not parent_info:
+            return
+        try:
+            state, reason_code, wait_code = coerce_legacy_progress_triple(
+                new_state
+            )
+        except ValueError as exc:
+            self._get_logger().warning(
+                "Dropping unmapped progress state: %s", exc
+            )
+            return
+        try:
+            info = workflow.info()
+            child_workflow_id = str(info.workflow_id or "").strip()
+            child_run_id = str(info.run_id or "").strip() or None
+            parent_workflow_id = str(parent_info.workflow_id or "").strip()
+            parent_run_id = str(parent_info.run_id or "").strip()
+            step_execution_id = str(
+                self._progress_step_execution_id or ""
+            ).strip()
+            generation = str(self._progress_generation or "").strip() or (
+                child_source_generation(child_workflow_id)
+            )
+            projection = build_progress_projection(
+                agent_run_workflow_id=child_workflow_id,
+                agent_run_run_id=child_run_id,
+                source_workflow_id=parent_workflow_id,
+                source_run_id=parent_run_id,
+                step_execution_id=step_execution_id,
+                attempt_index=self._progress_attempt_index,
+                source_generation=generation,
+                projection_revision=self._progress_next_revision,
+                state=state,
+                reason_code=reason_code,
+                wait_code=wait_code,
+                # Free-form reason text is display summary only (redacted
+                # and bounded by the schema); authority comes from the
+                # canonical triple above, never by parsing this string.
+                summary=reason,
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Dropping invalid progress projection: %s", exc
+            )
+            return
+        payload = projection.canonical_dict()
+        signature = (
+            payload.get("state"),
+            payload.get("reasonCode"),
+            payload.get("waitCode"),
+            payload.get("attentionRequired"),
+            payload.get("summary"),
+            payload.get("diagnosticArtifactRef"),
+        )
+        if signature == self._progress_last_signature:
+            return
+        parent_handle = workflow.get_external_workflow_handle(
+            parent_info.workflow_id,
+            run_id=parent_info.run_id,
+        )
+        try:
+            await parent_handle.signal(
+                AGENT_RUN_PROGRESS_SIGNAL_NAME,
+                args=[payload],
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to signal parent progress %s: %s",
+                parent_info.workflow_id,
+                exc,
+            )
+            return
+        self._progress_last_signature = signature
+        self._progress_next_revision = (
+            int(payload.get("projectionRevision", 0)) + 1
+        )
+        return
 
     def _record_provider_wait_observation(
         self,
@@ -6561,6 +6712,9 @@ class MoonMindAgentRun:
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
         self.agent_kind = request.agent_kind
+        # MoonLadderStudios/MoonMind#1088: establish the progress identity
+        # before any progress can be emitted or accepted.
+        self._init_progress_identity(request)
         # Keep historical ``agentId: auto`` payloads decodable so existing
         # AgentRun histories can replay. Reject the planning sentinel only at
         # the versioned live-dispatch boundary for newly started workflows.
