@@ -3394,6 +3394,10 @@ async def test_provider_profile_manager_state_returns_compact_running_snapshot(
             "execution_lease_count": None,
             "capacity_scope_ref": None,
         },
+        # MoonLadderStudios/MoonMind#1089: manager_state publishes the stable
+        # per-slot cleanup claims surface; empty here because the fake
+        # get_state carries no obligations.
+        "cleanup_obligations": [],
     }
     assert "state" not in result
 
