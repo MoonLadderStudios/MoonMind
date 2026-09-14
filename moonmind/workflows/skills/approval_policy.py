@@ -304,6 +304,14 @@ class StepGateResult:
     degraded: bool = False
     downgrade_reason: str | None = None
     schema_version: str = "v1"
+    # Immutable review-attempt binding (MoonMind#3945 R2): the admitted
+    # reviewer route/model, policy and reviewed evidence digest carried with
+    # the verdict so the persisted gate-result artifact names the exact
+    # review attempt. Optional for replay compatibility: payloads recorded
+    # before this field parse unchanged with review_provenance None. The
+    # field never influences invalid/degraded branching and never carries
+    # credentials (route/model/digests/policy only).
+    review_provenance: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != "v1":
@@ -374,6 +382,8 @@ class StepGateResult:
             )
         if self.downgrade_reason:
             payload["downgradeReason"] = self.downgrade_reason
+        if self.review_provenance is not None:
+            payload["reviewProvenance"] = dict(self.review_provenance)
         return payload
 
     def to_review_verdict(self) -> ReviewVerdict:
@@ -545,6 +555,13 @@ def parse_step_gate_result(
     }:
         recommended_next_action = "blocked"
 
+    provenance_raw = payload.get("reviewProvenance")
+    if provenance_raw is None:
+        provenance_raw = payload.get("review_provenance")
+    review_provenance: Mapping[str, Any] | None = (
+        dict(provenance_raw) if isinstance(provenance_raw, Mapping) else None
+    )
+
     return StepGateResult(
         verdict=verdict_raw,
         confidence=confidence,
@@ -585,6 +602,7 @@ def parse_step_gate_result(
         invalid=invalid,
         degraded=degraded,
         downgrade_reason=downgrade_reason,
+        review_provenance=review_provenance,
     )
 
 
