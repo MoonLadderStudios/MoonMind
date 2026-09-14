@@ -840,6 +840,23 @@ def apply_agent_run_progress(
                     "terminal result"
                 ),
             )
+    elif (
+        parent_state.get("pendingSuccessorGeneration") is not None
+        and parent_state.get("pendingSuccessorGeneration") != accepted_generation
+    ):
+        # A noted successor immediately supersedes the previously accepted
+        # generation: old-generation messages cannot reopen a replacement
+        # while the successor is pending. The first message carrying the
+        # noted generation adopts it (handled above); anything else from
+        # the old generation is ignored as display-only because terminal
+        # authority already comes from AgentRunResult, not progress.
+        return ProgressApplyOutcome(
+            disposition="old_generation",
+            diagnostics=(
+                "a successor generation is pending; progress from the "
+                "superseded source generation is ignored"
+            ),
+        )
 
     # Run fence within a generation: distinct Temporal runs (child retry,
     # replacement attempt, Continue-As-New) carry distinct run IDs. A new
