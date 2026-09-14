@@ -2102,3 +2102,99 @@ async def test_cleanup_redrive_carries_a_non_workflow_consumer_claim() -> None:
     assert claims[0]["runId"] == "run-validation-1"
     assert claims[0]["attempt"] == 1
     assert profile.current_leases == ["agent-run-1"]
+
+
+@pytest.mark.asyncio
+async def test_terminal_obligation_reaches_executing_owner_and_completes_verified() -> None:
+    """The manager-to-janitor handoff frees capacity only from teardown evidence.
+
+    MoonLadderStudios/MoonMind#1089 R4: the existing executing owner polls the
+    published ``cleanup_obligations`` claim, stops the exact admitted consumer
+    with its own machinery, and completes the stable claim through
+    ``report_cleanup_verified`` quoting the acquired fence and admitted
+    identity. A late duplicate is idempotent; a stale fence for a replacement
+    generation frees nothing.
+    """
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
+            },
+            "release_verified": {
+                "released": True,
+                "outcome": LeaseTransitionOutcome.RELEASED.value,
+            },
+        }
+    )
+    wf = _admitted_manager()
+
+    with _patched(ledger):
+        await wf._reclaim_terminal_leases_durably(
+            {"agent-run-1": {"running": False, "status": "NOT_FOUND"}}
+        )
+        # The existing owner polls exactly this surface; no new engine.
+        claims = wf.get_state()["cleanup_obligations"]
+        assert [claim["claim_id"] for claim in claims] == ["agent-run-1:6"]
+        claim = claims[0]
+        # The owner stops its host/session with its own machinery here; the
+        # test models the stop as done and completes the same stable claim.
+        await wf.report_cleanup_verified(
+            {
+                "lease_id": claim["lease_id"],
+                "profile_id": claim["profile_id"],
+                "fencing_generation": claim["fencing_generation"],
+                "teardown_evidence": {
+                    "consumer_stopped": True,
+                    "verified_by": "omnigent-oauth-host-janitor",
+                    "run_id": claim["runId"],
+                    "evidence_identity": claim["evidenceIdentity"],
+                },
+            }
+        )
+        assert wf._profiles[PROFILE_ID].current_leases == []
+        assert wf.get_state()["cleanup_obligations"] == []
+        # Late duplicate delivery of the same stable claim frees nothing new.
+        await wf.report_cleanup_verified(
+            {
+                "lease_id": claim["lease_id"],
+                "profile_id": claim["profile_id"],
+                "fencing_generation": claim["fencing_generation"],
+                "teardown_evidence": {
+                    "consumer_stopped": True,
+                    "verified_by": "omnigent-oauth-host-janitor",
+                    "run_id": claim["runId"],
+                    "evidence_identity": claim["evidenceIdentity"],
+                },
+            }
+        )
+
+    assert ledger.actions() == ["request_cleanup", "release_verified"]
+    assert wf._profiles[PROFILE_ID].current_leases == []
+
+    # A stale claim for a replacement generation must not free the new owner.
+    replacement_ledger = _Ledger(
+        {
+            "release_verified": {
+                "released": False,
+                "outcome": LeaseTransitionOutcome.STALE.value,
+            },
+        }
+    )
+    successor = _admitted_manager()
+    with _patched(replacement_ledger):
+        await successor.report_cleanup_verified(
+            {
+                "lease_id": "agent-run-1",
+                "profile_id": PROFILE_ID,
+                "fencing_generation": 5,
+                "teardown_evidence": {
+                    "consumer_stopped": True,
+                    "verified_by": "omnigent-oauth-host-janitor",
+                    "run_id": "run-admitted-1",
+                    "evidence_identity": "evidence-admitted-1",
+                },
+            }
+        )
+    assert successor._profiles[PROFILE_ID].current_leases == ["agent-run-1"]

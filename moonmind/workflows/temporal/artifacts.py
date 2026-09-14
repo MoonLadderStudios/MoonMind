@@ -5449,6 +5449,13 @@ class TemporalArtifactActivities:
             "requester_profile_id": requester_profile_id,
             "requester_fencing_generation": requester_fencing_generation,
             "requested_profile": requested_profile,
+            # MoonLadderStudios/MoonMind#1089: surface the manager's stable
+            # per-slot cleanup claims (non-secret: lease/profile/fence,
+            # claim ID, reason, consumer, admitted run/evidence identity,
+            # attempt) so the existing AgentRun, runtime realizer, janitor,
+            # or operator can consume them and complete each claim through
+            # report_cleanup_verified.
+            "cleanup_obligations": state.get("cleanup_obligations") or [],
         }
 
     async def provider_profile_verify_lease_holders(
