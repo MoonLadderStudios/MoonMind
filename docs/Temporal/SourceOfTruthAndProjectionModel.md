@@ -216,6 +216,44 @@ evidence but are never registered for new work). Internal supervisors, managers 
 owners have operator scope; janitors and reconciliation loops are excluded.
 Unknown types are reported as unknown and never relabeled as UserWorkflow.
 Product admission and list/detail readers enforce the same registry policy.
+The direct-Temporal list/count, metrics, and facet paths share one query
+builder (`_build_temporal_execution_query`) whose product-domain clause is
+derived from the registry (`_product_temporal_scope_query`), with the
+caller's owner filter applied in the same upstream query; the DB-backed list
+filters `product_workflow_types()` in SQL.
+
+Direct-Temporal list totals are always `estimated_or_unknown` with a null
+count (MoonLadderStudios/MoonMind#3947): the page is filtered per row through
+the registry policy, so an upstream visibility count is not the product total
+— an excluded type may sit entirely on a later page. An excluded-only page
+legitimately returns zero items with the underlying continuation token
+preserved; callers must keep the Next control enabled and must not treat that
+page as an empty repository or end of results. Single-page fetch only — no
+overscan drain of the upstream list.
+
+Authorization precedes disclosure on direct-ID paths: exclusion reason codes
+(`workflow_type_operator_only`, etc.) are returned only to callers already
+authorized to see diagnostics (admins); every other caller receives the same
+generic `execution_not_found` shape as a failed ownership check, with no raw
+provider state. Product visibility never implies control capability: Pause,
+rerun, edit, and continuation support are governed by the existing
+action-capability owners (remediation capability matrix, per-workflow Update
+validators, system quiesce enumeration in `WorkerPauseSystem.md`), not by
+projection scope.
+
+Operator children (`MoonMind.AgentRun`, sessions, container jobs,
+merge/publication recovery, and the rest of the operator catalog in
+`WorkflowTypeCatalogGenerated.md`) stay out of ordinary product task cards and
+remain reachable only through their existing authorized diagnostics/detail
+surfaces and parent links; registry scope alone grants no route. Previously
+misclassified rows are repaired only through the shared projection-mutation
+owner (`mutate_execution_projection`, §7.2 field ownership) against
+authoritative workflow/run and owner evidence: correct projection metadata
+without restarting work, changing terminal outcomes, transferring ownership,
+or deleting artifacts. Unknown or unreachable executions stay
+reconciliation-needed — never deleted or relabeled by guess. Continue-As-New
+and current-versus-historical run selection remain the shared mutator's
+responsibility.
 
 ### 7.3 `ExecutionModel`
 
