@@ -1,0 +1,17 @@
+{
+  "incidentWorkflowId": "mm:d8540454-ebaa-48eb-9d8d-1099deb3e3fc-2026-09-13T23:30:00Z",
+  "failure": "The verifier's generic-host materialization rejected .claude/skills and .github/skills after checkpoint capture excluded their .agents/skills target.",
+  "runtime": "omnigent",
+  "files": {
+    "AGENTS.md": "Repository guidance\n",
+    "candidate.txt": "Implemented candidate\n",
+    ".agents/skills/skills/example/SKILL.md": "Runtime input excluded from saved work\n"
+  },
+  "links": {
+    ".claude/skills": "../.agents/skills/skills",
+    ".github/skills": "../.agents/skills/skills",
+    "CLAUDE.md": "AGENTS.md",
+    "GEMINI.md": "AGENTS.md"
+  },
+  "expected": "The next step restores the candidate and exact link text from durable artifacts after source loss. Contained dangling links remain data; runtime Skill inputs stay excluded and escape/cycle checks remain enforced."
+}
