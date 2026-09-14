@@ -51,9 +51,18 @@ def test_temporal_user_workflow_query_excludes_legacy_run_entry() -> None:
         )
 
     assert response.status_code == 200
-    count_query = temporal_client.count_workflows.await_args.kwargs["query"]
-    assert 'mm_entry="user_workflow"' in count_query
-    assert 'mm_entry="run"' not in count_query
+    # No count RPC is issued on the direct-Temporal list path; the upstream
+    # total is unprovable after per-row exclusion filtering, so the total is
+    # reported as unknown.
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
+    assert 'mm_entry="user_workflow"' in query
+    assert 'mm_entry="run"' not in query
+    temporal_client.list_workflows.assert_called_once()
+    temporal_client.count_workflows.assert_not_awaited()
+    body = response.json()
+    assert body["count"] is None
+    assert body["countMode"] == "estimated_or_unknown"
+    assert body["degradedCount"] is True
 
 
 def test_serialized_workflow_execution_exposes_agent_run_id_not_agent_run_id() -> None:

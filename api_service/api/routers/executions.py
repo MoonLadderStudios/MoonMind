@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from moonmind.workflows.temporal.workflow_registry import WorkflowProjectionExcluded
+from moonmind.workflows.temporal.workflow_registry import (
+    WorkflowProjectionExcluded,
+    product_workflow_types,
+)
 
 import asyncio
 import base64
@@ -347,8 +350,38 @@ _SUPPORTED_TASK_RUNTIMES = frozenset({
 _GITHUB_ONLY_REPOSITORY_SKILLS = frozenset(
     {"batch-pr-resolver", "pr-resolver"}
 )
+def _product_temporal_scope_query() -> str:
+    """Build the product-domain Temporal visibility clause from the registry.
+
+    MoonLadderStudios/MoonMind#3947: the direct-Temporal list/count, metrics,
+    and facet paths must enforce the same registry product domain instead of a
+    hardcoded type string. The clause derives the allowed ``WorkflowType`` set
+    from :func:`product_workflow_types` so a registry change cannot silently
+    diverge from the upstream query. The ``mm_entry="user_workflow"`` conjunct
+    is kept while ``MoonMind.UserWorkflow`` is the sole product type; when the
+    product set grows beyond one entry shape the entry conjunct is dropped
+    rather than guessing entry values for new product types.
+    """
+
+    def _quote(value: str) -> str:
+        return value.replace('"', '\\"')
+
+    product_types = tuple(product_workflow_types())
+    if not product_types:
+        return 'WorkflowType="__no_product_workflow__"'
+    if len(product_types) == 1:
+        type_clause = f'WorkflowType="{_quote(product_types[0])}"'
+    else:
+        type_clause = "(" + " OR ".join(
+            f'WorkflowType="{_quote(name)}"' for name in product_types
+        ) + ")"
+    if tuple(product_types) == ("MoonMind.UserWorkflow",):
+        return f'{type_clause} AND mm_entry="user_workflow"'
+    return type_clause
+
+
 _TEMPORAL_SCOPE_QUERIES = {
-    "default": 'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow"',
+    "default": _product_temporal_scope_query(),
 }
 _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.SCHEDULED: "queued",
@@ -2801,7 +2834,13 @@ def _build_temporal_execution_query(
         workflow_type=workflow_type,
         entry=entry,
     )
-    scope_query = _TEMPORAL_SCOPE_QUERIES[temporal_scope]
+    # MoonLadderStudios/MoonMind#3947: resolve the product scope live from the
+    # registry so list/count/metrics/facets share one product domain even if
+    # the registry gains product types after import.
+    if temporal_scope == "default":
+        scope_query = _product_temporal_scope_query()
+    else:
+        scope_query = _TEMPORAL_SCOPE_QUERIES[temporal_scope]
     if scope_query:
         query_parts.append(scope_query)
     if workflow_type and not _is_user_workflow_list_type(workflow_type):
@@ -11835,7 +11874,24 @@ async def _get_owned_execution(
                 include_orphaned=include_orphaned_projection,
             )
     except WorkflowProjectionExcluded as exc:
-        raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
+        # MoonLadderStudios/MoonMind#3947 (R4): authorization before disclosure.
+        # A known operator/excluded/unknown type is not permission to read
+        # another owner's run. The service enforces projection scope before the
+        # router can compare ownership, so disclosing exc.code/message here
+        # would teach an unauthorized caller that the ID exists and its
+        # internal type. Preserve the reason code only for callers already
+        # authorized to see diagnostics (admins); everyone else receives the
+        # same generic not-found shape as a failed ownership check, without
+        # raw provider state.
+        if _is_execution_admin(user):
+            raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "execution_not_found",
+                "message": f"Workflow execution {workflow_id} was not found",
+            },
+        ) from exc
     except TemporalExecutionNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -14109,23 +14165,20 @@ async def list_executions(
             )
             await iterator.fetch_next_page()
 
+            # MoonLadderStudios/MoonMind#3947 (R1/R2): the direct-Temporal page
+            # is filtered per row through the registry policy, so an upstream
+            # count over the visibility query is not the product total — an
+            # excluded type may sit entirely on a later page the current fetch
+            # never sees. Report the total as unknown independent of which page
+            # was seen instead of treating the broader-domain count as exact.
+            # The DB-backed list path below keeps its exact product-filtered
+            # count; metrics/facets count over the same product-scoped upstream
+            # query. No count RPC is issued here (bounded single-page work);
+            # callers paginate with the underlying continuation token, which is
+            # preserved even when this page filters down to zero items.
             count_value: int | None = None
-            count_mode = "exact"
-            degraded_count = False
-            try:
-                count_info = await asyncio.wait_for(
-                    client.count_workflows(query=count_query),
-                    timeout=settings.temporal_dashboard.list_count_timeout_seconds,
-                )
-                count_value = count_info.count
-            except Exception as exc:
-                count_mode = "estimated_or_unknown"
-                degraded_count = True
-                logger.warning(
-                    "Temporal execution list count degraded for query_present=%s: %s",
-                    bool(count_query),
-                    exc,
-                )
+            count_mode = "estimated_or_unknown"
+            degraded_count = True
 
             page = iterator.current_page or []
             canonical_map: dict[str, TemporalExecutionCanonicalRecord] = {}
@@ -14145,9 +14198,6 @@ async def list_executions(
                         payload = await map_temporal_state_to_projection(wf)
                     except WorkflowProjectionExcluded as exc:
                         logger.warning("Product projection excluded: %s", exc)
-                        count_value = None
-                        count_mode = "estimated_or_unknown"
-                        degraded_count = True
                         continue
                     canonical_record = canonical_map.get(wf.id)
                     payload["parameters"] = merged_parameters_for_projection(
@@ -16568,7 +16618,18 @@ async def describe_execution(
             use_projection_read = True
         except WorkflowProjectionExcluded as exc:
             await session.rollback()
-            raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
+            # MoonLadderStudios/MoonMind#3947 (R4): same authorization-before-
+            # disclosure rule as _get_owned_execution — reason codes only for
+            # admins, generic not-found for everyone else.
+            if _is_execution_admin(user):
+                raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "execution_not_found",
+                    "message": f"Workflow execution {workflow_id} was not found",
+                },
+            ) from exc
         except RPCError as exc:
             temporal_sync_unavailable = True
             await session.rollback()

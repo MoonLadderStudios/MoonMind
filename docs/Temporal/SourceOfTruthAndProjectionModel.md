@@ -216,6 +216,59 @@ evidence but are never registered for new work). Internal supervisors, managers 
 owners have operator scope; janitors and reconciliation loops are excluded.
 Unknown types are reported as unknown and never relabeled as UserWorkflow.
 Product admission and list/detail readers enforce the same registry policy.
+The direct-Temporal list/count, metrics, and facet paths share one query
+builder (`_build_temporal_execution_query`) whose product-domain clause is
+derived from the registry (`_product_temporal_scope_query`), with the
+caller's owner filter applied in the same upstream query; the DB-backed list
+filters `product_workflow_types()` in SQL.
+
+Direct-Temporal list totals are always `estimated_or_unknown` with a null
+count (MoonLadderStudios/MoonMind#3947): the page is filtered per row through
+the registry policy, so an upstream visibility count is not the product total
+— an excluded type may sit entirely on a later page. An excluded-only page
+legitimately returns zero items with the underlying continuation token
+preserved; callers must keep the Next control enabled and must not treat that
+page as an empty repository or end of results. Single-page fetch only — no
+overscan drain of the upstream list.
+
+Authorization precedes disclosure on direct-ID paths: exclusion reason codes
+(`workflow_type_operator_only`, etc.) are returned only to callers already
+authorized to see diagnostics (admins); every other caller receives the same
+generic `execution_not_found` shape as a failed ownership check, with no raw
+provider state. Product visibility never implies control capability: Pause,
+rerun, edit, and continuation support are governed by the existing
+action-capability owners (remediation capability matrix, per-workflow Update
+validators, system quiesce enumeration in `WorkerPauseSystem.md`), not by
+projection scope.
+
+Operator children (`MoonMind.AgentRun`, sessions, container jobs,
+merge/publication recovery, and the rest of the operator catalog in
+`WorkflowTypeCatalogGenerated.md`) stay out of ordinary product task cards and
+remain reachable only through their existing authorized diagnostics/detail
+surfaces and parent links; registry scope alone grants no route. The
+per-child mapping (MoonLadderStudios/MoonMind#3947) is:
+
+| Operator child | Authorized detail route / read model | Parent link from product execution |
+| --- | --- | --- |
+| `MoonMind.AgentRun` | `GET /api/agent-runs/{id}/observability-summary`, `/api/agent-runs/{id}/observability/events`, `/api/agent-runs/{id}/diagnostics`, `/api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}` (`api_service/api/routers/agent_runs.py`); owner-checked via `_require_observability_access` / `_require_agent_run_access` against the execution owner binding, with parent-workflow fallback | Execution detail `agentRunId` (memo / search attributes / parameters, surfaced as `agentRunId`) |
+| Agent / omnigent sessions | `GET /api/sessions/{session_id}` (+ `/items`, `/stream`, `/events`, `/elicitations/...`) (`api_service/api/routers/sessions.py`); authorized through the parent agent run (`_load_authorized_session_record` → `_require_agent_run_access`) | Session snapshot embedded in the agent-run observability summary (`sessionId`, `sessionSnapshot`) |
+| Container jobs (`MoonMindContainerJobWorkflow`) | `/api/v1/container-jobs/{job_id}` (+ `/logs`, `/artifacts`, `/cancel`) (`api_service/api/routers/container_jobs.py`); owner-scoped `ContainerJobService` keyed by `OwnerIdentity(user.id)` | No product parent link; jobs are addressed directly by `job_id` under the caller's own ownership scope |
+| Merge automation (`MoonMind.MergeAutomation`) | No standalone product route; read model is the parent execution detail `mergeAutomation` summary (`_enrich_execution_merge_automation`) with the child `workflowId` link and resolver children (`resolverChildren[].detailHref`) | `mergeAutomation.workflowId` + `resolverChildren[].workflowId` on the owning product execution |
+| Publication recovery (`MoonMind.PublicationRecoveryV1`) | No standalone product route; read model is the parent execution detail `actionEvidence.publicationRecovery*` fields (`publicationRecoveryWorkflowId`, phase/result) | `actionEvidence.publicationRecoveryWorkflowId` on the owning product execution |
+
+Cross-owner and operator/excluded access on every path above fails closed
+with the generic `execution_not_found` / `403` shapes (no internal type or
+child data disclosed); product detail links for the owning user keep working
+after exclusions are introduced (covered by
+`test_execution_operator_links_3947.py`). Previously
+misclassified rows are repaired only through the shared projection-mutation
+owner (`mutate_execution_projection`, §7.2 field ownership) against
+authoritative workflow/run and owner evidence: correct projection metadata
+without restarting work, changing terminal outcomes, transferring ownership,
+or deleting artifacts. Unknown or unreachable executions stay
+reconciliation-needed — never deleted or relabeled by guess. Continue-As-New
+and current-versus-historical run selection remain the shared mutator's
+responsibility.
 
 ### 7.3 `ExecutionModel`
 

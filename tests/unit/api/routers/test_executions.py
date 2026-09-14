@@ -2078,17 +2078,24 @@ def test_list_executions_temporal_query_includes_target_runtime_filter() -> None
         )
 
     assert response.status_code == 200
-    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    # MoonLadderStudios/MoonMind#3947: the direct-Temporal list shares the
+    # registry product domain in its upstream query but always reports the
+    # total as unknown (no count RPC — per-row exclusion filtering makes any
+    # upstream total unprovable independent of which page was seen).
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert 'WorkflowType="MoonMind.UserWorkflow"' in query
     assert 'mm_entry="user_workflow"' in query
     assert 'mm_target_runtime="codex_cli"' in query
     temporal_client.list_workflows.assert_called_once()
-    assert (
-        temporal_client.list_workflows.call_args.kwargs["query"]
-        == temporal_client.count_workflows.await_args.kwargs["query"]
-    )
+    temporal_client.count_workflows.assert_not_awaited()
+    body = response.json()
+    assert body["count"] is None
+    assert body["countMode"] == "estimated_or_unknown"
+    assert body["degradedCount"] is True
 
-def test_list_executions_source_temporal_degrades_count_failure() -> None:
+def test_list_executions_source_temporal_reports_unknown_count_without_count_rpc() -> None:
+    """MoonLadderStudios/MoonMind#3947 (R1): a clean product page still reports
+    an unknown total — an excluded type may sit entirely on a later page."""
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -2142,7 +2149,7 @@ def test_list_executions_source_temporal_degrades_count_failure() -> None:
                 return_value=SimpleNamespace(custom_attributes={})
             )
         ),
-        count_workflows=AsyncMock(side_effect=RuntimeError("count unavailable")),
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=7)),
         list_workflows=Mock(return_value=_WorkflowIterator()),
     )
     app.dependency_overrides[get_temporal_client] = lambda: temporal_client
@@ -2160,7 +2167,134 @@ def test_list_executions_source_temporal_degrades_count_failure() -> None:
     assert body["countMode"] == "estimated_or_unknown"
     assert body["degradedCount"] is True
     temporal_client.list_workflows.assert_called_once()
-    temporal_client.count_workflows.assert_awaited_once()
+    temporal_client.count_workflows.assert_not_awaited()
+
+def test_list_executions_source_temporal_excluded_only_page_keeps_continuation() -> None:
+    """MoonLadderStudios/MoonMind#3947 (R2): an excluded-only page returns zero
+    items with the underlying continuation token preserved and an unknown
+    total — navigable, not an empty repository or end of results."""
+    import base64 as _base64
+
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+
+    class _EmptyCanonicalResult:
+        def scalars(self) -> "_EmptyCanonicalResult":
+            return self
+
+        def all(self) -> list[TemporalExecutionCanonicalRecord]:
+            return []
+
+    class _Session:
+        async def execute(self, _stmt: object) -> _EmptyCanonicalResult:
+            return _EmptyCanonicalResult()
+
+    app.dependency_overrides[get_async_session] = lambda: _Session()
+    _override_user_dependencies(app, is_superuser=True)
+
+    async def _memo():
+        return {"title": "operator row"}
+
+    operator_workflow = SimpleNamespace(
+        id="mm:operator-1",
+        run_id="run-operator",
+        namespace="default",
+        workflow_type="MoonMind.ProviderProfileManager",
+        status="RUNNING",
+        start_time=datetime(2026, 4, 4, 18, 0, tzinfo=UTC),
+        close_time=None,
+        execution_time=None,
+        search_attributes={},
+        memo=_memo,
+    )
+
+    class _WorkflowIterator:
+        current_page = [operator_workflow]
+        next_page_token: bytes | None = b"underlying-token"
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(custom_attributes={})
+            )
+        ),
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=9)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "ownerType": "system"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"] == []
+    assert body["nextPageToken"] == _base64.b64encode(b"underlying-token").decode("utf-8")
+    assert body["count"] is None
+    assert body["countMode"] == "estimated_or_unknown"
+    assert body["degradedCount"] is True
+    temporal_client.count_workflows.assert_not_awaited()
+
+def test_product_temporal_scope_query_derives_from_registry(monkeypatch) -> None:
+    """MoonLadderStudios/MoonMind#3947 (R1): the upstream product-domain clause
+    tracks the registry instead of a hardcoded type string."""
+    from moonmind.workflows.temporal import workflow_registry
+
+    query = executions_module._product_temporal_scope_query()
+    for product_type in workflow_registry.product_workflow_types():
+        assert f'WorkflowType="{product_type}"' in query
+    assert 'mm_entry="user_workflow"' in query
+
+    monkeypatch.setattr(
+        executions_module,
+        "product_workflow_types",
+        lambda: ("MoonMind.UserWorkflow", "MoonMind.FutureProduct"),
+    )
+    multi_query = executions_module._product_temporal_scope_query()
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in multi_query
+    assert 'WorkflowType="MoonMind.FutureProduct"' in multi_query
+    # Entry values for future product types are not guessed.
+    assert 'mm_entry=' not in multi_query
+
+@pytest.mark.asyncio
+async def test_get_owned_execution_hides_projection_type_from_non_admin() -> None:
+    """MoonLadderStudios/MoonMind#3947 (R4): authorization before disclosure —
+    non-admins get generic not-found without the internal type; admins keep
+    the reason code for diagnostics."""
+    from fastapi import HTTPException as _HTTPException
+
+    from moonmind.workflows.temporal.workflow_registry import (
+        WorkflowProjectionExcluded as _Excluded,
+    )
+
+    service = AsyncMock()
+    service.describe_execution.side_effect = _Excluded(
+        "MoonMind.ProviderProfileManager"
+    )
+    ordinary_user = SimpleNamespace(id="user-1", is_superuser=False)
+    with pytest.raises(_HTTPException) as exc_info:
+        await executions_module._get_owned_execution(
+            service=service, workflow_id="mm:operator-1", user=ordinary_user
+        )
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail["code"] == "execution_not_found"
+    assert "ProviderProfileManager" not in str(exc_info.value.detail)
+
+    admin_user = SimpleNamespace(id="admin-1", is_superuser=True)
+    with pytest.raises(_HTTPException) as admin_exc_info:
+        await executions_module._get_owned_execution(
+            service=service, workflow_id="mm:operator-1", user=admin_user
+        )
+    assert admin_exc_info.value.status_code == 404
+    assert admin_exc_info.value.detail["code"] == "workflow_type_operator_only"
 
 def test_list_executions_temporal_query_includes_canonical_state_filters() -> None:
     app = FastAPI()
@@ -2202,7 +2336,7 @@ def test_list_executions_temporal_query_includes_canonical_state_filters() -> No
         )
 
     assert response.status_code == 200
-    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert 'WorkflowType="MoonMind.UserWorkflow"' in query
     assert 'mm_entry="user_workflow"' in query
     # ``completed`` and ``failed`` are terminal states; the executions list
@@ -2261,7 +2395,7 @@ def test_list_executions_temporal_query_anchors_non_terminal_state_to_running_st
         )
 
     assert response.status_code == 200
-    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert 'mm_state="waiting_on_dependencies"' in query
     assert 'ExecutionStatus="Running"' in query
     assert 'ExecutionStatus="Failed"' not in query
@@ -2307,7 +2441,7 @@ def test_list_executions_temporal_query_mixes_terminal_and_non_terminal_state_fi
         )
 
     assert response.status_code == 200
-    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert 'mm_state="waiting_on_dependencies"' in query
     assert 'ExecutionStatus="Running"' in query
     assert 'ExecutionStatus="Canceled"' in query
@@ -2357,7 +2491,7 @@ def test_list_executions_temporal_query_supports_repeated_canonical_filters() ->
         )
 
     assert response.status_code == 200
-    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert '(mm_target_runtime="codex_cli" OR mm_target_runtime="claude_code")' in query
     assert '(mm_repo="Moon/Mind" OR mm_repo="moon/sidecar")' in query
 
@@ -2394,7 +2528,7 @@ def test_list_executions_temporal_query_includes_legacy_no_commit_visibility_ali
         )
 
     assert response.status_code == 200
-    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert '(mm_state="no_commit" OR mm_state="no_changes")' in query
 
 
@@ -2430,7 +2564,7 @@ def test_list_executions_temporal_query_excludes_legacy_no_commit_visibility_ali
         )
 
     assert response.status_code == 200
-    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert 'mm_state!="no_commit"' in query
     assert 'mm_state!="no_changes"' in query
 
@@ -2476,7 +2610,7 @@ def test_list_executions_temporal_query_ignores_empty_canonical_state_for_legacy
         )
 
     assert response.status_code == 200
-    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert 'ExecutionStatus="Completed"' in query
     assert 'mm_state="completed"' not in query
 
@@ -2553,7 +2687,7 @@ def test_list_executions_temporal_query_includes_canonical_runtime_skill_and_rep
         )
 
     assert response.status_code == 200
-    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert '(mm_target_runtime="codex_cli" OR mm_target_runtime="claude_code")' in query
     assert 'mm_target_skill="moonspec-implement"' in query
     assert 'mm_repo="owner/repo"' in query
@@ -2713,7 +2847,7 @@ def test_list_executions_temporal_query_prefers_canonical_filters_over_legacy_ex
         )
 
     assert response.status_code == 200
-    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert (
         '(ExecutionStatus="Completed")' in query
         or 'ExecutionStatus="Completed"' in query
@@ -2772,7 +2906,7 @@ def test_list_executions_temporal_query_includes_canonical_date_bounds() -> None
         )
 
     assert response.status_code == 200
-    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert "mm_scheduled_for IS NOT NULL" in query
     assert 'mm_scheduled_for>="2026-05-01T00:00:00Z"' in query
     assert 'mm_scheduled_for<="2026-05-05T23:59:59.999999Z"' in query
@@ -2837,7 +2971,7 @@ def test_list_executions_temporal_query_includes_blank_date_filter_semantics() -
         )
 
     assert response.status_code == 200
-    query = temporal_client.count_workflows.await_args.kwargs["query"]
+    query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert '(mm_scheduled_for IS NULL OR (mm_scheduled_for>="2026-05-01T00:00:00Z"))' in query
     assert "CloseTime IS NULL" in query
 
@@ -2884,12 +3018,13 @@ def test_list_executions_temporal_query_supports_sort_and_text_filters() -> None
         )
 
     assert response.status_code == 200
-    count_query = temporal_client.count_workflows.await_args.kwargs["query"]
+    # MoonLadderStudios/MoonMind#3947: no count RPC on the direct-Temporal list
+    # path — filter assertions target the list query (the shared builder still
+    # keeps ORDER BY out of the count shape and on the ordered list shape).
     list_query = temporal_client.list_workflows.call_args.kwargs["query"]
-    assert 'mm_repo STARTS_WITH "Moon"' in count_query
-    assert 'WorkflowId STARTS_WITH "wf-"' in count_query
-    assert 'mm_title = "release"' in count_query
-    assert "ORDER BY" not in count_query
+    assert 'mm_repo STARTS_WITH "Moon"' in list_query
+    assert 'WorkflowId STARTS_WITH "wf-"' in list_query
+    assert 'mm_title = "release"' in list_query
     assert list_query.endswith("ORDER BY StartTime ASC")
 
 
@@ -2977,13 +3112,13 @@ def test_list_executions_temporal_query_title_filter_ands_word_tokens() -> None:
         )
 
     assert response.status_code == 200
-    count_query = temporal_client.count_workflows.await_args.kwargs["query"]
+    list_query = temporal_client.list_workflows.call_args.kwargs["query"]
     # The free-text title is tokenized and ANDed so every typed word must be a
     # member of the mm_title KeywordList.
-    assert 'mm_title = "post"' in count_query
-    assert 'mm_title = "merge"' in count_query
-    assert 'mm_title = "jira"' in count_query
-    assert "LIKE" not in count_query
+    assert 'mm_title = "post"' in list_query
+    assert 'mm_title = "merge"' in list_query
+    assert 'mm_title = "jira"' in list_query
+    assert "LIKE" not in list_query
 
 
 def test_list_executions_temporal_query_rejects_title_filter_without_tokens() -> None:
@@ -3050,9 +3185,8 @@ def test_list_executions_temporal_query_uses_workflow_id_prefix_filter() -> None
         )
 
     assert response.status_code == 200
-    count_query = temporal_client.count_workflows.await_args.kwargs["query"]
     list_query = temporal_client.list_workflows.call_args.kwargs["query"]
-    assert 'WorkflowId STARTS_WITH "wf-"' in count_query
+    assert 'WorkflowId STARTS_WITH "wf-"' in list_query
     assert list_query.endswith("ORDER BY WorkflowId DESC")
 
 
@@ -3315,10 +3449,13 @@ def test_list_executions_source_temporal_filters_and_sorts_progress_from_bounded
     assert response.status_code == 200
     body = response.json()
     assert [item["workflowId"] for item in body["items"]] == ["wf-high"]
-    count_query = temporal_client.count_workflows.await_args.kwargs["query"]
+    # MoonLadderStudios/MoonMind#3947: progress filters apply post-fetch and
+    # progress sort is client-side — neither reaches the upstream query, and no
+    # count RPC is issued.
     list_query = temporal_client.list_workflows.call_args.kwargs["query"]
-    assert "progress" not in count_query
+    assert "progress" not in list_query
     assert "ORDER BY" not in list_query
+    temporal_client.count_workflows.assert_not_awaited()
 
 
 def test_list_executions_source_temporal_hydrates_live_progress_by_default() -> None:
@@ -11375,6 +11512,130 @@ def test_describe_execution_hides_foreign_workflow_visibility(
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "execution_not_found"
     assert str(user.id) != service.describe_execution.return_value.owner_id
+
+def test_owner_product_detail_surfaces_operator_child_parent_links() -> None:
+    """MoonLadderStudios/MoonMind#3947 R3: the owning user reaches operator
+    children through parent links on the product detail payload.
+
+    The product link itself must stay reachable (200) after exclusions were
+    introduced, carrying the AgentRun parent link (``agentRunId``) and the
+    merge-automation child link (``mergeAutomation.workflowId``).
+    """
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    user = _override_user_dependencies(app, is_superuser=False)
+    record = _build_execution_record(owner_id=str(user.id))
+    record.parameters = {
+        "publishMode": "pr",
+        "mergeAutomation": {"enabled": True},
+    }
+    record.memo = {
+        **record.memo,
+        "agentRunId": "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d",
+        "merge_automation": {
+            "enabled": True,
+            "status": "awaiting_child",
+            "childWorkflowId": "merge-automation:mm:wf-1:pr:1614:head:abc123",
+        },
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        progress={
+            "total": 1,
+            "pending": 0,
+            "ready": 0,
+            "executing": 0,
+            "awaitingExternal": 1,
+            "reviewing": 0,
+            "completed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": None,
+            "updatedAt": "2026-04-08T12:00:00Z",
+        },
+        summary={
+            "status": "waiting",
+            "prNumber": 1614,
+            "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/1614",
+            "latestHeadSha": "abc123",
+            "blockers": [],
+            "resolverChildWorkflowIds": [],
+            "artifactRefs": {},
+        },
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-2",
+            "runScope": "latest",
+            "steps": [],
+        },
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["workflowId"] == "mm:wf-1"
+    assert body["agentRunId"] == "6f8b6bf7-6e0c-4d71-9b08-18d489f17a8d"
+    merge_automation = body["mergeAutomation"]
+    assert (
+        merge_automation["workflowId"]
+        == "merge-automation:mm:wf-1:pr:1614:head:abc123"
+    )
+
+
+def test_other_owner_product_detail_hides_operator_child_data(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """MoonLadderStudios/MoonMind#3947 R3: another owner's run — including its
+    operator-child links — is not readable through the product detail path."""
+    test_client, service, user = client
+    record = _build_execution_record(owner_id=str(uuid4()))
+    record.memo = {
+        **record.memo,
+        "agentRunId": "other-owner-agent-run",
+        "merge_automation": {
+            "enabled": True,
+            "status": "awaiting_child",
+            "childWorkflowId": "merge-automation:mm:foreign:pr:9:head:def456",
+        },
+    }
+    service.describe_execution.return_value = record
+
+    response = test_client.get("/api/executions/mm:foreign")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "execution_not_found"
+    assert str(user.id) != record.owner_id
+    assert "other-owner-agent-run" not in response.text
+    assert "merge-automation:mm:foreign" not in response.text
+    assert "agentRunId" not in response.text
+    assert "mergeAutomation" not in response.text
+
+
+def test_operator_type_detail_stays_out_of_product_cards_for_non_admin(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """MoonLadderStudios/MoonMind#3947 R3: an operator-typed execution stays
+    out of ordinary product cards with no internal-type disclosure."""
+    from moonmind.workflows.temporal.workflow_registry import (
+        WorkflowProjectionExcluded as _Excluded,
+    )
+
+    test_client, service, _user = client
+    service.describe_execution.side_effect = _Excluded("MoonMind.AgentRun")
+
+    response = test_client.get("/api/executions/mm:operator-1")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "execution_not_found"
+    assert "MoonMind.AgentRun" not in response.text
+    assert "agentRunId" not in response.text
+
 
 def test_describe_execution_allows_search_attribute_owner_id_fallback(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
