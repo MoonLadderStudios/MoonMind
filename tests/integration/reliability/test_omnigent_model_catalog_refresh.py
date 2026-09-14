@@ -6,10 +6,12 @@ import ast
 import asyncio
 import json
 import sys
+from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
@@ -20,6 +22,10 @@ from moonmind.omnigent.host_runtime import (
 from moonmind.omnigent.host_services import attestation
 from moonmind.omnigent.host_services.docker_backend import DockerCommandBackend
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.workflows.adapters.omnigent_client import (
+    OmnigentClientError,
+    OmnigentHttpClient,
+)
 from tests.integration.reliability.helpers import load_replay
 
 pytestmark = [
@@ -74,19 +80,38 @@ def _install_catalog_cli(root: Path, *, fault: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "harness_id", ["opencode-native", "codex-native", "claude-native", "pi-native"]
-)
-@pytest.mark.parametrize(
-    "fault",
-    [
-        "none",
-        "transient",
-        "exhausted",
-        "probe_error",
-        "build_mismatch",
-        "cancelled",
-        "artifact_error",
-    ],
+    ("fault", "harness_id"),
+    list(
+        product(
+            [
+                "none",
+                "transient",
+                "exhausted",
+                "probe_error",
+                "build_mismatch",
+                "cancelled",
+                "artifact_error",
+            ],
+            ["opencode-native", "codex-native", "claude-native", "pi-native"],
+        )
+    )
+    + list(
+        product(
+            [
+                "transport_error",
+                "rate_limit",
+                "request_timeout",
+                "probe_exhausted",
+                "http_400",
+                "http_401",
+                "http_403",
+                "http_404",
+                "http_409",
+                "http_422",
+            ],
+            ["codex-native", "claude-native", "pi-native"],
+        )
+    ),
 )
 async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, harness_id: str, fault: str
@@ -157,29 +182,51 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
                 ["env", f"PYTHONPATH={tmp_path}", sys.executable, *argv[4:]], **kwargs
             )
 
-    class Client:
-        async def get_host_model_options(self, host_id, requested_harness):
-            assert (host_id, requested_harness) == ("replay-host", harness_id)
-            attempts.append(host_id)
-            events.append("catalog")
-            if fault == "cancelled":
-                raise asyncio.CancelledError()
-            if fault == "build_mismatch":
-                raise HarnessPlatformError(
-                    "host mismatch", code="OMNIGENT_HARNESS_BUILD_MISMATCH"
-                )
-            if fault == "probe_error" and len(attempts) == 1:
-                raise HarnessPlatformError(
-                    "catalog probe failed", code="OMNIGENT_MODEL_UNAVAILABLE"
-                )
-            available = fault not in {"exhausted", "artifact_error"} and (
-                fault != "transient" or len(attempts) > 1
+    def catalog_response(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == (
+            f"/v1/hosts/replay-host/harnesses/{harness_id}/model-options"
+        )
+        attempts.append("replay-host")
+        events.append("catalog")
+        if fault == "cancelled":
+            raise asyncio.CancelledError()
+        if fault == "build_mismatch":
+            raise HarnessPlatformError(
+                "host mismatch", code="OMNIGENT_HARNESS_BUILD_MISMATCH"
             )
-            return {
+        if fault.startswith("http_"):
+            return httpx.Response(int(fault.removeprefix("http_")))
+        if fault == "probe_exhausted":
+            return httpx.Response(503, text="private provider diagnostic")
+        if len(attempts) == 1:
+            if fault == "transport_error":
+                raise httpx.ReadTimeout("private provider diagnostic", request=request)
+            transient_status = {
+                "probe_error": 502,
+                "rate_limit": 429,
+                "request_timeout": 408,
+            }.get(fault)
+            if transient_status is not None:
+                return httpx.Response(
+                    transient_status, text="private provider diagnostic"
+                )
+        available = fault not in {"exhausted", "artifact_error"} and (
+            fault != "transient" or len(attempts) > 1
+        )
+        return httpx.Response(
+            200,
+            json={
                 "models": [
                     {"id": selected_model if available else "opencode-go/older-model"}
                 ]
-            }
+            },
+        )
+
+    client = OmnigentHttpClient(
+        base_url="https://replay.invalid",
+        transport=httpx.MockTransport(catalog_response),
+    )
 
     class Artifacts:
         async def write_json(self, *, name, payload, **kwargs):
@@ -208,7 +255,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         async def cleanup(self, **kwargs):
             events.append("cleanup")
             assert kwargs["container_name"] == "replay-host"
-            if fault == "exhausted":
+            if fault in {"exhausted", "probe_exhausted"}:
                 assert (tmp_path / "generic-host-model-options.json").exists()
             return {"containerRemoved": True}
 
@@ -270,7 +317,7 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
             )
         ),
         host_attestor=attestation.DockerOmnigentHostAttestor(
-            backend=Backend(), client=Client(), artifacts=Artifacts()
+            backend=Backend(), client=client, artifacts=Artifacts()
         ),
         cleanup_service=Cleanup(),
     )
@@ -316,21 +363,33 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
         prepared=prepared,
         credential_handles=[],
     )
-    if fault in {"exhausted", "build_mismatch", "cancelled", "artifact_error"}:
-        error = asyncio.CancelledError if fault == "cancelled" else HarnessPlatformError
+    catalog_exhausted = fault in {"exhausted", "artifact_error", "probe_exhausted"}
+    terminal_http_error = fault.startswith("http_")
+    if (
+        catalog_exhausted
+        or terminal_http_error
+        or fault in {"build_mismatch", "cancelled"}
+    ):
+        error = (
+            OmnigentClientError
+            if terminal_http_error
+            else (
+                asyncio.CancelledError if fault == "cancelled" else HarnessPlatformError
+            )
+        )
         with pytest.raises(error) as exc:
             await operation
         assert events[-1] == "cleanup"
-        if fault != "cancelled":
+        if terminal_http_error:
+            assert exc.value.status_code == int(fault.removeprefix("http_"))
+        elif fault != "cancelled":
             assert exc.value.code == (
                 "OMNIGENT_MODEL_UNAVAILABLE"
-                if fault in {"exhausted", "artifact_error"}
+                if catalog_exhausted
                 else "OMNIGENT_HARNESS_BUILD_MISMATCH"
             )
-        assert len(attempts) == (
-            manifest["maxAttempts"] if fault in {"exhausted", "artifact_error"} else 1
-        )
-        if fault in {"exhausted", "artifact_error"}:
+        assert len(attempts) == (manifest["maxAttempts"] if catalog_exhausted else 1)
+        if catalog_exhausted:
             assert "after 3 catalog reads" in str(exc.value)
     else:
         result = await operation
@@ -344,13 +403,25 @@ async def test_catalog_recovery_keeps_exact_host_until_evidence_or_exhaustion(
     assert set(attempts) == {"replay-host"}
     assert candidate.read_text() == "preserved edits"
     assert plan.payload.modelConfig.qualifiedId == selected_model
-    if fault not in {"build_mismatch", "cancelled", "artifact_error"}:
+    if not terminal_http_error and fault not in {
+        "build_mismatch",
+        "cancelled",
+        "artifact_error",
+    }:
         evidence = json.loads(
             (tmp_path / "generic-host-model-options.json").read_text()
         )
         assert evidence["selectedModel"] == selected_model
         assert len(evidence["attempts"]) == len(attempts)
         assert evidence["attempts"][-1]["selectedModelPresent"] is (
-            fault != "exhausted"
+            not catalog_exhausted
         )
+        if fault in {
+            "probe_error",
+            "transport_error",
+            "rate_limit",
+            "request_timeout",
+            "probe_exhausted",
+        }:
+            assert evidence["attempts"][0]["errorCode"] == "OMNIGENT_MODEL_UNAVAILABLE"
         assert "private provider diagnostic" not in json.dumps(evidence)

@@ -23,6 +23,7 @@ from moonmind.security.egress import (
     EgressAttestation,
     attest_docker_workload_egress,
 )
+from moonmind.workflows.adapters.omnigent_client import OmnigentClientError
 
 # Resolve the upstream package layout inside the admitted image. Both 0.12 and
 # 0.13 hosts can be digest-pinned by existing plans. Select before importing:
@@ -130,10 +131,25 @@ async def _read_exact_host_model_options(
     """
 
     if harness_id != "opencode-native":
-        return (
-            await client.get_host_model_options(omnigent_host_id, harness_id),
-            "omnigent-host-tunnel",
-        )
+        try:
+            model_options = await client.get_host_model_options(
+                omnigent_host_id, harness_id
+            )
+        except OmnigentClientError as exc:
+            status = exc.status_code
+            transient = exc.failure_class == "integration_error" and (
+                status is None or status in {408, 429} or 500 <= status < 600
+            )
+            if not transient:
+                raise
+            # Normalize at the catalog boundary so the same bounded policy
+            # owns CLI and tunnel read recovery. Auth/input failures retain
+            # their original authority; provider diagnostics stay private.
+            raise HarnessPlatformError(
+                "exact host model catalog tunnel read failed",
+                code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+            ) from exc
+        return model_options, "omnigent-host-tunnel"
 
     probe = _substrate_guarded_probe(
         "import json; " + _OPENCODE_APP_SERVER_IMPORT + "print(json.dumps({'models': "
