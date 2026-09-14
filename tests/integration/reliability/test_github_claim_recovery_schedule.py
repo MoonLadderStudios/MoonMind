@@ -74,12 +74,17 @@ class FailedRecurringClaim:
 
 @pytest.mark.parametrize("journey", ["postgres"], indirect=True)
 @pytest.mark.parametrize(
-    "with_agent,startup_outage", [(False, False), (True, False), (True, True)]
+    "with_agent,startup_outage,foreign", [(False, False, False), (True, False, False), (True, True, False), (False, False, True)]
 )
 async def test_startup_installs_automatic_recovery_and_restart_releases_claim(
-    journey, monkeypatch, tmp_path, with_agent, startup_outage
+    journey, monkeypatch, tmp_path, with_agent, startup_outage, foreign
 ):
     from api_service import main as api_main
+    from fastapi import FastAPI
+
+    # Isolate lifespan-owned task handles from other tests' application/event
+    # loops; startup and shutdown still use the production lifespan owner.
+    monkeypatch.setattr(api_main, "app", FastAPI())
 
     state, service, sessions = journey
     client = await resolver_test_client(
@@ -169,7 +174,11 @@ async def test_startup_installs_automatic_recovery_and_restart_releases_claim(
         result = await TemporalIntegrationActivities().github_issue_reconcile_handoffs(
             payload
         )
-        if result["localClaims"]["released"]:
+        if result["localClaims"]["released"] or any(
+            item.get("reasonCode") == "lease_expired"
+            for repository in result.get("githubRepositories", [])
+            for item in repository.get("results", [])
+        ):
             recovered.set()
         return result
 
@@ -200,6 +209,23 @@ async def test_startup_installs_automatic_recovery_and_restart_releases_claim(
             **worker_options,
         ),
     ):
+        if foreign:
+            from api_service.db.models import GitHubIssueClaim
+            from moonmind.config.settings import settings
+            from moonmind.workflows.temporal import github_issue_claim_lease as leases
+            from tests.support.isolated_postgres import isolated_postgres
+
+            foreign_sessions = await stack.enter_async_context(isolated_postgres([GitHubIssueClaim.__table__]))
+            foreign_store = IssueClaimStore(foreign_sessions)
+            monkeypatch.setattr(recovery, "IssueClaimStore", lambda: foreign_store)
+            monkeypatch.setattr(tools, "IssueClaimStore", lambda: foreign_store)
+            monkeypatch.setattr(recovery, "_closed_execution_tree", AsyncMock(side_effect=AssertionError("Foreign runtime visibility is forbidden")))
+            monkeypatch.setattr(settings.workflow, "github_repository", "example/repo")
+            monkeypatch.setattr(service, "probe_token", AsyncMock(return_value={"repositoryAccessible": True}))
+            now = leases.utc_now()
+            monkeypatch.setattr(leases, "utc_now", lambda: now + timedelta(minutes=31))
+            state["actor"] = {"id": 456, "login": "independent-consumer"}
+            foreign_original = state["comments"][0]["body"]
 
         @asynccontextmanager
         async def database():
@@ -268,7 +294,11 @@ async def test_startup_installs_automatic_recovery_and_restart_releases_claim(
 
             await handle.update(faster)
             await asyncio.wait_for(recovered.wait(), timeout=45)
-            assert (await store.get(receipt.owner)).released
+            assert (await store.get(receipt.owner)).released is not foreign
+            if foreign:
+                assert state["comments"][0]["body"] == foreign_original
+                assert await foreign_store.get(receipt.owner) is None
+                recovery._closed_execution_tree.assert_not_awaited()
             assert state["labels"] == [] and state["posts"] == 1
             result = await tools.load_github_issue_preset_brief(
                 {"repository": "example/repo", "issueSearch": ""},

@@ -33,7 +33,7 @@ MAX_CLAIMS = 25
 MAX_EXECUTIONS = 64
 MAX_HISTORY_EVENTS = 25000
 MAX_CLAIM_SECONDS = 30
-MAX_SWEEP_SECONDS = 240
+MAX_SWEEP_SECONDS = 120
 
 
 async def _closed_execution_tree(client, receipt, now):
@@ -367,6 +367,7 @@ async def reconcile_local_claims(
         else ""
     )
     return {
+        "repositories": sorted({receipt.repository for receipt in receipts}),
         "examined": len(results),
         "released": sum(bool(item["released"]) for item in results),
         "results": results,

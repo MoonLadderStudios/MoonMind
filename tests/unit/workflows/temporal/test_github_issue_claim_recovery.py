@@ -49,7 +49,7 @@ async def test_scheduled_recovery_releases_failed_claim_and_next_search_selects_
             return_value=SimpleNamespace(
                 status=WorkflowExecutionStatus.FAILED,
                 close_time=datetime.now(UTC) - timedelta(minutes=6),
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 run_id="failed-run-id",
             )
         ),
@@ -155,7 +155,7 @@ async def test_incomplete_controlling_history_cannot_authorize_release(
             return_value=SimpleNamespace(
                 status=WorkflowExecutionStatus.FAILED,
                 close_time=datetime.now(UTC) - timedelta(minutes=6),
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
             )
         ),
         fetch_history_events=lambda **kwargs: history_events(events),
@@ -187,7 +187,7 @@ async def test_slow_owner_cannot_starve_rotation_and_next_sweep(journey, monkeyp
         return SimpleNamespace(
             status=WorkflowExecutionStatus.FAILED,
             close_time=datetime.now(UTC) - timedelta(minutes=6),
-            workflow_type="MoonMind.Run",
+            workflow_type="MoonMind.UserWorkflow",
         )
 
     client = SimpleNamespace(
@@ -227,7 +227,7 @@ async def test_fresh_workflow_ids_cannot_reset_the_portable_retry_allowance(jour
             return_value=SimpleNamespace(
                 status=WorkflowExecutionStatus.FAILED,
                 close_time=datetime.now(UTC) - timedelta(minutes=6),
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
             )
         ),
         fetch_history_events=lambda **kwargs: history_events([]),

@@ -1194,6 +1194,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=60),
         ),
         TemporalActivityDefinition(
+            activity_type="github_issue.renew_claim",
+            family="github_issue",
+            capability_class="integration:github",
+            task_queue=cfg.activity_integrations_task_queue,
+            fleet=INTEGRATIONS_FLEET,
+            timeouts=TemporalActivityTimeouts(25, 30),
+            retries=_activity_retries(max_attempts=1, max_interval_seconds=1),
+        ),
+        TemporalActivityDefinition(
             activity_type="github_issue.assess_legacy",
             family="github_issue",
             capability_class="integration:github",

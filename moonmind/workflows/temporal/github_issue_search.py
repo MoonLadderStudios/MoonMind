@@ -447,6 +447,7 @@ async def resolve_issue(
     query: str,
     github_service: GitHubService,
     blockers_from_issue: Callable[[Mapping[str, Any]], Awaitable[list[dict[str, Any]]]],
+    reconcile_candidate: Callable[[int], Awaitable[bool]] | None = None,
     attempt_evidence_resolver: Callable[
         [Mapping[str, Any]], Awaitable[Mapping[str, Any] | None]
     ]
@@ -701,6 +702,9 @@ async def resolve_issue(
                 normalized = dict(candidate)
                 labels = candidate["labels"]
                 normalized["labels"] = [label["name"] for label in labels]
+                if has_in_progress_status(normalized) and reconcile_candidate is not None:
+                    if await reconcile_candidate(candidate["number"]):
+                        normalized["labels"] = [label for label in normalized["labels"] if label != "status: in-progress"]
                 if has_in_progress_status(
                     normalized
                 ) or not is_lifecycle_selectable_candidate(normalized):
@@ -847,7 +851,7 @@ async def resolve_issue(
                     _record_rejection(
                         counts,
                         candidate["number"],
-                        "active_attempt_conflict",
+                        exc.evidence.get("reasonCode") or "active_attempt_conflict",
                         claimEvidence=exc.evidence,
                     )
                     continue

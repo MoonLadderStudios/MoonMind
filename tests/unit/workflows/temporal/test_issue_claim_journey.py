@@ -5,7 +5,7 @@ import json
 import threading
 from contextlib import AsyncExitStack, asynccontextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 import pytest
@@ -68,7 +68,7 @@ async def journey(tmp_path, monkeypatch, request):
                 self.respond({"message": "fixture read outage"}, 503)
                 return
             if path == "/user":
-                self.respond({"id": 123, "login": "fixture-owner"})
+                self.respond(state.get("actor", {"id": 123, "login": "fixture-owner"}))
             elif path.endswith("/issues/3971/comments") and "extra_state" in state:
                 self.respond(state["extra_state"]["comments"])
             elif path.endswith("/comments"):
@@ -77,6 +77,8 @@ async def journey(tmp_path, monkeypatch, request):
                 self.respond(self.issue(3971))
             elif path.endswith("/issues/3970"):
                 self.respond(self.issue())
+            elif state.get("scan_entries") and path.rsplit("/", 1)[-1].isdigit():
+                self.respond(next(item for item in state["scan_entries"] if item["number"] == int(path.rsplit("/", 1)[-1])))
             elif path.endswith("/issues/42"):
                 self.respond(
                     {
@@ -94,6 +96,12 @@ async def journey(tmp_path, monkeypatch, request):
                     payload, status = state["comparison_provider"](unquote(path.rsplit("/compare/", 1)[1]))
                     self.respond(payload, status)
             elif path.endswith("/issues"):
+                if state.get("scan_entries"):
+                    query = parse_qs(urlsplit(self.path).query)
+                    per_page = int(query.get("per_page", [100])[0])
+                    page = int(query.get("page", [1])[0])
+                    self.respond(state["scan_entries"][(page - 1) * per_page : page * per_page])
+                    return
                 self.respond(
                     ([self.issue()] if state.get("state", "open") == "open" else [])
                     + ([self.issue(3971)] if "extra_state" in state else [])
@@ -110,7 +118,8 @@ async def journey(tmp_path, monkeypatch, request):
                 comment = {
                     "id": len(issue_state["comments"]) + 1,
                     "body": payload["body"],
-                    "user": {"id": 123, "login": "fixture-owner"},
+                    "user": state.get("actor", {"id": 123, "login": "fixture-owner"}),
+                    "author_association": "COLLABORATOR",
                 }
                 issue_state["comments"].append(comment)
                 if state["lost_ack"]:
@@ -139,6 +148,10 @@ async def journey(tmp_path, monkeypatch, request):
                 self.respond({"message": "fixture temporary failure"}, 503)
                 return
             comment["body"] = payload["body"]
+            if state.get("lose_update_ack"):
+                state["lose_update_ack"] = False
+                self.close_connection = True
+                return
             if released and state.get("lose_release_ack"):
                 state["lose_release_ack"] = False
                 self.close_connection = True

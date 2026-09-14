@@ -4781,6 +4781,10 @@ async def load_github_issue_preset_brief(
                     if (explicit_repo.casefold(), explicit_number) != (receipt.repository, receipt.issue_number):
                         raise ValueError("substitution_denied: execution already selected a different issue")
                 service = github_service_factory()
+                if receipt.pending_comment_body:
+                    from moonmind.workflows.temporal.issue_claim_store import reconcile_claim_comment
+                    receipt = await reconcile_claim_comment(IssueClaimStore(), receipt, service)
+                    context["issue_claim_receipt"] = receipt
                 context["verified_issue_claim"] = await verify_claim(receipt, service)
                 inputs = {key: value for key, value in inputs.items() if key != "issueSearch"}
                 inputs = {**inputs, "repository": receipt.repository, "issueNumber": receipt.issue_number, **receipt.handoff()}
@@ -4846,6 +4850,15 @@ async def _load_github_issue_preset_brief(
         )
         return True
 
+    async def reconcile_candidate(issue_number: int) -> bool:
+        from moonmind.workflows.temporal.github_issue_claim_lease import reconcile_expired_issue
+        try:
+            result = await reconcile_expired_issue(service=github_service_factory(),
+                repository=repository, issue_number=issue_number)
+            return bool(result.get("reclaimed"))
+        except ValueError:
+            return False
+
     if "issueSearch" in inputs:
         repository = _string(inputs.get("repository"))
         # A recovery candidate without usable handoff evidence would fail
@@ -4866,6 +4879,7 @@ async def _load_github_issue_preset_brief(
                 query=_string(inputs.get("issueSearch")),
                 github_service=github_service_factory(),
                 blockers_from_issue=blockers_for_issue,
+                reconcile_candidate=reconcile_candidate,
                 reserve_candidate=reserve_candidate,
                 recovery_handoff=recovery_handoff or None,
                 # Same shared exact-issue admission boundary as explicit /
@@ -4903,6 +4917,10 @@ async def _load_github_issue_preset_brief(
             issue_number=issue_number,
             github_service_factory=github_service_factory,
         )
+    if issue_data and not search_evidence and has_in_progress_status(issue_data) and not (_context or {}).get("verified_issue_claim"):
+        if await reconcile_candidate(issue_number):
+            issue_data, error = await _fetch_github_issue(repository=repository,
+                issue_number=issue_number, github_service_factory=github_service_factory)
     if issue_data is None:
         return ToolResult(
             status="FAILED",
@@ -5150,6 +5168,29 @@ async def _load_github_issue_preset_brief(
                         ),
                     },
                 )
+    if isinstance(receipt, ClaimReceipt):
+        attempt = parse_attempt_comment(receipt.comment_body).handoff
+        if attempt and attempt.lease_expires_at:
+            preset_brief += (
+                "\n\nGitHub claim lease: "
+                f"https://github.com/{repository}/issues/{issue_number}"
+                f"#issuecomment-{receipt.comment_id}. "
+                "Before shared issue, branch, or PR writes, reread this attempt comment "
+                "and competing attempt comments. Proceed only while this lease is "
+                "unexpired and no live competing claim or hold exists. The workflow "
+                "owner renews this lease; do not extend it yourself. If evidence is "
+                "unreadable or ownership is lost, stop shared writes and retain local "
+                "work for recovery. An expired attempt cannot resume publication."
+            )
+        if attempt and attempt.predecessor_comment_id:
+            preset_brief += (
+                "\n\nPrior attempt evidence: "
+                f"https://github.com/{repository}/issues/{issue_number}"
+                f"#issuecomment-{attempt.predecessor_comment_id}. "
+                "Read the retained attempt history and inspect its linked PRs and branches "
+                "before editing. Claim expiry proves neither stopped writers nor absence "
+                "of prior work. Preserve existing work and implement only verified gaps."
+            )
     return ToolResult(
         status="COMPLETED",
         outputs={
@@ -6503,6 +6544,7 @@ async def _execute_brief_admission_claim(
 
 
 async def _prepare_github_issue_claim(*, inputs, context, repository, issue_number, service):
+    from moonmind.workflows.temporal.github_issue_claim_lease import with_lease, expired
     owner = claim_owner(context)
     existing = (context or {}).get("issue_claim_receipt") or await IssueClaimStore().for_execution(owner)
     if existing:
@@ -6519,6 +6561,30 @@ async def _prepare_github_issue_claim(*, inputs, context, repository, issue_numb
         inputs={**inputs, "attemptId": attempt_id, "workflowId": owner},
         context=context, pull_request_url="",
     )
+    listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
+    if not listed.get("ok") or not isinstance(listed.get("comments"), list):
+        raise ValueError("claim_read_failure: complete comment history required")
+    comments = listed["comments"]
+    prior_attempts = [(comment, parse_attempt_comment(comment.get("body"))) for comment in comments]
+    prior_attempts = [(comment, parsed) for comment, parsed in prior_attempts if parsed.status != "no_marker"]
+    # Carry portable lineage into a fresh ID instead of resetting its budget.
+    if prior_attempts and all(parsed.handoff and (parsed.handoff.activity == "released" or expired(parsed.handoff)) for _, parsed in prior_attempts):
+        from dataclasses import replace
+        from moonmind.workflows.temporal.github_issue_attempts import reconstruct_from_comments
+        from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import _trusted_posters
+        trusted = _trusted_posters(service=service) + [str((comment.get("user") or {}).get("login") or "")
+            for comment in comments if str((comment.get("user") or {}).get("id")) == actor["actorId"]
+            or comment.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}]
+        lineage = reconstruct_from_comments(comments, expected_repository=repository,
+            expected_issue_number=issue_number, trusted_posters=trusted, max_attempts=handoff.retry_allowance)
+        if lineage.outcome != "reconstructed":
+            raise ActiveIssueClaimConflict("retry_lineage_blocks_admission", evidence={
+                "reasonCode": lineage.reason_code, "source": "github_comments"})
+        comment, prior = prior_attempts[-1]
+        handoff = replace(handoff, predecessor_attempt_id=prior.attempt_id,
+            predecessor_comment_id=str(comment["id"]), retry_remaining=lineage.retry_remaining,
+            retry_history=tuple(parsed.attempt_id for _, parsed in prior_attempts))
+    handoff = with_lease(handoff)
     values = dict(owner=owner, repository=repository,
         issue_number=issue_number, attempt_id=attempt_id, actor_id=actor["actorId"],
         comment_body=render_attempt_comment(handoff))
@@ -6527,6 +6593,17 @@ async def _prepare_github_issue_claim(*, inputs, context, repository, issue_numb
     # before reserving this candidate so a search can continue without effects.
     await verify_claim(ClaimReceipt(**values, comment_id=None, confirmed=False,
         pending_comment_body=None, released=False), service)
+    # A local receipt is a cache of GitHub ownership. Its expired lease must
+    # not block a new consumer that sees the same expired comment remotely.
+    store = IssueClaimStore()
+    prior = await store.active_for_issue(repository, issue_number)
+    if prior is not None:
+        parsed = parse_attempt_comment(prior.comment_body)
+        if parsed.handoff and expired(parsed.handoff):
+            async with store.locked(prior.owner) as row:
+                current = parse_attempt_comment(row.comment_body).handoff
+                if current and expired(current):
+                    row.released = True
     return await IssueClaimStore().prepare(**values)
 
 
