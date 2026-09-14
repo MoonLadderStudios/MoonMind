@@ -744,11 +744,21 @@ async def test_expiry_never_rewrites_the_runtime_wide_snapshot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_terminal_reclamation_releases_one_row_and_asks_for_cleanup() -> None:
-    """Reclamation costs one fenced row transition, not a snapshot rewrite."""
+async def test_terminal_reclamation_requests_cleanup_without_freeing_the_slot() -> None:
+    """MoonLadderStudios/MoonMind#1089: terminal state is not teardown proof.
+
+    Reclamation costs one fenced ``request_cleanup`` transition, not a
+    snapshot rewrite and not a capacity-freeing release. The slot stays
+    spent until the designated cleanup owner confirms verified teardown.
+    """
 
     ledger = _Ledger(
-        {"release_one": {"released": True, "outcome": LeaseTransitionOutcome.RELEASED.value}}
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
+            }
+        }
     )
     wf = _held_manager(ledger_generation=6)
     # A second, still-running holder must not be touched.
@@ -769,18 +779,385 @@ async def test_terminal_reclamation_releases_one_row_and_asks_for_cleanup() -> N
             }
         )
 
-    assert ledger.actions() == ["release_one"]
-    rows = ledger.rows_for("release_one")
+    assert ledger.actions() == ["request_cleanup"]
+    assert "release_one" not in ledger.actions()
+    rows = ledger.rows_for("request_cleanup")
     assert rows[0]["lease_id"] == "agent-run-1"
     assert rows[0]["fencing_generation"] == 6
     assert rows[0]["reason"] == "owner_terminal"
-    assert rows[0]["cleanup_requested"] is True
-    assert profile.current_leases == ["agent-run-2"]
+    assert profile.current_leases == ["agent-run-1", "agent-run-2"]
+    assert "agent-run-1" in wf._cleanup_requested_leases
 
 
 @pytest.mark.asyncio
-async def test_a_failed_reclamation_keeps_the_slot_reserved() -> None:
-    ledger = _Ledger({"release_one": RuntimeError("artifacts worker unavailable")})
+async def test_terminal_not_found_keeps_profile_and_scope_capacity_spent() -> None:
+    """MoonLadderStudios/MoonMind#1089: a missing record frees no capacity.
+
+    A lease whose workflow is terminal or NOT_FOUND while its exact runtime
+    consumer remains live must keep both its profile slot and its
+    shared-scope unit unavailable before verified teardown.
+    """
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
+            }
+        }
+    )
+    wf = _held_manager(ledger_generation=6)
+    profile = wf._profiles[PROFILE_ID]
+    profile.max_parallel_runs = 1
+    wf._scopes[SCOPE_REF].configured_limit = 1
+    wf._scopes[SCOPE_REF].effective_limit = 1
+
+    with _patched(ledger):
+        await wf._reclaim_terminal_leases_durably(
+            {"agent-run-1": {"running": False, "status": "NOT_FOUND"}}
+        )
+
+    assert ledger.actions() == ["request_cleanup"]
+    assert profile.current_leases == ["agent-run-1"]
+    assert wf._scope_active_units(SCOPE_REF) == 1
+    assert wf._scope_is_available(wf._scopes[SCOPE_REF]) is False
+    assert wf._profile_effective_available(profile) is False
+
+
+@pytest.mark.asyncio
+async def test_verified_teardown_release_frees_each_unit_once() -> None:
+    """MoonLadderStudios/MoonMind#1089: release only from positive evidence.
+
+    A terminal-owner lease first moves to the capacity-consuming
+    cleanup-requested state. Only the designated cleanup owner's verified
+    teardown report frees it, quoting the acquired fence — exactly once.
+    """
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
+            },
+            "release_verified": {
+                "released": True,
+                "outcome": LeaseTransitionOutcome.RELEASED.value,
+            },
+        }
+    )
+    wf = _held_manager(ledger_generation=6)
+    profile = wf._profiles[PROFILE_ID]
+
+    with _patched(ledger):
+        await wf._reclaim_terminal_leases_durably(
+            {"agent-run-1": {"running": False, "status": "TERMINATED"}}
+        )
+        assert profile.current_leases == ["agent-run-1"]
+        await wf.report_cleanup_verified(
+            {
+                "lease_id": "agent-run-1",
+                "profile_id": PROFILE_ID,
+                "fencing_generation": 6,
+                "teardown_evidence": {
+                    "consumer_stopped": True,
+                    "verified_by": "runtime-janitor",
+                },
+            }
+        )
+
+    assert ledger.actions() == ["request_cleanup", "release_verified"]
+    row = ledger.rows_for("release_verified")[0]
+    assert row["lease_id"] == "agent-run-1"
+    assert row["fencing_generation"] == 6
+    assert row["reason"] == "cleanup_verified"
+    assert row["teardown_evidence"]["consumer_stopped"] is True
+    assert profile.current_leases == []
+    assert wf._cleanup_requested_leases == set()
+    assert wf._unresolved_releases == {}
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_verified_report_is_idempotent_not_a_second_free() -> None:
+    """A retried teardown report reconciles; it never frees a replacement."""
+
+    ledger = _Ledger(
+        {
+            "release_verified": [
+                {
+                    "released": True,
+                    "outcome": LeaseTransitionOutcome.RELEASED.value,
+                },
+                {
+                    "released": True,
+                    "duplicate": True,
+                    "outcome": LeaseTransitionOutcome.ALREADY_RELEASED.value,
+                },
+            ]
+        }
+    )
+    wf = _held_manager(ledger_generation=6)
+
+    evidence = {"consumer_stopped": True, "verified_by": "runtime-janitor"}
+    with _patched(ledger):
+        await wf.report_cleanup_verified(
+            {
+                "lease_id": "agent-run-1",
+                "profile_id": PROFILE_ID,
+                "fencing_generation": 6,
+                "teardown_evidence": evidence,
+            }
+        )
+        assert wf._profiles[PROFILE_ID].current_leases == []
+        # Redelivery after the free: nothing left to free, no conflict raised.
+        await wf.report_cleanup_verified(
+            {
+                "lease_id": "agent-run-1",
+                "profile_id": PROFILE_ID,
+                "fencing_generation": 6,
+                "teardown_evidence": evidence,
+            }
+        )
+
+    assert ledger.actions() == ["release_verified"]
+    assert wf._unresolved_releases == {}
+
+
+@pytest.mark.asyncio
+async def test_a_stale_verified_report_cannot_free_replacement_authority() -> None:
+    """A delayed report for a superseded generation is ignored in memory."""
+
+    ledger = _Ledger({"release_verified": {"released": True, "outcome": "released"}})
+    wf = _held_manager(ledger_generation=6)
+    # The lease was granted again under a newer generation.
+    wf._profiles[PROFILE_ID].lease_metadata["agent-run-1"]["fencingGeneration"] = 9
+    wf._lease_grant_sequence = 9
+
+    with _patched(ledger):
+        await wf.report_cleanup_verified(
+            {
+                "lease_id": "agent-run-1",
+                "profile_id": PROFILE_ID,
+                "fencing_generation": 6,
+                "teardown_evidence": {"consumer_stopped": True},
+            }
+        )
+
+    assert ledger.actions() == [], "a stale report reached the ledger"
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_verified_report_without_positive_evidence_frees_nothing() -> None:
+    """A missing consumer_stopped flag is not teardown evidence."""
+
+    ledger = _Ledger({"release_verified": {"released": True, "outcome": "released"}})
+    wf = _held_manager(ledger_generation=6)
+
+    with _patched(ledger):
+        await wf.report_cleanup_verified(
+            {
+                "lease_id": "agent-run-1",
+                "profile_id": PROFILE_ID,
+                "fencing_generation": 6,
+                "teardown_evidence": {"verified_by": "runtime-janitor"},
+            }
+        )
+
+    assert ledger.actions() == []
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_verified_release_without_requested_cleanup_stays_spent() -> None:
+    """The ledger refuses to skip the cleanup-request ordering step."""
+
+    ledger = _Ledger(
+        {
+            "release_verified": {
+                "released": False,
+                "outcome": LeaseTransitionOutcome.CONFLICT.value,
+                "error": "cleanup not requested",
+            }
+        }
+    )
+    wf = _held_manager(ledger_generation=6)
+
+    with _patched(ledger):
+        await wf.report_cleanup_verified(
+            {
+                "lease_id": "agent-run-1",
+                "profile_id": PROFILE_ID,
+                "fencing_generation": 6,
+                "teardown_evidence": {"consumer_stopped": True},
+            }
+        )
+
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+    pending = wf._unresolved_releases["agent-run-1"]
+    assert pending["kind"] == "verified_cleanup"
+    assert pending["retryable"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_retryable_verified_release_is_retried_with_its_evidence() -> None:
+    """Lost acknowledgments re-drive the gated transition, not owner release."""
+
+    ledger = _Ledger(
+        {
+            "release_verified": [
+                RuntimeError("artifacts worker unavailable"),
+                {
+                    "released": True,
+                    "outcome": LeaseTransitionOutcome.RELEASED.value,
+                },
+            ]
+        }
+    )
+    wf = _held_manager(ledger_generation=6)
+    evidence = {"consumer_stopped": True, "verified_by": "agent-run"}
+
+    with _patched(ledger):
+        await wf.report_cleanup_verified(
+            {
+                "lease_id": "agent-run-1",
+                "profile_id": PROFILE_ID,
+                "fencing_generation": 6,
+                "teardown_evidence": evidence,
+            }
+        )
+        assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+        assert wf._unresolved_releases["agent-run-1"]["kind"] == "verified_cleanup"
+        # The obligation survives Continue-As-New with its evidence intact.
+        successor = _held_manager(ledger_generation=6)
+        successor._restore_lease_obligations(wf._build_continue_as_new_input())
+        assert successor._unresolved_releases["agent-run-1"]["kind"] == (
+            "verified_cleanup"
+        )
+        assert successor._unresolved_releases["agent-run-1"]["teardown_evidence"] == (
+            evidence
+        )
+        await successor._retry_unresolved_releases()
+
+    assert successor._profiles[PROFILE_ID].current_leases == []
+    assert successor._unresolved_releases == {}
+    assert ledger.actions() == ["release_verified", "release_verified"]
+
+
+def test_consumer_classification_names_reconciliation_needed() -> None:
+    """Missing identity is reconciliation-needed, never proof of no process."""
+
+    wf = _held_manager()
+    profile = wf._profiles[PROFILE_ID]
+
+    assert wf._lease_consumer_class(profile, "agent-run-1") == "reservation"
+
+    profile.lease_metadata["agent-run-1"] = {
+        **profile.lease_metadata["agent-run-1"],
+        "workflowId": "agent-run-1",
+    }
+    assert wf._lease_consumer_class(profile, "agent-run-1") == "workflow_owned"
+
+    profile.lease_metadata["agent-run-1"] = {
+        "ownerIsWorkflow": False,
+        "workflowId": "agent-run-1",
+    }
+    assert wf._lease_consumer_class(profile, "agent-run-1") == "activity_owned"
+
+    profile.lease_metadata["agent-run-1"] = {"ownerIsWorkflow": False}
+    assert wf._lease_consumer_class(profile, "agent-run-1") == "unverifiable"
+
+
+@pytest.mark.asyncio
+async def test_an_activity_owned_terminal_owner_requests_cleanup_not_release() -> None:
+    """A non-workflow owner with a verifiable workflow still owes cleanup."""
+
+    ledger = _Ledger(
+        {
+            "request_cleanup": {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
+            }
+        }
+    )
+    wf = _held_manager()
+    profile = wf._profiles[PROFILE_ID]
+    profile.lease_metadata["agent-run-1"] = {
+        **profile.lease_metadata["agent-run-1"],
+        "ownerIsWorkflow": False,
+        "workflowId": "agent-run-1",
+    }
+
+    with _patched(ledger):
+        await wf._reclaim_terminal_leases_durably(
+            {"agent-run-1": {"running": False, "status": "TERMINATED"}},
+            include_activity_owned=True,
+        )
+
+    assert ledger.actions() == ["request_cleanup"]
+    assert profile.current_leases == ["agent-run-1"]
+    assert wf._lease_index_conflicts == []
+
+
+def test_an_unverifiable_lease_is_no_terminal_candidate() -> None:
+    """Without an owning workflow there is no liveness to observe.
+
+    The lease is skipped by the terminal path — never released — and stays
+    spent for the expiry path, which names it ``cleanup_owner_unverifiable``.
+    """
+
+    wf = _expired_cleanup_manager(owner_is_workflow=False)
+    candidates = wf._terminal_lease_candidates(
+        {"agent-run-1": {"running": False, "status": "NOT_FOUND"}},
+        include_activity_owned=True,
+    )
+
+    assert candidates == []
+    assert wf._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+
+@pytest.mark.asyncio
+async def test_liveness_observations_carry_the_admitted_run_id() -> None:
+    """The verify activity binds each observation to the admitted run."""
+
+    seen: list[dict[str, Any]] = []
+
+    async def _verify(name: str, payload: dict[str, Any], **_kwargs: Any):
+        seen.append(payload)
+        return {"agent-run-1": {"running": False, "status": "TERMINATED"}}
+
+    wf = _held_manager()
+    profile = wf._profiles[PROFILE_ID]
+    profile.lease_metadata["agent-run-1"] = {
+        **profile.lease_metadata["agent-run-1"],
+        "workflowId": "agent-run-1",
+        "runId": "run-admitted-1",
+    }
+
+    with patch(
+        "temporalio.workflow.patched",
+        side_effect=lambda name: name
+        in {
+            DB_LEASE_PERSISTENCE_PATCH,
+            DURABLE_LEASE_GRANT_PATCH,
+            PROVIDER_INCREMENTAL_LEASE_PATCH,
+        },
+    ), patch(
+        "temporalio.workflow.execute_activity", side_effect=_verify
+    ), patch(
+        "temporalio.workflow.now", return_value=NOW
+    ):
+        statuses = await wf._verify_workflow_statuses(
+            wf._lease_holder_workflow_ids(),
+            run_hints=wf._lease_holder_run_hints(),
+        )
+
+    assert seen[0]["run_ids"] == {"agent-run-1": "run-admitted-1"}
+    assert statuses == {"agent-run-1": {"running": False, "status": "TERMINATED"}}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_terminal_cleanup_request_keeps_the_slot_reserved() -> None:
+    ledger = _Ledger({"request_cleanup": RuntimeError("artifacts worker unavailable")})
     wf = _held_manager()
 
     with _patched(ledger):
@@ -1048,6 +1425,7 @@ def _manager_with_obligations() -> MoonMindProviderProfileManagerWorkflow:
             "fencing_generation": 4,
             "outcome": LeaseTransitionOutcome.RETRYABLE.value,
             "retryable": True,
+            "kind": "owner_release",
         }
     }
     wf._cleanup_requested_leases = {"agent-run-1"}

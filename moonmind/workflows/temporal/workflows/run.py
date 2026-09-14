@@ -24436,6 +24436,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
         This is called when a child AgentRun exits in a terminal state but
         may have failed to release its slot due to cancellation or other issues.
+
+        MoonLadderStudios/MoonMind#1089 inventory: this parent-side fallback
+        is retained until the manager-side verified-teardown handoff passes
+        (cleanup-requested ordering, positive teardown evidence, and
+        retention safety). The manager owns the durable release decision;
+        this signal is best-effort and never asserts that the child's
+        external consumer stopped.
         """
         if not self._assigned_profile_id:
             return
