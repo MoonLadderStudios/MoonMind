@@ -126,6 +126,20 @@ class GitHubPermissionProfile:
     profile_id: str
     required_permissions: dict[str, str]
     optional_permissions: dict[str, str]
+    # Actual caller operations this bundle satisfies (distinct requirements,
+    # not an ordered privilege ladder). Consumed by probes and launchers
+    # instead of parallel permission tables.
+    required_operations: tuple[str, ...] = ()
+
+
+# Versioned capability-bundle definition consumed by the probe path.
+# Bump when required operations or profiles change; persisted evidence keys
+# on this version alongside credential/binding revisions (#4008 R2/R4).
+GITHUB_CAPABILITY_DEFINITION_VERSION = "github-capabilities.v1"
+GITHUB_PROBE_RESULT_VERSION = "github-probe.v1"
+GITHUB_API_BASE = "https://api.github.com"
+# Observed probe evidence freshness (configuration-time discovery/probing).
+PROBE_EVIDENCE_TTL_SECONDS = 300
 
 # ---------------------------------------------------------------------------
 # Service
@@ -299,6 +313,7 @@ class GitHubService:
                 profile_id="indexing",
                 required_permissions={"Contents": "read"},
                 optional_permissions={},
+                required_operations=("repository.read", "contents.read"),
             ),
             "publish": GitHubPermissionProfile(
                 profile_id="publish",
@@ -312,6 +327,7 @@ class GitHubService:
                     "Checks": "read",
                     "Issues": "read",
                 },
+                required_operations=("branch.write", "pull_request.create"),
             ),
             "readiness": GitHubPermissionProfile(
                 profile_id="readiness",
@@ -322,6 +338,12 @@ class GitHubService:
                     "Issues": "read",
                 },
                 optional_permissions={},
+                required_operations=(
+                    "pull_request.read",
+                    "commit_status.read",
+                    "check_run.read",
+                    "issue.read",
+                ),
             ),
             "full_pr_automation": GitHubPermissionProfile(
                 profile_id="full_pr_automation",
@@ -333,8 +355,28 @@ class GitHubService:
                     "Issues": "read",
                 },
                 optional_permissions={"Workflows": "write"},
+                required_operations=(
+                    "branch.write",
+                    "pull_request.create",
+                    "pull_request.merge",
+                    "commit_status.read",
+                    "check_run.read",
+                    "issue.write",
+                ),
             ),
         }
+
+    @staticmethod
+    def capability_operations_for_mode(mode: str) -> tuple[str, ...]:
+        """Return the actual caller operations for a known probe mode.
+
+        Raises ``ValueError`` for unknown modes so callers validate before
+        network access instead of silently defaulting to publish requirements.
+        """
+        profile = GitHubService.github_permission_profiles().get(str(mode or ""))
+        if profile is None:
+            raise ValueError(f"Unsupported GitHub capability mode: {mode!r}.")
+        return profile.required_operations
 
     @staticmethod
     def _github_headers(token: str) -> dict[str, str]:
@@ -622,10 +664,9 @@ class GitHubService:
 
     @staticmethod
     def _profile_checklist(mode: str) -> list[dict[str, Any]]:
-        profile = GitHubService.github_permission_profiles().get(
-            mode,
-            GitHubService.github_permission_profiles()["publish"],
-        )
+        profile = GitHubService.github_permission_profiles().get(str(mode or ""))
+        if profile is None:
+            raise ValueError(f"Unsupported GitHub capability mode: {mode!r}.")
         items = [
             {
                 "permission": permission,
@@ -664,33 +705,249 @@ class GitHubService:
             else:
                 item["status"] = f"verified_{verified_level}_access"
 
+    @staticmethod
+    def _mark_probe_unavailable(
+        checklist: list[dict[str, Any]], *, permission: str | None
+    ) -> None:
+        """Mark one permission as unavailable (unknown), never as denied.
+
+        Quota, transport, and server failures must not become fabricated
+        permission-denied records; prior valid evidence stays visible and the
+        current admission decision treats the capability as unknown.
+        """
+        if not permission:
+            return
+        for item in checklist:
+            if item["permission"] != permission or not item["required"]:
+                continue
+            if item["status"] == "not_checked":
+                item["status"] = "unavailable"
+
+    @staticmethod
+    def _validate_repo_slug(repo: str) -> tuple[str, str]:
+        """Split and validate an ``owner/name`` slug for bound-client use."""
+        owner, sep, name = str(repo or "").strip().partition("/")
+        if not sep or not owner or not name or "/" in name:
+            raise ValueError(
+                "Repository target must be an owner/name slug "
+                f"without extra segments: {str(repo or '')[:80]!r}."
+            )
+        return owner, name
+
+    @classmethod
+    def _repo_api_url(cls, repo: str, suffix: str = "") -> str:
+        """Build an admitted-endpoint URL with per-segment encoding.
+
+        Exact target validation/segment encoding comes from this bound-client
+        helper, never from interpolated caller strings or arbitrary URL input.
+        """
+        from urllib.parse import quote
+
+        owner, name = cls._validate_repo_slug(repo)
+        base = f"{GITHUB_API_BASE}/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
+        if not suffix:
+            return base
+        if not suffix.startswith("/"):
+            raise ValueError("Repository API suffix must start with '/'.")
+        return base + suffix
+
+    @staticmethod
+    def _validate_discovery_next_page(url: str) -> str | None:
+        """Validate a paginated discovery ``next`` target through the endpoint.
+
+        Returns the URL only when it stays on the admitted GitHub API host
+        and under ``/repos/`` or ``/user/repos``/``/search/`` paths; otherwise
+        ``None`` so hostile pagination targets can never widen access.
+        """
+        from urllib.parse import urlsplit
+
+        candidate = str(url or "").strip()
+        if not candidate:
+            return None
+        try:
+            parts = urlsplit(candidate)
+        except ValueError:
+            return None
+        if parts.scheme not in {"https"}:
+            return None
+        if (parts.hostname or "").lower() != "api.github.com":
+            return None
+        path = parts.path or ""
+        if not (
+            path.startswith("/repos/")
+            or path.startswith("/user/repos")
+            or path.startswith("/search/repositories")
+        ):
+            return None
+        return candidate
+
+    @classmethod
+    def _classify_probe_http_failure(
+        cls, response: httpx.Response, *, operation: str
+    ) -> dict[str, Any]:
+        """Classify one probe HTTP failure from supported response evidence.
+
+        Status alone never infers every outcome: quota needs 403/429 plus
+        rate-limit headers/body, approval needs SSO/approval markers, and
+        anything else stays denied-or-concealed without suggesting broader
+        credentials as the universal repair. Response fields are bounded and
+        redacted; arbitrary URLs/HTML are never echoed.
+        """
+        from moonmind.utils.logging import redact_sensitive_text
+
+        status = response.status_code
+        rate_event = cls._github_rate_limit_event(response)
+        try:
+            body = response.json()
+        except Exception:
+            body = {}
+        message = ""
+        if isinstance(body, Mapping):
+            message = redact_sensitive_text(str(body.get("message") or ""))[:300]
+        lowered = message.lower()
+        retry_after: int | None = None
+        reset_at: str | None = None
+        if rate_event is not None:
+            retry_after = rate_event.retry_after_seconds
+            reset_at = rate_event.reset_at
+
+        if rate_event is not None:
+            return {
+                "reasonCode": "quota_exceeded",
+                "permissionState": "unavailable",
+                "retryable": True,
+                "retryAfterSeconds": retry_after,
+                "resetAt": reset_at,
+                "summary": (
+                    "GitHub quota reached for this probe identity; "
+                    "no capability was verified or denied."
+                ),
+            }
+        if status == 401:
+            return {
+                "reasonCode": "auth_denied",
+                "permissionState": "unavailable",
+                "retryable": False,
+                "retryAfterSeconds": None,
+                "resetAt": None,
+                "summary": (
+                    "GitHub authentication was rejected for this probe; "
+                    "no capability was verified."
+                ),
+            }
+        if status in {403, 404} and operation == "repository" and status == 404:
+            # A missing repository and a concealed one are indistinguishable
+            # from this evidence; never mislabel concealment as denied access.
+            return {
+                "reasonCode": "not_found_or_concealed",
+                "permissionState": "unavailable",
+                "retryable": False,
+                "retryAfterSeconds": None,
+                "resetAt": None,
+                "summary": (
+                    "Repository was not visible to this probe identity "
+                    "(missing or concealed)."
+                ),
+            }
+        if status == 403 and any(
+            marker in lowered
+            for marker in (
+                "sso",
+                "saml",
+                "approval",
+                "outside collaborator",
+                "organization",
+            )
+        ):
+            return {
+                "reasonCode": "approval_required",
+                "permissionState": "unavailable",
+                "retryable": False,
+                "retryAfterSeconds": None,
+                "resetAt": None,
+                "summary": (
+                    "Repository access needs organization approval for this "
+                    "probe identity."
+                ),
+            }
+        if status == 403:
+            detail = cls._github_permission_summary(response)[:300]
+            summary = "Probe identity lacks access to this resource."
+            if detail:
+                summary = f"{summary} {detail}"[:400]
+            return {
+                "reasonCode": "access_denied",
+                "permissionState": "denied",
+                "retryable": False,
+                "retryAfterSeconds": None,
+                "resetAt": None,
+                "summary": summary,
+            }
+        if status == 404:
+            return {
+                "reasonCode": "resource_absent",
+                "permissionState": "unavailable",
+                "retryable": False,
+                "retryAfterSeconds": None,
+                "resetAt": None,
+                "summary": "Probed resource was absent for this identity.",
+            }
+        if status == 422:
+            return {
+                "reasonCode": "resource_absent",
+                "permissionState": "unavailable",
+                "retryable": False,
+                "retryAfterSeconds": None,
+                "resetAt": None,
+                "summary": "Probed ref is not a valid repository state.",
+            }
+        if status >= 500:
+            return {
+                "reasonCode": "provider_unavailable",
+                "permissionState": "unavailable",
+                "retryable": True,
+                "retryAfterSeconds": None,
+                "resetAt": None,
+                "summary": (
+                    f"GitHub was unavailable for this probe (HTTP {status})."
+                ),
+            }
+        return {
+            "reasonCode": "outcome_unknown",
+            "permissionState": "unavailable",
+            "retryable": False,
+            "retryAfterSeconds": None,
+            "resetAt": None,
+            "summary": (
+                f"Probe outcome is unknown (HTTP {status}); "
+                "no capability was verified or denied."
+            ),
+        }
+
     @classmethod
     def _probe_checks_for_mode(
         cls,
         *,
         repo: str,
         mode: str,
-        base_branch: str | None,
+        ref: str,
     ) -> list[dict[str, str | None]]:
-        profile = cls.github_permission_profiles().get(
-            mode,
-            cls.github_permission_profiles()["publish"],
-        )
+        """Build dependent checks for an already-resolved branch ref.
+
+        The repository metadata read always happens first; this helper never
+        assumes ``main`` and never preconstructs checks before the remote
+        default (or an explicitly requested ref) is known.
+        """
+        profile = cls.github_permission_profiles().get(str(mode or ""))
+        if profile is None:
+            raise ValueError(f"Unsupported GitHub capability mode: {mode!r}.")
         required = profile.required_permissions
-        ref = base_branch or "main"
-        checks: list[dict[str, str | None]] = [
-            {
-                "field": "repositoryAccessible",
-                "url": f"https://api.github.com/repos/{repo}",
-                "operation": "repository",
-                "permission": None,
-            }
-        ]
+        checks: list[dict[str, str | None]] = []
         if "Contents" in required:
             checks.append(
                 {
                     "field": "defaultBranchAccessible",
-                    "url": f"https://api.github.com/repos/{repo}/branches/{ref}",
+                    "url": cls._repo_api_url(repo, f"/branches/{ref}"),
                     "operation": "branch",
                     "permission": "Contents",
                 }
@@ -699,7 +956,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": "pullRequestAccessible",
-                    "url": f"https://api.github.com/repos/{repo}/pulls?per_page=1",
+                    "url": cls._repo_api_url(repo, "/pulls?per_page=1"),
                     "operation": "pulls",
                     "permission": "Pull requests",
                 }
@@ -708,7 +965,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": None,
-                    "url": f"https://api.github.com/repos/{repo}/commits/{ref}/status",
+                    "url": cls._repo_api_url(repo, f"/commits/{ref}/status"),
                     "operation": "commit_statuses",
                     "permission": "Commit statuses",
                 }
@@ -717,9 +974,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": None,
-                    "url": (
-                        f"https://api.github.com/repos/{repo}/commits/{ref}/check-runs"
-                    ),
+                    "url": cls._repo_api_url(repo, f"/commits/{ref}/check-runs"),
                     "operation": "checks",
                     "permission": "Checks",
                 }
@@ -728,7 +983,7 @@ class GitHubService:
             checks.append(
                 {
                     "field": None,
-                    "url": f"https://api.github.com/repos/{repo}/issues?per_page=1",
+                    "url": cls._repo_api_url(repo, "/issues?per_page=1"),
                     "operation": "issues",
                     "permission": "Issues",
                 }
@@ -743,49 +998,257 @@ class GitHubService:
         base_branch: str | None = None,
         github_token: str | None = None,
     ) -> dict[str, Any]:
+        """Collect narrowly sufficient, non-mutating capability evidence.
+
+        Truthful probe contract (#4008): unknown modes are rejected before
+        network access; the remote default branch (or an explicitly requested
+        ref) is resolved and recorded before dependent checks; empty, absent,
+        concealed, denied, throttled, and unavailable outcomes stay distinct;
+        quota/transport/server failures never become permission-denied records;
+        throttling short-circuits remaining checks; URLs come from the bound
+        client; zero writes are performed. Explicitly supplied tokens are
+        ``selected-connection`` requests; ambient resolution is labeled legacy
+        and never attaches repositories or sets defaults.
+        """
+        from datetime import timedelta
+
         from moonmind.auth.github_credentials import resolve_github_credential
+        from moonmind.workflows.provider_failures import (
+            resolve_provider_cooldown_seconds,
+        )
+
+        now = datetime.now(timezone.utc)
+        observed_at = now.isoformat()
+
+        def _base_result(**overrides: Any) -> dict[str, Any]:
+            result: dict[str, Any] = {
+                "repo": repo,
+                "mode": mode,
+                "resultVersion": GITHUB_PROBE_RESULT_VERSION,
+                "capabilityBundleVersion": GITHUB_CAPABILITY_DEFINITION_VERSION,
+                "definitionVersion": GITHUB_CAPABILITY_DEFINITION_VERSION,
+                "endpoint": GITHUB_API_BASE,
+                "observedAt": observed_at,
+                "expiresAt": (now + timedelta(seconds=PROBE_EVIDENCE_TTL_SECONDS)).isoformat(),
+                "repositoryAccessible": None,
+                "defaultBranchAccessible": None,
+                "pullRequestAccessible": None,
+                "permissionChecklist": [],
+                "diagnostics": [],
+                "writesPerformed": 0,
+                "activeWriteTest": "not_requested",
+                "throttled": False,
+                "limitations": [
+                    (
+                        "Fine-grained personal access tokens must target the repository "
+                        "resource owner and include the selected repository."
+                    ),
+                    (
+                        "Organization approval, outside-collaborator restrictions, "
+                        "multi-organization automation, and SSH-only remotes may require "
+                        "a classic PAT or GitHub App instead."
+                    ),
+                ],
+            }
+            result.update(overrides)
+            return result
+
+        try:
+            operations = self.capability_operations_for_mode(mode)
+            checklist = self._profile_checklist(mode)
+        except ValueError:
+            result = _base_result(
+                reasonCode="unsupported_mode",
+                requiredOperations=[],
+                outcome="unsupported",
+            )
+            result["diagnostics"].append(
+                {
+                    "operation": "validate_mode",
+                    "reasonCode": "unsupported_mode",
+                    "permissionState": "unavailable",
+                    "message": (
+                        f"Unsupported capability mode {str(mode)[:64]!r}; "
+                        "no probe request was sent."
+                    ),
+                    "retryable": False,
+                }
+            )
+            return result
+
+        try:
+            self._validate_repo_slug(repo)
+        except ValueError as exc:
+            result = _base_result(
+                reasonCode="invalid_target",
+                requiredOperations=list(operations),
+                permissionChecklist=checklist,
+                outcome="invalid_target",
+            )
+            result["diagnostics"].append(
+                {
+                    "operation": "validate_target",
+                    "reasonCode": "invalid_target",
+                    "permissionState": "unavailable",
+                    "message": str(exc)[:300],
+                    "retryable": False,
+                }
+            )
+            return result
 
         resolved = await resolve_github_credential(github_token, repo=repo)
-        checklist = self._profile_checklist(mode)
-        result: dict[str, Any] = {
-            "repo": repo,
-            "mode": mode,
-            "credentialSource": resolved.safe_source_dict(),
-            "repositoryAccessible": None,
-            "defaultBranchAccessible": None,
-            "pullRequestAccessible": None,
-            "permissionChecklist": checklist,
-            "diagnostics": [],
-            "limitations": [
-                (
-                    "Fine-grained personal access tokens must target the repository "
-                    "resource owner and include the selected repository."
-                ),
-                (
-                    "Organization approval, outside-collaborator restrictions, "
-                    "multi-organization automation, and SSH-only remotes may require "
-                    "a classic PAT or GitHub App instead."
-                ),
-            ],
-        }
+        admission_mode = (
+            "selected-connection" if (github_token or "").strip() else "ambient-legacy"
+        )
+        result = _base_result(
+            credentialSource=resolved.safe_source_dict(),
+            admissionMode=admission_mode,
+            requiredOperations=list(operations),
+            permissionChecklist=checklist,
+            outcome="unknown",
+        )
         if not resolved.token:
+            result["reasonCode"] = "auth_unavailable"
+            result["outcome"] = "auth_unavailable"
             result["diagnostics"].append(
                 {
                     "operation": "resolve_github_credential",
-                    "message": resolved.safe_summary,
+                    "reasonCode": "auth_unavailable",
+                    "permissionState": "unavailable",
+                    "message": resolved.safe_summary[:300],
                     "retryable": False,
                 }
             )
             return result
 
         headers = self._github_headers(resolved.token)
+        requested_ref = (base_branch or "").strip() or None
         async with httpx.AsyncClient(timeout=self._timeout) as client:
+            # Step 1: resolve exact repository/ref identity first.
+            try:
+                repo_response = await client.get(
+                    self._repo_api_url(repo), headers=headers
+                )
+                repo_response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                classified = self._classify_probe_http_failure(
+                    exc.response, operation="repository"
+                )
+                result["repositoryAccessible"] = False
+                result["reasonCode"] = classified["reasonCode"]
+                result["outcome"] = classified["reasonCode"]
+                if classified["reasonCode"] == "quota_exceeded":
+                    result["throttled"] = True
+                    cooldown = resolve_provider_cooldown_seconds(
+                        self._github_rate_limit_event(exc.response),
+                        now=datetime.now(timezone.utc),
+                        default_seconds=60,
+                    )
+                    result["retryAfterSeconds"] = cooldown
+                entry: dict[str, Any] = {
+                    "operation": "repository",
+                    "httpStatus": exc.response.status_code,
+                    "reasonCode": classified["reasonCode"],
+                    "permissionState": classified["permissionState"],
+                    "message": classified["summary"],
+                    "retryable": classified["retryable"],
+                }
+                if classified.get("retryAfterSeconds") is not None:
+                    entry["retryAfterSeconds"] = classified["retryAfterSeconds"]
+                if classified.get("resetAt") is not None:
+                    entry["resetAt"] = classified["resetAt"]
+                result["diagnostics"].append(entry)
+                return result
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                result["reasonCode"] = "outcome_unknown"
+                result["outcome"] = "outcome_unknown"
+                result["diagnostics"].append(
+                    {
+                        "operation": "repository",
+                        "reasonCode": "outcome_unknown",
+                        "permissionState": "unavailable",
+                        "message": (
+                            "Repository identity could not be resolved: "
+                            f"{exc.__class__.__name__}."
+                        ),
+                        "retryable": True,
+                    }
+                )
+                return result
+
+            try:
+                metadata = repo_response.json()
+            except Exception:
+                metadata = {}
+            if not isinstance(metadata, Mapping):
+                result["reasonCode"] = "outcome_unknown"
+                result["outcome"] = "outcome_unknown"
+                result["diagnostics"].append(
+                    {
+                        "operation": "repository",
+                        "reasonCode": "outcome_unknown",
+                        "permissionState": "unavailable",
+                        "message": "Repository metadata response was invalid.",
+                        "retryable": False,
+                    }
+                )
+                return result
+            result["repositoryAccessible"] = True
+            full_name = str(metadata.get("full_name") or repo)
+            repository_id = metadata.get("id")
+            remote_default = metadata.get("default_branch")
+            remote_default = (
+                str(remote_default).strip()
+                if isinstance(remote_default, str) and remote_default.strip()
+                else None
+            )
+            result["repositoryIdentity"] = {
+                "fullName": full_name,
+                "repositoryId": repository_id,
+            }
+            result["remoteDefaultBranch"] = remote_default
+            if remote_default is None:
+                # Empty repository: no default branch to probe further.
+                result["resolvedRef"] = None
+                result["requestedRef"] = requested_ref
+                result["reasonCode"] = "empty_repository"
+                result["outcome"] = "empty_repository"
+                result["diagnostics"].append(
+                    {
+                        "operation": "repository",
+                        "reasonCode": "empty_repository",
+                        "permissionState": "unavailable",
+                        "message": (
+                            "Repository is empty; no default branch exists "
+                            "to probe."
+                        ),
+                        "retryable": False,
+                    }
+                )
+                return result
+            resolved_branch = requested_ref or remote_default
+            from urllib.parse import quote
+
+            resolved_ref = quote(resolved_branch, safe="")
+            result["resolvedRef"] = resolved_branch
+            result["requestedRef"] = requested_ref
+            result["defaultBranch"] = remote_default
+
             checks = self._probe_checks_for_mode(
                 repo=repo,
                 mode=mode,
-                base_branch=base_branch,
+                ref=resolved_ref,
             )
+            halt_remaining = False
             for check in checks:
+                if halt_remaining:
+                    self._mark_probe_unavailable(
+                        result["permissionChecklist"],
+                        permission=str(check["permission"])
+                        if check["permission"]
+                        else None,
+                    )
+                    continue
                 field = check["field"]
                 url = str(check["url"])
                 operation = str(check["operation"])
@@ -802,38 +1265,87 @@ class GitHubService:
                             success=True,
                         )
                 except httpx.HTTPStatusError as exc:
+                    classified = self._classify_probe_http_failure(
+                        exc.response, operation=operation
+                    )
+                    reason = str(classified["reasonCode"])
+                    state = str(classified["permissionState"])
                     if field:
-                        result[field] = False
-                    if permission:
+                        # Absent branch/resource is not denied access;
+                        # only definitive denial marks False, everything
+                        # else stays unknown (None) to avoid fabrication.
+                        if reason in {"access_denied"}:
+                            result[field] = False
+                        elif reason in {"resource_absent"} and operation == "branch":
+                            result[field] = False
+                        else:
+                            result[field] = None
+                    if state == "denied" and permission:
                         self._mark_probe_permission(
                             result["permissionChecklist"],
                             permission=str(permission),
                             success=False,
                         )
-                    result["diagnostics"].append(
-                        {
-                            "operation": operation,
-                            "httpStatus": exc.response.status_code,
-                            "message": self._github_permission_summary(exc.response),
-                            "retryable": exc.response.status_code >= 500,
-                        }
-                    )
+                    else:
+                        self._mark_probe_unavailable(
+                            result["permissionChecklist"],
+                            permission=str(permission)
+                            if permission
+                            else None,
+                        )
+                    entry = {
+                        "operation": operation,
+                        "httpStatus": exc.response.status_code,
+                        "reasonCode": reason,
+                        "permissionState": state,
+                        "message": classified["summary"],
+                        "retryable": classified["retryable"],
+                    }
+                    if classified.get("retryAfterSeconds") is not None:
+                        entry["retryAfterSeconds"] = classified["retryAfterSeconds"]
+                    if classified.get("resetAt") is not None:
+                        entry["resetAt"] = classified["resetAt"]
+                    result["diagnostics"].append(entry)
+                    if reason in {"quota_exceeded", "auth_denied"}:
+                        # Identity is known throttled/invalid: do not probe
+                        # all remaining endpoints (retry-storm guard).
+                        halt_remaining = True
+                        if reason == "quota_exceeded":
+                            result["throttled"] = True
+                            cooldown = resolve_provider_cooldown_seconds(
+                                self._github_rate_limit_event(exc.response),
+                                now=datetime.now(timezone.utc),
+                                default_seconds=60,
+                            )
+                            result["retryAfterSeconds"] = cooldown
                 except (httpx.TransportError, httpx.TimeoutException) as exc:
                     if field:
-                        result[field] = False
-                    if permission:
-                        self._mark_probe_permission(
-                            result["permissionChecklist"],
-                            permission=str(permission),
-                            success=False,
-                        )
+                        result[field] = None
+                    self._mark_probe_unavailable(
+                        result["permissionChecklist"],
+                        permission=str(permission) if permission else None,
+                    )
                     result["diagnostics"].append(
                         {
                             "operation": operation,
-                            "message": exc.__class__.__name__,
+                            "reasonCode": "outcome_unknown",
+                            "permissionState": "unavailable",
+                            "message": (
+                                "Probe result unknown: "
+                                f"{exc.__class__.__name__}."
+                            ),
                             "retryable": True,
                         }
                     )
+            if result.get("reasonCode") is None:
+                if result.get("throttled"):
+                    result["reasonCode"] = "quota_exceeded"
+                    result["outcome"] = "quota_exceeded"
+                else:
+                    result["reasonCode"] = "probed"
+                    result["outcome"] = "probed"
+            elif result.get("outcome") == "unknown":
+                result["outcome"] = str(result.get("reasonCode"))
         return result
 
     # -- PR operations ----------------------------------------------------

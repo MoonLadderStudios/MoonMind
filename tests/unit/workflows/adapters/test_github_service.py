@@ -563,7 +563,10 @@ async def test_probe_github_token_targets_repo_and_reports_publish_checklist(mon
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(
         side_effect=[
-            _mock_get_response(200, {"full_name": "owner/repo"}),
+            _mock_get_response(
+                200,
+                {"full_name": "owner/repo", "id": 123, "default_branch": "main"},
+            ),
             _mock_get_response(200, {"name": "main"}),
             _mock_get_response(200, []),
         ]
@@ -597,6 +600,11 @@ async def test_probe_github_token_targets_repo_and_reports_publish_checklist(mon
     assert checklist["Checks"]["status"] == "not_checked"
     assert any("resource owner" in item for item in result["limitations"])
     assert any("GitHub App" in item for item in result["limitations"])
+    assert result["writesPerformed"] == 0
+    assert result["activeWriteTest"] == "not_requested"
+    assert result["capabilityBundleVersion"] == "github-capabilities.v1"
+    assert result["resolvedRef"] == "main"
+    assert result["repositoryIdentity"]["fullName"] == "owner/repo"
 
 
 @pytest.mark.asyncio
@@ -606,7 +614,10 @@ async def test_probe_github_token_uses_indexing_mode_checks(monkeypatch):
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(
         side_effect=[
-            _mock_get_response(200, {"full_name": "owner/repo"}),
+            _mock_get_response(
+                200,
+                {"full_name": "owner/repo", "id": 123, "default_branch": "main"},
+            ),
             _mock_get_response(200, {"name": "main"}),
         ]
     )
@@ -639,7 +650,10 @@ async def test_probe_github_token_uses_readiness_mode_checks(monkeypatch):
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(
         side_effect=[
-            _mock_get_response(200, {"full_name": "owner/repo"}),
+            _mock_get_response(
+                200,
+                {"full_name": "owner/repo", "id": 123, "default_branch": "main"},
+            ),
             _mock_get_response(200, []),
             _mock_get_response(200, {"state": "success"}),
             _mock_get_response(200, {"check_runs": []}),
@@ -672,6 +686,212 @@ async def test_probe_github_token_uses_readiness_mode_checks(monkeypatch):
     assert checklist["Commit statuses"]["status"] == "passed"
     assert checklist["Checks"]["status"] == "passed"
     assert checklist["Issues"]["status"] == "passed"
+
+
+def _mock_http_error(status_code: int, json_body: dict, headers: dict | None = None) -> httpx.Response:
+    request = httpx.Request("GET", "https://api.github.com/test")
+    response = httpx.Response(status_code, json=json_body, headers=headers or {}, request=request)
+    return response
+
+
+def _probe_client(side_effects: list) -> AsyncMock:
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=side_effects)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_probe_rejects_unknown_mode_before_network(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _probe_client([])
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="owner/repo", mode="nope")
+    assert mock_client.get.await_count == 0
+    assert result["reasonCode"] == "unsupported_mode"
+    assert result["permissionChecklist"] == []
+    assert result["diagnostics"][0]["reasonCode"] == "unsupported_mode"
+
+
+@pytest.mark.asyncio
+async def test_probe_resolves_remote_default_branch_when_omitted(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _probe_client(
+        [
+            _mock_get_response(
+                200, {"full_name": "o/r", "id": 9, "default_branch": "trunk"}
+            ),
+            _mock_get_response(200, {"name": "trunk"}),
+        ]
+    )
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="o/r", mode="indexing")
+    urls = [call.args[0] for call in mock_client.get.call_args_list]
+    assert urls == [
+        "https://api.github.com/repos/o/r",
+        "https://api.github.com/repos/o/r/branches/trunk",
+    ]
+    assert result["resolvedRef"] == "trunk"
+    assert result["remoteDefaultBranch"] == "trunk"
+    assert "main" not in urls[1]
+
+
+@pytest.mark.asyncio
+async def test_probe_empty_repository_has_distinct_outcome(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _probe_client(
+        [_mock_get_response(200, {"full_name": "o/r", "id": 9, "default_branch": None})]
+    )
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="o/r", mode="publish")
+    assert mock_client.get.await_count == 1
+    assert result["reasonCode"] == "empty_repository"
+    assert result["resolvedRef"] is None
+
+
+@pytest.mark.asyncio
+async def test_probe_concealed_repository_is_not_denied(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    async def _raise_not_found(*args, **kwargs):
+        raise httpx.HTTPStatusError(
+            "not found",
+            request=httpx.Request("GET", "https://api.github.com/test"),
+            response=_mock_http_error(404, {"message": "Not Found"}),
+        )
+
+    mock_client = _probe_client([])
+    mock_client.get = AsyncMock(side_effect=_raise_not_found)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="o/r", mode="publish")
+    assert result["reasonCode"] == "not_found_or_concealed"
+    assert result["repositoryAccessible"] is False
+
+
+@pytest.mark.asyncio
+async def test_probe_quota_does_not_mark_permission_failed_and_halts(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    repo_meta = _mock_get_response(
+        200, {"full_name": "o/r", "id": 9, "default_branch": "main"}
+    )
+
+    async def _quota(*args, **kwargs):
+        url = args[0] if args else ""
+        if url == "https://api.github.com/repos/o/r":
+            return repo_meta
+        raise httpx.HTTPStatusError(
+            "limited",
+            request=httpx.Request("GET", url),
+            response=_mock_http_error(
+                403,
+                {"message": "API rate limit exceeded"},
+                {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "2000000000"},
+            ),
+        )
+
+    mock_client = _probe_client([])
+    mock_client.get = AsyncMock(side_effect=_quota)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="o/r", mode="publish")
+    # Only repo metadata + first dependent check run; remaining halted.
+    assert mock_client.get.await_count == 2
+    assert result["throttled"] is True
+    assert result["retryAfterSeconds"] is not None
+    checklist = {item["permission"]: item for item in result["permissionChecklist"]}
+    assert checklist["Contents"]["status"] == "unavailable"
+    assert checklist["Contents"]["status"] != "failed"
+    assert result["diagnostics"][0]["reasonCode"] == "quota_exceeded"
+    assert result["diagnostics"][0]["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_probe_transport_leaves_evidence_unknown(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    repo_meta = _mock_get_response(
+        200, {"full_name": "o/r", "id": 9, "default_branch": "main"}
+    )
+
+    async def _flaky(*args, **kwargs):
+        url = args[0] if args else ""
+        if url == "https://api.github.com/repos/o/r":
+            return repo_meta
+        raise httpx.ConnectError("dns down")
+
+    mock_client = _probe_client([])
+    mock_client.get = AsyncMock(side_effect=_flaky)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="o/r", mode="indexing")
+    assert result["defaultBranchAccessible"] is None
+    checklist = {item["permission"]: item for item in result["permissionChecklist"]}
+    assert checklist["Contents"]["status"] == "unavailable"
+    assert result["diagnostics"][0]["reasonCode"] == "outcome_unknown"
+    assert result["diagnostics"][0]["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_probe_rejects_invalid_repo_slug_without_network(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+    mock_client = _probe_client([])
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().probe_token(repo="not-a-slug", mode="publish")
+    assert mock_client.get.await_count == 0
+    assert result["reasonCode"] == "invalid_target"
+
+
+def test_probe_helpers_validate_targets():
+    assert GitHubService._repo_api_url("o/r") == "https://api.github.com/repos/o/r"
+    assert (
+        GitHubService._repo_api_url("o/r", "/branches/a%20b")
+        == "https://api.github.com/repos/o/r/branches/a%20b"
+    )
+    assert (
+        GitHubService._validate_discovery_next_page(
+            "https://api.github.com/repos/o/r/pulls?page=2"
+        )
+        is not None
+    )
+    assert (
+        GitHubService._validate_discovery_next_page("https://evil.example/x")
+        is None
+    )
+    assert GitHubService.capability_operations_for_mode("publish") == (
+        "branch.write",
+        "pull_request.create",
+    )
+    try:
+        GitHubService.capability_operations_for_mode("nope")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown mode must raise")
 
 # ---------------------------------------------------------------------------
 # merge_pull_request
