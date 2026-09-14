@@ -1,9 +1,79 @@
+import asyncio
 import json
 from types import SimpleNamespace
 
 import pytest
 
 from moonmind.workflows.skills import deployment_release as release
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_previous_report", [False, True])
+async def test_supervisor_publishes_complete_observation_after_inventory(
+    tmp_path, monkeypatch, has_previous_report
+):
+    from unittest.mock import AsyncMock
+
+    from moonmind.workflows.skills import deployment_availability as availability
+    from moonmind.workflows.skills import deployment_maintenance as maintenance
+    from moonmind.workflows.skills.deployment_execution import (
+        DeploymentUpdateLockManager,
+        HostDockerComposeRunner,
+    )
+    from moonmind.workflows.temporal import worker_runtime
+
+    executor = SimpleNamespace(
+        runner=HostDockerComposeRunner(project_dir=str(tmp_path)),
+        lock_manager=DeploymentUpdateLockManager(),
+    )
+    monkeypatch.setattr(worker_runtime, "_build_deployment_update_executor", lambda: executor)
+    monkeypatch.setattr(availability, "state_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        availability, "reconcile_availability",
+        AsyncMock(return_value={"current": "test.current", "versions": []}),
+    )
+    inventory_started, finish_inventory, stop = (
+        asyncio.Event(), asyncio.Event(), asyncio.Event()
+    )
+
+    async def inventory(_runner):
+        inventory_started.set()
+        await finish_inventory.wait()
+        return {"distinctBuildIds": ["current"], "coherent": True}
+
+    async def maintained():
+        stop.set()
+        return {}
+
+    monkeypatch.setattr(availability, "installed_fleet_inventory", inventory)
+    monkeypatch.setattr(maintenance, "reconcile_releases", maintained)
+    prior = {"current": "test.previous", "routing": {"status": "current"}}
+    metadata = {"releaseAvailability": prior} if has_previous_report else {}
+    report_file = tmp_path / "availability.json"
+    if has_previous_report:
+        release.write_record(report_file, prior)
+    spec = SimpleNamespace(deployment_id="test", build_id="current")
+    task = asyncio.create_task(
+        availability.supervise_availability(None, spec, metadata, stop=stop)
+    )
+    try:
+        await asyncio.wait_for(inventory_started.wait(), 5)
+        if has_previous_report:
+            assert metadata["releaseAvailability"] == prior
+            assert json.loads(report_file.read_text()) == prior
+        else:
+            assert "releaseAvailability" not in metadata
+            assert not report_file.exists()
+        finish_inventory.set()
+        await asyncio.wait_for(task, 5)
+        published = metadata["releaseAvailability"]
+        assert published["current"] == "test.current"
+        assert published["routing"] == metadata["releaseRouting"]
+        assert published["routing"]["status"] == "current"
+        assert published == json.loads(report_file.read_text())
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.parametrize(

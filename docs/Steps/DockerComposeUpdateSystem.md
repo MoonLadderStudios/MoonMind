@@ -884,6 +884,11 @@ changes. An available retained cohort means ordinary work can still execute the
 older release. It does not establish that fixes in newly installed containers
 are active. This diagnostic never promotes an image or stops working pollers.
 
+The supervisor assembles route and fleet observations before publishing either
+the durable report or its readiness projection. While inventory is in progress,
+readers retain the previous complete observation; they never receive an
+available-route report with its promotion evidence still missing.
+
 Availability recovery is active for omitted/default inputs and explicit `auto`.
 The default objective is to detect lost routability within 60 seconds and
 restore an available, already authorized compatible cohort within five minutes.
