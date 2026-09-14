@@ -20,6 +20,7 @@ from moonmind.workflows.skills.approval_policy import (
     build_review_prompt,
     parse_step_gate_result,
 )
+from moonmind.workflows.temporal.activities.reviewer import ReviewerUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,7 @@ async def step_review_activity(payload: Mapping[str, Any], *, reviewer: Any = No
     """Execute the configured reviewer and fail closed on unavailable evidence."""
     if reviewer is None:
         return _unavailable("reviewer_unavailable", "no reviewer implementation is configured")
+    provenance: Mapping[str, Any] | None = None
     try:
         raw_timeout = payload.get("review_timeout_seconds", 120)
         try:
@@ -312,7 +314,17 @@ async def step_review_activity(payload: Mapping[str, Any], *, reviewer: Any = No
         result_payload["reviewProvenance"] = provenance
         return result_payload
     except (TimeoutError, asyncio.TimeoutError):
-        return _unavailable("reviewer_timeout", "configured reviewer timed out")
+        return _unavailable(
+            "reviewer_timeout", "configured reviewer timed out", provenance=provenance
+        )
+    except ReviewerUnavailable as exc:
+        # ReviewerUnavailable subclasses ValueError, so it must be caught
+        # before the generic ValueError branch to preserve its distinct
+        # deployment-authority code (reviewer_disabled /
+        # reviewer_misconfigured / reviewer_unavailable / reviewer_truncated /
+        # review_timeout_invalid / review_timeout_over_budget). Never
+        # propagate provider detail; keep the bounded reason secret-safe.
+        return _unavailable(exc.code, "configured reviewer has no usable authority", provenance=provenance)
     except ValueError as exc:
         message = str(exc) or "invalid review request"
         if "review timeout" in message.lower():
@@ -336,17 +348,17 @@ async def step_review_activity(payload: Mapping[str, Any], *, reviewer: Any = No
                 "review_timeout_invalid",
                 "review_timeout_over_budget",
             }:
-                return _unavailable(code, "configured reviewer has no usable authority")
+                return _unavailable(code, "configured reviewer has no usable authority", provenance=provenance)
             if code in {"reviewer_malformed", "reviewer_transport"}:
-                return _unavailable(code, "configured reviewer returned malformed evidence")
+                return _unavailable(code, "configured reviewer returned malformed evidence", provenance=provenance)
         exc_name = type(exc).__name__
         if "Timeout" in exc_name or "Cancelled" in exc_name:
-            return _unavailable("reviewer_timeout", "configured reviewer timed out")
+            return _unavailable("reviewer_timeout", "configured reviewer timed out", provenance=provenance)
         if "HTTP" in exc_name or "Transport" in exc_name or "Network" in exc_name:
             return _unavailable(
-                "reviewer_transport", "configured reviewer transport failed"
+                "reviewer_transport", "configured reviewer transport failed", provenance=provenance
             )
-        return _unavailable("reviewer_unavailable", "configured reviewer failed or returned malformed evidence")
+        return _unavailable("reviewer_unavailable", "configured reviewer failed or returned malformed evidence", provenance=provenance)
 
 
 def reason_code(code: str) -> str:
