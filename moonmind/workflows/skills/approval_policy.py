@@ -432,7 +432,12 @@ def parse_step_gate_result(
     confidence_raw = payload.get("confidence")
     confidence: float | str
     confidence_invalid = False
-    if isinstance(confidence_raw, str) and confidence_raw.strip().lower() in {
+    if isinstance(confidence_raw, bool):
+        # Booleans are not numeric confidence: `float(True) == 1.0` would
+        # otherwise authorize advancement on malformed provider evidence.
+        confidence = 0.0
+        confidence_invalid = True
+    elif isinstance(confidence_raw, str) and confidence_raw.strip().lower() in {
         "low",
         "medium",
         "high",
