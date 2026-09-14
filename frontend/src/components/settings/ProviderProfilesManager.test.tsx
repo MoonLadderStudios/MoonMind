@@ -11,8 +11,23 @@ import {
   parseTags,
   parsePriority,
   parseClearEnvKeys,
+  resolveCreationAction,
+  setupContinuationAvailableForCreate,
+  captureSubmittedProfileOperation,
+  saveResponseIdentityMatches,
+  submissionOwnsCurrentForm,
+  computeAdvancedPolicySummary,
+  collectAdvancedControlDeviations,
+  loadPersistedDefaultIntents,
+  persistDefaultIntents,
+  isLostSaveAcknowledgment,
+  AmbiguousSaveAcknowledgmentError,
+  resolveAdvancedRecommendedText,
+  PENDING_DEFAULT_INTENT_STORAGE_KEY,
+  ProviderProfileRequestError,
 } from './ProviderProfilesManager';
 import { renderWithClient } from '../../utils/test-utils';
+import { runtimeDefaultTierDraft } from '../../utils/providerProfileTiers';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -267,7 +282,8 @@ describe('backend creation presets', () => {
     expect(screen.getByText('Materialization mode: api_key_env')).toBeTruthy();
     expect(screen.queryByLabelText('Enabled')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() => {
       expect(
@@ -439,7 +455,8 @@ describe('backend creation presets', () => {
     fireEvent.change(screen.getByLabelText('Command behavior'), {
       target: { value: '{"auth_strategy":"manual"}' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: explicitly permitted manual creation.
+    fireEvent.click(screen.getByRole('button', { name: 'Save disabled profile' }));
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true);
@@ -578,7 +595,8 @@ describe('backend creation presets', () => {
     fireEvent.click(await screen.findByLabelText('API key'));
 
     await screen.findByText(/provider-profile-create-v1-old loaded/);
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await screen.findByText(/provider-profile-create-v1-current loaded/);
     expect(presetRequests).toBe(2);
@@ -1181,14 +1199,16 @@ describe('ProviderProfilesManager form controls', () => {
       target: { value: 'unknown-provider' },
     });
     await screen.findByText('No validated creation preset exists for this runtime and provider.');
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: missing valid choices disable the
+    // action with the specific reason instead of submitting.
+    const action = screen.getByRole('button', { name: 'Create profile' });
+    expect((action as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.getByText('Choose a supported authentication method to continue.'),
+    ).toBeTruthy();
+    fireEvent.click(action);
 
-    await waitFor(() => {
-      expect(onNotice).toHaveBeenCalledWith({
-        level: 'error',
-        text: 'Choose a supported authentication method.',
-      });
-    });
+    expect(onNotice).not.toHaveBeenCalled();
     expect(fetchSpy.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
   });
 
@@ -1687,10 +1707,13 @@ describe('ProviderProfilesManager form controls', () => {
     const payload = JSON.parse(String((requestInit as RequestInit).body));
     expect(payload).toEqual({ token: submittedToken });
 
+    // MoonLadderStudios/MoonMind#4002: bounded pending is shown only while the
+    // real request is outstanding, then the returned outcome — timed client
+    // animations after the commit are not presented as backend phases.
     expect(await screen.findByText('validating token')).toBeTruthy();
-    expect(screen.getByText('saving secret')).toBeTruthy();
-    expect(screen.getByText('updating profile')).toBeTruthy();
     expect(await screen.findByText('ready')).toBeTruthy();
+    expect(screen.queryByText('saving secret')).toBeNull();
+    expect(screen.queryByText('updating profile')).toBeNull();
     expect(screen.queryByDisplayValue(submittedToken)).toBeNull();
     expect(await screen.findByText('Anthropic API key ready')).toBeTruthy();
   });
@@ -2201,7 +2224,8 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
       await act(async () => finishOAuthPreset());
       expect(screen.queryByText('Superseded OAuth preset failed.')).toBeNull();
     }
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: action agrees with the guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     expect(
       await screen.findByRole('dialog', { name: 'OpenAI API key enrollment for codex-guided-key' }),
@@ -2257,7 +2281,8 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     fireEvent.change(screen.getByLabelText('OpenAI API key (required)'), {
       target: { value: 'db://OPENAI_API_KEY' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() => expect(fetchSpy.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true));
     expect(
@@ -2334,7 +2359,8 @@ describe('MoonLadderStudios/MoonMind#3820 guided provider-profile creation', () 
     });
     fireEvent.click(await screen.findByLabelText('OAuth'));
     await screen.findByText(/Backend preset provider-profile-creation-v1 loaded/);
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided OAuth continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() => expect(openSpy).toHaveBeenCalledTimes(1));
     expect(fetchSpy).toHaveBeenCalledTimes(5);
@@ -2769,7 +2795,8 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     fireEvent.click(await screen.findByLabelText('API key'));
     await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
     fireEvent.click(screen.getByLabelText('Runtime default'));
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     // Guided API-key setup opens automatically; the checked default intent
     // must survive creation (which stores is_default=false) and apply after
@@ -2917,5 +2944,1373 @@ describe('MoonLadderStudios/MoonMind#3815 cross-boundary verification (#3822 cov
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true);
     expect(screen.getByDisplayValue('db://custom-secret')).toBeTruthy();
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#4002 truthful creation actions', () => {
+  it('resolves the full action matrix from one snapshot', () => {
+    const base = {
+      isEditing: false,
+      isPending: false,
+      authenticationMethod: 'api_key' as const,
+      presetLoading: false,
+      presetSupported: true as boolean | null,
+      presetError: null,
+      presetDiagnostic: null,
+      manualCreationAllowed: false,
+      setupContinuationAvailable: true,
+      canWrite: true,
+    };
+    expect(resolveCreationAction(base)).toEqual({
+      label: 'Create and connect',
+      disabled: false,
+      reason: null,
+    });
+    expect(
+      resolveCreationAction({ ...base, setupContinuationAvailable: false }).label,
+    ).toBe('Create profile');
+    expect(
+      resolveCreationAction({ ...base, manualCreationAllowed: true }),
+    ).toEqual({ label: 'Save disabled profile', disabled: false, reason: null });
+    expect(resolveCreationAction({ ...base, isEditing: true })).toEqual({
+      label: 'Update provider profile',
+      disabled: false,
+      reason: null,
+    });
+    expect(resolveCreationAction({ ...base, isPending: true })).toEqual({
+      label: 'Saving…',
+      disabled: true,
+      reason: null,
+    });
+    const noMethod = resolveCreationAction({ ...base, authenticationMethod: '' });
+    expect(noMethod.disabled).toBe(true);
+    expect(noMethod.reason).toContain('authentication method');
+    const waiting = resolveCreationAction({ ...base, presetSupported: null });
+    expect(waiting.disabled).toBe(true);
+    expect(waiting.reason).toContain('Waiting for the backend creation preset');
+    const loading = resolveCreationAction({ ...base, presetLoading: true, presetSupported: null });
+    expect(loading.disabled).toBe(true);
+    // A completed preset failure surfaces its error instead of the waiting state.
+    const failed = resolveCreationAction({
+      ...base,
+      presetSupported: null,
+      presetError: 'Failed to load the Provider Profile creation preset.',
+    });
+    expect(failed.disabled).toBe(true);
+    expect(failed.reason).toBe('Failed to load the Provider Profile creation preset.');
+    const unsupported = resolveCreationAction({
+      ...base,
+      presetSupported: false,
+      presetDiagnostic: 'Use the authorized manual profile path.',
+    });
+    expect(unsupported.disabled).toBe(true);
+    expect(unsupported.reason).toBe('Use the authorized manual profile path.');
+    const noWrite = resolveCreationAction({ ...base, canWrite: false });
+    expect(noWrite.disabled).toBe(true);
+    expect(noWrite.reason).toContain('permission');
+  });
+
+  it('derives setup continuation from the backend-declared method, not the method name alone', () => {
+    expect(setupContinuationAvailableForCreate('oauth', 'oauth', true, false)).toBe(true);
+    // A validated imported-volume setup is already complete: no continuation.
+    expect(setupContinuationAvailableForCreate('oauth', 'oauth', true, true)).toBe(false);
+    expect(setupContinuationAvailableForCreate('api_key', 'api_key', true, false)).toBe(true);
+    // Declared method without a setup handler is not a continuation.
+    expect(setupContinuationAvailableForCreate('api_key', 'none', false, false)).toBe(false);
+    expect(setupContinuationAvailableForCreate('api_key', 'api_key', false, false)).toBe(false);
+    expect(setupContinuationAvailableForCreate('none', 'none', false, false)).toBe(false);
+    expect(setupContinuationAvailableForCreate('', 'oauth', true, false)).toBe(false);
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#4002 immutable submitted operation', () => {
+  function submissionFor(formOverrides = {}) {
+    const form = { ...defaultFormState('codex_cli'), profileId: 'op-a', ...formOverrides };
+    const tier = runtimeDefaultTierDraft();
+    return captureSubmittedProfileOperation({
+      form,
+      editingProfileId: null,
+      tierDrafts: [tier],
+      defaultTierClientId: tier.clientId,
+      tierBaseline: [{ ...tier }],
+      tierBaselineDefaultId: tier.clientId,
+      formBaseline: defaultFormState('codex_cli'),
+      presetVersion: 'v1',
+      presetSupported: true,
+      creationPresetSnapshot: null,
+      manualCreation: false,
+      setupAction: 'api_key',
+      launchReadyAfterSetup: true,
+      importedVolumeValidated: false,
+      importedVolumeRef: '',
+    });
+  }
+
+  it('captures the full operation and rejects mismatched response identities', () => {
+    const submission = submissionFor();
+    expect(submission.kind).toBe('create');
+    expect(submission.profileId).toBe('op-a');
+    expect(saveResponseIdentityMatches('op-a', submission)).toBe(true);
+    expect(saveResponseIdentityMatches('op-other', submission)).toBe(false);
+    expect(saveResponseIdentityMatches(undefined, submission)).toBe(false);
+  });
+
+  it('keeps ownership only while no other draft was opened or edited', () => {
+    const submission = submissionFor();
+    // Untouched draft: still owned.
+    expect(
+      submissionOwnsCurrentForm({ ...submission.formSnapshot }, null, submission),
+    ).toBe(true);
+    // Untouched draft with matching tier snapshots: still owned.
+    expect(
+      submissionOwnsCurrentForm(
+        { ...submission.formSnapshot },
+        null,
+        submission,
+        submission.tierDraftsSnapshot.map((tier) => ({ ...tier })),
+        submission.defaultTierClientIdSnapshot,
+      ),
+    ).toBe(true);
+    // Draft B edited while A was pending: A no longer owns the form.
+    const editedB = { ...submission.formSnapshot, accountLabel: 'B edits' };
+    expect(submissionOwnsCurrentForm(editedB, null, submission)).toBe(false);
+    // Another profile opened for editing: ownership lost and kind differs.
+    expect(submissionOwnsCurrentForm({ ...submission.formSnapshot }, 'op-b', submission)).toBe(
+      false,
+    );
+  });
+
+  it('loses ownership when tier drafts change after submit', () => {
+    const submission = submissionFor();
+    const retiered = submission.tierDraftsSnapshot.map((tier) => ({
+      ...tier,
+      model: 'other-model',
+    }));
+    expect(
+      submissionOwnsCurrentForm(
+        { ...submission.formSnapshot },
+        null,
+        submission,
+        retiered,
+        submission.defaultTierClientIdSnapshot,
+      ),
+    ).toBe(false);
+    expect(
+      submissionOwnsCurrentForm(
+        { ...submission.formSnapshot },
+        null,
+        submission,
+        submission.tierDraftsSnapshot,
+        'another-default-tier',
+      ),
+    ).toBe(false);
+  });
+
+  it('classifies lost acknowledgments without swallowing server validation', () => {
+    expect(isLostSaveAcknowledgment(new TypeError('Failed to fetch'))).toBe(true);
+    expect(isLostSaveAcknowledgment(new Error('NetworkError when attempting to fetch resource.'))).toBe(
+      true,
+    );
+    // A 2xx with an undecodable body may already have committed the profile.
+    expect(
+      isLostSaveAcknowledgment(
+        new AmbiguousSaveAcknowledgmentError('Save confirmed but unreadable.'),
+      ),
+    ).toBe(true);
+    expect(
+      isLostSaveAcknowledgment(
+        new ProviderProfileRequestError('Profile ID is required.', 'validation', null),
+      ),
+    ).toBe(false);
+    expect(isLostSaveAcknowledgment(new Error('Choose a supported authentication method.'))).toBe(
+      false,
+    );
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#4002 collapsed advanced summary', () => {
+  it('reports recommended, custom, attention, and unavailable states', () => {
+    const ready = {
+      presetState: 'ready' as const,
+      presetErrorText: null,
+      hasUnknownAuthenticationMethod: false,
+      presetUnsupportedWithoutManual: false,
+      unsupportedDetail: null,
+      tierPolicyChanged: false,
+      deviations: [] as string[],
+    };
+    expect(computeAdvancedPolicySummary(ready).tone).toBe('recommended');
+    const custom = computeAdvancedPolicySummary({
+      ...ready,
+      tierPolicyChanged: false,
+      deviations: ['rate limiting', 'routing tags'],
+    });
+    expect(custom.tone).toBe('custom');
+    expect(custom.text).toBe('Custom advanced policy · 2 overrides: rate limiting, routing tags');
+    expect(custom.overrideCount).toBe(2);
+    const attention = computeAdvancedPolicySummary({
+      ...ready,
+      hasUnknownAuthenticationMethod: true,
+    });
+    expect(attention.tone).toBe('attention');
+    expect(attention.text).toContain('Needs attention');
+    expect(attention.text).toContain('unknown authentication method');
+    // Attention takes precedence over reassurance even with deviations.
+    const attentionWithDeviations = computeAdvancedPolicySummary({
+      ...ready,
+      hasUnknownAuthenticationMethod: true,
+      deviations: ['priority'],
+    });
+    expect(attentionWithDeviations.tone).toBe('attention');
+    const unavailable = computeAdvancedPolicySummary({ ...ready, presetState: 'missing' });
+    expect(unavailable.tone).toBe('unavailable');
+    expect(unavailable.text).toContain('unavailable');
+  });
+
+  it('compares typed values with key-order invariance and excludes generated metadata', () => {
+    const baseline = defaultFormState('codex_cli');
+    const pristine = { ...baseline };
+    expect(collectAdvancedControlDeviations(pristine, baseline)).toEqual([]);
+    // JSON key order is not a change.
+    const reordered = {
+      ...baseline,
+      commandBehavior: '{"b":1,"a":2}',
+    };
+    const baselineOrdered = { ...baseline, commandBehavior: '{"a":2,"b":1}' };
+    expect(collectAdvancedControlDeviations(reordered, baselineOrdered)).toEqual([]);
+    // Generated OAuth/isolation metadata never counts as a user override.
+    const generatedOnly = { ...baseline, clearEnvKeysText: 'OPENAI_API_KEY' };
+    expect(collectAdvancedControlDeviations(generatedOnly, baseline)).toEqual([]);
+    // Real authoring counts each top-level control once with allowlisted labels.
+    const authored = {
+      ...baseline,
+      cooldownAfter429Seconds: '900',
+      tagsText: 'team, preferred',
+      volumeRef: '  ',
+      priority: '5',
+    };
+    const deviations = collectAdvancedControlDeviations(authored, baseline);
+    expect(deviations).toEqual(['rate limiting', 'routing tags', 'priority']);
+    const summary = computeAdvancedPolicySummary({
+      presetState: 'ready',
+      presetErrorText: null,
+      hasUnknownAuthenticationMethod: false,
+      presetUnsupportedWithoutManual: false,
+      unsupportedDetail: null,
+      tierPolicyChanged: false,
+      deviations,
+    });
+    expect(summary.text).not.toContain('db://');
+    expect(summary.text).not.toContain('OPENAI_API_KEY');
+  });
+
+  it('keeps identity-only edits out of the advanced summary', () => {
+    const baseline = defaultFormState('codex_cli');
+    // Account label renders in the always-visible Identity fieldset.
+    const identityOnly = { ...baseline, accountLabel: 'team account' };
+    expect(collectAdvancedControlDeviations(identityOnly, baseline)).toEqual([]);
+  });
+
+  it('counts provider label and execution configuration as advanced overrides', () => {
+    const baseline = defaultFormState('codex_cli');
+    const labeled = { ...baseline, providerLabel: 'Preferred provider' };
+    expect(collectAdvancedControlDeviations(labeled, baseline)).toEqual(['provider label']);
+    const configured = {
+      ...baseline,
+      executionConfiguration: JSON.stringify({ profileId: 'p', version: 2, digest: 'd' }),
+    };
+    expect(collectAdvancedControlDeviations(configured, baseline)).toEqual([
+      'execution configuration',
+    ]);
+  });
+
+  it('reports manual creation state instead of recommended settings', () => {
+    const recommended = 'Using recommended API key launch settings';
+    expect(
+      resolveAdvancedRecommendedText({
+        manualCreationAllowed: true,
+        isEditing: false,
+        presetReady: true,
+        recommendedLaunchSettingsText: recommended,
+      }),
+    ).toBe('Manual creation — profile will be saved disabled');
+    expect(
+      resolveAdvancedRecommendedText({
+        manualCreationAllowed: false,
+        isEditing: true,
+        presetReady: false,
+        recommendedLaunchSettingsText: recommended,
+      }),
+    ).toBe('Preserving the existing launch contract');
+    expect(
+      resolveAdvancedRecommendedText({
+        manualCreationAllowed: false,
+        isEditing: false,
+        presetReady: true,
+        recommendedLaunchSettingsText: recommended,
+      }),
+    ).toBe(recommended);
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#4002 deferred default intent storage', () => {
+  function memoryStorage() {
+    const store = new Map<string, string>();
+    return {
+      getItem: (key: string) => (store.has(key) ? store.get(key)! : null),
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+    };
+  }
+
+  it('round-trips pending intents and tolerates corrupt or missing storage', () => {
+    const storage = memoryStorage();
+    expect(loadPersistedDefaultIntents(storage)).toEqual([]);
+    persistDefaultIntents(
+      [
+        { profileId: 'profile-a', priorDefaultProfileId: 'profile-old' },
+        { profileId: 'profile-b', priorDefaultProfileId: null },
+        { profileId: 'profile-a', priorDefaultProfileId: 'profile-old' },
+      ],
+      storage,
+    );
+    expect(loadPersistedDefaultIntents(storage)).toEqual([
+      { profileId: 'profile-a', priorDefaultProfileId: 'profile-old' },
+      { profileId: 'profile-b', priorDefaultProfileId: null },
+    ]);
+    expect(storage.getItem(PENDING_DEFAULT_INTENT_STORAGE_KEY)).not.toContain('secret');
+    storage.setItem(PENDING_DEFAULT_INTENT_STORAGE_KEY, 'not-json{{{');
+    expect(loadPersistedDefaultIntents(storage)).toEqual([]);
+    expect(loadPersistedDefaultIntents(null)).toEqual([]);
+    persistDefaultIntents([{ profileId: 'x', priorDefaultProfileId: null }], null);
+  });
+
+  it('reads legacy string-only intents without a captured prior default', () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      PENDING_DEFAULT_INTENT_STORAGE_KEY,
+      JSON.stringify(['legacy-a', '  ', 42, null]),
+    );
+    expect(loadPersistedDefaultIntents(storage)).toEqual([
+      { profileId: 'legacy-a', priorDefaultProfileId: null },
+    ]);
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#4002 save reconciliation', () => {
+  function guidedMocks(savedProfile: ProviderProfile) {
+    const preset = {
+      version: 'provider-profile-create-v1-test',
+      supported: true,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      fields: {
+        credential_source: { value: 'secret_ref', source: 't', editable: false, lock_reason: null, required: false },
+        runtime_materialization_mode: { value: 'api_key_env', source: 't', editable: false, lock_reason: null, required: false },
+        secret_refs: { value: {}, source: 't', editable: true, lock_reason: null, required: false },
+        volume_ref: { value: null, source: 't', editable: false, lock_reason: null, required: false },
+        volume_mount_path: { value: null, source: 't', editable: false, lock_reason: null, required: false },
+        max_parallel_runs: { value: 1, source: 't', editable: true, lock_reason: null, required: false },
+        cooldown_after_429_seconds: { value: 300, source: 't', editable: true, lock_reason: null, required: false },
+        rate_limit_policy: { value: 'backoff', source: 't', editable: true, lock_reason: null, required: false },
+        enabled: { value: false, source: 't', editable: false, lock_reason: null, required: false },
+        is_default: { value: false, source: 't', editable: true, lock_reason: null, required: false },
+        command_behavior: { value: { auth_strategy: 'api_key_env' }, source: 't', editable: false, lock_reason: null, required: false },
+        user_tags: { value: [], source: 't', editable: true, lock_reason: null, required: false },
+        priority: { value: 100, source: 't', editable: true, lock_reason: null, required: false },
+        clear_env_keys: { value: [], source: 't', editable: false, lock_reason: null, required: false },
+      },
+      diagnostics: [],
+      manual_creation_allowed: false,
+      required_manual_fields: [],
+    };
+    return vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            version: 'tier-cap-v1-test',
+            profile_id: null,
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            evidence: { source: 't', credential_generation: null, image_ref: null, observed_at: null, stale: false },
+            tier_constraints: { min_count: 1, max_count: null },
+            model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [] },
+            effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [] },
+            diagnostics: [],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            version: preset.version,
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            supported: true,
+            authentication_methods: [
+              {
+                id: 'api_key',
+                label: 'API key',
+                setup_action: 'api_key',
+                launch_ready_after_setup: true,
+                fields: preset.fields,
+                secret_roles: [],
+                imported_volume: { supported: false, mount_path: null, source: 't', lock_reason: 'no' },
+              },
+            ],
+            diagnostics: [],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => preset } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && init?.method === 'POST') {
+        return { ok: true, json: async () => savedProfile } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url} ${String((init as RequestInit | undefined)?.method)}`);
+    });
+  }
+
+  const baseSaved: ProviderProfile = {
+    profile_id: 'identity-profile',
+    runtime_id: 'codex_cli',
+    provider_id: 'openai',
+    credential_source: 'secret_ref',
+    runtime_materialization_mode: 'api_key_env',
+    secret_refs: {},
+    max_parallel_runs: 1,
+    cooldown_after_429_seconds: 300,
+    rate_limit_policy: 'backoff',
+    enabled: false,
+    is_default: false,
+  };
+
+  it('rejects a mismatched save identity without starting setup for another profile', async () => {
+    const fetchSpy = guidedMocks({
+      ...baseSaved,
+      profile_id: 'different-profile',
+    });
+    const { onNotice } = renderProviderProfilesManager();
+    fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'identity-profile' } });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    fireEvent.click(await screen.findByLabelText('API key'));
+    await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'error',
+        text: expect.stringContaining('unexpected profile identity'),
+      });
+    });
+    // No setup continuation starts for another profile.
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === '/api/v1/oauth-sessions')).toBe(false);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('treats a lost create acknowledgment as ambiguous and keeps the draft', async () => {
+    const preset = {
+      version: 'provider-profile-create-v1-test',
+      supported: true,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      fields: {},
+      diagnostics: [],
+      manual_creation_allowed: false,
+      required_manual_fields: [],
+    };
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            version: 'tier-cap-v1-test',
+            profile_id: null,
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            evidence: { source: 't', credential_generation: null, image_ref: null, observed_at: null, stale: false },
+            tier_constraints: { min_count: 1, max_count: null },
+            model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [] },
+            effort: { supported: true, runtime_default: 'medium', allow_custom: false, application: 'native', options: [] },
+            diagnostics: [],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            version: preset.version,
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            supported: true,
+            authentication_methods: [
+              {
+                id: 'api_key',
+                label: 'API key',
+                setup_action: 'api_key',
+                launch_ready_after_setup: true,
+                fields: preset.fields,
+                secret_roles: [],
+                imported_volume: { supported: false, mount_path: null, source: 't', lock_reason: 'no' },
+              },
+            ],
+            diagnostics: [],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => preset } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        // The request may have reached the server; the ack is lost.
+        throw new TypeError('Failed to fetch');
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { onNotice } = renderProviderProfilesManager();
+    fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'ambiguous-profile' } });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    fireEvent.click(await screen.findByLabelText('API key'));
+    await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'error',
+        text: expect.stringContaining('did not confirm'),
+      });
+    });
+    // Ambiguous, not success and not an automatic retry: the draft is kept.
+    expect((screen.getByLabelText(/Profile ID/) as HTMLInputElement).value).toBe(
+      'ambiguous-profile',
+    );
+    expect(onNotice).not.toHaveBeenCalledWith(
+      expect.objectContaining({ level: 'ok' }),
+    );
+  });
+});
+
+describe('MoonLadderStudios/MoonMind#4002 remediation gaps (R2-R6,R8)', () => {
+  const remediationPresetVersion = 'provider-profile-create-v1-test';
+  const remediationSavedBase: ProviderProfile = {
+    profile_id: 'remediation-base',
+    runtime_id: 'codex_cli',
+    provider_id: 'openai',
+    credential_source: 'none',
+    runtime_materialization_mode: 'api_key_env',
+    secret_refs: {},
+    max_parallel_runs: 1,
+    cooldown_after_429_seconds: 300,
+    rate_limit_policy: 'backoff',
+    enabled: false,
+    is_default: false,
+    auth_state: 'not_configured',
+    disabled_reason: 'missing_credentials',
+  };
+
+  function remediationPresetFields() {
+    const field = (value: unknown, editable = true) => ({
+      value,
+      source: 'test',
+      editable,
+      required: false,
+      lock_reason: null,
+    });
+    return {
+      credential_source: field('none', false),
+      runtime_materialization_mode: field('api_key_env', false),
+      secret_refs: field({}),
+      volume_ref: field(null, false),
+      volume_mount_path: field(null, false),
+      max_parallel_runs: field(1),
+      cooldown_after_429_seconds: field(300),
+      rate_limit_policy: field('backoff'),
+      enabled: field(false, false),
+      is_default: field(false),
+      command_behavior: field({ auth_strategy: 'api_key_env' }, false),
+      user_tags: field([]),
+      priority: field(100),
+      clear_env_keys: field(['OPENAI_API_KEY'], false),
+    };
+  }
+
+  function remediationTierCapabilities() {
+    return {
+      version: 'tier-cap-v1-test',
+      profile_id: null,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      evidence: {
+        source: 't',
+        credential_generation: null,
+        image_ref: null,
+        observed_at: null,
+        stale: false,
+      },
+      tier_constraints: { min_count: 1, max_count: null },
+      model: { runtime_default: 'gpt-5.5', allow_custom: true, options: [] },
+      effort: {
+        supported: true,
+        runtime_default: 'medium',
+        allow_custom: false,
+        application: 'native',
+        options: [],
+      },
+      diagnostics: [],
+    };
+  }
+
+  function remediationCreationCapabilities() {
+    return {
+      version: remediationPresetVersion,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      supported: true,
+      authentication_methods: [
+        {
+          id: 'api_key',
+          label: 'API key',
+          setup_action: 'api_key',
+          launch_ready_after_setup: true,
+          fields: remediationPresetFields(),
+          secret_roles: [],
+          imported_volume: {
+            supported: false,
+            mount_path: null,
+            source: 't',
+            lock_reason: 'no',
+          },
+        },
+      ],
+      diagnostics: [],
+    };
+  }
+
+  function remediationPreset() {
+    return {
+      version: remediationPresetVersion,
+      supported: true,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      fields: remediationPresetFields(),
+      diagnostics: [],
+      manual_creation_allowed: false,
+      required_manual_fields: [],
+    };
+  }
+
+  async function fillCreateForm(profileId: string) {
+    fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: profileId } });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    fireEvent.click(await screen.findByLabelText('API key'));
+    await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
+  }
+
+  it('R2: delayed save A reconciles by captured identity while draft B stays untouched', async () => {
+    const savedA: ProviderProfile = { ...remediationSavedBase, profile_id: 'delayed-a' };
+    let resolvePost: ((response: Response) => void) | null = null;
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+        return { ok: true, json: async () => remediationTierCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return { ok: true, json: async () => remediationCreationCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => remediationPreset() } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        return new Promise<Response>((resolve) => {
+          resolvePost = resolve;
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { onNotice, queryClient } = renderProviderProfilesManager();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    await fillCreateForm('delayed-a');
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.filter(
+          ([url, init]) =>
+            String(url) === '/api/v1/provider-profiles' &&
+            (init as RequestInit | undefined)?.method === 'POST',
+        ),
+      ).toHaveLength(1);
+    });
+    // Duplicate submit while pending is suppressed: the action reads Saving….
+    expect(screen.getByRole('button', { name: 'Saving…' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Saving…' }));
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([url, init]) =>
+          String(url) === '/api/v1/provider-profiles' &&
+          (init as RequestInit | undefined)?.method === 'POST',
+      ),
+    ).toHaveLength(1);
+    // Draft B is opened/edited while A is still pending.
+    fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'draft-b' } });
+    expect(resolvePost).not.toBeNull();
+    resolvePost!({ ok: true, json: async () => savedA } as Response);
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'ok',
+        text: expect.stringContaining('delayed-a'),
+      });
+    });
+    // A reconciled by captured identity (create, not update) and B is untouched.
+    const okCall = onNotice.mock.calls.find(([arg]) => (arg as { level: string }).level === 'ok');
+    expect(String((okCall?.[0] as { text: string }).text)).toContain('saved');
+    expect(String((okCall?.[0] as { text: string }).text)).not.toContain('updated');
+    expect((screen.getByLabelText(/Profile ID/) as HTMLInputElement).value).toBe('draft-b');
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([url, init]) =>
+          String(url) === '/api/v1/provider-profiles' &&
+          (init as RequestInit | undefined)?.method === 'POST',
+      ),
+    ).toHaveLength(1);
+    expect(invalidateSpy).toHaveBeenCalled();
+  });
+
+  it('R3: next creation after a custom-tier save uses genuine defaults and preserves pending edits', async () => {
+    const savedCustom: ProviderProfile = { ...remediationSavedBase, profile_id: 'custom-tier-save' };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+        return { ok: true, json: async () => remediationTierCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return { ok: true, json: async () => remediationCreationCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => remediationPreset() } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        return { ok: true, json: async () => savedCustom } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { onNotice } = renderProviderProfilesManager();
+    await fillCreateForm('custom-tier-save');
+    // Author a second custom tier before saving.
+    fireEvent.click(screen.getByLabelText('Duplicate Tier 1 as new last tier'));
+    expect(screen.getByLabelText('Tier 2 label')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'ok',
+        text: expect.stringContaining('custom-tier-save'),
+      });
+    });
+    // The next form is genuinely new: identity cleared, one default tier, no Tier 2.
+    expect((screen.getByLabelText(/Profile ID/) as HTMLInputElement).value).toBe('');
+    expect(screen.queryByLabelText('Tier 2 label')).toBeNull();
+    expect(screen.getByLabelText('Tier 1 label')).toBeTruthy();
+    expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(false);
+    expect(fetchSpy.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(1);
+  });
+
+  it('R4: confirmed create followed by setup failure keeps same-profile retry with no second create POST', async () => {
+    const savedRetry: ProviderProfile = { ...remediationSavedBase, profile_id: 'retry-profile' };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+        return { ok: true, json: async () => remediationTierCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return { ok: true, json: async () => remediationCreationCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => remediationPreset() } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        return { ok: true, json: async () => savedRetry } as Response;
+      }
+      if (
+        url === '/api/v1/provider-profiles/retry-profile/credentials/api-key' &&
+        (init as RequestInit | undefined)?.method === 'POST'
+      ) {
+        return { ok: false, json: async () => ({ detail: 'Invalid API key.' }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    renderProviderProfilesManager();
+    await fillCreateForm('retry-profile');
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+    // Same-profile guided enrollment opens for the exact saved identity.
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'sk-retry-test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenAI API key' }));
+    // Setup failure offers a same-profile retry, never a second create POST.
+    expect(await screen.findByRole('button', { name: 'Return to API key paste' })).toBeTruthy();
+    expect(
+      screen.getByRole('dialog', { name: 'OpenAI API key enrollment for retry-profile' }),
+    ).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([url, init]) =>
+          String(url) === '/api/v1/provider-profiles' &&
+          (init as RequestInit | undefined)?.method === 'POST',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('R4: lost acknowledgment never overwrites an independently created conflicting profile', async () => {
+    const conflicting: ProviderProfile = {
+      ...remediationSavedBase,
+      profile_id: 'conflict-profile',
+      provider_id: 'openai',
+      account_label: 'independently created',
+    };
+    vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+        return { ok: true, json: async () => remediationTierCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return { ok: true, json: async () => remediationCreationCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => remediationPreset() } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        throw new TypeError('Failed to fetch');
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { onNotice, queryClient } = renderProviderProfilesManagerWithQuery([conflicting]);
+    await fillCreateForm('conflict-profile');
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'error',
+        text: expect.stringContaining('did not confirm'),
+      });
+    });
+    // Safe draft values kept; the independently created row is not overwritten.
+    expect((screen.getByLabelText(/Profile ID/) as HTMLInputElement).value).toBe('conflict-profile');
+    const cached = queryClient.getQueryData<ProviderProfile[]>(PROVIDER_PROFILE_QUERY_KEY) ?? [];
+    expect(cached).toHaveLength(1);
+    expect(cached[0]?.account_label).toBe('independently created');
+    expect(onNotice).not.toHaveBeenCalledWith(expect.objectContaining({ level: 'ok' }));
+  });
+
+  it('R5: closing the Claude drawer mid-commit still reconciles the cache without cross-profile mutation', async () => {
+    const claudeProfile: ProviderProfile = {
+      profile_id: 'claude-anthropic',
+      runtime_id: 'claude_code',
+      provider_id: 'anthropic',
+      credential_source: 'oauth_volume',
+      runtime_materialization_mode: 'oauth_home',
+      secret_refs: {},
+      max_parallel_runs: 1,
+      cooldown_after_429_seconds: 300,
+      rate_limit_policy: 'backoff',
+      enabled: false,
+      is_default: false,
+      account_label: 'Claude Anthropic OAuth',
+      auth_state: 'not_configured',
+      disabled_reason: 'missing_credentials',
+      command_behavior: {
+        auth_strategy: 'claude_credential_methods',
+        auth_state: 'not_connected',
+        auth_actions: ['connect_oauth', 'use_api_key'],
+        auth_status_label: 'Claude credentials not connected',
+      },
+    };
+    const secondClaudeProfile: ProviderProfile = { ...claudeProfile, profile_id: 'claude-anthropic-secondary' };
+    let resolveCommit: ((response: Response) => void) | null = null;
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveCommit = resolve;
+        }),
+    );
+    const { onNotice, queryClient } = renderProviderProfilesManager([claudeProfile, secondClaudeProfile]);
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    fireEvent.click(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('Anthropic API key'), { target: { value: 'sk-ant-close-test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save Anthropic API key' }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/provider-profiles/claude-anthropic/manual-auth/commit',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    // Close the drawer mid-commit, then let the commit succeed.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel API key enrollment' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(resolveCommit).not.toBeNull();
+    resolveCommit!({
+      ok: true,
+      json: async () => ({
+        status: 'ready',
+        status_label: 'Anthropic API key ready',
+        readiness: { connected: true },
+      }),
+    } as Response);
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalled();
+    });
+    // Committed-profile cache reconciles even with the drawer closed; nothing
+    // reopens, nothing is misreported as cancelled, and no cross-profile panel
+    // is mutated with this profile's outcome.
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByText('Anthropic API key ready')).toBeNull();
+    expect(onNotice).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('cancelled') }),
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic-secondary' }),
+    );
+    expect(
+      screen.getByRole('dialog', {
+        name: 'Anthropic API key enrollment for claude-anthropic-secondary',
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByText('Anthropic API key ready')).toBeNull();
+  });
+
+  it('R5: closing the OpenCode drawer mid-commit still reconciles without misreporting cancellation', async () => {
+    const savedEnrollment: ProviderProfile = { ...remediationSavedBase, profile_id: 'drawer-profile' };
+    let resolveCredentials: ((response: Response) => void) | null = null;
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+        return { ok: true, json: async () => remediationTierCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return { ok: true, json: async () => remediationCreationCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => remediationPreset() } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        return { ok: true, json: async () => savedEnrollment } as Response;
+      }
+      if (
+        url === '/api/v1/provider-profiles/drawer-profile/credentials/api-key' &&
+        (init as RequestInit | undefined)?.method === 'POST'
+      ) {
+        return new Promise<Response>((resolve) => {
+          resolveCredentials = resolve;
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { onNotice, queryClient } = renderProviderProfilesManager();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    await fillCreateForm('drawer-profile');
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'sk-drawer-test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenAI API key' }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/provider-profiles/drawer-profile/credentials/api-key',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel API key enrollment' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(resolveCredentials).not.toBeNull();
+    resolveCredentials!({
+      ok: true,
+      json: async () => ({
+        status: 'ready',
+        status_label: 'OpenAI API key ready',
+        readiness: { connected: true },
+      }),
+    } as Response);
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalled();
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(onNotice).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('cancelled') }),
+    );
+  });
+
+  it('R6: failed default PATCH keeps truthful pending state with an explicit retry remedy', async () => {
+    window.localStorage.clear();
+    const savedDefault: ProviderProfile = { ...remediationSavedBase, profile_id: 'default-fail-profile' };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return { ok: true, json: async () => remediationCreationCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => remediationPreset() } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        return { ok: true, json: async () => savedDefault } as Response;
+      }
+      if (
+        url === '/api/v1/provider-profiles/default-fail-profile/credentials/api-key' &&
+        (init as RequestInit | undefined)?.method === 'POST'
+      ) {
+        return {
+          ok: true,
+          json: async () => ({
+            status: 'ready',
+            status_label: 'OpenAI API key ready',
+            readiness: { connected: true },
+          }),
+        } as Response;
+      }
+      if (
+        url === '/api/v1/provider-profiles/default-fail-profile' &&
+        (init as RequestInit | undefined)?.method === 'PATCH'
+      ) {
+        return { ok: false, json: async () => ({ detail: 'Default assignment failed.' }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { onNotice } = renderProviderProfilesManager();
+    await fillCreateForm('default-fail-profile');
+    fireEvent.click(screen.getByLabelText('Runtime default'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'sk-default-fail' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenAI API key' }));
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(
+          ([url, init]) =>
+            String(url) === '/api/v1/provider-profiles/default-fail-profile' &&
+            (init as RequestInit | undefined)?.method === 'PATCH',
+        ),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'error',
+        text: expect.stringContaining('was not applied'),
+      });
+    });
+    // Truthful pending state: the intent survives the failure with a retry remedy.
+    expect(
+      loadPersistedDefaultIntents(window.localStorage).map((intent) => intent.profileId),
+    ).toContain('default-fail-profile');
+    const failureCall = onNotice.mock.calls
+      .map(([arg]) => arg as { level: string; text: string } | null)
+      .find((arg) => arg !== null && arg.level === 'error' && arg.text.includes('was not applied'));
+    expect(failureCall?.text).toContain('Make default');
+    expect(onNotice).not.toHaveBeenCalledWith({
+      level: 'ok',
+      text: expect.stringContaining('is now the runtime default'),
+    });
+    window.localStorage.clear();
+  });
+
+  it('R6: a pre-existing default is replaced, not mistaken for a newer choice', async () => {
+    window.localStorage.clear();
+    const savedNewer: ProviderProfile = { ...remediationSavedBase, profile_id: 'newer-intent-profile' };
+    const currentDefault: ProviderProfile = {
+      ...remediationSavedBase,
+      profile_id: 'operator-default',
+      is_default: true,
+    };
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return { ok: true, json: async () => remediationCreationCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => remediationPreset() } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        return { ok: true, json: async () => savedNewer } as Response;
+      }
+      if (
+        url === '/api/v1/provider-profiles/newer-intent-profile/credentials/api-key' &&
+        (init as RequestInit | undefined)?.method === 'POST'
+      ) {
+        return {
+          ok: true,
+          json: async () => ({
+            status: 'ready',
+            status_label: 'OpenAI API key ready',
+            readiness: { connected: true },
+          }),
+        } as Response;
+      }
+      if (
+        url === '/api/v1/provider-profiles/newer-intent-profile' &&
+        (init as RequestInit | undefined)?.method === 'PATCH'
+      ) {
+        return { ok: true, json: async () => ({ ...savedNewer, is_default: true }) } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { onNotice } = renderProviderProfilesManagerWithQuery([currentDefault, savedNewer]);
+    await fillCreateForm('newer-intent-profile');
+    fireEvent.click(screen.getByLabelText('Runtime default'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'sk-newer-intent' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenAI API key' }));
+    // The default observed at submission is the intent's replacement target.
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(
+          ([url, init]) =>
+            String(url) === '/api/v1/provider-profiles/newer-intent-profile' &&
+            (init as RequestInit | undefined)?.method === 'PATCH',
+        ),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'ok',
+        text: expect.stringContaining('is now the runtime default'),
+      });
+    });
+    // The intent's own notice owns the final slot: no enrollment notice on top.
+    expect(onNotice).not.toHaveBeenCalledWith({
+      level: 'ok',
+      text: expect.stringContaining('enrollment completed'),
+    });
+    const cached = window.localStorage.getItem(PENDING_DEFAULT_INTENT_STORAGE_KEY) ?? '';
+    expect(cached).not.toContain('newer-intent-profile');
+    window.localStorage.clear();
+  });
+
+  it('R6: a genuinely newer default is never silently undone', async () => {
+    window.localStorage.clear();
+    const savedNewer: ProviderProfile = { ...remediationSavedBase, profile_id: 'newer-intent-profile' };
+    const currentDefault: ProviderProfile = {
+      ...remediationSavedBase,
+      profile_id: 'operator-default',
+      is_default: true,
+    };
+    const thirdProfile: ProviderProfile = {
+      ...remediationSavedBase,
+      profile_id: 'third-profile',
+      is_default: false,
+    };
+    // A stale page-local intent from before this run: reload performs no
+    // silent PATCH on mount.
+    window.localStorage.setItem(
+      PENDING_DEFAULT_INTENT_STORAGE_KEY,
+      JSON.stringify(['newer-intent-profile']),
+    );
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return { ok: true, json: async () => remediationCreationCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => remediationPreset() } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        return { ok: true, json: async () => savedNewer } as Response;
+      }
+      if (
+        url === '/api/v1/provider-profiles/newer-intent-profile/credentials/api-key' &&
+        (init as RequestInit | undefined)?.method === 'POST'
+      ) {
+        return {
+          ok: true,
+          json: async () => ({
+            status: 'ready',
+            status_label: 'OpenAI API key ready',
+            readiness: { connected: true },
+          }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { onNotice, queryClient } = renderProviderProfilesManagerWithQuery([
+      currentDefault,
+      savedNewer,
+      thirdProfile,
+    ]);
+    // Reload with a stale pending intent performs no silent PATCH on mount.
+    expect(
+      fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PATCH'),
+    ).toBe(false);
+    await fillCreateForm('newer-intent-profile');
+    fireEvent.click(screen.getByLabelText('Runtime default'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('OpenAI API key'), { target: { value: 'sk-newer-intent' } });
+    // While setup is pending the operator explicitly defaults another profile.
+    queryClient.setQueryData<ProviderProfile[]>(PROVIDER_PROFILE_QUERY_KEY, [
+      { ...currentDefault, is_default: false },
+      savedNewer,
+      { ...thirdProfile, is_default: true },
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenAI API key' }));
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'error',
+        text: expect.stringContaining('is now the default'),
+      });
+    });
+    const blockedCall = onNotice.mock.calls
+      .map(([arg]) => arg as { level: string; text: string } | null)
+      .find((arg) => arg !== null && arg.level === 'error' && arg.text.includes('is now the default'));
+    expect(blockedCall?.text).toContain('third-profile');
+    // The newer operator choice wins: no PATCH against it, intent cleared, never undone.
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) =>
+          String(url) === '/api/v1/provider-profiles/newer-intent-profile' &&
+          (init as RequestInit | undefined)?.method === 'PATCH',
+      ),
+    ).toBe(false);
+    const cached = (window.localStorage.getItem(PENDING_DEFAULT_INTENT_STORAGE_KEY) ?? '');
+    expect(cached).not.toContain('newer-intent-profile');
+    window.localStorage.clear();
+  });
+
+  it('R8: opening and canceling a reset preview mutates nothing', async () => {
+    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return { ok: true, json: async () => remediationCreationCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => remediationPreset() } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { onNotice } = renderProviderProfilesManager();
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    fireEvent.click(await screen.findByLabelText('API key'));
+    await screen.findByText(/Backend preset provider-profile-create-v1-test loaded/);
+    fireEvent.click(screen.getByLabelText('Show advanced options'));
+    const cooldown = screen.getByLabelText(/Cooldown after 429/) as HTMLInputElement;
+    fireEvent.change(cooldown, { target: { value: '900' } });
+    expect(cooldown.value).toBe('900');
+    fireEvent.click(screen.getByText('Reset advanced options to recommended'));
+    expect(screen.getByText(/Preview — recommended values will replace draft overrides/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    // Cancel leaves every authored value and disclosure choice intact.
+    expect((screen.getByLabelText(/Cooldown after 429/) as HTMLInputElement).value).toBe('900');
+    expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true);
+    expect(screen.queryByText(/Preview — recommended values will replace draft overrides/)).toBeNull();
+    expect(onNotice).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('reset to recommended') }),
+    );
+  });
+
+  it('R8: preset-version conflict preserves authored values for review without a second POST', async () => {
+    const field = (value: unknown, editable = true) => ({
+      value,
+      source: 'test_policy',
+      editable,
+      required: false,
+      lock_reason: editable ? null : 'Backend controlled.',
+    });
+    const makePreset = (version: string, cooldown: number) => ({
+      version,
+      supported: true,
+      runtime_id: 'codex_cli',
+      provider_id: 'openai',
+      authentication_method: 'api_key',
+      fields: {
+        credential_source: field('none', false),
+        runtime_materialization_mode: field('api_key_env', false),
+        secret_refs: field({}),
+        volume_ref: field(null, false),
+        volume_mount_path: field(null, false),
+        max_parallel_runs: field(1),
+        cooldown_after_429_seconds: field(cooldown),
+        rate_limit_policy: field('backoff'),
+        enabled: field(false, false),
+        is_default: field(false),
+        command_behavior: field({ auth_strategy: 'api_key_env' }, false),
+        user_tags: field([]),
+        priority: field(100),
+        clear_env_keys: field(['MINIMAX_API_KEY'], false),
+      },
+      diagnostics: [],
+      manual_creation_allowed: false,
+      required_manual_fields: [],
+    });
+    const fetchSpy = vi.spyOn(window, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/v1/provider-profiles/capabilities?')) {
+        return { ok: true, json: async () => remediationTierCapabilities() } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-capabilities?')) {
+        return {
+          ok: true,
+          json: async () => ({
+            version: 'provider-profile-create-v1-old',
+            runtime_id: 'codex_cli',
+            provider_id: 'openai',
+            supported: true,
+            authentication_methods: [
+              {
+                id: 'api_key',
+                label: 'API key',
+                setup_action: 'api_key',
+                launch_ready_after_setup: true,
+                fields: makePreset('provider-profile-create-v1-old', 300).fields,
+                secret_roles: [],
+                imported_volume: { supported: false, mount_path: null, source: 'test_policy', lock_reason: 'no' },
+              },
+            ],
+            diagnostics: [],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/v1/provider-profiles/creation-preset?')) {
+        return { ok: true, json: async () => makePreset('provider-profile-create-v1-current', 600) } as Response;
+      }
+      if (url === '/api/v1/provider-profiles' && (init as RequestInit | undefined)?.method === 'POST') {
+        return {
+          ok: false,
+          json: async () => ({
+            detail: {
+              code: 'provider_profile_creation_preset_version_mismatch',
+              message: 'The preset changed.',
+            },
+          }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const { onNotice } = renderProviderProfilesManager();
+    fireEvent.change(screen.getByLabelText(/Profile ID/), { target: { value: 'conflict-review-profile' } });
+    fireEvent.change(screen.getByLabelText(/Runtime ID/), { target: { value: 'codex_cli' } });
+    fireEvent.change(screen.getByLabelText(/Provider ID/), { target: { value: 'openai' } });
+    fireEvent.click(await screen.findByLabelText('API key'));
+    await screen.findByText(/Backend preset provider-profile-create-v1-current loaded/);
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
+    await waitFor(() => {
+      expect(onNotice).toHaveBeenCalledWith({
+        level: 'error',
+        text: 'The creation policy changed. Reloading the current preset for review.',
+      });
+    });
+    // Authored identity is preserved for review; the conflict triggers exactly one POST.
+    expect((screen.getByLabelText(/Profile ID/) as HTMLInputElement).value).toBe('conflict-review-profile');
+    expect(fetchSpy.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(1);
+    expect(onNotice).not.toHaveBeenCalledWith(expect.objectContaining({ level: 'ok' }));
   });
 });

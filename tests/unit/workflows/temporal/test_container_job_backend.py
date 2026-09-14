@@ -1693,3 +1693,45 @@ async def test_reconcile_recovers_launch_attestation_for_bridge(tmp_path):
     assert published[0][1]["reconciliationResult"] == "recovered"
     assert published[0][1]["evidenceStage"] == "running"
     assert published[0][1]["networkIdentity"] == "restricted-network-id"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ceiling,expected_cpu", [(1500, "1.5"), (8000, "4.2")])
+async def test_shared_defaults_keep_operator_cpu_and_memory_ceilings(tmp_path, ceiling, expected_cpu):
+    from types import SimpleNamespace
+
+    (tmp_path / "art_workspace").mkdir()
+    commands = []
+    record = _recording_runner(commands)
+
+    async def runner(args):
+        if args[0] == "info":
+            commands.append(tuple(args))
+            return 0, f"{9934 * 1024**2}\t6".encode(), b""
+        return await record(args)
+    pool = SimpleNamespace(
+        launch_args=AsyncMock(
+            return_value=["--cgroup-parent", "/owned-pool", "--cpu-shares", "1024"]
+        )
+    )
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        cpu_pool=pool,
+        settings=resolve_container_backend_settings(
+            {
+                "MOONMIND_CONTAINER_BACKEND_MAX_CPU_MILLIS": str(ceiling),
+                "MOONMIND_CONTAINER_BACKEND_MAX_MEMORY_MIB": "2048",
+            }
+        ),
+    )
+    await backend.create_container(
+        _request(
+            tmp_path,
+            resources={"cpuMillis": 0, "memoryMiB": 4096, "minimumMemoryMiB": 2048},
+        )
+    )
+    create = next(c for c in commands if c[0] == "create")
+    assert create[create.index("--cpus") + 1] == expected_cpu
+    assert create[create.index("--memory") + 1] == "2048m"
+    assert "/owned-pool" in create

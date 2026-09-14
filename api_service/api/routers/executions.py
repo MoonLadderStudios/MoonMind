@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from moonmind.workflows.temporal.workflow_registry import WorkflowProjectionExcluded
+from moonmind.workflows.temporal.workflow_registry import (
+    WorkflowProjectionExcluded,
+    product_workflow_types,
+)
 
 import asyncio
 import base64
@@ -108,6 +111,7 @@ from moonmind.statuses.compat import (
     canonicalize_finish_outcome_code_alias,
     normalize_no_commit_finish_summary,
 )
+from moonmind.statuses.workflow import TERMINAL_WORKFLOW_STATES
 from moonmind.utils.metrics import get_metrics_emitter
 from moonmind.workflows.report_output import normalize_report_output_primary_path
 from moonmind.workflows.executions.preset_expansion import (
@@ -346,8 +350,38 @@ _SUPPORTED_TASK_RUNTIMES = frozenset({
 _GITHUB_ONLY_REPOSITORY_SKILLS = frozenset(
     {"batch-pr-resolver", "pr-resolver"}
 )
+def _product_temporal_scope_query() -> str:
+    """Build the product-domain Temporal visibility clause from the registry.
+
+    MoonLadderStudios/MoonMind#3947: the direct-Temporal list/count, metrics,
+    and facet paths must enforce the same registry product domain instead of a
+    hardcoded type string. The clause derives the allowed ``WorkflowType`` set
+    from :func:`product_workflow_types` so a registry change cannot silently
+    diverge from the upstream query. The ``mm_entry="user_workflow"`` conjunct
+    is kept while ``MoonMind.UserWorkflow`` is the sole product type; when the
+    product set grows beyond one entry shape the entry conjunct is dropped
+    rather than guessing entry values for new product types.
+    """
+
+    def _quote(value: str) -> str:
+        return value.replace('"', '\\"')
+
+    product_types = tuple(product_workflow_types())
+    if not product_types:
+        return 'WorkflowType="__no_product_workflow__"'
+    if len(product_types) == 1:
+        type_clause = f'WorkflowType="{_quote(product_types[0])}"'
+    else:
+        type_clause = "(" + " OR ".join(
+            f'WorkflowType="{_quote(name)}"' for name in product_types
+        ) + ")"
+    if tuple(product_types) == ("MoonMind.UserWorkflow",):
+        return f'{type_clause} AND mm_entry="user_workflow"'
+    return type_clause
+
+
 _TEMPORAL_SCOPE_QUERIES = {
-    "default": 'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow"',
+    "default": _product_temporal_scope_query(),
 }
 _DASHBOARD_STATUS_BY_STATE: dict[MoonMindWorkflowState, str] = {
     MoonMindWorkflowState.SCHEDULED: "queued",
@@ -2800,7 +2834,13 @@ def _build_temporal_execution_query(
         workflow_type=workflow_type,
         entry=entry,
     )
-    scope_query = _TEMPORAL_SCOPE_QUERIES[temporal_scope]
+    # MoonLadderStudios/MoonMind#3947: resolve the product scope live from the
+    # registry so list/count/metrics/facets share one product domain even if
+    # the registry gains product types after import.
+    if temporal_scope == "default":
+        scope_query = _product_temporal_scope_query()
+    else:
+        scope_query = _TEMPORAL_SCOPE_QUERIES[temporal_scope]
     if scope_query:
         query_parts.append(scope_query)
     if workflow_type and not _is_user_workflow_list_type(workflow_type):
@@ -12079,7 +12119,24 @@ async def _get_owned_execution(
                 include_orphaned=include_orphaned_projection,
             )
     except WorkflowProjectionExcluded as exc:
-        raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
+        # MoonLadderStudios/MoonMind#3947 (R4): authorization before disclosure.
+        # A known operator/excluded/unknown type is not permission to read
+        # another owner's run. The service enforces projection scope before the
+        # router can compare ownership, so disclosing exc.code/message here
+        # would teach an unauthorized caller that the ID exists and its
+        # internal type. Preserve the reason code only for callers already
+        # authorized to see diagnostics (admins); everyone else receives the
+        # same generic not-found shape as a failed ownership check, without
+        # raw provider state.
+        if _is_execution_admin(user):
+            raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "execution_not_found",
+                "message": f"Workflow execution {workflow_id} was not found",
+            },
+        ) from exc
     except TemporalExecutionNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -14355,23 +14412,20 @@ async def list_executions(
             )
             await iterator.fetch_next_page()
 
+            # MoonLadderStudios/MoonMind#3947 (R1/R2): the direct-Temporal page
+            # is filtered per row through the registry policy, so an upstream
+            # count over the visibility query is not the product total — an
+            # excluded type may sit entirely on a later page the current fetch
+            # never sees. Report the total as unknown independent of which page
+            # was seen instead of treating the broader-domain count as exact.
+            # The DB-backed list path below keeps its exact product-filtered
+            # count; metrics/facets count over the same product-scoped upstream
+            # query. No count RPC is issued here (bounded single-page work);
+            # callers paginate with the underlying continuation token, which is
+            # preserved even when this page filters down to zero items.
             count_value: int | None = None
-            count_mode = "exact"
-            degraded_count = False
-            try:
-                count_info = await asyncio.wait_for(
-                    client.count_workflows(query=count_query),
-                    timeout=settings.temporal_dashboard.list_count_timeout_seconds,
-                )
-                count_value = count_info.count
-            except Exception as exc:
-                count_mode = "estimated_or_unknown"
-                degraded_count = True
-                logger.warning(
-                    "Temporal execution list count degraded for query_present=%s: %s",
-                    bool(count_query),
-                    exc,
-                )
+            count_mode = "estimated_or_unknown"
+            degraded_count = True
 
             page = iterator.current_page or []
             canonical_map: dict[str, TemporalExecutionCanonicalRecord] = {}
@@ -14391,9 +14445,6 @@ async def list_executions(
                         payload = await map_temporal_state_to_projection(wf)
                     except WorkflowProjectionExcluded as exc:
                         logger.warning("Product projection excluded: %s", exc)
-                        count_value = None
-                        count_mode = "estimated_or_unknown"
-                        degraded_count = True
                         continue
                     canonical_record = canonical_map.get(wf.id)
                     payload["parameters"] = merged_parameters_for_projection(
@@ -16814,7 +16865,18 @@ async def describe_execution(
             use_projection_read = True
         except WorkflowProjectionExcluded as exc:
             await session.rollback()
-            raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
+            # MoonLadderStudios/MoonMind#3947 (R4): same authorization-before-
+            # disclosure rule as _get_owned_execution — reason codes only for
+            # admins, generic not-found for everyone else.
+            if _is_execution_admin(user):
+                raise HTTPException(status_code=404, detail={"code": exc.code, "message": str(exc)}) from exc
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "execution_not_found",
+                    "message": f"Workflow execution {workflow_id} was not found",
+                },
+            ) from exc
         except RPCError as exc:
             temporal_sync_unavailable = True
             await session.rollback()
@@ -17044,12 +17106,39 @@ async def resolve_workflow_chat_binding(
 # and never routing the intent through the native composer / SubmitChatInstruction.
 # ---------------------------------------------------------------------------
 
-# Terminal ``ExecutionModel.status`` values. A linked continuation may only be
+# Terminal execution state values. A linked continuation may only be
 # authored from a terminal source (issue §7: "source is not terminal" fails
 # closed) — a still-idle or still-reachable session is never inferred writeable.
-_TERMINAL_EXECUTION_STATUSES: frozenset[str] = frozenset(
-    {"completed", "failed", "canceled"}
+_CONTINUATION_TERMINAL_STATES: frozenset[str] = frozenset(
+    state.value for state in TERMINAL_WORKFLOW_STATES
 )
+
+
+async def _recovery_source_record(
+    *,
+    source: TemporalExecutionRecord | TemporalExecutionCanonicalRecord,
+    service: TemporalExecutionService,
+    session: AsyncSession,
+) -> TemporalExecutionCanonicalRecord:
+    canonical = await session.get(TemporalExecutionCanonicalRecord, source.workflow_id)
+    if canonical is not None:
+        if canonical.run_id != source.run_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "recovery_source_changed",
+                    "message": "The source run changed; refresh before recovery.",
+                },
+            )
+        return canonical
+    try:
+        return await service.read_scheduled_execution_source(source)
+    except (TemporalExecutionValidationError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "recovery_source_unavailable", "message": str(exc)},
+        ) from exc
+
 
 # Ordered (camelCase label, bridge-session column, kind) for the named terminal
 # evidence refs surfaced by **View captured evidence**. These are MoonMind
@@ -17443,9 +17532,8 @@ async def _materialize_continuation_source_attachments(
     evidence into execution context"). Copy each authorized selected ref into a
     durable ``LONG`` artifact and return ``inputAttachments`` entries; the caller
     injects them into the destination's ``workflow`` payload (the same shape the
-    ordinary create path uses) and links them to the destination workflow after
-    it is created. Unreadable or oversized refs are skipped rather than failing
-    the whole continuation — they remain pinned for display.
+    ordinary create path uses). The workflow's planning stage links the inputs
+    to its actual Temporal run before dispatch. Selected evidence must be readable.
     """
 
     if not refs:
@@ -17458,7 +17546,13 @@ async def _materialize_continuation_source_attachments(
             artifact_service=artifact_service, principal=principal, ref=ref
         )
         if body is None or len(body) > _CONTINUATION_EVIDENCE_MAX_BYTES:
-            continue
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_evidence_unavailable",
+                    "message": "Selected source evidence could not be delivered. Restore artifact access or revise the selection before retrying.",
+                },
+            )
         filename = _evidence_download_filename(ref)
         content_type = _evidence_attachment_content_type(filename)
         artifact, _upload = await artifact_service.create(
@@ -17592,7 +17686,7 @@ async def continue_in_new_workflow(
     source = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
     )
-    if str(getattr(source, "status", "") or "") not in _TERMINAL_EXECUTION_STATUSES:
+    if _enum_value(source.state) not in _CONTINUATION_TERMINAL_STATES:
         # Never infer writeability from an idle status or a still-reachable
         # upstream session after the MoonMind Workflow is terminal (§1, §7).
         raise HTTPException(
@@ -17615,17 +17709,9 @@ async def continue_in_new_workflow(
             },
         )
 
-    canonical = await session.get(TemporalExecutionCanonicalRecord, source.workflow_id)
-    if canonical is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "continuation_source_unpinnable",
-                "message": (
-                    "The source Workflow could not be pinned for continuation."
-                ),
-            },
-        )
+    canonical = await _recovery_source_record(
+        source=source, service=service, session=session
+    )
 
     evidence = await _resolve_source_captured_evidence(
         workflow_id=source.workflow_id, run_id=source_run_id
@@ -17716,99 +17802,6 @@ async def continue_in_new_workflow(
     # (§5, §7 "create submission fails after relationship reservation").
     await session.commit()
 
-    # Author the destination through the ordinary create path. Inherit the
-    # source's authored choices (sanitized like a rerun), layer operator-authored
-    # overrides, then pin the source lineage so both Workflows present the linked
-    # relationship. Fresh authority (runtime/profile/credential/policy) is
-    # resolved by ``create_execution`` — nothing is silently inherited stale.
-    initial_params = service._full_rerun_parameters(canonical.parameters or {})
-    if payload.initial_parameters:
-        initial_params.update(payload.initial_parameters)
-    source_plan_payload = (canonical.parameters or {}).get(
-        "omnigentExecutionPlan"
-    )
-    candidate_plan_payload = initial_params.get("omnigentExecutionPlan")
-    if isinstance(source_plan_payload, Mapping):
-        try:
-            source_plan = OmnigentExecutionPlanBinding.model_validate(
-                source_plan_payload
-            )
-            candidate_plan = OmnigentExecutionPlanBinding.model_validate(
-                candidate_plan_payload
-            )
-        except ValidationError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "continuation_execution_plan_conflict",
-                    "message": (
-                        "The linked continuation must reuse the source "
-                        "Workflow's immutable Omnigent execution plan."
-                    ),
-                },
-            ) from exc
-        if candidate_plan != source_plan:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "continuation_execution_plan_conflict",
-                    "message": (
-                        "The linked continuation must reuse the source "
-                        "Workflow's immutable Omnigent execution plan."
-                    ),
-                },
-            )
-    elif isinstance(candidate_plan_payload, Mapping):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "continuation_execution_plan_conflict",
-                "message": (
-                    "A linked continuation cannot introduce authored "
-                    "Omnigent execution-plan authority."
-                ),
-            },
-        )
-    if payload.instructions:
-        workflow_payload = initial_params.get("workflow")
-        if not isinstance(workflow_payload, dict):
-            workflow_payload = initial_params.get("task")
-        if isinstance(workflow_payload, dict):
-            workflow_payload["instructions"] = payload.instructions
-            initial_params["workflow"] = workflow_payload
-            initial_params.pop("task", None)
-        else:
-            initial_params.setdefault("workflow", {})["instructions"] = (
-                payload.instructions
-            )
-    initial_params["continuationSource"] = pinned
-
-    # Materialize the authorized selected source evidence into durable input
-    # attachments so the destination agent can actually read it. Storing the refs
-    # only under ``continuationSource`` is not enough — no runtime consumer reads
-    # that key, and the prepared-input boundary materializes only durable
-    # Temporal artifacts linked to the destination workflow. Attach them under the
-    # ``workflow`` payload's ``inputAttachments`` (the same shape the ordinary
-    # create path uses) and link them to the destination workflow after it is
-    # created (#3641 §6).
-    source_attachments = await _materialize_continuation_source_attachments(
-        session=session, user=user, refs=payload.selected_source_artifact_refs
-    )
-    if source_attachments:
-        workflow_payload = initial_params.get("workflow")
-        if not isinstance(workflow_payload, dict):
-            workflow_payload = {}
-        existing_attachments = workflow_payload.get("inputAttachments")
-        merged_attachments = (
-            list(existing_attachments)
-            if isinstance(existing_attachments, list)
-            else []
-        )
-        merged_attachments.extend(source_attachments)
-        workflow_payload["inputAttachments"] = merged_attachments
-        initial_params["workflow"] = workflow_payload
-        initial_params.pop("task", None)
-
     reserved_workflow_id = reservation.destination_workflow_id
     # Scope the ordinary create idempotency key to the same authority boundary as
     # the relationship reservation — (source_workflow_id, source_run_id,
@@ -17825,6 +17818,144 @@ async def continue_in_new_workflow(
             "idempotencyKey": payload.idempotency_key,
         }
     )
+    # The ordinary create may have committed the destination and started Temporal
+    # before its acknowledgement was lost. Reuse that admission before copying
+    # evidence again; the reserved record owns the inputs and their attachment IDs.
+    admitted = await session.get(TemporalExecutionCanonicalRecord, reserved_workflow_id)
+    if admitted is not None:
+        if (
+            admitted.create_idempotency_key != create_idempotency_key
+            or admitted.owner_id != str(canonical.owner_id or user.id)
+            or admitted.owner_type != canonical.owner_type
+            or admitted.workflow_type != canonical.workflow_type
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_destination_conflict",
+                    "message": "The reserved destination does not match this continuation admission.",
+                },
+            )
+        initial_params = dict(admitted.parameters or {})
+        source_attachments = list(
+            _workflow_payload_from_parameters(initial_params).get("inputAttachments")
+            or []
+        )
+    else:
+        # Author the destination through the ordinary create path. Inherit the
+        # source's authored choices (sanitized like a rerun), layer operator-authored
+        # overrides, then pin the source lineage so both Workflows present the linked
+        # relationship. Fresh authority (runtime/profile/credential/policy) is
+        # resolved by ``create_execution`` — nothing is silently inherited stale.
+        source_payload, source_task = (
+            await _snapshot_source_payload_from_parameters_and_artifact(
+                session=session,
+                user=user,
+                record=canonical,
+                parameters=canonical.parameters or {},
+            )
+        )
+        # The artifact can own instructions, steps, and top-level settings even
+        # when the retained parameters contain a partial task. Hydrate both layers
+        # before sanitizing rerun-only state and applying the new authored turn.
+        initial_params = service._full_rerun_parameters(
+            {
+                **(canonical.parameters or {}),
+                **{
+                    key: value
+                    for key, value in source_payload.items()
+                    if value not in (None, [], "")
+                },
+                "workflow": source_task,
+            }
+        )
+        initial_params.pop("task", None)
+        if payload.initial_parameters:
+            authored_workflow = _workflow_payload_from_parameters(
+                payload.initial_parameters
+            )
+            retained_workflow = _workflow_payload_from_parameters(initial_params)
+            initial_params.update(payload.initial_parameters)
+            initial_params["workflow"] = {**retained_workflow, **authored_workflow}
+        source_plan_payload = (canonical.parameters or {}).get("omnigentExecutionPlan")
+        candidate_plan_payload = initial_params.get("omnigentExecutionPlan")
+        if isinstance(source_plan_payload, Mapping):
+            try:
+                source_plan = OmnigentExecutionPlanBinding.model_validate(
+                    source_plan_payload
+                )
+                candidate_plan = OmnigentExecutionPlanBinding.model_validate(
+                    candidate_plan_payload
+                )
+            except ValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "continuation_execution_plan_conflict",
+                        "message": (
+                            "The linked continuation must reuse the source "
+                            "Workflow's immutable Omnigent execution plan."
+                        ),
+                    },
+                ) from exc
+            if candidate_plan != source_plan:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "continuation_execution_plan_conflict",
+                        "message": (
+                            "The linked continuation must reuse the source "
+                            "Workflow's immutable Omnigent execution plan."
+                        ),
+                    },
+                )
+        elif isinstance(candidate_plan_payload, Mapping):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_execution_plan_conflict",
+                    "message": (
+                        "A linked continuation cannot introduce authored "
+                        "Omnigent execution-plan authority."
+                    ),
+                },
+            )
+        # Canonicalize the retained task payload even when instructions are omitted.
+        # Copy before layering attachments/instructions so the source stays immutable.
+        initial_params["workflow"] = _workflow_payload_from_parameters(initial_params)
+        initial_params.pop("task", None)
+        if payload.instructions:
+            initial_params["workflow"]["instructions"] = payload.instructions
+        initial_params["continuationSource"] = pinned
+
+        # Materialize the authorized selected source evidence into durable input
+        # attachments so the destination agent can actually read it. Storing the refs
+        # only under ``continuationSource`` is not enough — no runtime consumer reads
+        # that key, and the prepared-input boundary materializes only durable
+        # Temporal artifacts linked to the destination workflow. Attach them under the
+        # ``workflow`` payload's ``inputAttachments`` (the same shape the ordinary
+        # create path uses) and link them to the destination workflow after it is
+        # created (#3641 §6).
+        source_attachments = await _materialize_continuation_source_attachments(
+            session=session,
+            user=user,
+            refs=payload.selected_source_artifact_refs,
+        )
+        if source_attachments:
+            workflow_payload = initial_params.get("workflow")
+            if not isinstance(workflow_payload, dict):
+                workflow_payload = {}
+            existing_attachments = workflow_payload.get("inputAttachments")
+            merged_attachments = (
+                list(existing_attachments)
+                if isinstance(existing_attachments, list)
+                else []
+            )
+            merged_attachments.extend(source_attachments)
+            workflow_payload["inputAttachments"] = merged_attachments
+            initial_params["workflow"] = workflow_payload
+            initial_params.pop("task", None)
+
     try:
         record = await service.create_execution(
             workflow_type=canonical.workflow_type.value,
@@ -17832,7 +17963,10 @@ async def continue_in_new_workflow(
             owner_type=canonical.owner_type.value if canonical.owner_type else "user",
             title=payload.title
             or (canonical.memo.get("title") if canonical.memo else None),
-            input_artifact_ref=canonical.input_ref,
+            # The ordinary parameter-backed compiler path owns the newly
+            # authored turn. The source input artifact would override these
+            # instructions and steps; retain it only as source/plan evidence.
+            input_artifact_ref=None,
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
@@ -17859,6 +17993,14 @@ async def continue_in_new_workflow(
             },
         ) from exc
 
+    if isinstance(record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)):
+        # Create may reconcile an earlier successful start whose acknowledgement
+        # was lost. Its recorded inputs own the snapshot and attachment links.
+        initial_params = dict(record.parameters or {})
+        source_attachments = list(
+            _workflow_payload_from_parameters(initial_params).get("inputAttachments")
+            or []
+        )
     await repository.finalize(
         reservation.record,
         destination_run_id=str(getattr(record, "run_id", "") or "").strip() or None,
@@ -17926,7 +18068,7 @@ async def continue_in_new_workflow(
             source_kind="linked_continuation",
             source_workflow_id=source.workflow_id,
             source_run_id=source_run_id,
-            input_artifact_ref=canonical.input_ref,
+            input_artifact_ref=None,
         )
     await session.commit()
 
@@ -18005,7 +18147,7 @@ async def list_execution_continuations(
             if exc.status_code == status.HTTP_404_NOT_FOUND:
                 return None
             raise
-        return str(getattr(execution, "status", "") or "") or None
+        return _enum_value(execution.state) or None
 
     items: list[LinkedContinuationSummaryModel] = []
     if direction == "outbound":
@@ -19242,16 +19384,12 @@ async def recover_execution_from_failed_step(
 ) -> RecoverFromFailedStepResponse:
     _reject_recovery_task_payload_edits(request, action="Recover from failed step")
 
-    await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
-    canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
-    if canonical is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "execution_not_found",
-                "message": "Source execution was not found or is not visible.",
-            },
-        )
+    source = await _get_owned_execution(
+        service=service, workflow_id=workflow_id, user=user
+    )
+    canonical = await _recovery_source_record(
+        source=source, service=service, session=session
+    )
     checkpoint_ref = request.recovery_checkpoint_ref or _recovery_checkpoint_ref_from_record(
         canonical
     )

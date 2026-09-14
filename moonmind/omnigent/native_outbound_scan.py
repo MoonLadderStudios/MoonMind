@@ -30,8 +30,6 @@ unit-tested in isolation and keeps one canonical native-scan contract.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -226,19 +224,15 @@ def canonical_payload_digest(body: Any) -> str:
     serialization (sorted keys, no incidental whitespace); a value that cannot be
     serialized deterministically yields a stable ``unserializable`` sentinel so
     the caller still fails closed rather than silently forwarding.
+
+    This is the native alias for
+    :func:`moonmind.security.outbound_scan.canonical_outbound_digest` so native
+    and non-native boundaries share one canonical construction.
     """
 
-    try:
-        serialized = json.dumps(
-            body,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-            default=str,
-        )
-    except (TypeError, ValueError):
-        serialized = "\x00unserializable"
-    return hashlib.sha256(serialized.encode("utf-8", "surrogatepass")).hexdigest()
+    from moonmind.security.outbound_scan import canonical_outbound_digest
+
+    return canonical_outbound_digest(body)
 
 
 def _collect_scannable(value: Any, *, prefix: str) -> list[OutboundBundleItem]:

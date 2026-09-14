@@ -24,6 +24,7 @@ from moonmind.schemas.temporal_activity_models import AgentRuntimeFetchResultInp
 from moonmind.workflows.provider_failures import ProviderFailureEvent
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import (
+    AGENT_RUN_PROGRESS_PATCH_ID,
     CODEX_TURN_RUNTIME_SELECTION_PATCH_ID,
     MoonMindAgentRun,
     TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID,
@@ -1456,6 +1457,14 @@ async def test_parent_child_state_signal_failure_is_logged_not_raised(
         lambda *_args, **_kwargs: _FailingParentHandle(),
     )
     monkeypatch.setattr(run, "_get_logger", lambda: _Logger())
+    # Exercise the legacy child_state_changed path: new histories route
+    # through the typed agent_run_progress projection with different
+    # diagnostics, so disable that patch for this legacy-failure test.
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id != AGENT_RUN_PROGRESS_PATCH_ID,
+    )
 
     await run._signal_parent_child_state_changed(
         parent_info,

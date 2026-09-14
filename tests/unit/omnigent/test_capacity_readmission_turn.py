@@ -30,7 +30,7 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
 # Importing fixtures registers them with pytest; session_factory needs _engine.
 from tests.unit.omnigent.test_canonical_turn_routing import (  # noqa: F401
     _engine,
-    session_factory,
+    session_factory as _session_factory_fixture,
 )
 from tests.unit.omnigent.test_generic_platform_production_services import (
     _exact_plan,
@@ -39,8 +39,12 @@ from tests.unit.omnigent.test_generic_platform_production_services import (
     _prime_attested_host_binding,
     _Artifacts,
     _DockerBackend,
+    _PUSHED_PUBLICATION,
 )
 
+
+# Register the imported pytest fixture under the name consumed by these tests.
+session_factory = _session_factory_fixture
 
 REPLAY = json.loads(
     (
@@ -89,19 +93,8 @@ def admitted_session_id(request):
     )
 
 
-async def replay_capacity_readmission(store, monkeypatch):
-    """Only external host/provider services are simulated; owners persist real state."""
-
-    harness = await _generic_publication_harness({})
-    harness.publish_request = harness.publish_request.model_copy(
-        update={
-            "parameters": {**harness.publish_request.parameters, "publishMode": "none"},
-        }
-    )
+def install_credential_ledger(harness, session_factory):
     realizer = harness.realizer
-    realizer._turn_commands = CanonicalTurnCommandService(store)
-    realizer._cleanup_authority = CanonicalCleanupAuthority(store)
-    plan = _plan("opencode-go/model")
     # Exercise the production credential ledger as well as canonical turn
     # ownership. A fake cleanup here hid reuse of the first epoch's tombstone.
     from moonmind.omnigent.credential_materializers import (
@@ -112,10 +105,13 @@ async def replay_capacity_readmission(store, monkeypatch):
 
     async def acquire_leases(**kwargs):
         harness.events.append("provider-acquired")
-        return (replace(
-            harness.acquired,
-            admission_epoch=kwargs["admitted_capacity"].admission_epoch,
-        ),)
+        return (
+            replace(
+                harness.acquired,
+                admission_epoch=kwargs["admitted_capacity"].admission_epoch,
+                admission_run_id=kwargs["admitted_capacity"].agent_run_run_id,
+            ),
+        )
 
     realizer._provider_leases.acquire_all = acquire_leases
 
@@ -141,11 +137,29 @@ async def replay_capacity_readmission(store, monkeypatch):
             return await super().run(argv, **kwargs)
 
     realizer._credentials = Credentials(
-        session_factory=store._session_factory,
+        session_factory=session_factory,
         secret_resolution_service=SimpleNamespace(resolve=resolve_secrets),
-        registry=build_default_credential_materializer_registry(backend=DockerBackend()),
+        registry=build_default_credential_materializer_registry(
+            backend=DockerBackend()
+        ),
         artifact_gateway=_Artifacts(),
     )
+
+
+async def replay_capacity_readmission(store, monkeypatch, *, reset=False):
+    """Only external host/provider services are simulated; owners persist real state."""
+
+    harness = await _generic_publication_harness({})
+    harness.publish_request = harness.publish_request.model_copy(
+        update={
+            "parameters": {**harness.publish_request.parameters, "publishMode": "none"},
+        }
+    )
+    realizer = harness.realizer
+    realizer._turn_commands = CanonicalTurnCommandService(store)
+    realizer._cleanup_authority = CanonicalCleanupAuthority(store)
+    plan = _plan("opencode-go/model")
+    install_credential_ledger(harness, store._session_factory)
     registry = OmnigentExecutionRealizerRegistry()
     registry.register(realizer)
 
@@ -193,6 +207,23 @@ async def replay_capacity_readmission(store, monkeypatch):
     # The same immutable input is re-admitted; only the workflow-owned epoch changes.
     monkeypatch.setattr(harness.host_leases, "acquire", acquire)
     second = admitted_request(harness.publish_request, plan, REPLAY["epochs"][1])
+    if reset:
+        # Parent reset records a new child request but reuses the child Workflow
+        # ID / provider lease owner. The child run starts its epoch at one again.
+        second = second.model_copy(
+            update={
+                "correlation_id": "reset-step",
+                "idempotency_key": "reset-request",
+            }
+        )
+        second = admitted_request(second, plan, 1)
+        second = second.model_copy(
+            update={
+                "admitted_provider_capacity": second.admitted_provider_capacity.model_copy(
+                    update={"agent_run_run_id": "reset-run"}
+                )
+            }
+        )
     result = await execute(second)
     assert result.failure_class is None
     assert result.metadata["omnigentSessionId"] == "session-1"
@@ -209,12 +240,12 @@ async def replay_capacity_readmission(store, monkeypatch):
     assert len(commands) == 1
     assert commands[0].provider_receipt_id == "session-1"
 
-    for epoch in REPLAY["epochs"]:
+    for attempt in (first, second):
         binding = await harness.runtime_store.get(
             stable_binding_id(
                 execution_plan_ref=plan.planRef,
-                idempotency_key=first.idempotency_key,
-                admission_epoch=epoch,
+                idempotency_key=attempt.idempotency_key,
+                admission_epoch=attempt.admitted_provider_capacity.admission_epoch,
             )
         )
         assert binding.state is RuntimeBindingState.cleaned
@@ -238,12 +269,65 @@ async def replay_capacity_readmission(store, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reset", [False, True])
 async def test_capacity_readmission_survives_completed_cleanup(
-    session_factory, monkeypatch
+    session_factory, monkeypatch, reset
 ):
     await replay_capacity_readmission(
-        OmnigentControlPlaneStore(session_factory), monkeypatch
+        OmnigentControlPlaneStore(session_factory), monkeypatch, reset=reset
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("epoch", "retained_epoch"), [(1, 0), (2, 0), (2, 2)])
+async def test_inflight_binding_retains_recorded_credential_authority(
+    session_factory, epoch, retained_epoch
+):
+    from moonmind.omnigent.credential_materializers import credential_runtime_identity
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    store = OmnigentControlPlaneStore(session_factory)
+    harness.realizer._turn_commands = CanonicalTurnCommandService(store)
+    harness.realizer._cleanup_authority = CanonicalCleanupAuthority(store)
+    plan = _plan("opencode-go/model")
+    request = admitted_request(harness.publish_request, plan, epoch)
+    slot = harness.acquired.slot
+    materializer = plan.payload.credentialBindings[slot].materializerRef
+    # A deployed worker may already have recorded either the original identity
+    # or the prior per-epoch format. It owns the exact same binding on redelivery.
+    legacy = replace(harness.acquired, admission_epoch=retained_epoch)
+    ref = credential_runtime_identity(legacy, materializer)[0]
+    await harness.runtime_store.create_initial(
+        execution_plan_ref=plan.planRef,
+        idempotency_key=request.idempotency_key,
+        provider_leases={
+            slot: {
+                **legacy.runtime_binding_value(credential_runtime_ref=ref),
+                "materializerRef": materializer,
+            }
+        },
+        admission_epoch=epoch,
+    )
+
+    async def acquire(**kwargs):
+        return (
+            replace(harness.acquired, admission_epoch=epoch, admission_run_id="run-1"),
+        )
+
+    harness.realizer._provider_leases.acquire_all = acquire
+    materialize = harness.realizer._credentials.materialize_all
+    seen = []
+
+    async def record_materialization(**kwargs):
+        seen.extend(
+            credential_runtime_identity(item, materializer)[0]
+            for item in kwargs["acquired_leases"]
+        )
+        return await materialize(**kwargs)
+
+    harness.realizer._credentials.materialize_all = record_materialization
+    await harness.realizer.execute(request, plan)
+    assert seen == [ref]
 
 
 @pytest.mark.parametrize("epoch", [None, 0, 1])

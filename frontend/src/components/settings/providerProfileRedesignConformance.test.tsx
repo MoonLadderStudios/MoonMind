@@ -460,7 +460,12 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
       expect(screen.getByLabelText('Runtime default')).toBeTruthy();
       expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(false);
 
-      fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+      // MoonLadderStudios/MoonMind#4002: the action agrees with the actual
+      // operation — guided continuations read "Create and connect".
+      const expectedAction =
+        creationClass.method === 'none' ? 'Create profile' : 'Create and connect';
+      expect(screen.getByRole('button', { name: expectedAction })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: expectedAction }));
       await waitFor(() =>
         expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toBe(true),
       );
@@ -498,7 +503,8 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
     const fetchSpy = creationFetch(creationClass, profileId);
     renderManager();
     await startStandardCreation(creationClass, profileId);
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
     const keyInput = screen.getByLabelText('Anthropic API key') as HTMLInputElement;
@@ -529,7 +535,8 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
     const fetchSpy = creationFetch(creationClass, profileId);
     renderManager();
     await startStandardCreation(creationClass, profileId);
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
     fireEvent.change(screen.getByLabelText('OpenCode API key'), {
@@ -560,7 +567,8 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
     await startStandardCreation(creationClass, profileId);
 
     expect(screen.queryByLabelText(/Volume/)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided OAuth continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() =>
       expect(fetchSpy.mock.calls.some(([url]) => url === '/api/v1/oauth-sessions')).toBe(true),
@@ -687,7 +695,8 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
     fireEvent.change(screen.getByLabelText('Provider API key (required)'), {
       target: { value: 'db://OPENAI_API_KEY' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: explicitly permitted manual creation.
+    fireEvent.click(screen.getByRole('button', { name: 'Save disabled profile' }));
 
     await waitFor(() =>
       expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toBe(true),
@@ -721,8 +730,11 @@ describe('MoonLadderStudios/MoonMind#3822 progressive disclosure and tier drafts
     fireEvent.click(toggle);
     expect(toggle.checked).toBe(false);
     expect(document.getElementById('provider-profile-advanced-region')).toBeNull();
-    // The collapsed summary comes from backend preset metadata.
-    expect(screen.getByText('Using recommended API key launch settings')).toBeTruthy();
+    // MoonLadderStudios/MoonMind#4002: the collapsed summary derives from
+    // actual draft-vs-baseline deviations, not capability presence.
+    expect(
+      screen.getByText('Custom advanced policy · 2 overrides: rate limiting, routing tags'),
+    ).toBeTruthy();
 
     fireEvent.click(toggle);
     expect((screen.getByLabelText('Cooldown after 429 (seconds)') as HTMLInputElement).value).toBe('900');
@@ -764,7 +776,8 @@ describe('MoonLadderStudios/MoonMind#3822 progressive disclosure and tier drafts
     await startStandardCreation(creationClass, 'conformance-hidden-error');
     expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(false);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() =>
       expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true),
@@ -828,7 +841,8 @@ describe('MoonLadderStudios/MoonMind#3822 progressive disclosure and tier drafts
     expect(toggle.checked).toBe(false);
     expect(document.getElementById('provider-profile-advanced-region')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() =>
       expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true),
@@ -874,7 +888,8 @@ describe('MoonLadderStudios/MoonMind#3822 progressive disclosure and tier drafts
 
     renderManager();
     await startStandardCreation(creationClass, 'conformance-clear-env');
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() =>
       expect((screen.getByLabelText('Show advanced options') as HTMLInputElement).checked).toBe(true),
@@ -931,7 +946,8 @@ describe('MoonLadderStudios/MoonMind#3822 progressive disclosure and tier drafts
     fireEvent.change(screen.getByLabelText('Tier 2 model'), { target: { value: 'gpt-4o' } });
     fireEvent.change(screen.getByLabelText('Tier 2 effort'), { target: { value: 'high' } });
     fireEvent.click(screen.getByRole('radio', { name: 'Use Tier 2 as default' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Create profile' }));
+    // MoonLadderStudios/MoonMind#4002: guided continuation.
+    fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
     await waitFor(() =>
       expect(fetchSpy.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toBe(true),

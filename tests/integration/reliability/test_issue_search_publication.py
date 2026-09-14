@@ -154,9 +154,13 @@ async def test_search_publication_recovers_missing_pr_before_status(
     )
     seeds = tmp_path / "seeds"
     seeds.mkdir()
-    shutil.copy(
-        Path("api_service/data/presets/github-issue-search-and-implement.yaml"), seeds
-    )
+    preset_dir = Path("api_service/data/presets")
+    for filename in (
+        "github-issue-search-and-implement.yaml",
+        "issue-implement-assessment.yaml",
+        "issue-implement-work-pr.yaml",
+    ):
+        shutil.copy(preset_dir / filename, seeds / filename)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/catalog.db")
     try:
         async with engine.begin() as connection:

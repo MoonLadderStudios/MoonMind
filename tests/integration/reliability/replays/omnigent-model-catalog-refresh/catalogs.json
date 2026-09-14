@@ -1,0 +1,5 @@
+{
+  "bundled": "opencode/big-pickle\nopencode-go/glm-5.2\nopencode-go/minimax-m3\n",
+  "refreshed": "opencode/big-pickle\nopencode-go/glm-5.2\nopencode-go/muse-spark-1.3-contributor\n",
+  "stderr": "\u001b[92m\u001b[1mModels cache refreshed\u001b[0m\n"
+}

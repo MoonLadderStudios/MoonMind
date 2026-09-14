@@ -298,7 +298,11 @@ async def test_a_grant_without_a_lease_id_is_rejected() -> None:
 class _LeaseRow:
     """A minimal stand-in for a ProviderProfileSlotLease ORM row."""
 
+    _next_id = 1
+
     def __init__(self, **fields: Any) -> None:
+        self.id = fields.get("id", _LeaseRow._next_id)
+        _LeaseRow._next_id += 1
         self.runtime_id = fields.get("runtime_id", "opencode")
         self.workflow_id = fields.get("workflow_id", "agent-run-3")
         self.profile_id = fields.get("profile_id", "opencode-zen-free")
@@ -386,7 +390,16 @@ class _LeaseTableRecorder(_Recorder):
                 ),
                 None,
             )
+            # A targeted ``id IN`` delete only reaps the rows the caller
+            # partitioned as safe; an emulated bulk delete must honor it.
+            id_allowlist: set[Any] | None = None
+            for value in params.values():
+                if isinstance(value, (list, tuple, set)):
+                    id_allowlist = {item for item in value}
+                    break
             for lease_id, row in list(recorder.table.items()):
+                if id_allowlist is not None and row.id not in id_allowlist:
+                    continue
                 if row.lease_state != "released" or row.released_at is None:
                     continue
                 released_at = row.released_at
@@ -517,6 +530,109 @@ async def test_a_release_tombstones_instead_of_deleting() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_verified_release_completes_only_requested_cleanup() -> None:
+    """MoonLadderStudios/MoonMind#1089: the ledger enforces cleanup ordering.
+
+    ``release_verified`` frees only a row already in the capacity-consuming
+    ``cleanup_requested`` state, quoting the acquired fence, with positive
+    teardown evidence. A held row, a stale fence, or missing evidence keeps
+    the slot spent; a missing row reconciles as already released without
+    claiming anything about physical teardown.
+    """
+
+    evidence = {"consumer_stopped": True, "verified_by": "runtime-janitor"}
+
+    held = await _run_table_action(
+        "release_verified",
+        [
+            {
+                "lease_id": "agent-run-3",
+                "profile_id": "opencode-zen-free",
+                "fencing_generation": 5,
+                "reason": "cleanup_verified",
+                "teardown_evidence": evidence,
+            }
+        ],
+        [_LeaseRow(fencing_generation=5)],
+    )
+    assert held.result["outcome"] == "conflict"
+    assert held.result["error"] == "cleanup not requested"
+    assert held.table["agent-run-3"].lease_state == "held"
+
+    no_evidence = await _run_table_action(
+        "release_verified",
+        [
+            {
+                "lease_id": "agent-run-3",
+                "profile_id": "opencode-zen-free",
+                "fencing_generation": 5,
+                "reason": "cleanup_verified",
+                "teardown_evidence": {"verified_by": "runtime-janitor"},
+            }
+        ],
+        [_LeaseRow(fencing_generation=5, lease_state="cleanup_requested")],
+    )
+    assert no_evidence.result["outcome"] == "conflict"
+    assert no_evidence.table["agent-run-3"].lease_state == "cleanup_requested"
+
+    stale = await _run_table_action(
+        "release_verified",
+        [
+            {
+                "lease_id": "agent-run-3",
+                "profile_id": "opencode-zen-free",
+                "fencing_generation": 4,
+                "reason": "cleanup_verified",
+                "teardown_evidence": evidence,
+            }
+        ],
+        [_LeaseRow(fencing_generation=5, lease_state="cleanup_requested")],
+    )
+    assert stale.result["outcome"] == "stale"
+    assert stale.table["agent-run-3"].lease_state == "cleanup_requested"
+
+    verified = await _run_table_action(
+        "release_verified",
+        [
+            {
+                "lease_id": "agent-run-3",
+                "profile_id": "opencode-zen-free",
+                "fencing_generation": 5,
+                "reason": "cleanup_verified",
+                "teardown_evidence": evidence,
+            }
+        ],
+        [
+            _LeaseRow(
+                fencing_generation=5,
+                lease_state="cleanup_requested",
+                safe_metadata_json={"cleanupReason": "owner_terminal"},
+            )
+        ],
+    )
+    assert verified.result == {"released": True, "outcome": "released"}
+    row = verified.table["agent-run-3"]
+    assert row.lease_state == "released"
+    assert row.safe_metadata_json["cleanupVerified"] is True
+    assert row.safe_metadata_json["verifiedBy"] == "runtime-janitor"
+
+    missing = await _run_table_action(
+        "release_verified",
+        [
+            {
+                "lease_id": "agent-run-3",
+                "profile_id": "opencode-zen-free",
+                "fencing_generation": 5,
+                "reason": "cleanup_verified",
+                "teardown_evidence": evidence,
+            }
+        ],
+        [],
+    )
+    assert missing.result["outcome"] == "already_released"
+
+
+@pytest.mark.asyncio
 async def test_load_excludes_tombstones_but_reports_the_high_water_mark() -> None:
     """A fresh manager resumes above every issued generation, live or not."""
 
@@ -600,8 +716,67 @@ async def test_purge_reaps_only_tombstones_past_the_horizon() -> None:
         ],
     )
 
-    assert recorder.result == {"purged": 1}
+    assert recorder.result == {"purged": 1, "retained_unresolved_cleanup": 0}
     assert sorted(recorder.table) == ["fresh", "held"]
-    purge_text = str(recorder.statements[0])
-    assert "lease_state" in purge_text
-    assert "released" in list(recorder.statements[0].compile().params.values())
+    deletes = _delete_targets(recorder)
+    assert len(deletes) == 1
+    purge_text = deletes[0]
+    # The reap itself is id-targeted: horizon/state narrowing happens in the
+    # candidate SELECT plus the retention partition, never in a broad delete.
+    assert "id IN" in purge_text
+    selects = [
+        str(statement)
+        for statement in recorder.statements
+        if str(statement).lstrip().upper().startswith("SELECT")
+    ]
+    assert selects and "lease_state" in selects[0]
+
+
+@pytest.mark.asyncio
+async def test_purge_retains_tombstones_with_unresolved_cleanup() -> None:
+    """MoonLadderStudios/MoonMind#1089: retention cannot discard obligations.
+
+    A release tombstone that records an owed cleanup without a verified
+    teardown is the only remaining evidence of an unresolved
+    physical-cleanup obligation. Ordinary retention must not purge it — a
+    missing row is never proof that a consumer stopped.
+    """
+
+    now = datetime.now(timezone.utc)
+    recorder = await _run_table_action(
+        "purge_released",
+        [{"older_than_seconds": 30 * 24 * 3600}],
+        [
+            _LeaseRow(
+                lease_id="ancient",
+                fencing_generation=3,
+                lease_state="released",
+                released_at=now - timedelta(days=40),
+            ),
+            _LeaseRow(
+                lease_id="unresolved",
+                fencing_generation=4,
+                lease_state="released",
+                released_at=now - timedelta(days=40),
+                safe_metadata_json={
+                    "releaseReason": "owner_terminal",
+                    "cleanupRequested": True,
+                },
+            ),
+            _LeaseRow(
+                lease_id="verified",
+                fencing_generation=5,
+                lease_state="released",
+                released_at=now - timedelta(days=40),
+                safe_metadata_json={
+                    "releaseReason": "cleanup_verified",
+                    "cleanupRequested": True,
+                    "cleanupVerified": True,
+                },
+            ),
+        ],
+    )
+
+    assert recorder.result == {"purged": 2, "retained_unresolved_cleanup": 1}
+    assert sorted(recorder.table) == ["unresolved"]
+    assert sorted(recorder.deleted) == ["ancient", "verified"]

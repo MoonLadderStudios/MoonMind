@@ -1,0 +1,32 @@
+{
+  "sourceWorkflowId": "mm:68d074f1-1e17-401d-8f03-1818f38ad17f-2026-09-13T20:00:00Z",
+  "defects": [
+    "terminal ORM state was read through a nonexistent status field",
+    "scheduled execution had no API source row and only compact projection parameters",
+    "source input artifact overrode newly authored continuation instructions and steps",
+    "workflow payload attachments were omitted from the child request",
+    "reset reused epoch one under the same capacity owner and collided with a cleaned credential lifecycle"
+  ],
+  "originalInput": {
+    "task": {
+      "instructions": "Retained source intent",
+      "runtime": {"mode": "omnigent"}
+    }
+  },
+  "continuationSteps": [
+    {"id": "repair", "instructions": "Repair only the saved candidate"},
+    {"id": "verify", "instructions": "Verify the repaired candidate"}
+  ],
+  "requiredJourneys": [
+    "test_scheduled_continuation_journey.py",
+    "test_interrupted_host_admission_journey.py"
+  ],
+  "preservedAuthority": [
+    "source run and owner",
+    "immutable execution plan and task snapshot",
+    "model and effort",
+    "saved workspace",
+    "step-scoped evidence",
+    "capacity lease owner and cleanup fences"
+  ]
+}

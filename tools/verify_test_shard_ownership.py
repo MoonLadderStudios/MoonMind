@@ -91,7 +91,9 @@ def owners(node: CollectedNode) -> set[str]:
     ):
         result.add("temporal-boundary")
     if (
-        node.path.startswith("tests/integration/reliability/")
+        node.path.startswith(
+            ("tests/integration/reliability/", "tests/integration/resource_allocation/")
+        )
         and "reliability_journey" in markers
     ):
         result.add("reliability-journey-checkpoint-resume")
