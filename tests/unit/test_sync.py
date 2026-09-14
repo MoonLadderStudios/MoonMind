@@ -1936,7 +1936,9 @@ async def test_api_shaped_canonical_patch_accepts_scheduled_for_and_rejects_move
             stored_canonical = await session.get(
                 TemporalExecutionCanonicalRecord, "mm:api-canonical-patch"
             )
-            assert _as_utc(stored_canonical.scheduled_for) == scheduled_at
+            # scheduled_for lives on the projection row only; the canonical
+            # table has no such column, so it must not gain the hint.
+            assert not hasattr(stored_canonical, "scheduled_for")
             assert stored_canonical.memo["omnigent_execution_plan_ref"] == "plan-1"
 
             # Rejection paths: each moves a protected field or rewrites an
