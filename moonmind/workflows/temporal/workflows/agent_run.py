@@ -3591,6 +3591,10 @@ class MoonMindAgentRun:
             "purpose": "execution_direct",
             "metadata": {
                 "workflowId": workflow.info().workflow_id,
+                # MoonLadderStudios/MoonMind#1089: bind liveness to the exact
+                # admitted run; the logical workflow ID alone is insufficient
+                # across replacement runs, reset, or Continue-As-New.
+                "runId": workflow.info().run_id,
                 "ownerIsWorkflow": True,
                 # MoonLadderStudios/MoonMind#3880: compact, non-secret fence
                 # identity the manager persists with the grant so the execution
@@ -6489,6 +6493,7 @@ class MoonMindAgentRun:
                             "purpose": "execution_direct",
                             "metadata": {
                                 "workflowId": wf_id,
+                                "runId": workflow.info().run_id,
                                 "ownerIsWorkflow": True,
                             },
                         }

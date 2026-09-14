@@ -284,6 +284,25 @@ class ProviderProfileLeaseClient:
         # workflow-context ExternalWorkflowHandle cannot execute Updates; in
         # that case the stable owner really is the delegating workflow ID.
         safe_metadata["ownerIsWorkflow"] = owner_is_workflow
+        if not str(safe_metadata.get("runId") or "").strip():
+            # MoonLadderStudios/MoonMind#1089: bind activity-owned grants to
+            # the exact owning run when the acquisition runs inside a Temporal
+            # Activity; the logical workflow ID alone is insufficient across
+            # replacement runs, reset, or Continue-As-New. Outside an activity
+            # (or when the run is unknown) the hint stays absent and the
+            # manager treats a missing hint as reconciliation-needed, never as
+            # proof of no process.
+            try:
+                from temporalio import activity as _temporal_activity
+
+                _info = _temporal_activity.info()
+                _run_id = str(
+                    getattr(_info, "workflow_run_id", "") or ""
+                ).strip()
+            except Exception:
+                _run_id = ""
+            if _run_id:
+                safe_metadata["runId"] = _run_id
         result = await self._update_manager(
             runtime_id,
             (

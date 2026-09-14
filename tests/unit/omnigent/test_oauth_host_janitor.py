@@ -1114,3 +1114,63 @@ async def test_drain_completes_owned_claim_and_leaves_foreign_claims() -> None:
     # AgentRun, realizer, or operator, never invented as teardown.
     assert all(a["providerLeaseId"] != "provider-lease-foreign" for a in result["actions"])
     assert foreign_id != owned.lease_id
+
+
+@pytest.mark.asyncio
+async def test_proactive_release_without_fenced_claim_leaves_slot_owed() -> None:
+    """No fenced obligation means no verified signal and no false release."""
+
+    lease = _drain_lease()
+    repository = _Repository(lease)
+    runtime = _Runtime()
+    lease_client = _VerifiedLeaseClient({"codex_cli": []})
+
+    janitor = OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        lease_client=lease_client,
+    )
+    binding = await repository.validate_binding("binding-1")
+    assert await janitor._release_provider_lease(binding=binding, lease=lease) is False
+    assert lease_client.verified == []
+
+
+@pytest.mark.asyncio
+async def test_drain_without_usable_fence_fails_claim_without_false_release() -> None:
+    """A fenceless claim stops its host but never reports an unconfirmed release."""
+
+    owned = _drain_lease(provider_lease_id="provider-lease-1")
+    repository = _Repository(owned)
+    runtime = _Runtime()
+    lease_client = _VerifiedLeaseClient()
+    janitor = OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        lease_client=lease_client,
+    )
+    claims = [
+        {
+            "lease_id": "provider-lease-1",
+            "profile_id": "profile-1",
+            "fencing_generation": 0,
+            "claim_id": "provider-lease-1:0",
+            "reason": "owner_terminal",
+            "runId": "run-admitted-1",
+            "evidenceIdentity": "evidence-admitted-1",
+            "attempt": 0,
+        },
+    ]
+
+    result = await janitor.drain_manager_cleanup_claims("codex_cli", claims)
+
+    assert lease_client.verified == []
+    failed = [a for a in result["actions"] if a["action"] == "cleanup_claim_failed"]
+    assert len(failed) == 1
+    assert failed[0]["errorCode"] == "cleanup_not_verified"
+    assert all(
+        a["action"] != "cleanup_claim_completed_verified"
+        for a in result["actions"]
+    )
+    assert owned.status == "stopped"
