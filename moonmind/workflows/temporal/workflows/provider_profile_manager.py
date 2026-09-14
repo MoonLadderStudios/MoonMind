@@ -1073,6 +1073,11 @@ class MoonMindProviderProfileManagerWorkflow:
             source = {}
         allowed = {
             "workflowId",
+            # MoonLadderStudios/MoonMind#1089: the admitted run ID binds a
+            # liveness observation to the exact run this lease authorized.
+            # The logical workflow ID alone is insufficient across
+            # replacement runs, reset, or Continue-As-New.
+            "runId",
             "stepExecutionId",
             "oauthSessionId",
             "idempotencyKey",
@@ -1346,6 +1351,184 @@ class MoonMindProviderProfileManagerWorkflow:
             )
         return outcome
 
+    @workflow.signal
+    async def report_cleanup_verified(self, payload: dict[str, Any]) -> None:
+        """Release a cleanup-requested slot after verified consumer teardown.
+
+        MoonLadderStudios/MoonMind#1089: the designated cleanup owner — the
+        existing AgentRun, runtime realizer, or janitor that performed the
+        teardown, never a new cleanup engine — confirms the exact admitted
+        consumer stopped. Only this signal (besides the owner's own
+        ``release_slot``) may free a slot whose cleanup was requested. A
+        terminal workflow, a NOT_FOUND lookup, a database tombstone, an
+        accepted cancellation, or a lease timeout is not teardown evidence
+        and never reaches the ledger through this path.
+        """
+
+        self._event_count += 1
+        self._has_new_events = True
+        lease_id = self._normalize_optional_string(
+            payload.get("lease_id") or payload.get("requester_workflow_id")
+        )
+        profile_id = self._normalize_optional_string(payload.get("profile_id"))
+        if not lease_id or not profile_id:
+            self._get_logger().warning(
+                "Ignoring a cleanup-verified report without lease and profile identity"
+            )
+            return
+        profile = self._profiles.get(profile_id)
+        if profile is None or lease_id not in profile.current_leases:
+            # Idempotent redelivery for a slot that already came back, or a
+            # report for unknown authority. Either way there is nothing to
+            # free here; a late report must never touch a replacement holder.
+            self._get_logger().warning(
+                "Ignoring a cleanup-verified report for unknown or already "
+                "released lease %s on profile %s",
+                lease_id,
+                profile_id,
+            )
+            return
+        raw_fence = payload.get("fencing_generation")
+        try:
+            claimed_fence = int(raw_fence) if raw_fence is not None else 0
+        except (TypeError, ValueError):
+            self._get_logger().warning(
+                "Ignoring a cleanup-verified report for lease %s on profile "
+                "%s; it carries a malformed grant generation",
+                lease_id,
+                profile_id,
+            )
+            return
+        held_fence = profile.lease_fencing_generation(lease_id)
+        if held_fence and claimed_fence != held_fence:
+            # A delayed report for a superseded generation must not free the
+            # replacement holder's authority.
+            self._get_logger().warning(
+                "Ignoring a stale cleanup-verified report for lease %s on "
+                "profile %s; it names generation %s but %s is held",
+                lease_id,
+                profile_id,
+                claimed_fence,
+                held_fence,
+            )
+            return
+        evidence = payload.get("teardown_evidence")
+        evidence = dict(evidence) if isinstance(evidence, dict) else {}
+        if evidence.get("consumer_stopped") is not True:
+            self._get_logger().warning(
+                "Ignoring a cleanup-verified report for lease %s on profile "
+                "%s without positive teardown evidence",
+                lease_id,
+                profile_id,
+            )
+            return
+        admitted = profile.lease_metadata.get(lease_id) or {}
+        for admitted_key, evidence_key in (
+            ("evidenceIdentity", "evidence_identity"),
+            ("runId", "run_id"),
+        ):
+            admitted_value = admitted.get(admitted_key)
+            if admitted_value is None or admitted_value == "":
+                continue
+            if str(evidence.get(evidence_key) or "") != str(admitted_value):
+                self._get_logger().warning(
+                    "Ignoring a cleanup-verified report for lease %s on "
+                    "profile %s; its %s does not match the admitted consumer",
+                    lease_id,
+                    profile_id,
+                    evidence_key,
+                )
+                return
+        await self._release_verified_cleanup(
+            lease_id,
+            profile_id=profile_id,
+            fencing_generation=held_fence or claimed_fence,
+            teardown_evidence=evidence,
+        )
+
+    async def _release_verified_cleanup(
+        self,
+        lease_id: str,
+        *,
+        profile_id: str,
+        fencing_generation: int,
+        teardown_evidence: dict[str, Any],
+        _reason: str = "cleanup_verified",
+    ) -> str:
+        """Free a cleanup-requested slot from positive teardown evidence.
+
+        The ledger only releases rows already in the capacity-consuming
+        ``cleanup_requested`` state, quoting the acquired fence. A stale or
+        failed release keeps the slot spent and becomes a retryable
+        obligation or reconciliation evidence — it never frees replacement
+        authority.
+        """
+
+        try:
+            result = await workflow.execute_activity(
+                "provider_profile.sync_slot_leases",
+                {
+                    "runtime_id": self._runtime_id,
+                    "leases": [
+                        {
+                            "lease_id": lease_id,
+                            "profile_id": profile_id,
+                            "fencing_generation": int(fencing_generation or 0),
+                            "reason": _reason,
+                            "teardown_evidence": dict(teardown_evidence),
+                        }
+                    ],
+                    "action": "release_verified",
+                },
+                task_queue=ACTIVITY_TASK_QUEUE,
+                start_to_close_timeout=timedelta(seconds=10),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=1),
+                    backoff_coefficient=2.0,
+                    maximum_interval=timedelta(seconds=10),
+                    maximum_attempts=3,
+                ),
+            )
+        except Exception:
+            self._get_logger().warning(
+                "Failed to release verified lease %s from DB", lease_id
+            )
+            outcome = LeaseTransitionOutcome.RETRYABLE.value
+            self._record_unresolved_release(
+                lease_id,
+                profile_id=profile_id,
+                fencing_generation=int(fencing_generation or 0),
+                outcome=outcome,
+                kind="verified_cleanup",
+                teardown_evidence=dict(teardown_evidence),
+            )
+            return outcome
+        outcome = self._release_outcome(result, lease_id)
+        if outcome not in RELEASING_LEASE_OUTCOMES:
+            self._record_unresolved_release(
+                lease_id,
+                profile_id=profile_id,
+                fencing_generation=int(fencing_generation or 0),
+                outcome=outcome,
+                kind="verified_cleanup",
+                teardown_evidence=dict(teardown_evidence),
+            )
+            return outcome
+        self._unresolved_releases.pop(lease_id, None)
+        self._cleanup_requested_leases.discard(lease_id)
+        # Re-resolve: an awaited activity can be interleaved with a profile
+        # refresh that replaced the object this handler started with.
+        profile = self._profiles.get(profile_id)
+        if profile is not None and profile.release(lease_id):
+            self._unindex_lease(lease_id)
+            self._has_new_events = True
+            self._get_logger().warning(
+                "Released slot for profile %s after verified teardown of %s",
+                profile_id,
+                lease_id,
+            )
+        return outcome
+
     def _record_unresolved_release(
         self,
         lease_id: str,
@@ -1353,6 +1536,8 @@ class MoonMindProviderProfileManagerWorkflow:
         profile_id: str,
         fencing_generation: int,
         outcome: str,
+        kind: str = "owner_release",
+        teardown_evidence: dict[str, Any] | None = None,
     ) -> None:
         """Keep the slot spent and classify why the release did not resolve.
 
@@ -1364,12 +1549,16 @@ class MoonMindProviderProfileManagerWorkflow:
         """
 
         retryable = outcome == LeaseTransitionOutcome.RETRYABLE.value
-        self._unresolved_releases[lease_id] = {
+        entry: dict[str, Any] = {
             "profile_id": profile_id,
             "fencing_generation": fencing_generation,
             "outcome": outcome,
             "retryable": retryable,
+            "kind": kind,
         }
+        if teardown_evidence is not None:
+            entry["teardown_evidence"] = dict(teardown_evidence)
+        self._unresolved_releases[lease_id] = entry
         if not retryable:
             self._record_lease_index_conflict(
                 "unresolved_release",
@@ -1393,6 +1582,39 @@ class MoonMindProviderProfileManagerWorkflow:
         for requester_id in sorted(self._unresolved_releases):
             pending = self._unresolved_releases.get(requester_id)
             if pending is None or not pending.get("retryable", True):
+                continue
+            if pending.get("kind") == "verified_cleanup":
+                # A verified-teardown release retries through the same
+                # cleanup-gated ledger transition with its original evidence:
+                # re-driving it as an owner release would bypass the
+                # cleanup-requested precondition.
+                outcome = await self._release_verified_cleanup(
+                    requester_id,
+                    profile_id=str(pending.get("profile_id") or ""),
+                    fencing_generation=int(pending.get("fencing_generation") or 0),
+                    teardown_evidence=dict(pending.get("teardown_evidence") or {}),
+                    _reason="cleanup_verified_retry",
+                )
+                if outcome not in RELEASING_LEASE_OUTCOMES:
+                    self._record_unresolved_release(
+                        requester_id,
+                        profile_id=str(pending.get("profile_id") or ""),
+                        fencing_generation=int(
+                            pending.get("fencing_generation") or 0
+                        ),
+                        outcome=outcome,
+                        kind="verified_cleanup",
+                        teardown_evidence=dict(
+                            pending.get("teardown_evidence") or {}
+                        ),
+                    )
+                    continue
+                self._unresolved_releases.pop(requester_id, None)
+                self._cleanup_requested_leases.discard(requester_id)
+                profile = self._profiles.get(str(pending.get("profile_id") or ""))
+                if profile and profile.release(requester_id):
+                    self._unindex_lease(requester_id)
+                    self._has_new_events = True
                 continue
             outcome = await self._remove_lease_from_db(
                 requester_id,
@@ -2805,6 +3027,16 @@ class MoonMindProviderProfileManagerWorkflow:
                         or LeaseTransitionOutcome.RETRYABLE.value
                     ),
                     "retryable": details.get("retryable", True) is not False,
+                    # MoonLadderStudios/MoonMind#1089: a verified-teardown
+                    # release retries through the cleanup-gated transition
+                    # with its original evidence, so the successor inherits
+                    # both the kind and the evidence it was admitted with.
+                    "kind": str(details.get("kind") or "owner_release"),
+                    **(
+                        {"teardown_evidence": dict(details["teardown_evidence"])}
+                        if isinstance(details.get("teardown_evidence"), dict)
+                        else {}
+                    ),
                 }
 
         cleanup = input_payload.get("cleanup_requested_leases")
@@ -4109,10 +4341,41 @@ class MoonMindProviderProfileManagerWorkflow:
             dict.fromkeys(req.requester_workflow_id for req in self._pending_requests)
         )
 
+    def _lease_holder_run_hints(self) -> dict[str, str]:
+        """Return admitted run IDs keyed by observed workflow ID, where known.
+
+        MoonLadderStudios/MoonMind#1089: a liveness observation must bind to
+        the exact run the lease authorized. Leases admitted before the run ID
+        was recorded carry no hint; a missing hint is reconciliation-needed,
+        never proof of no process.
+        """
+
+        hints: dict[str, str] = {}
+        for profile in self._profiles.values():
+            for lease_id in profile.current_leases:
+                metadata = profile.lease_metadata.get(lease_id) or {}
+                run_id = str(metadata.get("runId") or "").strip()
+                if not run_id:
+                    continue
+                owner_workflow_id = (
+                    str(metadata.get("workflowId") or "").strip() or lease_id
+                )
+                hints.setdefault(owner_workflow_id, run_id)
+        return hints
+
     async def _verify_workflow_statuses(
-        self, workflow_ids: list[str]
+        self,
+        workflow_ids: list[str],
+        run_hints: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]] | None:
-        """Fetch workflow running status in bounded batches."""
+        """Fetch workflow running status in bounded batches.
+
+        MoonLadderStudios/MoonMind#1089: where the admitted lease recorded its
+        run ID, the observation is bound to that exact run. A terminal
+        workflow, a NOT_FOUND lookup, or an unknown consumer state only ever
+        justifies a cleanup request while the slot stays spent; none of them
+        proves the external consumer stopped.
+        """
         unique_workflow_ids = list(dict.fromkeys(workflow_ids))
         if not unique_workflow_ids:
             return {}
@@ -4126,10 +4389,18 @@ class MoonMindProviderProfileManagerWorkflow:
             batch = unique_workflow_ids[
                 start : start + _VERIFY_WORKFLOW_STATUS_BATCH_SIZE
             ]
+            batch_hints = {
+                wf_id: (run_hints or {}).get(wf_id)
+                for wf_id in batch
+                if (run_hints or {}).get(wf_id)
+            }
             try:
+                payload: dict[str, Any] = {"workflow_ids": batch}
+                if batch_hints:
+                    payload["run_ids"] = batch_hints
                 result = await workflow.execute_activity(
                     "provider_profile.verify_lease_holders",
-                    {"workflow_ids": batch},
+                    payload,
                     task_queue=ACTIVITY_TASK_QUEUE,
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=RetryPolicy(
@@ -4153,7 +4424,14 @@ class MoonMindProviderProfileManagerWorkflow:
         *,
         include_activity_owned: bool = False,
     ) -> list[tuple[str, str, str]]:
-        """Return ``(profile_id, lease_id, status)`` for terminal-owner leases."""
+        """Return ``(profile_id, lease_id, status)`` for cleanup-request leases.
+
+        MoonLadderStudios/MoonMind#1089: a terminal owner workflow, a NOT_FOUND
+        lookup, or an unknown consumer state is a reason to *request* resource
+        cleanup while the slot stays spent — never evidence that the
+        credential consumer stopped. Neither a closed workflow nor a missing
+        Temporal record retracts a token from a still-running process.
+        """
 
         candidates: list[tuple[str, str, str]] = []
         for profile in list(self._profiles.values()):
@@ -4177,19 +4455,44 @@ class MoonMindProviderProfileManagerWorkflow:
                     )
         return candidates
 
+    @staticmethod
+    def _lease_consumer_class(profile: ProfileSlotState, lease_id: str) -> str:
+        """Classify what kind of consumer one lease authorizes.
+
+        MoonLadderStudios/MoonMind#1089: the logical workflow ID alone is
+        insufficient across replacement runs, reset, or Continue-As-New. An
+        unconsumed reservation (no external consumer was ever created) is
+        distinct from a host-attached consumer, and a lease with no
+        verifiable owner is reconciliation-needed — never proof of no
+        process.
+        """
+
+        metadata = profile.lease_metadata.get(lease_id) or {}
+        owner_is_workflow = metadata.get("ownerIsWorkflow")
+        workflow_id = str(metadata.get("workflowId") or "").strip()
+        if owner_is_workflow is False and not workflow_id:
+            return "unverifiable"
+        if owner_is_workflow is False:
+            return "activity_owned"
+        if not workflow_id:
+            return "reservation"
+        return "workflow_owned"
+
     async def _reclaim_terminal_leases_durably(
         self,
         workflow_statuses: dict[str, dict[str, Any]],
         *,
         include_activity_owned: bool = False,
     ) -> None:
-        """Release each terminal-owner lease through the persistence owner.
+        """Request cleanup for each terminal-owner lease; never release it.
 
         MoonLadderStudios/MoonMind#3883: reclamation used to rewrite the whole
         runtime snapshot, which let a retained writer replace unrelated rows.
-        Each lease now costs one fenced row transition, and the tombstone
-        records that resource cleanup is owed for it
-        (MoonLadderStudios/MoonMind#1089).
+        MoonLadderStudios/MoonMind#1089: terminal workflow state — including
+        NOT_FOUND — is not proof that the exact runtime consumer stopped, so
+        this path costs one fenced ``request_cleanup`` transition per lease
+        and keeps the slot spent. Only positive teardown evidence delivered
+        through :meth:`report_cleanup_verified` may release it.
         """
 
         for profile_id, lease_id, status in self._terminal_lease_candidates(
@@ -4198,33 +4501,48 @@ class MoonMindProviderProfileManagerWorkflow:
             profile = self._profiles.get(profile_id)
             if profile is None:
                 continue
-            outcome = await self._remove_lease_from_db(
+            consumer_class = self._lease_consumer_class(profile, lease_id)
+            # Note: an "unverifiable" lease (non-workflow owner with no
+            # owning workflow) never appears here: with no workflow to
+            # observe there is no liveness to classify, so
+            # ``_terminal_lease_candidates`` skips it and the expiry path
+            # names it ``cleanup_owner_unverifiable`` instead.
+            outcome = await self._request_lease_cleanup(
                 lease_id,
-                fencing_generation=profile.lease_fencing_generation(lease_id),
                 profile_id=profile_id,
+                fencing_generation=profile.lease_fencing_generation(lease_id),
                 reason="owner_terminal",
-                cleanup_requested=True,
             )
-            if outcome not in RELEASING_LEASE_OUTCOMES:
-                self._record_unresolved_release(
-                    lease_id,
-                    profile_id=profile_id,
-                    fencing_generation=profile.lease_fencing_generation(lease_id),
-                    outcome=outcome,
-                )
-                continue
-            self._unresolved_releases.pop(lease_id, None)
-            self._cleanup_requested_leases.discard(lease_id)
-            profile = self._profiles.get(profile_id)
-            if profile is not None and profile.release(lease_id):
-                self._unindex_lease(lease_id)
+            if outcome == LeaseTransitionOutcome.CLEANUP_REQUESTED.value:
+                self._cleanup_requested_leases.add(lease_id)
                 self._has_new_events = True
                 self._get_logger().warning(
-                    "Reclaimed slot for profile %s from terminated workflow %s (status=%s)",
-                    profile_id,
+                    "Requested resource cleanup for the terminal-owner lease "
+                    "%s on profile %s (status=%s, consumer=%s); its slot "
+                    "stays reserved until verified teardown",
                     lease_id,
+                    profile_id,
                     status,
+                    consumer_class,
                 )
+                continue
+            if outcome == LeaseTransitionOutcome.ALREADY_RELEASED.value:
+                # The durable row is already a tombstone written by a prior
+                # verified release, so nothing is running against it.
+                # Reconcile the in-memory ledger.
+                self._cleanup_requested_leases.discard(lease_id)
+                self._unresolved_releases.pop(lease_id, None)
+                profile = self._profiles.get(profile_id)
+                if profile is not None and profile.release(lease_id):
+                    self._unindex_lease(lease_id)
+                    self._has_new_events = True
+                continue
+            self._record_unresolved_release(
+                lease_id,
+                profile_id=profile_id,
+                fencing_generation=profile.lease_fencing_generation(lease_id),
+                outcome=outcome,
+            )
 
     def _reclaim_terminal_leases(
         self,
@@ -4293,7 +4611,9 @@ class MoonMindProviderProfileManagerWorkflow:
         if verify_pending_requesters:
             workflow_ids.extend(self._pending_requester_workflow_ids())
 
-        workflow_statuses = await self._verify_workflow_statuses(workflow_ids)
+        workflow_statuses = await self._verify_workflow_statuses(
+            workflow_ids, run_hints=self._lease_holder_run_hints()
+        )
         if workflow_statuses is None:
             return
 
@@ -4315,14 +4635,17 @@ class MoonMindProviderProfileManagerWorkflow:
             await self._sync_leases_to_db()
 
     async def _verify_lease_holders(self) -> None:
-        """Remove leases held by workflows that are in a terminal state.
+        """Request cleanup for leases whose owners look terminal.
 
-        Uses the verify_lease_holders activity to check whether each lease-holding
-        workflow is still running. This allows faster reclaim of slots from
-        cancelled/terminated workflows without waiting for the lease duration timeout.
+        MoonLadderStudios/MoonMind#1089: uses the verify_lease_holders
+        activity to check whether each lease-holding workflow is still
+        running. A terminal or missing owner only justifies a
+        capacity-consuming cleanup request — the slot stays spent until the
+        designated cleanup owner confirms verified teardown.
         """
         workflow_statuses = await self._verify_workflow_statuses(
-            self._lease_holder_workflow_ids()
+            self._lease_holder_workflow_ids(),
+            run_hints=self._lease_holder_run_hints(),
         )
         if workflow_statuses is None:
             return
@@ -4786,7 +5109,6 @@ class MoonMindProviderProfileManagerWorkflow:
         fencing_generation: int = 0,
         profile_id: str | None = None,
         reason: str | None = None,
-        cleanup_requested: bool = False,
     ) -> str:
         """Release one lease durably and report exactly what the ledger did.
 
@@ -4795,6 +5117,11 @@ class MoonMindProviderProfileManagerWorkflow:
         value. Only ``released`` and ``already_released`` make the slot
         reusable; every other outcome keeps capacity unavailable. A swallowed
         exception used to look exactly like success.
+
+        MoonLadderStudios/MoonMind#1089: this is the owner's own release.
+        Terminal-owner reclamation requests cleanup instead and only
+        completes through the verified-teardown release, so no caller may
+        attach a cleanup flag to a capacity-freeing release here.
         """
         try:
             use_incremental = False
@@ -4816,8 +5143,6 @@ class MoonMindProviderProfileManagerWorkflow:
                         payload["profile_id"] = profile_id
                     if reason:
                         payload["reason"] = reason
-                    if cleanup_requested:
-                        payload["cleanup_requested"] = True
                 result = await workflow.execute_activity(
                     "provider_profile.sync_slot_leases",
                     {
