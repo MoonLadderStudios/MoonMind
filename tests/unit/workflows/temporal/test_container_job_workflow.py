@@ -851,3 +851,69 @@ async def test_image_observation_threads_into_terminal_projection(
     assert terminal.image_observation.resolved_digest == digest
     assert terminal.image_observation.pull_duration_ms == 345
     assert terminal.image_observation.pull_lock_wait_ms == 12
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_capacity_wait_preserves_job_and_resolved_grant(monkeypatch, cancel):
+    from moonmind.schemas.container_job_models import ResourceLimits
+    from moonmind.workflows.temporal.workflows import container_job as module
+
+    job = MoonMindContainerJobWorkflow()
+    starts = []
+    publications = []
+    states = []
+
+    async def execute(name, request):
+        if name.endswith("start_container"):
+            starts.append(request.model_dump(by_alias=True, exclude_none=True))
+            if len(starts) == 1:
+                # Round-trip the compact production contract consumed by the workflow.
+                return ContainerJobActivityResult.model_validate(
+                    {"capacityWait": "waiting for machine_memory"}
+                )
+            return ContainerJobActivityResult(
+                running=True,
+                resolvedResources=ResourceLimits(cpuMillis=0, memoryMiB=2857),
+            )
+        if name.endswith("project_status"):
+            states.append(request.state)
+        if name.endswith("publish_evidence"):
+            publications.append(request.model_copy(deep=True))
+        return _result_for(name)
+
+    async def wait(*args, **kwargs):
+        if cancel:
+            await job.cancel()
+        else:
+            raise TimeoutError
+
+    monkeypatch.setattr(job, "_activity", execute)
+    monkeypatch.setattr(module.workflow, "wait_condition", wait)
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+    assert result["state"] == ("canceled" if cancel else "succeeded")
+    assert "waiting_for_capacity" in states
+    assert len(starts) == (1 if cancel else 2)
+    if not cancel:
+        assert starts[0]["request"] == starts[1]["request"]
+        assert starts[0]["ownershipToken"] == starts[1]["ownershipToken"]
+        assert publications[0].resolved_resources.memory_mib == 2857
+
+
+@pytest.mark.asyncio
+async def test_historical_workflow_keeps_fixed_admission_path(monkeypatch):
+    from moonmind.workflows.temporal.workflows import container_job as module
+
+    job = MoonMindContainerJobWorkflow()
+    requests = []
+
+    async def execute(name, request):
+        requests.append(request.model_copy(deep=True))
+        return _result_for(name)
+
+    monkeypatch.setattr(module, "_workflow_patch_enabled", lambda patch: False)
+    monkeypatch.setattr(job, "_activity", execute)
+    assert (await job.run(_input().model_dump(mode="json", by_alias=True)))[
+        "state"
+    ] == "succeeded"
+    assert all(not item.wait_for_capacity for item in requests)

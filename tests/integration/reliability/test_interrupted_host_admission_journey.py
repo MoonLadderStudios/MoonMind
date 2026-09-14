@@ -6,6 +6,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 from collections.abc import Sequence
+from sqlalchemy import select
 
 import pytest
 from temporalio import activity
@@ -18,6 +19,7 @@ from api_service.db.models import (
     Base,
     OmnigentExecutionPlanRecord,
     OmnigentRuntimeBindingRecord,
+    OmnigentCredentialRuntimeRecord,
 )
 from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
 from moonmind.omnigent.control_plane.cleanup_authority import CanonicalCleanupAuthority
@@ -54,6 +56,7 @@ from tests.unit.workflows.temporal.workflows.test_agent_run_omnigent_capacity_ad
 )
 from tests.integration.reliability.test_release_routing_journey import connect
 from tests.support.isolated_postgres import isolated_postgres
+from tests.unit.omnigent.test_capacity_readmission_turn import install_credential_ledger
 from tests.unit.omnigent.test_generic_platform_production_services import (
     _PUSHED_PUBLICATION,
     _generic_publication_harness,
@@ -86,6 +89,7 @@ async def test_replacement_cleans_owned_docker_resources_before_readmission(
         [
             OmnigentExecutionPlanRecord.__table__,
             OmnigentRuntimeBindingRecord.__table__,
+            OmnigentCredentialRuntimeRecord.__table__,
             *(
                 table
                 for table in Base.metadata.sorted_tables
@@ -103,6 +107,7 @@ async def test_replacement_cleans_owned_docker_resources_before_readmission(
         ]
     ) as sessions:
         harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+        install_credential_ledger(harness, sessions)
         plan = _plan("opencode-go/model")
         await DbExecutionPlanStore(sessions).persist(plan)
         harness.realizer._runtime_bindings = DbRuntimeBindingStore(sessions)
@@ -407,6 +412,76 @@ async def test_replacement_cleans_owned_docker_resources_before_readmission(
                     workflow_runner=UnsandboxedWorkflowRunner(),
                     data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
                 ).replay_workflow(await handle.fetch_history())
+                # A reset parent starts the same child Workflow ID with a new
+                # request identity. AgentRun's real entrypoint starts epoch one
+                # again; the provider lease owner remains the same Workflow ID.
+                prior_run_id = (await handle.describe()).run_id
+                reset_request = request.model_copy(
+                    update={
+                        "correlation_id": queue + "-reset-step",
+                        "idempotency_key": queue + "-reset-request",
+                    }
+                )
+
+                async def replacement_session(request, *, session_authority_sink):
+                    await session_authority_sink.session_created("session-reset")
+                    harness.events.append("message-completed")
+                    return AgentRunResult(
+                        summary="done", metadata={"omnigentSessionId": "session-reset"}
+                    )
+
+                async def drain_replacement(session_id):
+                    assert session_id == "session-reset"
+                    return {"sessionId": session_id, "stopped": True}
+
+                harness.realizer._session_driver = replacement_session
+                harness.realizer._session_cleanup = SimpleNamespace(
+                    drain=drain_replacement
+                )
+                async with Worker(
+                    client, task_queue=queue + "-activity", activities=[binding.handler]
+                ):
+                    replacement = await client.start_workflow(
+                        MoonMindAgentRun.run,
+                        reset_request,
+                        id=queue,
+                        task_queue=queue,
+                        execution_timeout=timedelta(seconds=90),
+                    )
+                    reset_result = await replacement.result()
+                assert reset_result.failure_class is None
+                assert (await replacement.describe()).run_id != prior_run_id
+                assert (
+                    execution_requests[-1].admitted_provider_capacity.admission_epoch
+                    == 1
+                )
+                assert (
+                    execution_requests[-1].admitted_provider_capacity.lease_owner_id
+                    == execution_requests[0].admitted_provider_capacity.lease_owner_id
+                )
+                assert (
+                    execution_requests[-1].admitted_provider_capacity.agent_run_run_id
+                    != execution_requests[0].admitted_provider_capacity.agent_run_run_id
+                )
+                async with sessions() as session:
+                    credentials = (
+                        await session.scalars(select(OmnigentCredentialRuntimeRecord))
+                    ).all()
+                assert len(credentials) == 3
+                assert len({row.cleanup_ref for row in credentials}) == 3
+                assert all(row.cleanup_state == "cleaned" for row in credentials), [
+                    (
+                        row.credential_runtime_ref,
+                        row.cleanup_state,
+                        row.cleanup_evidence_json,
+                    )
+                    for row in credentials
+                ]
+                await Replayer(
+                    workflows=[MoonMindAgentRun, MockProviderProfileManager],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                    data_converter=MOONMIND_TEMPORAL_DATA_CONVERTER,
+                ).replay_workflow(await replacement.fetch_history())
         finally:
             if "manager" in locals():
                 await manager.terminate(reason="isolated admission journey finished")

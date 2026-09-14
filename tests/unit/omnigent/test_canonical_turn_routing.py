@@ -102,6 +102,7 @@ async def session_factory(_engine):
     async with _engine.begin() as conn:
         for table in _CONTROL_PLANE_TABLES:
             await conn.execute(text(f"DELETE FROM {table}"))
+        await conn.execute(text("DELETE FROM omnigent_credential_runtimes"))
     return sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
 
 

@@ -111,6 +111,10 @@ fi
 
 PYTEST_PARALLEL_ARGS=()
 if [[ "$USE_XDIST" == "1" ]] && "$PYTHON_BIN" -c "import xdist" >/dev/null 2>&1; then
+    if [[ -z "${PYTEST_XDIST_AUTO_NUM_WORKERS:-}" ]]; then
+        export PYTEST_XDIST_AUTO_NUM_WORKERS
+        PYTEST_XDIST_AUTO_NUM_WORKERS=$("$PYTHON_BIN" tools/test_worker_count.py)
+    fi
     PYTEST_PARALLEL_ARGS=(-n auto --dist loadfile)
 elif [[ "$USE_XDIST" == "1" ]]; then
     echo "Warning: pytest-xdist is not installed; running unit tests without parallel workers." >&2

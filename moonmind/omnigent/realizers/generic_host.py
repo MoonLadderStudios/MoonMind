@@ -297,18 +297,29 @@ class GenericOmnigentHostRealizer:
             # immutable credential authority. New admissions use the epoch;
             # cleaned bindings were handled above and cannot be resurrected.
             if prior is not None:
-                acquired = tuple(
-                    replace(item, admission_epoch=0)
-                    if item.admission_epoch > 1
-                    and prior.providerLeases.get(item.slot, {}).get(
+                retained = []
+                for item in acquired:
+                    recorded_ref = prior.providerLeases.get(item.slot, {}).get(
                         "credentialRuntimeRef"
                     )
-                    == credential_runtime_identity(
-                        replace(item, admission_epoch=0), materializers[item.slot]
-                    )[0]
-                    else item
-                    for item in acquired
-                )
+                    # Only the same persisted binding can retain an older
+                    # credential identity. A new/reset binding never adopts
+                    # another attempt's authority or its cleanup tombstone.
+                    for candidate in (
+                        item,
+                        replace(item, admission_run_id=None),
+                        replace(item, admission_run_id=None, admission_epoch=0),
+                    ):
+                        if (
+                            recorded_ref
+                            == credential_runtime_identity(
+                                candidate, materializers[item.slot]
+                            )[0]
+                        ):
+                            item = candidate
+                            break
+                    retained.append(item)
+                acquired = tuple(retained)
             provider_authority = {
                 item.slot: {
                     **item.runtime_binding_value(

@@ -35,6 +35,16 @@ with workflow.unsafe.imports_passed_through():
         provider_profile_launch_ready_from_payload,
     )
     from moonmind.schemas.agent_skill_models import ResolvedSkillSet, SkillSelector
+    from moonmind.schemas.agent_run_progress import (
+        AGENT_RUN_PROGRESS_PATCH_ID,
+        STEP_WAITING_REASONS,
+        TERMINAL_PROGRESS_STATES,
+        apply_agent_run_progress,
+        assert_classified_child_signal,
+        new_progress_parent_state,
+        reduce_progress_to_step,
+        seal_terminal_result,
+    )
     from moonmind.schemas.container_job_models import (
         ContainerJobState,
         ContainerJobSubmitRequest,
@@ -185,6 +195,9 @@ with workflow.unsafe.imports_passed_through():
     )
 
 from moonmind.workflows.skills.approval_policy import (
+    gate_transition_allows_review_retry,
+    inject_review_feedback_into_inputs,
+    merge_accepted_output_evidence,
     review_gate_budget_metadata,
     review_gate_retry_allowed,
     review_gate_verdict_made_progress,
@@ -192,8 +205,6 @@ from moonmind.workflows.skills.approval_policy import (
     is_review_gate_active,
     ReviewRequest,
     StepGateResult,
-    build_feedback_input,
-    build_feedback_instruction,
     parse_step_gate_result,
     recommended_next_actions,
 )
@@ -496,7 +507,11 @@ _JSON_OBJECT_CODE_FENCE_PATTERN = re.compile(
 )
 # Replay-stable `workflow.patched` id for integration status polling terminal handling.
 INTEGRATION_POLL_LOOP_PATCH = "refactor-loop-1.2"
-# Replay-stable patch id for parent-initiated defensive slot release on child terminal state.
+# Deprecated marker for the retired parent-initiated defensive slot release
+# (MoonLadderStudios/MoonMind#1089 R8). New executions emit no release; the
+# marker is recorded only as deprecated. `workflow.deprecate_patch` at the
+# terminal child-state branch keeps retained marker-only histories replayable
+# until drainage.
 RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release-1"
 # Replay-stable patch id for workflow-scoped Codex terminate activity+signal finalization.
 RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
@@ -558,6 +573,7 @@ RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH = "run-direct-tool-report-outputs-v1"
 RUN_ASSESSMENT_PARAMETER_INJECTION_PATCH = "run-assessment-parameter-injection-v1"
 RUN_ASSESSMENT_CONSUMER_HANDOFF_PATCH = "run-assessment-consumer-handoff-v1"
 RUN_ASSESSMENT_ATTACHMENT_HANDOFF_PATCH = "run-assessment-attachment-handoff-v1"
+RUN_WORKFLOW_PREPARED_INPUTS_PATCH = "run-workflow-prepared-inputs-v1"
 RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH = "run-issue-brief-attachment-handoff-v1"
 RUN_TRUSTED_ISSUE_BRIEF_AUTHORITY_PATCH = "run-trusted-issue-brief-authority-v1"
 # New gates bind objective acceptance; old histories retain their recorded routing.
@@ -1074,6 +1090,71 @@ def _legacy_manager_workflow_id(runtime_id: str) -> str:
     return f"auth-profile-manager:{runtime_id}"
 
 
+# Committed review-gate reuse for MoonLadderStudios/MoonMind#3945 (R5).
+#
+# The step.review Activity commits a completed verified verdict
+# (FULLY_IMPLEMENTED / ADDITIONAL_WORK_NEEDED) under its immutable
+# review-attempt identity, and the workflow persists the gate-result artifact
+# plus step-ledger check before acknowledging completion. A duplicate
+# delivery or lost-acknowledgment retry of the same admitted review must
+# reuse only that same committed decision: it may never overwrite a
+# committed verdict with an unavailable outcome or a divergent re-invocation,
+# and changed evidence (a different identity) is always a new attempt.
+# Unavailable results (NO_DETERMINATION) are never committed and never reused.
+_COMMITTED_GATE_REUSE_VERDICTS = frozenset(
+    {"FULLY_IMPLEMENTED", "ADDITIONAL_WORK_NEEDED"}
+)
+
+
+def resolve_committed_gate_reuse(
+    committed_gates: Mapping[str, Any],
+    gate: StepGateResult,
+    *,
+    validate_action_compatibility: bool = True,
+) -> tuple[StepGateResult, str] | None:
+    """Reuse the committed gate decision for a duplicate review delivery.
+
+    Returns the committed ``(gate_result, artifact_ref)`` when this delivery
+    carries the same review-attempt identity as an already committed decision,
+    otherwise None (the caller persists a new gate-result artifact). Pure and
+    deterministic: it reads workflow state only, so replay rebuilds it
+    identically. Deliveries without provenance (payloads recorded before the
+    binding) return None and follow the normal path.
+    """
+    try:
+        provenance = gate.review_provenance
+        identity = (
+            str(provenance.get("reviewAttemptIdentity") or "")
+            if isinstance(provenance, Mapping)
+            else ""
+        )
+        if not identity:
+            return None
+        stored = committed_gates.get(identity)
+        if not isinstance(stored, Mapping):
+            return None
+        payload = stored.get("payload")
+        artifact_ref = stored.get("artifactRef")
+        if not isinstance(payload, Mapping) or not artifact_ref:
+            return None
+        committed = parse_step_gate_result(
+            payload, validate_action_compatibility=validate_action_compatibility
+        )
+        stored_provenance = committed.review_provenance
+        stored_identity = (
+            str(stored_provenance.get("reviewAttemptIdentity") or "")
+            if isinstance(stored_provenance, Mapping)
+            else ""
+        )
+        if stored_identity != identity:
+            return None
+        if committed.verdict not in _COMMITTED_GATE_REUSE_VERDICTS:
+            return None
+        return (committed, str(artifact_ref))
+    except Exception:
+        return None
+
+
 class MoonMindRunWorkflow(RunFailureDiagnostics):
     def _expected_workflow_name(self) -> str:
         return WORKFLOW_NAME
@@ -1162,6 +1243,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._publish_status: Optional[str] = None
         self._publish_reason: Optional[str] = None
         self._publish_context: dict[str, Any] = {}
+        # Committed review-gate decisions keyed by immutable review-attempt
+        # identity (MoonLadderStudios/MoonMind#3945 R5). Duplicate deliveries
+        # and lost-acknowledgment retries of the same admitted review reuse
+        # only the same committed decision instead of persisting a divergent
+        # or unavailable redelivery. Updated only in deterministic workflow
+        # code from history-recorded activity results, so replay rebuilds it
+        # identically; entries are small (one bounded gate payload plus an
+        # artifact ref per committed attempt) and attempts are policy-bounded.
+        self._committed_review_gates: dict[str, dict[str, Any]] = {}
         self._canonical_git_repository_projection_enabled: bool = False
         self._canonical_no_commit_outcome_enabled: bool = False
         self._canonical_no_commit_search_preset_enabled: bool = False
@@ -1376,14 +1466,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # as Temporal schedules the workflow even if it is awaiting a slot.
         self._started_at: datetime | None = None
 
-        # Auth profile slot tracking for managed agent runs.
-        # Set when a child AgentRun acquires a slot so the parent can
-        # defensively release it if the child exits in a terminal state.
-        self._assigned_profile_id: Optional[str] = None
-        self._assigned_child_workflow_id: Optional[str] = None
-        self._assigned_runtime_id: Optional[str] = None
         self._active_agent_child_workflow_id: Optional[str] = None
         self._active_agent_id: Optional[str] = None
+        # MoonLadderStudios/MoonMind#1088: accepted typed AgentRun progress
+        # projections keyed by child workflow ID. Each entry is the single
+        # parent reducer state for that child (expected identity, accepted
+        # source/revision/digest, terminal seal). Detailed events stay in
+        # the existing timeline; the validated AgentRunResult keeps
+        # terminal authority.
+        self._agent_run_progress_by_child: dict[str, dict[str, Any]] = {}
         self._last_publish_repair_request: AgentExecutionRequest | None = None
         self._last_publish_repair_node_id: str | None = None
         self._codex_session_handle: Any | None = None
@@ -5507,6 +5598,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         gate_result_ref: str,
         gate: StepGateResult,
     ) -> dict[str, Any]:
+        provenance = (
+            dict(gate.review_provenance)
+            if isinstance(gate.review_provenance, Mapping)
+            else None
+        )
         return {
             "gateResultRef": gate_result_ref,
             "gateVerdict": gate.verdict,
@@ -5519,6 +5615,23 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "recommendedNextAction": gate.recommended_next_action,
             "invalid": gate.invalid,
             "degraded": gate.degraded,
+            # Immutable review-attempt binding (MoonLadderStudios/MoonMind#3945
+            # R2/R5): the step-ledger check names the exact committed attempt
+            # so duplicate deliveries can reuse it and operators can verify
+            # the binding without opening the artifact. None for payloads
+            # recorded before provenance; readers treat a missing identity as
+            # "no committed decision" and follow the normal path.
+            "reviewProvenance": provenance,
+            "reviewAttemptIdentity": (
+                str(provenance.get("reviewAttemptIdentity") or "") or None
+                if provenance is not None
+                else None
+            ),
+            "reviewEvidenceDigest": (
+                str(provenance.get("evidenceDigest") or "") or None
+                if provenance is not None
+                else None
+            ),
         }
 
     def _step_execution_for(self, logical_step_id: str) -> int | None:
@@ -9092,10 +9205,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         plan_routed_moonspec_remediation_enabled: bool,
         transition: GateTransitionDecision,
     ) -> bool:
-        """Keep pre-cutover review retries independent of new plan routing."""
-        return (
-            not plan_routed_moonspec_remediation_enabled
-            or transition.disposition in {"generic", "retry"}
+        """Keep pre-cutover review retries independent of new plan routing.
+
+        Value computation lives in ``approval_policy``; the workflow owns the
+        transition object and passes its compact disposition value.
+        """
+        return gate_transition_allows_review_retry(
+            plan_routed_moonspec_remediation_enabled=(
+                plan_routed_moonspec_remediation_enabled
+            ),
+            transition_disposition=transition.disposition,
         )
 
     def _step_has_accepted_output_evidence(
@@ -9103,29 +9222,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         logical_step_id: str,
         execution_result: Any,
     ) -> bool:
+        # Workflow-owned ledger reads; value merge lives in approval_policy.
         outputs = self._effective_result_outputs(execution_result)
         row_outputs = self._step_execution_compact_output_refs(logical_step_id)
-        merged_outputs: dict[str, Any] = {}
-        if isinstance(outputs, Mapping):
-            merged_outputs.update(dict(outputs))
-            self._merge_direct_output_evidence(merged_outputs, outputs)
-        merged_outputs.update(row_outputs)
+        merged_outputs = merge_accepted_output_evidence(
+            execution_outputs=outputs if isinstance(outputs, Mapping) else None,
+            ledger_output_refs=row_outputs,
+        )
         return logical_step_success_allowed(outputs=merged_outputs)
-
-    @staticmethod
-    def _merge_direct_output_evidence(
-        merged_outputs: dict[str, Any],
-        outputs: Mapping[str, Any],
-    ) -> None:
-        for source_key, target_key in (
-            ("primary_report_ref", "primaryRef"),
-            ("primaryReportRef", "primaryRef"),
-            ("summary_ref", "summaryRef"),
-            ("summaryRef", "summaryRef"),
-        ):
-            value = outputs.get(source_key)
-            if isinstance(value, str) and value.strip():
-                merged_outputs.setdefault(target_key, value.strip())
 
     def _inject_review_feedback_into_inputs(
         self,
@@ -9136,29 +9240,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         feedback: str,
         issues: tuple[Mapping[str, Any], ...],
     ) -> dict[str, Any]:
-        merged_inputs = build_feedback_input(
-            original_inputs,
-            attempt,
-            feedback,
-            issues,
+        # Pure value computation in approval_policy; no ledger/scheduling here.
+        return inject_review_feedback_into_inputs(
+            tool_type=tool_type,
+            original_inputs=original_inputs,
+            attempt=attempt,
+            feedback=feedback,
+            issues=issues,
         )
-        if tool_type == "agent_runtime":
-            for key in (
-                "instructions",
-                "instructionRef",
-                "instruction",
-                "instructionsText",
-                "instructions_text",
-            ):
-                instruction = merged_inputs.get(key)
-                if isinstance(instruction, str) and instruction.strip():
-                    merged_inputs[key] = build_feedback_instruction(
-                        instruction,
-                        attempt,
-                        feedback,
-                    )
-                    break
-        return merged_inputs
 
     @staticmethod
     def _truncate_json_context_value(
@@ -11516,6 +11605,31 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         input_ref: Optional[str],
         plan_ref: Optional[str],
     ) -> Optional[str]:
+        if workflow.patched(RUN_WORKFLOW_PREPARED_INPUTS_PATCH):
+            # Temporal supplies the actual run identity here. Authorize declared
+            # inputs before any child can read them, including scheduled starts
+            # and create acknowledgements lost before API-side linkage.
+            task_payload = parameters.get("workflow") or parameters.get("task") or {}
+            manifest = build_prepared_input_manifest(task_payload)
+            if manifest.has_entries:
+                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.link")
+                for artifact_id in dict.fromkeys(
+                    entry.artifact_id for entry in manifest.entries
+                ):
+                    await workflow.execute_activity(
+                        "artifact.link",
+                        {
+                            "artifact_id": artifact_id,
+                            "principal": self._principal(),
+                            "execution_ref": {
+                                "namespace": workflow.info().namespace,
+                                "workflow_id": workflow.info().workflow_id,
+                                "run_id": workflow.info().run_id,
+                                "link_type": "input.attachment",
+                            },
+                        },
+                        **self._execute_kwargs_for_route(route),
+                    )
         # A new scheduled execution must validate its saved requirements even
         # when it supplies a plan. Recorded histories and durable continuations
         # keep their admitted inputs and already validated progress.
@@ -12745,6 +12859,23 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 self._active_agent_child_workflow_id = None
                                 self._active_agent_id = None
                             execution_result = self._map_agent_run_result(child_result)
+                            try:
+                                progress_state = self._agent_run_progress_by_child.get(
+                                    child_workflow_id
+                                )
+                                if progress_state is not None:
+                                    seal_terminal_result(
+                                        progress_state,
+                                        status=str(
+                                            execution_result.get("status")
+                                            or "COMPLETED"
+                                        ),
+                                    )
+                            except Exception:
+                                # Progress sealing is best-effort telemetry;
+                                # admission already succeeded so failures here
+                                # must not fail the step.
+                                pass
                         except Exception as exc:
                             if self._should_propagate_agent_child_cancellation(exc):
                                 raise
@@ -13240,19 +13371,64 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
                     ),
                 )
-                review_verdict = gate_result.to_review_verdict()
-                step_execution = self._step_execution_for(node_id) or 0
-                gate_result_ref = await self._write_json_artifact(
-                    name=(
-                        "reports/gate_result_"
-                        f"{node_id}_attempt_{step_execution}.json"
+                # MoonLadderStudios/MoonMind#3945 (R5): a duplicate delivery
+                # or lost-acknowledgment retry of the same admitted review
+                # reuses only the same committed decision instead of
+                # persisting a divergent or unavailable redelivery. Changed
+                # evidence (a different attempt identity) misses and follows
+                # the normal path as a new attempt.
+                committed_reuse = resolve_committed_gate_reuse(
+                    self._committed_review_gates,
+                    gate_result,
+                    validate_action_compatibility=workflow.patched(
+                        RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
                     ),
-                    payload=gate_result.to_payload(),
                 )
-                gate_check_metadata = self._gate_check_metadata(
-                    gate_result_ref=gate_result_ref,
-                    gate=gate_result,
-                )
+                if committed_reuse is not None:
+                    restored_gate_result, gate_result_ref = committed_reuse
+                    if restored_gate_result.verdict != gate_result.verdict:
+                        self._get_logger().warning(
+                            "Reusing committed review decision for duplicate "
+                            "delivery; discarding redelivered verdict %s",
+                            gate_result.verdict,
+                        )
+                    gate_result = restored_gate_result
+                    gate_check_metadata = self._gate_check_metadata(
+                        gate_result_ref=gate_result_ref,
+                        gate=gate_result,
+                    )
+                else:
+                    step_execution = self._step_execution_for(node_id) or 0
+                    gate_result_ref = await self._write_json_artifact(
+                        name=(
+                            "reports/gate_result_"
+                            f"{node_id}_attempt_{step_execution}.json"
+                        ),
+                        payload=gate_result.to_payload(),
+                    )
+                    gate_check_metadata = self._gate_check_metadata(
+                        gate_result_ref=gate_result_ref,
+                        gate=gate_result,
+                    )
+                    reuse_provenance = (
+                        gate_result.review_provenance
+                        if isinstance(gate_result.review_provenance, Mapping)
+                        else None
+                    )
+                    reuse_identity = (
+                        str(reuse_provenance.get("reviewAttemptIdentity") or "")
+                        if reuse_provenance is not None
+                        else ""
+                    )
+                    if (
+                        reuse_identity
+                        and gate_result.verdict in _COMMITTED_GATE_REUSE_VERDICTS
+                    ):
+                        self._committed_review_gates[reuse_identity] = {
+                            "payload": gate_result.to_payload(),
+                            "artifactRef": gate_result_ref,
+                        }
+                review_verdict = gate_result.to_review_verdict()
                 review_check_status = self._check_status_for_review_verdict(
                     review_verdict.verdict
                 )
@@ -16460,7 +16636,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
     def _native_pr_push_status_blocks_creation(self, push_status: Any) -> bool:
         status = self._coerce_text(push_status)
-        if status in {"failed", "skipped"}:
+        if status in {"failed", "skipped", "blocked"}:
             return True
         if status == "lease_conflict":
             return workflow.patched(NATIVE_PR_LEASE_CONFLICT_GATE_PATCH)
@@ -16607,6 +16783,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             push_error = self._coerce_text(outputs.get("push_error"), max_chars=200)
             self._publish_status = "failed"
             self._publish_reason = push_error or "publish failed"
+            return
+
+        if push_status == "blocked":
+            # A high-security scan block is terminal: no push occurred, so
+            # there is nothing a downstream PR creation could target.
+            push_error = self._coerce_text(outputs.get("push_error"), max_chars=200)
+            self._publish_status = "failed"
+            self._publish_reason = push_error or "publish blocked"
             return
 
         if push_status == "skipped":
@@ -20897,6 +21081,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         prepared_context = None
         if isinstance(workflow_parameters, Mapping):
             task_payload = workflow_parameters.get("task")
+            if self._patched_or_false_outside_workflow(
+                RUN_WORKFLOW_PREPARED_INPUTS_PATCH
+            ):
+                task_payload = workflow_parameters.get("workflow") or task_payload
             if isinstance(task_payload, Mapping):
                 task_payload_for_context = task_payload
                 prepared_manifest = build_prepared_input_manifest(task_payload)
@@ -24212,6 +24400,107 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 extra={"error": str(exc)},
             )
 
+    @workflow.signal(name="agent_run_progress")
+    def agent_run_progress(self, payload: dict) -> None:
+        """Apply one typed AgentRun product-progress projection.
+
+        MoonLadderStudios/MoonMind#1088: the sole normal product-progress
+        projection for new histories. Old histories ignore it and retain
+        ``child_state_changed``; continuation, chat, and cleanup support
+        are untouched. A terminal child result seals the product outcome
+        and takes precedence over late or disagreeing progress.
+        """
+
+        try:
+            assert_classified_child_signal("agent_run_progress")
+        except ValueError:
+            return
+        if not workflow.patched(AGENT_RUN_PROGRESS_PATCH_ID):
+            # Old history: retain required legacy behavior.
+            return
+        if not isinstance(payload, Mapping):
+            self._get_logger().warning(
+                "Ignoring non-mapping agent_run_progress payload"
+            )
+            return
+        child_id = str(payload.get("agentRunWorkflowId") or "").strip()
+        active_child = str(self._active_agent_child_workflow_id or "").strip()
+        assigned_child = str(
+            getattr(self, "_assigned_child_workflow_id", None) or ""
+        ).strip()
+        if (
+            not child_id
+            or (child_id != active_child and child_id != assigned_child)
+        ):
+            # Fence: only the known awaited/assigned child is observed.
+            # Payload identity fields are fences, not proof of sender
+            # permission; sender authorization stays with the authorized
+            # signal ingress and execution ownership checks.
+            self._get_logger().warning(
+                "Ignoring agent_run_progress for unexpected child %s",
+                child_id or "?",
+            )
+            return
+        state = self._agent_run_progress_by_child.get(child_id)
+        if state is None:
+            step_id = str(payload.get("stepExecutionId") or "").strip()
+            if not step_id:
+                self._get_logger().warning(
+                    "Ignoring agent_run_progress without Step identity"
+                )
+                return
+            state = new_progress_parent_state(
+                expected_agent_run_workflow_id=child_id,
+                expected_step_execution_id=step_id,
+            )
+            self._agent_run_progress_by_child[child_id] = state
+        outcome = apply_agent_run_progress(
+            state,
+            payload,
+            terminal_sealed=self._state == STATE_COMPLETED,
+        )
+        if outcome.disposition != "accepted" or outcome.accepted_state is None:
+            self._get_logger().debug(
+                "agent_run_progress %s: %s",
+                outcome.disposition,
+                outcome.diagnostics,
+            )
+            return
+        accepted = outcome.accepted_state
+        if str(accepted.get("state") or "") in TERMINAL_PROGRESS_STATES:
+            # Terminal progress seals the projection; the validated
+            # AgentRunResult keeps product authority, so no Step state
+            # moves here. Slot release is owned by the
+            # ProviderProfileManager through verified consumer teardown
+            # (MoonLadderStudios/MoonMind#1089): record the deprecated
+            # marker as deprecated and emit no release.
+            if workflow.patched(
+                RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH
+            ):
+                workflow.deprecate_patch(
+                    RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH
+                )
+            return
+        if self._state == STATE_COMPLETED:
+            return
+        view = reduce_progress_to_step(accepted)
+        if view.waiting_reason is not None:
+            self._waiting_reason = view.waiting_reason
+            self._set_state(STATE_AWAITING_SLOT, summary=view.summary)
+        else:
+            if self._waiting_reason in (
+                "provider_profile_slot",
+                *STEP_WAITING_REASONS,
+            ):
+                self._waiting_reason = None
+            if workflow.patched(RUN_REAL_STARTED_AT_PATCH):
+                self._mark_real_work_started()
+            self._set_state(STATE_EXECUTING, summary=view.summary)
+        if view.attention_required:
+            self._attention_required = True
+        elif self._waiting_reason != "operator_paused":
+            self._attention_required = False
+
     @workflow.signal
     def child_state_changed(self, new_state: str, reason: str) -> None:
         if new_state == "awaiting_slot":
@@ -24230,29 +24519,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             if workflow.patched(RUN_REAL_STARTED_AT_PATCH):
                 self._mark_real_work_started()
             self._set_state(STATE_EXECUTING, summary="Agent is running.")
+        # Terminal child states need no parent action: slot release is owned
+        # by the ProviderProfileManager through verified consumer teardown
+        # (MoonLadderStudios/MoonMind#1089). The deprecated marker stays
+        # consumable so retained marker-only histories keep replaying; the
+        # branch records the marker only as deprecated and emits no release.
         elif new_state in ("completed", "failed", "canceled", "timed_out"):
-            # Child has reached a terminal state. If we have an assigned profile
-            # slot, release it defensively. This is a fallback for cases where
-            # the child fails to release the slot due to cancellation or other
-            # issues.
-            if workflow.patched(RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH):
-                self._release_slot_defensive()
-
-    @workflow.signal
-    def profile_assigned(self, payload: dict) -> None:
-        """Record that a child AgentRun has acquired a provider-profile slot.
-
-        The parent uses this to track which profile slot to release if the
-        child exits in a terminal state without releasing it itself.
-        """
-        self._assigned_profile_id = payload.get("profile_id")
-        self._assigned_child_workflow_id = payload.get("child_workflow_id")
-        self._assigned_runtime_id = payload.get("runtime_id")
-        self._get_logger().debug(
-            "Child workflow %s assigned profile %s",
-            self._assigned_child_workflow_id,
-            self._assigned_profile_id,
-        )
+            workflow.deprecate_patch(
+                RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH
+            )
 
     @workflow.signal
     def managed_session_bound(self, payload: dict) -> None:
@@ -24282,85 +24557,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
     @workflow.signal(name="BypassDependencies")
     def bypass_dependencies(self, payload: dict[str, Any] | None = None) -> None:
         self._bypass_dependencies(payload)
-
-    def _release_slot_defensive(self) -> None:
-        """Release the provider-profile slot defensively when a child exits.
-
-        This is called when a child AgentRun exits in a terminal state but
-        may have failed to release its slot due to cancellation or other issues.
-        """
-        if not self._assigned_profile_id:
-            return
-
-        profile_id = self._assigned_profile_id
-        child_wf_id = self._assigned_child_workflow_id or "unknown"
-
-        self._get_logger().warning(
-            "Defensively releasing provider-profile slot %s for child %s",
-            profile_id,
-            child_wf_id,
-        )
-
-        # Use the runtime_id passed from the child via profile_assigned signal.
-        # Fall back to inference from child_workflow_id if not available.
-        runtime_id = self._assigned_runtime_id or self._infer_runtime_from_child(
-            child_wf_id
-        )
-        if runtime_id:
-            manager_id = self._manager_workflow_id(runtime_id)
-            try:
-                manager_handle = workflow.get_external_workflow_handle(manager_id)
-                # Schedule the async signal without awaiting - best effort cleanup.
-                # The manager's verify_lease_holders will reclaim the slot if this fails.
-                asyncio.create_task(
-                    self._signal_release_slot(manager_handle, child_wf_id, profile_id)
-                )
-            except Exception:
-                self._get_logger().warning(
-                    "Failed to schedule defensive release for profile %s", profile_id
-                )
-
-        # Clear the assignment
-        self._assigned_profile_id = None
-        self._assigned_child_workflow_id = None
-        self._assigned_runtime_id = None
-
-    async def _signal_release_slot(
-        self, manager_handle: Any, child_workflow_id: str, profile_id: str
-    ) -> None:
-        """Send release_slot signal to the ProviderProfileManager."""
-        try:
-            await manager_handle.signal(
-                "release_slot",
-                {
-                    "requester_workflow_id": child_workflow_id,
-                    "profile_id": profile_id,
-                },
-            )
-        except Exception as exc:
-            self._get_logger().warning(
-                "Failed to signal release_slot for profile %s: %s", profile_id, exc
-            )
-
-    def _infer_runtime_from_child(self, child_workflow_id: str) -> Optional[str]:
-        """Infer runtime_id from child workflow ID pattern.
-
-        Child workflow ID pattern: "<parent_workflow_id>:agent:<node_id>[:retry<N>]"
-        The node_id typically indicates the agent kind (e.g., "jules", "claude").
-        """
-        # Simple heuristic: extract from the workflow ID
-        # Format: parent_id:agent:node_id[:retry<N>]
-        parts = child_workflow_id.split(":")
-        if len(parts) >= 3:
-            node_id = parts[2]
-            # Map common node IDs to runtime IDs
-            mapping = {
-                "jules": "jules",
-                "claude": "claude_code",
-                "codex": "codex_cli",
-            }
-            return mapping.get(node_id)
-        return None
 
     @workflow.query(name="control_state")
     def control_state(self) -> dict[str, Any]:

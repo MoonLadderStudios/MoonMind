@@ -27,6 +27,14 @@ these fields in `inputRefs`. The host supplies `gateResultPath` and
 identify one artifact, both paths identify that same file. The host does not
 interpret verifier findings or replace the resolved Skill's decisions.
 
+Prepared attachments use the canonical `workflow` payload; retained Temporal
+inputs under `task` remain readable. Planning links each declared artifact to
+the actual workflow/run through the artifact owner before dispatch. External
+requests carry selected raw refs; managed requests carry their prepared-context
+contract. The consumer preserves objective and step scope, and the host checks
+ownership and materializes bytes before launch. Temporal patching preserves the
+commands of histories recorded before this input-admission boundary.
+
 A ready workspace establishes repository readiness, not delivery of the next
 step's evidence. Re-admission verifies current artifact ownership, integrity,
 size, and containment while preserving candidate edits. Input replacement is
@@ -220,6 +228,20 @@ timers own waiting without occupying an execution Activity or consuming a host
 attempt. An existing owned lease reuses its reservation. The cumulative waiting
 budget survives capacity requeues, and an unsatisfiable demand is rejected rather
 than queued indefinitely. Atomic allocation remains the final admission fence.
+
+Bootstrap on-demand policies select shared CPU (`cpuMillis: 0`) only after the
+launch owner's read-only authority probe confirms a rootful cgroup-v2 Docker
+backend and an immutable helper image. Unsupported or temporarily unreadable
+backends retain the executable fixed stock limit (`cpuMillis: 2000`); each
+bootstrap reconciliation retries the probe before advancing stock defaults.
+The Docker resource owner enforces one machine-derived CPU cap across agents and new
+container jobs, allowing testing to use idle agent CPU. Memory remains a hard
+reservation; test jobs may authorize a minimum/preferred range. Existing
+immutable policies and recorded launch limits retain their authority, and
+bootstrap startup creates a new version only for an unmodified stock default.
+Container-job capacity waits use durable timers under the original timeout.
+See [Docker Backend Service](../ManagedAgents/DockerBackendService.md#shared-machine-resource-budget)
+for enforcement, prerequisites, and diagnostics.
 
 The scheduled host janitor bounds OAuth and generic-host cleanup independently.
 A historical credential-generation failure remains fenced and visible while
@@ -873,6 +895,14 @@ to stop it.
 ### 16.1 Activity retry
 
 An activity retry reuses the same canonical request and idempotency key. It inspects durable run/provider/session/host state before creating side effects.
+
+Credential lifecycle identity includes the admitted AgentRun run ID and its
+admission epoch. The provider-capacity owner remains the child workflow ID.
+A reset can therefore start epoch one under the same capacity owner without
+reusing a previous run's cleaned credential handles. Activity redelivery retains
+its identity. An existing runtime binding keeps its exact recorded credential
+authority across worker changes; historical tickets without a run ID retain
+their recorded identity. Cleanup tombstones never authorize reactivation.
 
 A revoked Activity delivery cannot settle its canonical turn command. It leaves
 the claim and runtime binding for the replacement delivery to reconcile. User
