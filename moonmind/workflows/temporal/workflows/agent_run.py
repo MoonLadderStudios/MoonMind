@@ -770,6 +770,9 @@ def next_provider_wait_transition(
     reason: str,
     cooldown_until: str | None = None,
     queue_position: int | None = None,
+    queue_ordered: bool | None = None,
+    queue_fresh: bool | None = None,
+    next_check: str | None = None,
     terminal: bool = False,
     canceled: bool = False,
     granted: bool = False,
@@ -780,7 +783,12 @@ def next_provider_wait_transition(
     None when nothing should be appended. A new current snapshot never
     reopens completed work, retargets another wait identity, or reorders on
     a stale revision. Callers own persistence through the existing
-    timeline/progress pipeline; this helper creates no store.
+    timeline/progress pipeline; this helper creates no store. The
+    authoritative ``queue_ordered``/``queue_fresh`` flags travel with the
+    transition so the detail layer never has to infer them from fragment
+    presence; ``next_check`` travels only when an authoritative deadline is
+    observed (never invented here). Missing flags from histories recorded
+    before they existed stay None (unknown), never fabricated.
     """
 
     wait_id = str(wait_id or "").strip()
@@ -789,6 +797,11 @@ def next_provider_wait_transition(
     normalized_reason = str(reason or "").strip() or "awaiting_provider_capacity"
     normalized_cooldown = str(cooldown_until or "").strip() or None
     normalized_queue = queue_position if isinstance(queue_position, int) and queue_position > 0 else None
+    normalized_ordered = (
+        bool(queue_ordered) if queue_ordered is not None else None
+    )
+    normalized_fresh = bool(queue_fresh) if queue_fresh is not None else None
+    normalized_next_check = str(next_check or "").strip() or None
     normalized_revision = revision if isinstance(revision, int) and revision >= 0 else None
     if previous is not None and not isinstance(previous, Mapping):
         previous = None
@@ -810,6 +823,13 @@ def next_provider_wait_transition(
             previous.get("reason") == normalized_reason
             and (previous.get("cooldown_until") or None) == normalized_cooldown
             and (previous.get("queue_position") or None) == normalized_queue
+            and (previous.get("queue_ordered")
+                 if isinstance(previous.get("queue_ordered"), bool)
+                 else None) == normalized_ordered
+            and (previous.get("queue_fresh")
+                 if isinstance(previous.get("queue_fresh"), bool)
+                 else None) == normalized_fresh
+            and (previous.get("next_check") or None) == normalized_next_check
             and previous.get("canceled", False) is False
             and not granted
             and not canceled
@@ -828,6 +848,12 @@ def next_provider_wait_transition(
         transition = "deadline_extended"
     elif (previous.get("queue_position") if previous else None) != normalized_queue:
         transition = "reason_changed"
+    elif (previous.get("queue_ordered") if previous else None) != normalized_ordered or (
+        previous.get("queue_fresh") if previous else None
+    ) != normalized_fresh:
+        transition = "reason_changed"
+    elif (previous.get("next_check") if previous else None) != normalized_next_check:
+        transition = "deadline_extended"
     else:
         transition = "wait_entered"
     return {
@@ -836,6 +862,9 @@ def next_provider_wait_transition(
         "reason": normalized_reason,
         "cooldown_until": normalized_cooldown,
         "queue_position": normalized_queue,
+        "queue_ordered": normalized_ordered,
+        "queue_fresh": normalized_fresh,
+        "next_check": normalized_next_check,
         "transition": transition,
     }
 
@@ -890,14 +919,26 @@ def structured_manager_slot_wait(manager_state: Mapping[str, Any]) -> dict[str, 
     lease state) and keeps technical lease/fence/credential/host handles
     internal. Returns ``cooldown_until`` (profile cooldown first, else the
     scope cooldown when ``scope_known``), ``queue_position`` (only when the
-    manager says its pending queue is ordered), and ``revision``
+    manager says its pending queue is ordered), ``queue_ordered`` (whether
+    the manager attests its pending queue is ordered), ``queue_fresh``
+    (ordered snapshot with a monotonic revision), ``next_check`` (always
+    None: the manager exposes no authoritative next-poll deadline, and this
+    pipeline never invents one), and ``revision``
     (``event_count`` when it is an int, else None).
     """
 
     if not isinstance(manager_state, Mapping):
-        return {"cooldown_until": None, "queue_position": None, "revision": None}
+        return {
+            "cooldown_until": None,
+            "queue_position": None,
+            "queue_ordered": False,
+            "queue_fresh": False,
+            "next_check": None,
+            "revision": None,
+        }
+    queue_ordered = manager_state.get("pending_requests_ordered") is True
     queue_position: int | None = None
-    if manager_state.get("pending_requests_ordered") is True:
+    if queue_ordered:
         raw_position = manager_state.get("requester_queue_position")
         if isinstance(raw_position, int) and raw_position > 0:
             queue_position = raw_position
@@ -914,10 +955,16 @@ def structured_manager_slot_wait(manager_state: Mapping[str, Any]) -> dict[str, 
                 if scope_deadline:
                     cooldown_until = scope_deadline
     revision = manager_state.get("event_count")
+    normalized_revision = (
+        revision if isinstance(revision, int) and revision >= 0 else None
+    )
     return {
         "cooldown_until": cooldown_until,
         "queue_position": queue_position,
-        "revision": revision if isinstance(revision, int) and revision >= 0 else None,
+        "queue_ordered": queue_ordered,
+        "queue_fresh": bool(queue_ordered and normalized_revision is not None),
+        "next_check": None,
+        "revision": normalized_revision,
     }
 
 @workflow.defn(name="MoonMind.AgentRun")
@@ -1300,6 +1347,9 @@ class MoonMindAgentRun:
         reason: str,
         cooldown_until: str | None = None,
         queue_position: int | None = None,
+        queue_ordered: bool | None = None,
+        queue_fresh: bool | None = None,
+        next_check: str | None = None,
         revision: int | None = None,
         terminal: bool = False,
         canceled: bool = False,
@@ -1315,11 +1365,15 @@ class MoonMindAgentRun:
         transition as ``self._provider_wait_state``. Repeated identical
         observations, stale revisions, retargeted identities, and late
         observations against completed work return None and persist nothing.
-        Current-wait entry time (``_provider_wait_entered_at``) stays
-        separate from ``_provider_wait_cumulative_seconds`` across
-        grants/requeues; this helper creates no store beyond the durable
-        workflow instance fields. ``now_iso`` is an explicit timestamp for
-        tests; when omitted the current UTC time is used best-effort.
+        The authoritative ``queue_ordered``/``queue_fresh`` flags and the
+        observed ``next_check`` deadline (None when the manager exposes no
+        authoritative deadline — never invented here) travel with the
+        transition so the detail layer never infers them. Current-wait
+        entry time (``_provider_wait_entered_at``) stays separate from
+        ``_provider_wait_cumulative_seconds`` across grants/requeues; this
+        helper creates no store beyond the durable workflow instance
+        fields. ``now_iso`` is an explicit timestamp for tests; when
+        omitted the current UTC time is used best-effort.
         """
 
         wait_id = build_provider_wait_identity(
@@ -1334,6 +1388,9 @@ class MoonMindAgentRun:
             reason=reason,
             cooldown_until=cooldown_until,
             queue_position=queue_position,
+            queue_ordered=queue_ordered,
+            queue_fresh=queue_fresh,
+            next_check=next_check,
             terminal=terminal,
             canceled=canceled,
             granted=granted,
@@ -1398,6 +1455,9 @@ class MoonMindAgentRun:
         reason: str,
         cooldown_until: str | None = None,
         queue_position: int | None = None,
+        queue_ordered: bool | None = None,
+        queue_fresh: bool | None = None,
+        next_check: str | None = None,
         revision: int | None = None,
     ) -> dict[str, Any] | None:
         """Signal awaiting_slot only when the observation is a new transition.
@@ -1428,6 +1488,9 @@ class MoonMindAgentRun:
             reason=reason,
             cooldown_until=cooldown_until,
             queue_position=queue_position,
+            queue_ordered=queue_ordered,
+            queue_fresh=queue_fresh,
+            next_check=next_check,
             revision=revision,
         )
         if transition is None:
@@ -1437,8 +1500,12 @@ class MoonMindAgentRun:
         # the reason string (two-arg signal preserved for replay), so the
         # authoritative structured fields travel as safe fragments the
         # Workflow Detail parsers already understand. Never invent a
-        # deadline/position here: append only observed values missing from
-        # the reason, sanitized exactly like canonical_waiting_reason.
+        # deadline/position/flag here: append only observed values missing
+        # from the reason, sanitized exactly like canonical_waiting_reason.
+        # queue_ordered/queue_fresh travel as explicit flags so the detail
+        # layer never infers them from fragment presence; wait_entered_at
+        # lets the detail layer render honest elapsed wait; next_check
+        # travels only when the manager observes an authoritative deadline.
         parent_reason = str(reason or "")
         observed_queue = transition.get("queue_position")
         if (
@@ -1457,6 +1524,34 @@ class MoonMindAgentRun:
             and "cooldown_until=" not in parent_reason
         ):
             parent_reason = f"{parent_reason}; cooldown_until={observed_deadline}"
+        if (
+            transition.get("queue_ordered") is True
+            and "queue_ordered=" not in parent_reason
+        ):
+            parent_reason = f"{parent_reason}; queue_ordered=1"
+        if (
+            transition.get("queue_fresh") is True
+            and "queue_fresh=" not in parent_reason
+        ):
+            parent_reason = f"{parent_reason}; queue_fresh=1"
+        observed_next_check = str(transition.get("next_check") or "").strip()
+        if (
+            observed_next_check
+            and len(observed_next_check) <= 64
+            and not any(
+                ch.isspace() or ch in ";," for ch in observed_next_check
+            )
+            and "next_check=" not in parent_reason
+        ):
+            parent_reason = f"{parent_reason}; next_check={observed_next_check}"
+        entered_at = str(self._provider_wait_entered_at or "").strip()
+        if (
+            entered_at
+            and len(entered_at) <= 64
+            and not any(ch.isspace() or ch in ";," for ch in entered_at)
+            and "wait_entered_at=" not in parent_reason
+        ):
+            parent_reason = f"{parent_reason}; wait_entered_at={entered_at}"
         await self._signal_parent_child_state_changed(
             parent_info,
             "awaiting_slot",
@@ -1689,10 +1784,14 @@ class MoonMindAgentRun:
     ) -> str:
         """Describe the manager-owned condition that is blocking slot assignment."""
 
-        queue_position = manager_state.get("requester_queue_position")
-        queue_number = (
-            queue_position if isinstance(queue_position, int) and queue_position > 0 else None
-        )
+        # MoonLadderStudios/MoonMind#1130 R5: queue position requires
+        # ordered current evidence. An unordered pending queue never lends
+        # its index as a display position.
+        queue_number: int | None = None
+        if manager_state.get("pending_requests_ordered") is True:
+            queue_position = manager_state.get("requester_queue_position")
+            if isinstance(queue_position, int) and queue_position > 0:
+                queue_number = queue_position
         try:
             use_canonical = workflow.patched(CANONICAL_WAITING_STATE_PATCH_ID)
         except Exception:
@@ -4158,9 +4257,12 @@ class MoonMindAgentRun:
 
         MoonLadderStudios/MoonMind#1130: the timeline pipeline needs the
         mapped reason plus the authoritative cooldown deadline, the ordered
-        queue position, and the monotonic manager revision. Falls back to
-        the generic provider reason with unknown structure when inspection
-        fails; unknown stays unknown, never fabricated capacity.
+        queue position with its ordered/fresh attestation, the observed
+        next-check deadline (None: the manager exposes none and this
+        pipeline never invents one), and the monotonic manager revision.
+        Falls back to the generic provider reason with unknown structure
+        when inspection fails; unknown stays unknown, never fabricated
+        capacity.
         """
 
         waiting_reason = self._build_provider_slot_waiting_reason(
@@ -4170,6 +4272,9 @@ class MoonMindAgentRun:
         structured: dict[str, Any] = {
             "cooldown_until": None,
             "queue_position": None,
+            "queue_ordered": None,
+            "queue_fresh": None,
+            "next_check": None,
             "revision": None,
         }
         try:
@@ -4198,6 +4303,9 @@ class MoonMindAgentRun:
             "reason": waiting_reason,
             "cooldown_until": structured.get("cooldown_until"),
             "queue_position": structured.get("queue_position"),
+            "queue_ordered": structured.get("queue_ordered"),
+            "queue_fresh": structured.get("queue_fresh"),
+            "next_check": structured.get("next_check"),
             "revision": structured.get("revision"),
             "profile_ref": profile_ref,
         }
@@ -6689,6 +6797,13 @@ class MoonMindAgentRun:
                                     reason=waiting_reason,
                                     cooldown_until=wait_observation.get("cooldown_until"),
                                     queue_position=wait_observation.get("queue_position"),
+                                    queue_ordered=wait_observation.get("queue_ordered")
+                                    if isinstance(wait_observation.get("queue_ordered"), bool)
+                                    else None,
+                                    queue_fresh=wait_observation.get("queue_fresh")
+                                    if isinstance(wait_observation.get("queue_fresh"), bool)
+                                    else None,
+                                    next_check=wait_observation.get("next_check"),
                                     revision=wait_observation.get("revision"),
                                 )
                             else:
@@ -6735,6 +6850,13 @@ class MoonMindAgentRun:
                                             reason=waiting_reason,
                                             cooldown_until=wait_observation.get("cooldown_until"),
                                             queue_position=wait_observation.get("queue_position"),
+                                            queue_ordered=wait_observation.get("queue_ordered")
+                                            if isinstance(wait_observation.get("queue_ordered"), bool)
+                                            else None,
+                                            queue_fresh=wait_observation.get("queue_fresh")
+                                            if isinstance(wait_observation.get("queue_fresh"), bool)
+                                            else None,
+                                            next_check=wait_observation.get("next_check"),
                                             revision=wait_observation.get("revision"),
                                         )
                                         refresh_waiting_reason = False
@@ -6906,6 +7028,7 @@ class MoonMindAgentRun:
                     # admission that already succeeded.
                     try:
                         if self._provider_wait_state is not None:
+                            stored_flags = self._provider_wait_state or {}
                             self._record_provider_wait_observation(
                                 runtime_id=runtime_id,
                                 requester_workflow_id=workflow.info().workflow_id,
@@ -6920,6 +7043,15 @@ class MoonMindAgentRun:
                                 ),
                                 queue_position=(self._provider_wait_state or {}).get(
                                     "queue_position"
+                                ),
+                                queue_ordered=stored_flags.get("queue_ordered")
+                                if isinstance(stored_flags.get("queue_ordered"), bool)
+                                else None,
+                                queue_fresh=stored_flags.get("queue_fresh")
+                                if isinstance(stored_flags.get("queue_fresh"), bool)
+                                else None,
+                                next_check=(self._provider_wait_state or {}).get(
+                                    "next_check"
                                 ),
                                 revision=(self._provider_wait_state or {}).get("revision"),
                                 granted=True,

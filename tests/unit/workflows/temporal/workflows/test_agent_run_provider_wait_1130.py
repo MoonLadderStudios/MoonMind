@@ -176,6 +176,9 @@ def test_structured_manager_slot_wait_projects_only_safe_fields() -> None:
     )
     assert out["cooldown_until"] == "2026-09-14T09:00:00+00:00"
     assert out["queue_position"] == 3
+    assert out["queue_ordered"] is True
+    assert out["queue_fresh"] is True
+    assert out["next_check"] is None
     assert out["revision"] == 11
 
 
@@ -189,6 +192,9 @@ def test_structured_manager_slot_wait_unordered_hides_position() -> None:
         }
     )
     assert out["queue_position"] is None
+    assert out["queue_ordered"] is False
+    assert out["queue_fresh"] is False
+    assert out["next_check"] is None
     assert out["revision"] == 4
 
 
@@ -312,6 +318,9 @@ def test_inspected_slot_wait_compatible_with_previous_compact_shape(
     assert structured == {
         "cooldown_until": None,
         "queue_position": 1,
+        "queue_ordered": True,
+        "queue_fresh": False,
+        "next_check": None,
         "revision": None,
     }
 
@@ -576,7 +585,8 @@ def test_provider_wait_public_transition_matrix_denies_cross_owner() -> None:
     assert entered is not None
     allowed_keys = {
         "wait_id", "revision", "reason", "cooldown_until",
-        "queue_position", "transition", "completed",
+        "queue_position", "queue_ordered", "queue_fresh", "next_check",
+        "transition", "completed",
     }
     assert set(entered.keys()) <= allowed_keys
     assert "lease" not in str(entered) and "credential" not in str(entered).lower()
@@ -865,6 +875,13 @@ async def test_wait_signal_hides_other_identities_and_secrets_end_to_end(
         reason=str(observation.get("reason") or ""),
         cooldown_until=observation.get("cooldown_until"),
         queue_position=observation.get("queue_position"),
+        queue_ordered=observation.get("queue_ordered")
+        if isinstance(observation.get("queue_ordered"), bool)
+        else None,
+        queue_fresh=observation.get("queue_fresh")
+        if isinstance(observation.get("queue_fresh"), bool)
+        else None,
+        next_check=observation.get("next_check"),
         revision=observation.get("revision"),
     )
     assert transition is not None
@@ -877,3 +894,210 @@ async def test_wait_signal_hides_other_identities_and_secrets_end_to_end(
     assert "lease" not in parent_reason.lower()
     assert "fence" not in parent_reason.lower()
     assert "host" not in parent_reason.lower()
+
+
+def test_manager_slot_wait_unordered_queue_hides_position_in_reason(
+    monkeypatch,
+) -> None:
+    """R5: queue position requires ordered current evidence.
+
+    An unordered pending queue never lends its index as a display
+    position in the canonical reason.
+    """
+    _enable_canonical(monkeypatch)
+    wf = MoonMindAgentRun()
+    state = _base_manager_state(
+        pending_requests_ordered=False,
+        requester_queue_position=2,
+    )
+    reason = wf._build_manager_slot_waiting_reason(
+        runtime_id="codex_cli",
+        request=_make_request(),
+        manager_state=state,
+    )
+    assert "queue_position" not in reason
+    ordered_state = _base_manager_state(
+        pending_requests_ordered=True,
+        requester_queue_position=2,
+    )
+    ordered_reason = wf._build_manager_slot_waiting_reason(
+        runtime_id="codex_cli",
+        request=_make_request(),
+        manager_state=ordered_state,
+    )
+    assert "queue_position=2" in ordered_reason
+
+
+def test_record_carries_authoritative_ordered_fresh_flags() -> None:
+    """R5: ordered/fresh attestations travel with the transition.
+
+    Identical polls carrying the same attestation dedupe; an attestation
+    change emits one bounded reason_changed event.
+    """
+    wf = MoonMindAgentRun()
+    entered = wf._record_provider_wait_observation(
+        **_record_kwargs(queue_position=2, queue_ordered=True, queue_fresh=True)
+    )
+    assert entered is not None and entered["transition"] == "wait_entered"
+    assert entered["queue_ordered"] is True
+    assert entered["queue_fresh"] is True
+    assert entered["next_check"] is None
+    # Identical poll with the same attestation: no new event.
+    assert (
+        wf._record_provider_wait_observation(
+            **_record_kwargs(
+                queue_position=2, queue_ordered=True, queue_fresh=True
+            )
+        )
+        is None
+    )
+    # Attestation loss (ordered snapshot gone stale) is a real change.
+    changed = wf._record_provider_wait_observation(
+        **_record_kwargs(
+            queue_position=None, queue_ordered=False, queue_fresh=False
+        )
+    )
+    assert changed is not None and changed["transition"] == "reason_changed"
+    assert changed["queue_ordered"] is False
+    # Unknown stays unknown: a poll without attestation after an
+    # unattested wait still dedupes.
+    fresh_wf = MoonMindAgentRun()
+    assert fresh_wf._record_provider_wait_observation(**_record_kwargs()) is not None
+    assert fresh_wf._record_provider_wait_observation(**_record_kwargs()) is None
+
+
+@pytest.mark.asyncio
+async def test_signal_forwards_ordered_fresh_and_entered_fragments(
+    monkeypatch,
+) -> None:
+    """R5: authoritative flags, entry time, and next-check reach the parent.
+
+    The two-arg signal is preserved; observed fields travel as safe
+    fragments. No ETA is ever implied.
+    """
+    calls = _patch_canonical_signal(monkeypatch)
+    wf = MoonMindAgentRun()
+    parent = object()
+    transition = await wf._signal_provider_slot_wait(
+        parent,
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-1",
+        profile_ref="p1",
+        reason="awaiting_provider_capacity",
+        queue_position=2,
+        queue_ordered=True,
+        queue_fresh=True,
+        next_check="2026-09-14T07:01:00+00:00",
+        revision=7,
+    )
+    assert transition is not None and transition["transition"] == "wait_entered"
+    assert len(calls) == 1
+    new_state, parent_reason = calls[0]
+    assert new_state == "awaiting_slot"
+    assert "queue_position=2" in parent_reason
+    assert "queue_ordered=1" in parent_reason
+    assert "queue_fresh=1" in parent_reason
+    assert "next_check=2026-09-14T07:01:00+00:00" in parent_reason
+    assert "wait_entered_at=" in parent_reason
+    assert "ETA" not in parent_reason and "eta" not in parent_reason.lower()
+    # Unattested observations carry no flag fragments and invent none.
+    second_wf = MoonMindAgentRun()
+    await second_wf._signal_provider_slot_wait(
+        parent,
+        runtime_id="codex_cli",
+        requester_workflow_id="agent-run-2",
+        profile_ref="p1",
+        reason="awaiting_provider_capacity",
+        revision=7,
+    )
+    assert len(calls) == 2
+    _, unattested_reason = calls[1]
+    assert "queue_ordered=" not in unattested_reason
+    assert "queue_fresh=" not in unattested_reason
+    assert "next_check=" not in unattested_reason
+
+
+@pytest.mark.asyncio
+async def test_signal_rejects_malicious_next_check_fragment(
+    monkeypatch,
+) -> None:
+    """R5/R7: hostile next-check values never widen the parent payload."""
+    calls = _patch_canonical_signal(monkeypatch)
+    wf = MoonMindAgentRun()
+    parent = object()
+    for hostile in (
+        "2026-09-14T07:01:00+00:00; lease=abc",
+        "soon, now",
+        "in 5 minutes",
+        "x" * 65,
+    ):
+        transition = await wf._signal_provider_slot_wait(
+            parent,
+            runtime_id="codex_cli",
+            requester_workflow_id="agent-run-1",
+            profile_ref="p1",
+            reason="awaiting_provider_capacity",
+            next_check=hostile,
+            revision=7,
+        )
+        # The first hostile poll records; repeats dedupe.
+        assert len(calls) >= 1
+        _, parent_reason = calls[-1]
+        assert "lease" not in parent_reason
+        assert "next_check=" not in parent_reason
+        assert transition is None or "ETA" not in str(transition)
+
+
+def test_replay_compat_pre_flag_history_upgrades_without_fabrication() -> None:
+    """R6: histories recorded before ordered/fresh flags still replay.
+
+    A recorded wait without flag keys reuses verbatim; unattested polls
+    dedupe against it; one bounded reason_changed persists newly observed
+    attestation, and identical polls dedupe afterwards. JSON round-trips
+    (worker restart / Continue-As-New shape) preserve the flags.
+    """
+    import copy
+    import json
+
+    wf = MoonMindAgentRun()
+    entered = wf._record_provider_wait_observation(**_record_kwargs())
+    assert entered is not None
+    assert entered["queue_ordered"] is None
+    assert entered["queue_fresh"] is None
+    assert entered["next_check"] is None
+    # Retained-history reads reuse the recorded observation verbatim.
+    assert wf._reuse_recorded_provider_wait() == entered
+    # Unattested polls dedupe against pre-flag history.
+    assert wf._record_provider_wait_observation(**_record_kwargs()) is None
+    # Newly observed attestation emits exactly one bounded transition.
+    attested = wf._record_provider_wait_observation(
+        **_record_kwargs(queue_position=2, queue_ordered=True, queue_fresh=True)
+    )
+    assert attested is not None and attested["transition"] == "reason_changed"
+    assert wf._record_provider_wait_observation(
+        **_record_kwargs(queue_position=2, queue_ordered=True, queue_fresh=True)
+    ) is None
+    # Worker restart / Continue-As-New: flags survive the round-trip and
+    # reuse verbatim with no invented transitions.
+    snapshot = json.loads(
+        json.dumps(
+            {
+                "state": wf._provider_wait_state,
+                "entered_at": wf._provider_wait_entered_at,
+                "cumulative_seconds": wf._provider_wait_cumulative_seconds,
+            }
+        )
+    )
+    restarted = MoonMindAgentRun()
+    restarted._provider_wait_state = copy.deepcopy(snapshot["state"])
+    restarted._provider_wait_entered_at = snapshot["entered_at"]
+    restarted._provider_wait_cumulative_seconds = snapshot["cumulative_seconds"]
+    assert restarted._reuse_recorded_provider_wait() == wf._provider_wait_state
+    assert (
+        restarted._record_provider_wait_observation(
+            **_record_kwargs(
+                queue_position=2, queue_ordered=True, queue_fresh=True
+            )
+        )
+        is None
+    )

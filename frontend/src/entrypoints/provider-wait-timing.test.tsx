@@ -2,8 +2,13 @@ import { describe, it, expect } from 'vitest';
 
 import {
   formatProviderWaitTiming,
+  formatWaitElapsedSince,
   parseProviderCooldownUntil,
+  parseProviderNextCheck,
+  parseProviderQueueFresh,
+  parseProviderQueueOrdered,
   parseProviderQueuePosition,
+  parseProviderWaitEnteredAt,
   ProviderWaitDetails,
 } from './workflow-detail';
 
@@ -80,5 +85,54 @@ describe('provider wait timing labels (MoonLadderStudios/MoonMind#1130)', () => 
     expect(labels.queueLabel).toBe('Queue position 2 (ordered snapshot)');
     expect(labels.cooldownLabel).toBe('Cooldown until 2026-09-14T08:00:00+00:00');
     expect(labels.nextCheckLabel ?? '').toContain('not a promised start time');
+  });
+
+  it('propagates authoritative ordered/fresh flags instead of inferring them', () => {
+    // Explicit attestations travel as fragments in the parent reason.
+    const attested =
+      'awaiting_provider_capacity; queue_position=2; queue_ordered=1; queue_fresh=1';
+    expect(parseProviderQueueOrdered(attested)).toBe(true);
+    expect(parseProviderQueueFresh(attested)).toBe(true);
+    // Legacy reasons without flag fragments keep the historical inference
+    // path (position presence implies the ordered precondition).
+    const legacy = 'awaiting_provider_capacity; queue_position=2';
+    expect(parseProviderQueueOrdered(legacy)).toBeNull();
+    expect(parseProviderQueueFresh(legacy)).toBeNull();
+    expect(parseProviderQueuePosition(legacy)).toBe(2);
+    // An unordered queue never lends its index as a display position and
+    // carries no attestation flags.
+    const unordered = 'awaiting_provider_capacity';
+    expect(parseProviderQueueOrdered(unordered)).toBeNull();
+    expect(parseProviderQueueFresh(unordered)).toBeNull();
+    expect(parseProviderQueuePosition(unordered)).toBeNull();
+  });
+
+  it('parses next-check and wait-entered fragments without implying an ETA', () => {
+    const reason =
+      'provider_cooldown; cooldown_until=2026-09-14T08:00:00+00:00; next_check=2026-09-14T07:01:00+00:00; wait_entered_at=2026-09-14T07:00:00+00:00';
+    expect(parseProviderNextCheck(reason)).toBe('2026-09-14T07:01:00+00:00');
+    expect(parseProviderWaitEnteredAt(reason)).toBe('2026-09-14T07:00:00+00:00');
+    expect(parseProviderNextCheck('awaiting_provider_capacity')).toBeNull();
+    expect(parseProviderWaitEnteredAt('awaiting_provider_capacity')).toBeNull();
+    // Unknown stays unknown: no fragment means no next-check label.
+    expect(
+      formatProviderWaitTiming({ nextCheck: parseProviderNextCheck('awaiting_provider_capacity') })
+        .nextCheckLabel,
+    ).toBeNull();
+  });
+
+  it('formats honest elapsed wait from the observed entry time', () => {
+    expect(
+      formatWaitElapsedSince('2026-09-14T07:00:00+00:00', Date.parse('2026-09-14T07:00:45+00:00')),
+    ).toBe('45s');
+    expect(
+      formatWaitElapsedSince('2026-09-14T07:00:00+00:00', Date.parse('2026-09-14T07:02:30+00:00')),
+    ).toBe('2m 30s');
+    // Unparseable or future entry times never fabricate elapsed wait.
+    expect(formatWaitElapsedSince('not-a-timestamp', Date.parse('2026-09-14T07:00:45+00:00'))).toBeNull();
+    expect(
+      formatWaitElapsedSince('2026-09-14T08:00:00+00:00', Date.parse('2026-09-14T07:00:00+00:00')),
+    ).toBeNull();
+    expect(formatWaitElapsedSince(null)).toBeNull();
   });
 });
