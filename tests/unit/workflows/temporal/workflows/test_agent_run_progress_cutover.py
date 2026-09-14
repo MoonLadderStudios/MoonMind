@@ -69,6 +69,7 @@ def _install_parent(monkeypatch, patched_ids) -> MoonMindUserWorkflow:
             workflow, "patched", lambda patch_id: patch_id in allowed
         )
     monkeypatch.setattr(workflow, "now", lambda: _LAUNCH_NOW)
+    monkeypatch.setattr(workflow, "deprecate_patch", lambda _patch_id: None)
     instance._active_agent_child_workflow_id = CHILD_WF
     return instance
 
