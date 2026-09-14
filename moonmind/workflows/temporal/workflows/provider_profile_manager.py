@@ -2301,6 +2301,12 @@ class MoonMindProviderProfileManagerWorkflow:
                 for r in self._pending_requests
             ],
             "pending_requests_ordered": self._pending_requests_ordered,
+            # MoonLadderStudios/MoonMind#1130: project the shared-scope
+            # aggregates through the compact read path so wait reporting can
+            # explain shared throttling without serializing lease authority.
+            # CapacityScopeState.to_dict carries only safe aggregate fields
+            # (no user identities or queue entries).
+            "scopes": [s.to_dict() for s in self._scopes.values()],
             # MoonLadderStudios/MoonMind#3883: index and durable-state
             # disagreements are surfaced, not silently skipped, so an operator
             # can act on them. Both lists are compact and non-secret.
