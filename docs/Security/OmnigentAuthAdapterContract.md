@@ -2,27 +2,43 @@
 
 **Document Class:** Canonical declarative
 **Viewpoint:** Cross-Cutting Concept View
-**Status:** Draft
+**Status:** Superseded
+**Superseded By:** [Single-User Application Design](../SingleUserApplicationDesign.md)
 **Owners:** MoonMind Engineering
 **Audience:** API, security contributors and operators
-**Authority:** Supported reusable upstream authentication interfaces qualified
-for MoonMind composition, and the MoonMind-side adapter seams that bind
-them to MoonMind configuration, identity, persistence, and session policy.
-Qualifies MoonLadderStudios/MoonMind#4118 (parent epic #4116, depends on
+**Authority:** Predecessor application-account adapter reference for code and
+releases that still use its identity and session mechanisms. The
+[single-user application model](../MoonMindArchitecture.md#single-user-application-model)
+governs the target architecture. This reference records the interfaces qualified
+under MoonLadderStudios/MoonMind#4118 (parent epic #4116, depends on
 #4117, plan coverage K2 in `../tmp/KeycloakRemovalPlan.md`).
 **Owning Surface:** `moonmind/security/omnigent_auth_qualification.py`,
 conformance fixtures in `tests/unit/security/test_omnigent_auth_qualification_4118.py`
 **Related Docs:** [AuthenticationContracts.md](./AuthenticationContracts.md)
-(desired-state modes, identity, session, and error semantics),
+(predecessor modes, identity, session, and error semantics),
 [KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) (predecessor proposal;
 starting evidence only), [KeycloakRemovalQualification-4118.md](../tmp/KeycloakRemovalQualification-4118.md)
 (pin, artifact identities, and test results for this qualification)
 
-> [!NOTE]
-> This document declares which upstream entrypoints MoonMind reuses and
-> which MoonMind-side seams are authoritative. Rollout sequencing,
-> migration tasks, and backlog tickets belong in MoonSpec artifacts,
-> gitignored handoffs, or `docs/tmp/` implementation plans.
+> [!IMPORTANT]
+> This adapter's application-account target is superseded by the
+> [Single-User Application Design](../SingleUserApplicationDesign.md).
+> Identity mapping to `User.id`, account stores, application-login sessions,
+> password handling, and human-role checks below are predecessor requirements.
+> They are not prerequisites for single-user operation and must not be recreated
+> under a default user, singleton operator, or renamed identity abstraction.
+>
+> Sections below retain the qualified account-era reference for existing code.
+> Their normative language applies only to that predecessor implementation, not
+> to a parallel desired application architecture. This documentation change does
+> not disable any deployed protection or establish completed runtime removal.
+> Protected deployment admission, browser safety, scoped machine credentials,
+> runtime-token separation, and in-flight work remain governed by their owning
+> contracts. Reusable signing or verification primitives may survive for those
+> purposes without retaining this application-account adapter.
+>
+> Rollout sequencing and qualification evidence remain in issues, `docs/tmp/`,
+> or run-local artifacts.
 
 ---
 
@@ -54,7 +70,7 @@ store, and CLI/magic-link routes are never imported by the adapter.
 Existing standalone upstream consumers are unaffected: qualification
 mutates no upstream global, default, or allowlist.
 
-## 3. Identity hook ordering (authoritative)
+## 3. Identity hook ordering (predecessor reference)
 
 A validated identity resolves to exactly one existing MoonMind UUID
 before any MoonMind session is minted:

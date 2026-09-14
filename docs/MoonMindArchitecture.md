@@ -8,7 +8,7 @@ evidence; direct Codex remains a truthfully labeled migration and historical
 compatibility path. Claude-through-Omnigent parity is deferred.
 
 **Status:** Current architecture and near-term direction  
-**Updated:** 2026-07-13  
+**Updated:** 2026-09-14\
 **Audience:** Contributors, operators, runtime authors, integration authors, and dashboard developers  
 **Purpose:** Top-level architecture for MoonMind's Temporal-native agent orchestration model, including managed runtimes, managed sessions, Omnigent hosts, external agents, artifacts, provider profiles, and API-governed container jobs.
 
@@ -44,6 +44,30 @@ boundaries.
 > repository work enters MoonMind through the API-owned
 > [`Docker Backend Service`](ManagedAgents/DockerBackendService.md), which uses one
 > deployment-selected daemon and a cross-workflow image cache.
+
+## Single-user application model
+
+MoonMind's target application architecture is single-user only. One operator
+controls an instance, and application configuration and resources belong to the
+instance rather than to application users. There are no application accounts,
+human roles, membership, or per-user resource scopes. A permanently seeded user
+or a renamed singleton principal is not the target model.
+
+Deployment admission and scoped machine authority remain separate security
+boundaries. Agents and workers do not inherit unrestricted operator access.
+Concurrent workflows, multiple provider profiles, and independent deployments
+remain supported without a shared human-identity service.
+
+The [Single-User Application Design](SingleUserApplicationDesign.md) defines the
+accepted desired behavior and data-preservation invariants. This system-wide
+application model supersedes conflicting account, role, and human-ownership
+targets in older authentication, settings, and preset documents. It does not
+supersede exact machine interfaces or weaken runtime, credential, browser,
+network, approval, or replay protections.
+
+This is architectural direction, not a claim that existing account-based code
+has been removed. Existing deployments retain their working protected access
+until the replacement is implemented and verified.
 
 ---
 
@@ -209,7 +233,7 @@ The API service and dashboard provide the operator boundary. They:
 
 - create workflow executions;
 - validate and normalize runtime intent;
-- expose provider-profile and authentication configuration;
+- expose provider-profile, managed-secret, and deployment-access configuration;
 - serve artifact, log, and execution projections;
 - accept intervention and approval requests;
 - expose context and MCP surfaces;
@@ -612,11 +636,15 @@ Engine endpoint without changing public tools.
     backend branches.
 16. New runtimes extend MoonMind through adapters and declared capabilities, not
     parallel orchestration systems.
+17. The application is single-user only. Deployment admission and scoped machine
+    credentials replace human-account ownership, not execution safety boundaries.
 
 ---
 
 ## 17. Canonical subsystem documents
 
+- [`SingleUserApplicationDesign.md`](SingleUserApplicationDesign.md): accepted
+  single-user application design and preservation of access and execution boundaries.
 - [`Temporal/TemporalArchitecture.md`](Temporal/TemporalArchitecture.md): Temporal
   topology and workflow/Activity authority.
 - [`Temporal/ManagedAndExternalAgentExecutionModel.md`](Temporal/ManagedAndExternalAgentExecutionModel.md): true agent execution lifecycle and canonical contracts.

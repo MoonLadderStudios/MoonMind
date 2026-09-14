@@ -3,13 +3,14 @@
 Guards the K5 documentation-reconciliation core: MCP/artifact/stack docs must
 describe the post-removal selector-based auth model (not the pre-removal
 two-state model), README/.env-template must separate the operator journeys,
-the canonical contract must own target behavior with an honest
-supported-vs-blocked matrix and real tooling linkage, and the temporary removal
-plan must not be deleted prematurely.
+account-era contracts must retain an honest supported-vs-blocked matrix and
+real tooling linkage without overriding the accepted single-user target, and
+the temporary removal plan must not be deleted prematurely.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -102,10 +103,19 @@ def test_env_template_points_at_canonical_contract():
     assert "local" in text
 
 
+def _metadata(text: str, field: str) -> str:
+    """Read a metadata line, not an incidental phrase in historical prose."""
+    match = re.search(rf"^\*\*{re.escape(field)}:\*\*[ \t]*(.+)$", text, re.MULTILINE)
+    assert match is not None, f"missing {field} metadata"
+    return match.group(1).rstrip(" \\")
+
+
 def test_canonical_doc_owns_matrix_tooling_and_evidence():
     text = _read(CANONICAL_DOC)
-    assert "Status:** Draft" in text or "Status: Draft" in text
-    assert "single owner" in text
+    # The account target is superseded, but its qualification and safety
+    # evidence must remain available to deployments still running that code.
+    assert "superseded" in _metadata(text, "Status").casefold()
+    assert "SingleUserApplicationDesign.md" in _metadata(text, "Authority")
     assert "keycloak_cutover_rehearsal" in text
     assert "#4128" in text
     assert "never whole shared" in text.lower() or "not an auth rollback" in text
@@ -272,3 +282,24 @@ def test_api_composition_mounts_no_legacy_login_routes():
     text = _read(API_MAIN)
     assert 'prefix="/api/v1/auth"' not in text
     assert "auth/jwt" not in text
+
+
+def test_account_adapter_is_explicitly_superseded():
+    text = _read(REPO_ROOT / "docs/Security/OmnigentAuthAdapterContract.md")
+    assert _metadata(text, "Status") == "Superseded"
+    assert "../SingleUserApplicationDesign.md" in _metadata(text, "Superseded By")
+
+
+def test_settings_owner_classifies_superseded_scopes():
+    text = _read(REPO_ROOT / "docs/Security/SettingsSystem.md")
+    assert _metadata(text, "Application Model") == "Single-user"
+    assert _metadata(text, "Superseded Scope")
+    assert "../SingleUserApplicationDesign.md" in _metadata(text, "Superseded By")
+
+
+def test_single_user_design_is_accepted_not_claimed_implemented():
+    text = _read(REPO_ROOT / "docs/SingleUserApplicationDesign.md")
+    assert _metadata(text, "Status") == "Accepted"
+    assert "MoonMindArchitecture.md#single-user-application-model" in _metadata(
+        text, "Authority"
+    )
