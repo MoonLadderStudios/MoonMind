@@ -1,6 +1,6 @@
 ---
 name: fix-merge-conflicts
-description: Sync the branch with the latest `origin/main`, merge `origin/main`, resolve conflicts end-to-end, then commit and push the current branch.
+description: Sync the branch with the latest PR base branch from `origin`, merge the PR base ref, resolve conflicts end-to-end, then commit and push the current branch.
 metadata:
   publish:
     mode: auto
@@ -14,16 +14,24 @@ metadata:
 # Fix Merge Conflicts
 
 Run this as an end-to-end sync and conflict resolution workflow:
-1. Fetch latest `main` from `origin`.
-2. Merge `origin/main` into the current branch.
+1. Fetch latest PR base branch from `origin`.
+2. Merge the PR base ref into the current branch.
 3. Resolve any conflicts.
 4. Validate no conflict markers remain.
 5. Commit and push the current branch.
 
+## Inputs
+
+- `inputs.base` (required): the PR base branch name (for example `main` or
+  `release/2.x`). The merge target is always `origin/<base>`.
+- If the base branch is missing or empty, stop as blocked with reason
+  `base_unavailable`. Never silently substitute a default branch for a PR
+  that targets another base branch.
+
 ## Default Prompt
 
 ```text
-Fetch the latest main branch from origin, merge origin/main into the current branch, resolve all merge conflicts, verify no conflict markers remain, then commit and push.
+Fetch the latest PR base branch from origin, merge the PR base ref into the current branch, resolve all merge conflicts, verify no conflict markers remain, then commit and push.
 ```
 
 ## Workflow
@@ -46,12 +54,14 @@ if [ -z "$git_local_name" ] || [ -z "$git_local_email" ]; then
 fi
 ```
 
-1. Sync remote refs for `main`.
-- Run `git fetch origin main --prune`.
+1. Sync remote refs for the PR base branch.
+- Resolve the base branch name from `inputs.base` (required). If it is
+  missing or empty, stop as blocked with reason `base_unavailable`.
+- Run `git fetch origin <base> --prune`.
 - Confirm branch state with `git status`.
 
-2. Merge latest `main` into the current branch.
-- Run `git merge origin/main`.
+2. Merge the latest PR base ref into the current branch.
+- Run `git merge origin/<base>`.
 - If merge completes cleanly, continue to step 4.
 - If git reports conflicts, continue to step 3.
 
@@ -61,7 +71,7 @@ fi
 - Keep the correct merged content.
 - Preserve project conventions and existing architecture.
 - Stage resolved files with `git add <file>` or `git add -A`.
-- Complete the merge commit with `git commit` (or `git commit -m "Merge origin/main and resolve conflicts"`).
+- Complete the merge commit with `git commit` (or `git commit -m "Merge origin/<base> and resolve conflicts"`).
 
 4. Validate resolution completeness.
 - Confirm `git diff --name-only --diff-filter=U` returns nothing.
@@ -105,6 +115,6 @@ fi
 
 Provide:
 - Resolved file list.
-- Whether `git merge origin/main` was clean, fast-forward, or conflicting.
+- Whether the merge of the PR base ref was clean, fast-forward, or conflicting.
 - Verification performed (or what was skipped).
 - Commit hash or verified no-op `HEAD` hash, plus pushed/verified branch.
