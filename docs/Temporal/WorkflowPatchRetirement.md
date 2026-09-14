@@ -280,6 +280,97 @@ histories against the changed call site.
   - **Remove condition:** audit reports `safe_to_remove`: no retained
     history carries the marker within retention and retained closed
     executions are no longer reset/replay eligible.
+- **Patch:** `provider-profile-manager-db-lease-persistence-v1`
+  (`DB_LEASE_PERSISTENCE_PATCH`, 10 call sites:
+  `release_slot`, `_acquire_slot`,
+  `_acquire_single_flight_validation_lease`,
+  `_acquire_exclusive_maintenance_lease`, `run` (x3), `_drain_queue`,
+  `_verify_active_workflows`, `_verify_lease_holders`).
+  - **Command boundary:** activity: durable lease-table writes on every
+    grant/release/reclaim path (`_persist_lease_grant`,
+    `_remove_lease_from_db`, `_sync_leases_to_db`).
+  - **Old/new behavior:** in-memory-only lease accounting with no
+    lease-table activity vs persisting every grant, removing every
+    release, and syncing reclaims through the durable lease table so
+    leases survive Continue-As-New and restarts.
+  - **Introduction:** `30020778` (2026-03-28).
+  - **Classification:** retained-history compatibility required.
+  - **Deprecate condition:** audit reports `safe_to_deprecate` with an
+    admission cutoff newer than every admitted execution that could
+    predate 2026-03-28, no pre-patch workers, and a pre/post-history
+    replay test passes against the `deprecate_patch` call sites.
+  - **Remove condition:** audit reports `safe_to_remove`: no retained
+    history carries the marker within retention and retained closed
+    executions are no longer reset/replay eligible.
+- **Patch:** `provider-profile-manager-capacity-scope-v1`
+  (`PROVIDER_CAPACITY_SCOPE_PATCH`, 6 call sites:
+  `report_cooldown`, `_maintenance_consumes_scope`,
+  `_apply_profile_sync`, `_clear_expired_cooldowns`,
+  `_profile_admitted_by_capacity`, `_load_profiles_from_db`).
+  - **Command boundary:** capacity accounting scope: which lease
+    purposes consume execution slots and whether a 429 report withdraws
+    the profile or lowers effective admission (admission decisions
+    change; no new activity commands).
+  - **Old/new behavior:** every maintenance purpose consumed provider
+    capacity scope and a rate-limit report withdrew the profile via
+    `cooldown_until` vs purpose-aware capacity ledger exempting
+    validation/maintenance leases and lowering effective admission on
+    rate-limit reports.
+  - **Introduction:** `a962b88c` (2026-09-04).
+  - **Classification:** retained-history compatibility required.
+  - **Deprecate condition:** audit reports `safe_to_deprecate` with an
+    admission cutoff newer than every admitted execution that could
+    predate 2026-09-04, no pre-patch workers, and a pre/post-history
+    replay test passes against the `deprecate_patch` call sites.
+  - **Remove condition:** audit reports `safe_to_remove`: no retained
+    history carries the marker within retention and retained closed
+    executions are no longer reset/replay eligible.
+- **Patch:** `run-durable-finalization-outcome-v1`
+  (`RUN_DURABLE_FINALIZATION_OUTCOME_PATCH`, 6 call sites:
+  `_record_prepublication_checkpoint`, `run`,
+  `_run_execution_stage` (x4)).
+  - **Command boundary:** step-ledger finalization outcome recording
+    and `RunWorkflowOutput` enrichment
+    (`executionOutcome`/`finalizationOutcome` propagation; checkpoint
+    failure recorded instead of raised).
+  - **Old/new behavior:** checkpoint failures raised and the run output
+    carried no durable execution/finalization outcomes vs recording a
+    `finalizationOutcome` row on checkpoint failure and propagating the
+    latest outcome pair into the run output.
+  - **Introduction:** `1c05b2be` (2026-07-10).
+  - **Classification:** retained-history compatibility required.
+  - **Deprecate condition:** audit reports `safe_to_deprecate` with an
+    admission cutoff newer than every admitted execution that could
+    predate 2026-07-10, no pre-patch workers, and a pre/post-history
+    replay test passes against the `deprecate_patch` call sites.
+  - **Remove condition:** audit reports `safe_to_remove`: no retained
+    history carries the marker within retention and retained closed
+    executions are no longer reset/replay eligible.
+- **Patch:** `run-omnigent-remediation-checkpoint-restore-v1`
+  (`RUN_OMNIGENT_REMEDIATION_CHECKPOINT_RESTORE_PATCH`, 6 call sites:
+  `_initialize_remediation_loop_controller`,
+  `_canonical_remediation_checkpoint_evidence`,
+  `_remediation_workspace_materialization_required`,
+  `_advance_remediation_workspace_head` (x2),
+  `_run_execution_stage`).
+  - **Command boundary:** dynamic remediation child request and
+    workspace checkpoint restore sequence (workflow-owned archive ref
+    passed into the host restore boundary; workspace-head adoption
+    across attempts).
+  - **Old/new behavior:** archive the remediation destination before
+    the child started and seed the loop from the verifier read-only
+    checkout vs pass the workflow-owned archive ref into the host
+    restore boundary, validate the captured result, and adopt the
+    latest preceding candidate archive as the workspace head.
+  - **Introduction:** `43261c55` (2026-09-02).
+  - **Classification:** retained-history compatibility required.
+  - **Deprecate condition:** audit reports `safe_to_deprecate` with an
+    admission cutoff newer than every admitted execution that could
+    predate 2026-09-02, no pre-patch workers, and a pre/post-history
+    replay test passes against the `deprecate_patch` call sites.
+  - **Remove condition:** audit reports `safe_to_remove`: no retained
+    history carries the marker within retention and retained closed
+    executions are no longer reset/replay eligible.
 
 ### Production-history evidence procedure (read-only)
 
