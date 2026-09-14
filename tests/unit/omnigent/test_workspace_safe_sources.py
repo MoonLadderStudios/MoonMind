@@ -1438,7 +1438,7 @@ async def test_cyclic_staged_symlink_fails_before_promotion(tmp_path, indirect):
     service = FakeArtifactService({"checkpoint": payload})
     workspace = tmp_path / "ws"
     workspace.mkdir()
-    with pytest.raises(WorkspaceArtifactProjectionError, match="unresolvable: loop"):
+    with pytest.raises(WorkspaceArtifactProjectionError, match="unresolvable:") as exc:
         await WorkspaceArtifactProjector(service).project(
             workspace,
             checkpoint_ref="artifact://checkpoint",
@@ -1448,6 +1448,9 @@ async def test_cyclic_staged_symlink_fails_before_promotion(tmp_path, indirect):
             runtime_gid=os.getgid(),
             strict_admission=True,
         )
+    assert str(exc.value) in {
+        f"workspace checkpoint symlink is unresolvable: {entry[0]}" for entry in entries
+    }
     assert not any(workspace.iterdir())
 
 
