@@ -4245,6 +4245,57 @@ function formatStepLastError(lastError: unknown): string | null {
   return String(lastError);
 }
 
+// MoonLadderStudios/MoonMind#1130: honest provider-wait timing labels.
+// Queue position renders only from an ordered snapshot, cooldown only from
+// an authoritative deadline, next-check timing labeled as such — never a
+// promised start time or an ETA derived from active-count arithmetic.
+export function formatProviderWaitTiming(input: {
+  queuePosition?: number | null;
+  queueOrdered?: boolean;
+  queueFresh?: boolean;
+  cooldownUntil?: string | null;
+  nextCheck?: string | null;
+}): { queueLabel: string | null; cooldownLabel: string | null; nextCheckLabel: string | null } {
+  const position = input.queuePosition;
+  const queueLabel =
+    input.queueOrdered && input.queueFresh && typeof position === 'number' && position > 0
+      ? `Queue position ${position} (ordered snapshot)`
+      : null;
+  const deadline = (input.cooldownUntil ?? '').trim();
+  const cooldownLabel = deadline ? `Cooldown until ${deadline}` : null;
+  const check = (input.nextCheck ?? '').trim();
+  const nextCheckLabel = check ? `Next check ${check} (not a promised start time)` : null;
+  return { queueLabel, cooldownLabel, nextCheckLabel };
+}
+
+export function parseProviderQueuePosition(waitingReason: string | null | undefined): number | null {
+  if (!waitingReason) return null;
+  const match = /queue_position=(\d+)/.exec(waitingReason);
+  if (!match) return null;
+  const position = Number.parseInt(match[1] ?? '', 10);
+  return Number.isFinite(position) && position > 0 ? position : null;
+}
+
+export function ProviderWaitDetails({ waitingReason }: { waitingReason: string | null | undefined }) {
+  if (!waitingReason) return null;
+  // The canonical backend reason carries queue_position only from an
+  // ordered scoped snapshot (artifacts guard), so its presence implies the
+  // ordered-snapshot precondition. Cooldown/next-check render when future
+  // API fields supply them; until then no deadline is invented here.
+  const queuePosition = parseProviderQueuePosition(waitingReason);
+  const { queueLabel } = formatProviderWaitTiming({
+    queuePosition,
+    queueOrdered: queuePosition !== null,
+    queueFresh: queuePosition !== null,
+  });
+  return (
+    <>
+      {queueLabel ? <p className="small">{queueLabel} — not a promised start time.</p> : null}
+      <p className="small">Wait times are observations, not an ETA.</p>
+    </>
+  );
+}
+
 function stepTerminal(status: string | null | undefined): boolean {
   const normalized = String(status || '').trim().toLowerCase();
   return normalized === 'completed'
@@ -5756,6 +5807,7 @@ function StepLedgerRowCard({
               <h4>Summary</h4>
               <p className="small">{row.summary || 'No step summary yet.'}</p>
               {row.waitingReason ? <p className="small">Waiting reason: {row.waitingReason}</p> : null}
+              <ProviderWaitDetails waitingReason={row.waitingReason} />
               {row.preservedFrom ? (
                 <p className="small">
                   Preserved from source run <code>{row.preservedFrom.workflowId}</code> run{' '}
@@ -8381,6 +8433,9 @@ function InterventionMonitorPanel({
         <Card label="Audit Entries">{String(auditCount)}</Card>
         <Card label="Waiting Reason">{execution.waitingReason || '—'}</Card>
       </div>
+      {execution.waitingReason ? (
+        <p className="small">Wait times are observations, not an ETA. Positions appear only from an ordered snapshot.</p>
+      ) : null}
     </section>
   );
 }
