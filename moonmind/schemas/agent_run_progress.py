@@ -815,7 +815,6 @@ def apply_agent_run_progress(
         parent_state["acceptedSourceGeneration"] = projection.source_generation
         if projection.agent_run_run_id is not None:
             parent_state["acceptedAgentRunRunId"] = projection.agent_run_run_id
-        accepted_generation = projection.source_generation
     elif projection.source_generation != accepted_generation:
         if (
             parent_state.get("pendingSuccessorGeneration") is not None
@@ -830,7 +829,6 @@ def apply_agent_run_progress(
             parent_state["acceptedReasonCode"] = None
             parent_state["acceptedWaitCode"] = None
             parent_state["pendingSuccessorGeneration"] = None
-            accepted_generation = projection.source_generation
         else:
             return ProgressApplyOutcome(
                 disposition="old_generation",
