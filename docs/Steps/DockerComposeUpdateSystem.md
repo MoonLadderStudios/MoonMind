@@ -788,16 +788,16 @@ response reuses the same canary run and verifies the server's current decision.
 
 A plain restart onto a never-promoted release with no live route left to
 preserve must still converge: when the recorded current version has no live
-pollers on any of its queues and the deployed release is not older than it,
-the starting workflow fleet runs the same pinned canary and compare-and-set
-promotion itself instead of waiting for an update owner. This is the disjoint
-complement of the row above: whenever the current version still serves
-traffic, or the deployed release is older, startup preserves the route and
-leaves qualification and promotion to the authorized release controller.
-Local presence alone grants nothing; only the canary identity proof, the
+pollers on any of its queues, the starting workflow fleet runs the same
+pinned canary and compare-and-set promotion itself instead of waiting for an
+update owner, qualified across every queue the current version served. This
+is the disjoint complement of the row above: whenever the current version
+still serves any traffic, startup preserves the route and leaves
+qualification and promotion to the authorized release controller. Local
+presence alone grants nothing; only the canary identity proof, the
 compare-and-set, and the proven absence of any serving capability authorize
-the handoff. A newer recorded current version keeps its authority, so
-deliberate downgrades stay on the managed update path.
+the handoff. A live route is never displaced whatever image backs it, so
+deliberate moves of a serving route stay on the managed update path.
 
 Before promotion, the controller retains pollers from the exact previous image.
 Pinned work remains owned by that version after normal Compose services change.

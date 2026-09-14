@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from uuid import uuid4
 
 from temporalio.api.workflowservice.v1 import (
@@ -359,46 +359,6 @@ async def promote_version(
     }
 
 
-async def _deployment_version_create_time(
-    client, version: str, *, retries: int = 1
-) -> datetime | None:
-    """Create time of a deployment version, or None when it never registered.
-
-    A freshly started worker's own version may take seconds to appear after
-    its first poll, so callers can retry that lookup briefly. Anything else
-    missing means the version genuinely has no fleet behind it.
-    """
-    for attempt in range(max(1, retries)):
-        try:
-            response = await client.workflow_service.describe_worker_deployment_version(
-                DescribeWorkerDeploymentVersionRequest(
-                    namespace=client.namespace, version=version
-                )
-            )
-        except RPCError as exc:
-            if exc.status != RPCStatusCode.NOT_FOUND:
-                raise
-            if attempt < max(1, retries) - 1:
-                await asyncio.sleep(2)
-                continue
-            return None
-        create_time = getattr(
-            response.worker_deployment_version_info, "create_time", None
-        )
-        if create_time is None:
-            return None
-        to_datetime = getattr(create_time, "ToDatetime", None)
-        observed = (
-            to_datetime(tzinfo=timezone.utc) if callable(to_datetime) else create_time
-        )
-        if observed is None:
-            return None
-        if getattr(observed, "tzinfo", None) is None:
-            observed = observed.replace(tzinfo=timezone.utc)
-        return observed
-    return None
-
-
 def _parked(current: str, target: str) -> dict[str, str]:
     """Upstream readiness shape: startup waits, deployment-control recovers."""
     return {
@@ -417,7 +377,19 @@ _ROUTE_DEATH_TIMEOUT_SECONDS = 120
 _ROUTE_DEATH_POLL_SECONDS = 10
 
 
-async def _await_route_death(client, version: str) -> dict | None:
+def _has_live_pollers(observation) -> bool:
+    """Any live poller on any queue means a route remains to preserve.
+
+    A partially degraded route still serves part of its traffic, so only a
+    total absence of live pollers across every registered queue counts as
+    abandoned. A missing or empty observation is abandoned, never live.
+    """
+    if not observation:
+        return False
+    return any(item.get("livePollers") for item in observation.get("queues", []))
+
+
+async def _await_no_live_pollers(client, version: str) -> dict | None:
     """Re-observe a seemingly live route until it proves live or dead.
 
     Fresh poller observations may be a restart in flight: the previous fleet
@@ -435,7 +407,7 @@ async def _await_route_death(client, version: str) -> dict | None:
             if exc.status != RPCStatusCode.NOT_FOUND:
                 raise
             return None
-        if not observation["available"] or time.monotonic() >= deadline:
+        if not _has_live_pollers(observation) or time.monotonic() >= deadline:
             return observation
         await asyncio.sleep(_ROUTE_DEATH_POLL_SECONDS)
 
@@ -450,38 +422,55 @@ async def steward_abandoned_routing(
     no live pollers on any of its queues, so there is no serving route to
     preserve and no receipt the deployment-control recovery could restore.
     The starting fleet finishes the handoff itself with the same
-    canary-gated compare-and-set promotion the updater runs.
+    canary-gated compare-and-set promotion the updater runs, qualified
+    across every queue the current version served rather than just this
+    process's own queues -- on a full deployment that is the canonical
+    all-fleet set, and on a minimal one it is exactly the deployed subset.
 
-    Whenever the recorded current version still serves traffic, startup
-    preserves that route exactly like the unpromoted-installed-fix replay
-    requires: qualification and promotion stay with the authorized release
-    controller. A live verdict is re-verified past the poller-freshness
-    window so a restart in flight is never mistaken for a serving route. A
-    stale image restarting under a newer route likewise never rolls routing
-    back; deliberate downgrades stay on the managed update path.
+    Whenever the recorded current version still serves any traffic --
+    including a partial outage where only some queues have live pollers --
+    startup preserves that route exactly like the unpromoted-installed-fix
+    replay requires: qualification and promotion stay with the authorized
+    release controller. Registration timestamps never order releases: a lone
+    stale fleet with nothing serving converges routing to the release that
+    is actually deployed, while a live route is never displaced whatever
+    image backs it.
     """
-    ours = await _deployment_version_create_time(client, target, retries=8)
-    theirs = await _deployment_version_create_time(client, current)
-    if theirs is not None and (ours is None or ours <= theirs):
-        logger.info(
-            "Release routing stays with live current version %s; %s awaits promotion",
-            current,
-            target,
-        )
-        return _parked(current, target)
-    observation = await _await_route_death(client, current)
-    if observation is not None and observation["available"]:
+    from temporalio.api.enums.v1 import TaskQueueType
+
+    observation = await _await_no_live_pollers(client, current)
+    if _has_live_pollers(observation):
         logger.info(
             "Release routing current version %s still serves traffic; "
             "preserving its route for the authorized release controller",
             current,
         )
         return _parked(current, target)
+    if observation is not None:
+        workflow_queues = tuple(
+            item["queue"]
+            for item in observation["queues"]
+            if item["type"] == TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW
+        )
+        activity_queues = tuple(
+            item["queue"]
+            for item in observation["queues"]
+            if item["type"] == TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY
+        )
+    else:
+        workflow_queues = ()
+        activity_queues = tuple(spec.task_queues)
     logger.warning(
         "Release routing current version %s has no live pollers; "
         "stewarding promotion of %s",
         current,
         target,
+    )
+    # One deterministic canary per deployed release: concurrent stewards and
+    # conflict-token retries reuse the same run instead of spinning new ones.
+    canary_id = "mm-steward-canary-" + "".join(
+        ch if (ch.isalnum() or ch in "-_.:") else "-"
+        for ch in f"{spec.deployment_id}.{spec.build_id}"
     )
     failure = None
     try:
@@ -491,7 +480,9 @@ async def steward_abandoned_routing(
             build_id=spec.build_id,
             expected_current=current,
             task_queue=spec.task_queues[0],
-            task_queues=tuple(spec.task_queues),
+            task_queues=activity_queues,
+            workflow_queues=workflow_queues,
+            canary_id=canary_id,
         )
     except (RPCError, ValueError) as exc:
         if isinstance(exc, RPCError) and exc.status != RPCStatusCode.ABORTED:
@@ -504,6 +495,13 @@ async def steward_abandoned_routing(
         return {"status": "current", "currentVersion": target}
     observed = current_version(await routing_snapshot(client, spec.deployment_id))
     if observed == target:
+        # A failed ordinary-route check must not look like a handoff: the
+        # compare-and-set may have applied while verification failed, so
+        # prove the converged route serves ordinary traffic before reporting
+        # it, and fail loudly when it does not.
+        await verify_ordinary_route(
+            client, version=target, canary_id=f"{canary_id}-verify-{uuid4().hex}"
+        )
         return {"status": "current", "currentVersion": target}
     if observed != current:
         logger.info(
