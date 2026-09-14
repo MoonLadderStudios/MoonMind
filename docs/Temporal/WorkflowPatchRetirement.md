@@ -94,10 +94,13 @@ Enforcement is wired into the production admission choke point:
 `TemporalClientAdapter.start_workflow` accepts optional
 `retirement_evidence` / `retirement_patch_ids` and raises
 `RetirementAdmissionBlocked` while any retiring patch's evidence is
-incomplete. The guard is opt-in per call site and defaults to unchanged
-behavior; `service.py` still starts without evidence until the operator
-evidence pipeline supplies it, so the current posture is mechanism-wired
-with manual review. New work always takes the new code path under worker
+incomplete. `TemporalExecutionService.create_execution` accepts the same
+optional pair, fails fast with `RetirementAdmissionBlocked` before any
+record is persisted, forwards the evidence to `start_workflow` (which
+remains the authoritative enforcement point and never has the hold
+swallowed into a projection sync), and defaults to unchanged behavior;
+until the operator evidence pipeline supplies evidence, the current
+posture is mechanism-wired with manual review. New work always takes the new code path under worker
 versioning, so healthy evidence with known consumers still allows
 admission while old workers serve only pinned old executions.
 
@@ -195,6 +198,42 @@ histories against the changed call site.
     predate 2026-06-24, no pre-patch workers, per-call-site boundary
     review confirming payload-only change, and pre/post-history replay
     tests pass against the `deprecate_patch` call sites.
+  - **Remove condition:** audit reports `safe_to_remove`: no retained
+    history carries the marker within retention and retained closed
+    executions are no longer reset/replay eligible.
+- **Patch:** `dependency-gate-v1`
+  (`DEPENDENCY_GATE_PATCH`,
+  `MoonMindRunWorkflow.run`).
+  - **Command boundary:** init stage dependency wait
+    (activity-polled reconciliation plus signal/timer wait loop) before
+    planning.
+  - **Old/new behavior:** skip the dependency wait and proceed to planning
+    even with dependency ids vs await `_wait_for_dependencies` so
+    prerequisite executions resolve first.
+  - **Introduction:** `06906426` (2026-04-02).
+  - **Classification:** retained-history compatibility required.
+  - **Deprecate condition:** audit reports `safe_to_deprecate` with an
+    admission cutoff newer than every admitted execution that could
+    predate 2026-04-02, no pre-patch workers, and a pre/post-history
+    replay test passes against the `deprecate_patch` call site.
+  - **Remove condition:** audit reports `safe_to_remove`: no retained
+    history carries the marker within retention and retained closed
+    executions are no longer reset/replay eligible.
+- **Patch:** `jules-bundling-v1`
+  (literal id, `MoonMindRunWorkflow._run_execution_stage`).
+  - **Command boundary:** execution-stage bundle-manifest artifact-write
+    activity plus downstream step-execution command shape (bundled
+    representative node vs individual nodes).
+  - **Old/new behavior:** execute ordered plan nodes unbundled with no
+    bundle manifest artifact vs bundle eligible Jules runtime nodes,
+    write a bundle manifest artifact, and execute the representative
+    node.
+  - **Introduction:** `24bc98ab` (2026-03-27).
+  - **Classification:** retained-history compatibility required.
+  - **Deprecate condition:** audit reports `safe_to_deprecate` with an
+    admission cutoff newer than every admitted execution that could
+    predate 2026-03-27, no pre-patch workers, and a pre/post-history
+    replay test passes against the `deprecate_patch` call site.
   - **Remove condition:** audit reports `safe_to_remove`: no retained
     history carries the marker within retention and retained closed
     executions are no longer reset/replay eligible.

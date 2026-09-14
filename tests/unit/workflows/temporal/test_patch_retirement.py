@@ -84,6 +84,16 @@ def test_inventory_skips_dynamic_dispatch_pseudo_ids() -> None:
     assert not [r for r in records if r.patch_id == "patch_id"]
 
 
+def test_inventory_finds_branch_keyword_literal_ids() -> None:
+    """REQ-1: a literal id behind ``if`` is a live patch, not silence."""
+    records = patch_retirement.inventory_patches(REPO_ROOT)
+    by_id: dict[str, list[PatchRecord]] = {}
+    for record in records:
+        by_id.setdefault(record.patch_id, []).append(record)
+    assert "jules-bundling-v1" in by_id
+    assert "dependency-gate-v1" in by_id
+
+
 # --- Audit verdicts (REQ-2, AC-1, AC-3) --------------------------------------
 
 

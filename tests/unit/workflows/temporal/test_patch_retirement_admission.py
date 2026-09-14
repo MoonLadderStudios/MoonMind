@@ -9,13 +9,23 @@ catalog entry carries checkable removal conditions).
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
+from api_service.db.models import (
+    Base,
+    TemporalExecutionCanonicalRecord,
+)
+from moonmind.config.settings import settings
 from moonmind.workflows.temporal import patch_retirement
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.patch_retirement import (
@@ -25,6 +35,7 @@ from moonmind.workflows.temporal.patch_retirement import (
     AuditEvidence,
     RetirementAdmissionBlocked,
 )
+from moonmind.workflows.temporal.service import TemporalExecutionService
 
 # Captured at import time, before the autouse Temporal guard in conftest.py
 # replaces ``start_workflow`` with a no-op. The wired-path tests below
@@ -196,3 +207,130 @@ async def test_wired_admission_default_preserves_current_behavior(
     )
     assert result.workflow_id == "wf-id"
     client.start_workflow.assert_called_once()
+
+
+# --- Service admission wiring (REQ-3 production choke point) ------------------
+
+
+@asynccontextmanager
+async def _retirement_db(tmp_path: Path):
+    """Isolated sqlite lifecycle DB mirroring test_temporal_service.temporal_db."""
+    original_artifact_backend = settings.workflow.temporal_artifact_backend
+    original_artifact_root = settings.workflow.temporal_artifact_root
+    settings.workflow.temporal_artifact_backend = "local_fs"
+    settings.workflow.temporal_artifact_root = str(tmp_path / "artifacts")
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_retirement.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            yield session
+    finally:
+        await engine.dispose()
+        settings.workflow.temporal_artifact_backend = original_artifact_backend
+        settings.workflow.temporal_artifact_root = original_artifact_root
+
+
+def _retirement_service_adapter() -> MagicMock:
+    adapter = MagicMock()
+    adapter.start_workflow = AsyncMock(
+        return_value=SimpleNamespace(id="wf-id", result_run_id="run-id")
+    )
+    return adapter
+
+
+@pytest.mark.asyncio
+async def test_service_create_execution_forwards_retirement_evidence(
+    tmp_path: Path,
+) -> None:
+    """Known consumers still admit: evidence reaches the start boundary."""
+    adapter = _retirement_service_adapter()
+    async with _retirement_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=adapter)
+        evidence = _healthy_evidence(
+            retained_markers=frozenset({"fetch-profile-snapshots-v1"})
+        )
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Retirement evidence run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"workflow": {"instructions": "Fixture."}},
+            idempotency_key="retirement-forward-1",
+            retirement_evidence=evidence,
+            retirement_patch_ids=("fetch-profile-snapshots-v1",),
+        )
+        assert record.workflow_id.startswith("mm:")
+        adapter.start_workflow.assert_awaited_once()
+        assert (
+            adapter.start_workflow.await_args.kwargs["retirement_evidence"]
+            is evidence
+        )
+        assert adapter.start_workflow.await_args.kwargs[
+            "retirement_patch_ids"
+        ] == ("fetch-profile-snapshots-v1",)
+
+
+@pytest.mark.asyncio
+async def test_service_create_execution_holds_on_unknown_retirement_evidence(
+    tmp_path: Path,
+) -> None:
+    """Unknown evidence holds admission before any record is persisted."""
+    adapter = _retirement_service_adapter()
+    async with _retirement_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=adapter)
+        with pytest.raises(RetirementAdmissionBlocked):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=uuid4(),
+                title="Retirement held run",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={"workflow": {"instructions": "Fixture."}},
+                idempotency_key="retirement-held-1",
+                retirement_evidence=_healthy_evidence(
+                    visibility_failures=("visibility query timed out",),
+                    history_failures=("history fetch unavailable",),
+                ),
+                retirement_patch_ids=("fetch-profile-snapshots-v1",),
+            )
+        adapter.start_workflow.assert_not_awaited()
+        rows = (
+            await session.execute(select(TemporalExecutionCanonicalRecord))
+        ).scalars().all()
+        assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_service_create_execution_default_preserves_current_behavior(
+    tmp_path: Path,
+) -> None:
+    """No evidence supplied: the service starts exactly as before."""
+    adapter = _retirement_service_adapter()
+    async with _retirement_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=adapter)
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Retirement default run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={"workflow": {"instructions": "Fixture."}},
+            idempotency_key="retirement-default-1",
+        )
+        assert record.workflow_id.startswith("mm:")
+        adapter.start_workflow.assert_awaited_once()
+        assert (
+            adapter.start_workflow.await_args.kwargs["retirement_evidence"] is None
+        )

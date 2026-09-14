@@ -324,16 +324,22 @@ def inventory_patches(repo_root: str | Path) -> list[PatchRecord]:
 def _literal_patch_id(source_lines: list[str], line: int) -> str | None:
     if line < 1 or line > len(source_lines):
         return None
-    text = source_lines[line - 1]
-    try:
-        tree = ast.parse(text.strip())
-    except SyntaxError:
-        return None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and node.args:
-            first = node.args[0]
-            if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                return first.value
+    text = source_lines[line - 1].strip()
+    # Most call sites are bare expression statements, but a literal id may
+    # also appear behind a branch keyword (``if workflow.patched("id"):``).
+    # The indented probe parses those without changing what a bare line
+    # resolves to; a live patch must never be silently omitted from the
+    # inventory because of its surrounding statement shape.
+    for probe in (text, f"if True:\n    {text}\n        pass"):
+        try:
+            tree = ast.parse(probe)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and node.args:
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    return first.value
     return None
 
 
@@ -574,6 +580,30 @@ PATCH_CATALOG: tuple[PatchCatalogEntry, ...] = (
         fixture="none yet: deprecation requires a replay test pairing pre/post-change histories for each of the three call sites, replayed against the changed call sites",
         classification=CLASSIFICATION_RETAINED_HISTORY,
         deprecate_condition="audit reports safe_to_deprecate: healthy evidence, admission cutoff newer than every admitted execution that could predate 2026-06-24, no pre-patch workers, per-call-site boundary review confirming payload-only change, and replay tests pairing pre/post-change histories pass against the deprecate_patch call sites",
+        remove_condition="audit reports safe_to_remove for this id: no retained history carries the marker within retention and retained closed executions are no longer reset/replay eligible",
+    ),
+    PatchCatalogEntry(
+        patch_id="dependency-gate-v1",
+        workflow_types=("MoonMindRunWorkflow.run",),
+        command_boundary="init stage: dependency wait (activity-polled reconciliation plus signal/timer wait loop) before planning",
+        old_behavior="skipped the dependency wait and proceeded to planning even when dependency_ids were present",
+        new_behavior="awaited _wait_for_dependencies so prerequisite executions resolve before planning",
+        introduction_rev="0690642611eebf170dcd6f00edb76c00969d83a2",
+        fixture="none yet: deprecation requires a replay test pairing a pre-change history (marker recorded, dependency wait executed) with a post-change history, replayed against the changed call site",
+        classification=CLASSIFICATION_RETAINED_HISTORY,
+        deprecate_condition="audit reports safe_to_deprecate: healthy evidence, admission cutoff newer than every admitted execution that could predate 2026-04-02, no pre-patch workers, and a replay test pairing pre/post-change histories passes against the deprecate_patch call site",
+        remove_condition="audit reports safe_to_remove for this id: no retained history carries the marker within retention and retained closed executions are no longer reset/replay eligible",
+    ),
+    PatchCatalogEntry(
+        patch_id="jules-bundling-v1",
+        workflow_types=("MoonMindRunWorkflow._run_execution_stage",),
+        command_boundary="execution stage: bundle-manifest artifact-write activity plus downstream step-execution command shape (bundled representative node vs individual nodes)",
+        old_behavior="executed ordered plan nodes unbundled with no bundle manifest artifact",
+        new_behavior="bundled eligible Jules runtime nodes, wrote a bundle manifest artifact, and executed the representative node",
+        introduction_rev="24bc98ab2bc5b0d6d71a3c2b12d366f03dccce51",
+        fixture="none yet: deprecation requires a replay test pairing a pre-change history (marker recorded, bundling executed) with a post-change history, replayed against the changed call site",
+        classification=CLASSIFICATION_RETAINED_HISTORY,
+        deprecate_condition="audit reports safe_to_deprecate: healthy evidence, admission cutoff newer than every admitted execution that could predate 2026-03-27, no pre-patch workers, and a replay test pairing pre/post-change histories passes against the deprecate_patch call site",
         remove_condition="audit reports safe_to_remove for this id: no retained history carries the marker within retention and retained closed executions are no longer reset/replay eligible",
     ),
 )

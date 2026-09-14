@@ -76,6 +76,12 @@ from moonmind.schemas.workflow_recovery_models import WorkflowRecoveryTargetMode
 from moonmind.services.skill_step_inputs import validate_skill_step_inputs
 from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.patch_retirement import (
+    PATCH_CATALOG,
+    AuditEvidence,
+    RetirementAdmissionBlocked,
+    check_retirement_admission,
+)
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     TemporalArtifactNotFoundError,
@@ -2059,6 +2065,8 @@ class TemporalExecutionService:
         _skip_pause_guard: bool = False,
         _workflow_id: str | None = None,
         _run_id: str | None = None,
+        retirement_evidence: AuditEvidence | None = None,
+        retirement_patch_ids: Sequence[str] | None = None,
     ) -> TemporalExecutionRecord:
         # --- Worker Pause API Guard (DOC-REQ-001, DOC-REQ-005, FR-005) ---
         if not _skip_pause_guard and await self.check_system_paused():
@@ -2067,6 +2075,26 @@ class TemporalExecutionService:
                 "Resume the system via POST /api/system/worker-pause before "
                 "starting new workflows."
             )
+        # --- Patch-retirement admission gate (MoonLadderStudios/MoonMind#3944).
+        # Optional operator-supplied evidence; ``None`` (the default)
+        # preserves current behavior. Unknown evidence holds admission before
+        # any record is persisted; known consumers still allow admission
+        # because worker versioning routes new work to the new code path.
+        # The same evidence is forwarded to ``start_workflow`` so the client
+        # remains the authoritative enforcement point.
+        if retirement_evidence is not None:
+            retirement_ids = (
+                tuple(retirement_patch_ids)
+                if retirement_patch_ids is not None
+                else tuple(entry.patch_id for entry in PATCH_CATALOG)
+            )
+            retirement_check = check_retirement_admission(
+                retirement_ids, retirement_evidence
+            )
+            if not retirement_check.allowed:
+                raise RetirementAdmissionBlocked(
+                    "; ".join(retirement_check.reasons)
+                )
 
         workflow_type_enum = self._parse_workflow_type(workflow_type)
         owner_type_enum, owner = self._resolve_owner_metadata(
@@ -2440,6 +2468,8 @@ class TemporalExecutionService:
                     if workflow_type_enum is not TemporalWorkflowType.USER_WORKFLOW
                     else None
                 ),
+                retirement_evidence=retirement_evidence,
+                retirement_patch_ids=retirement_patch_ids,
             )
             start_run_id = getattr(start_result, "run_id", None)
             if (
@@ -2467,6 +2497,10 @@ class TemporalExecutionService:
                             context_link.run_id = start_run_id
                 await self._session.commit()
                 await self._session.refresh(record)
+        except RetirementAdmissionBlocked:
+            # The retirement hold is never swallowed into a projection sync:
+            # incomplete evidence must stay a loud admission failure.
+            raise
         except Exception as exc:
             if remediation_link is not None:
                 logger.exception(
