@@ -106,6 +106,33 @@ def test_accepted_repository_evidence_rejects_inconsistent_push_state() -> None:
         )
 
 
+@pytest.mark.parametrize("remote_verified", [True, False])
+def test_no_change_evidence_preserves_exact_tip_proof(remote_verified: bool) -> None:
+    evidence = AcceptedRepositoryEvidence(
+        pushStatus="no_commits",
+        branch="main",
+        baseBranch="main",
+        headSha="a" * 40,
+        commitsAheadOfBase=0,
+        repositoryChanged=False,
+        remoteVerified=remote_verified,
+    )
+    assert evidence.remote_verified is remote_verified
+
+
+def test_pushed_evidence_still_requires_exact_tip_verification() -> None:
+    with pytest.raises(ValidationError):
+        AcceptedRepositoryEvidence(
+            pushStatus="pushed",
+            branch="candidate",
+            baseBranch="main",
+            headSha="a" * 40,
+            commitsAheadOfBase=1,
+            repositoryChanged=True,
+            remoteVerified=False,
+        )
+
+
 @pytest.mark.asyncio
 async def test_external_lifecycle_helper_accepts_provider_neutral_activity_name(
     monkeypatch: pytest.MonkeyPatch,

@@ -17,12 +17,14 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from pydantic import ValidationError
+    from moonmind.omnigent.runtime_bindings import stable_binding_id
 
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
         MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
         AdmittedProviderCapacity,
         AdmittedProviderProfileCapacity,
+        AgentAdmissionRecovery,
         AgentExecutionRequest,
         AgentRunHandle,
         AgentRunResult,
@@ -4270,6 +4272,8 @@ class MoonMindAgentRun:
 
         admitted_at: Any = None
         capacity_requeue_attempts = 0
+        readiness_wait_started = None
+        recovering_interrupted_admission = False
         reconcile_admission = self._workflow_patch_enabled("omnigent-resume-owned-admission-v1")
         while True:
             resuming = (
@@ -4329,6 +4333,7 @@ class MoonMindAgentRun:
                 # StartToClose from a server-side retry.
                 routed_overrides["retry_policy"] = retry_policy
             activity_returned = False
+            activity_started_at = workflow.now()
             try:
                 result_payload = await self._execute_routed_activity(
                     act_name,
@@ -4360,6 +4365,58 @@ class MoonMindAgentRun:
                     ),
                 )
                 activity_returned = True
+            except Exception as exc:
+                cause = exc
+                while getattr(cause, "cause", None) is not None:
+                    cause = cause.cause
+                if (
+                    getattr(cause, "type", type(cause).__name__)
+                    != "OmnigentDeploymentNotReady"
+                    or not self._workflow_patch_enabled(
+                        "omnigent-deployment-readiness-wait-v1"
+                    )
+                    or not reconcile_admission
+                ):
+                    raise
+                # Discovery failed before this delivery acquired host/session authority.
+                # Retain any earlier admission for fenced reattachment. The API's
+                # bootstrap reconciler repairs discovery independently of this queue.
+                now = workflow.now()
+                if readiness_wait_started is None:
+                    readiness_wait_started = activity_started_at
+                stc_seconds -= (now - activity_started_at).total_seconds()
+                remaining = min(
+                    stc_seconds,
+                    _OMNIGENT_EXECUTION_HANDOFF_SECONDS
+                    - (now - readiness_wait_started).total_seconds(),
+                )
+                if remaining <= 0:
+                    raise ApplicationError(
+                        "Omnigent deployment readiness wait exhausted; bootstrap "
+                        "reconciliation did not restore server identity within the "
+                        "remaining execution budget. Preserved admission requires "
+                        "reconciliation.",
+                        type="OmnigentDeploymentReadinessTimeout",
+                        non_retryable=True,
+                    ) from exc
+                self.run_status = RunStatus.awaiting_callback
+                await self._signal_parent_child_state_changed(
+                    parent_info,
+                    "awaiting_callback",
+                    "Waiting for Omnigent deployment readiness; bootstrap "
+                    "reconciliation owns recovery. Preserving the admitted execution.",
+                )
+                delay = min(30.0, remaining)
+                await workflow.sleep(timedelta(seconds=delay))
+                stc_seconds -= delay
+                if stc_seconds <= 0 or delay >= remaining:
+                    raise ApplicationError(
+                        "Omnigent deployment readiness wait exhausted",
+                        type="OmnigentDeploymentReadinessTimeout",
+                        non_retryable=True,
+                    ) from exc
+                self.run_status = RunStatus.launching
+                continue
             finally:
                 # A heartbeat timeout or worker loss is not a cleanup receipt.
                 # Keep the admitted request and lease while reconciliation may
@@ -4373,12 +4430,28 @@ class MoonMindAgentRun:
                     self._omnigent_pending_request = None
                     self._omnigent_pending_admitted_at = None
             requeue_reason = (
-                self._omnigent_capacity_requeue_reason(result_payload)
+                self._omnigent_capacity_requeue_reason(result_payload, request=request)
                 if admit_capacity_before_activity
                 else None
             )
             if requeue_reason is None:
                 return result_payload, admitted_at
+            metadata = (
+                result_payload.get("metadata", {})
+                if isinstance(result_payload, Mapping)
+                else getattr(result_payload, "metadata", {})
+            )
+            recovering_interrupted_admission = recovering_interrupted_admission or bool(
+                metadata.get("admissionRecovery")
+            )
+            if recovering_interrupted_admission:
+                # Only the new, validated cleanup receipt enters this branch;
+                # historical code-only capacity refusals keep their commands.
+                # Cleanup and Activity handoff consume the remaining execution
+                # allowance. Durable capacity queueing remains outside it.
+                stc_seconds -= (workflow.now() - activity_started_at).total_seconds()
+                if stc_seconds <= 0:
+                    return result_payload, admitted_at
             if (
                 capacity_requeue_attempts
                 >= _MAX_OMNIGENT_CAPACITY_REQUEUE_ATTEMPTS
@@ -4447,7 +4520,12 @@ class MoonMindAgentRun:
             )
         except CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            cause = exc
+            while cause is not None:
+                if getattr(cause, "non_retryable", False):
+                    raise
+                cause = getattr(cause, "cause", None)
             elapsed = (workflow.now() - lane_start).total_seconds()
             retry_stc = profile_bound_retry_start_to_close_seconds(
                 first_stc_seconds=stc_seconds,
@@ -4474,7 +4552,11 @@ class MoonMindAgentRun:
             )
 
     @staticmethod
-    def _omnigent_capacity_requeue_reason(result_payload: Any) -> str | None:
+    def _omnigent_capacity_requeue_reason(
+        result_payload: Any,
+        *,
+        request: AgentExecutionRequest | None = None,
+    ) -> str | None:
         """Name the capacity this run lost after admission, if any.
 
         MoonLadderStudios/MoonMind#3880 AC5. The execution Activity projects a
@@ -4484,6 +4566,45 @@ class MoonMindAgentRun:
         so it returns to durable waiting instead of failing the task.
         """
 
+        metadata = (
+            result_payload.get("metadata")
+            if isinstance(result_payload, Mapping)
+            else getattr(result_payload, "metadata", None)
+        )
+        if isinstance(metadata, Mapping) and "admissionRecovery" in metadata:
+            # A hint/error code cannot authorize another host. The lifecycle
+            # owner must prove pre-session cleanup for this exact admission.
+            # Old recorded results have no receipt and keep their old path.
+            failure_class = (
+                result_payload.get("failureClass")
+                if isinstance(result_payload, Mapping)
+                else getattr(result_payload, "failure_class", None)
+            )
+            if not failure_class:
+                return None
+            try:
+                recovery = AgentAdmissionRecovery.model_validate(
+                    metadata["admissionRecovery"]
+                )
+            except ValidationError:
+                return None
+            capacity = (
+                request.admitted_provider_capacity if request is not None else None
+            )
+            if capacity is None or request is None:
+                return None
+            if (
+                recovery.execution_plan_ref != capacity.execution_plan_ref
+                or recovery.admission_epoch != capacity.admission_epoch
+                or recovery.runtime_binding_ref
+                != stable_binding_id(
+                    execution_plan_ref=capacity.execution_plan_ref,
+                    idempotency_key=request.idempotency_key,
+                    admission_epoch=capacity.admission_epoch,
+                )
+            ):
+                return None
+            return "generic host admission (pre-session cleanup verified)"
         if isinstance(result_payload, Mapping):
             code = result_payload.get("providerErrorCode")
         else:
@@ -4621,7 +4742,10 @@ class MoonMindAgentRun:
         input that looks authoritative is worse than no input at all.
         """
 
-        waited_seconds = 0
+        cumulative = workflow.patched("omnigent-cumulative-host-capacity-wait-v1")
+        waited_seconds = (
+            getattr(self, "_host_capacity_wait_seconds", 0) if cumulative else 0
+        )
         while True:
             decision = await self._execute_routed_activity(
                 "omnigent.admit_generic_host_capacity",
@@ -4641,6 +4765,15 @@ class MoonMindAgentRun:
                 }
             if decision.get("admitted") is True:
                 return
+            if decision.get("unsatisfiable") is True:
+                raise ApplicationError(
+                    str(
+                        decision.get("waitingReason")
+                        or "Host demand exceeds machine limits"
+                    ),
+                    type="HostCapacityUnsatisfiable",
+                    non_retryable=True,
+                )
             retry_after = decision.get("retryAfterSeconds")
             if not isinstance(retry_after, int) or retry_after < 1:
                 retry_after = _OMNIGENT_HOST_CAPACITY_RETRY_SECONDS
@@ -4650,6 +4783,11 @@ class MoonMindAgentRun:
                     f"{waited_seconds}s: {decision.get('waitingReason')}",
                     type="HostCapacityAcquisitionTimeout",
                     non_retryable=True,
+                )
+            if cumulative:
+                retry_after = min(
+                    retry_after,
+                    _OMNIGENT_CAPACITY_WAIT_CEILING_SECONDS - waited_seconds,
                 )
             self.run_status = RunStatus.awaiting_slot
             await self._signal_parent_child_state_changed(
@@ -4662,6 +4800,8 @@ class MoonMindAgentRun:
             )
             await workflow.sleep(timedelta(seconds=retry_after))
             waited_seconds += retry_after
+            if cumulative:
+                self._host_capacity_wait_seconds = waited_seconds
 
     async def _reset_and_request_slot(
         self,
@@ -7801,7 +7941,7 @@ class MoonMindAgentRun:
                 runtime_mapping = {"claude": "claude_code", "codex": "codex_cli"}
                 runtime_id = runtime_mapping.get(request.agent_id, request.agent_id)
                 manager_id = self._manager_workflow_id(runtime_id)
-                
+
                 async def _release_slot():
                     try:
                         manager_handle = workflow.get_external_workflow_handle(manager_id)
@@ -7815,7 +7955,7 @@ class MoonMindAgentRun:
                     except Exception:
                         # Errors are intentionally ignored to avoid masking the original cancellation
                         self._get_logger().warning("Failed to release slot on cancellation, which may lead to a leak.", exc_info=True)
-                
+
                 tasks.append(asyncio.shield(_release_slot()))
 
             if self.run_id is not None and self.agent_kind is not None:
@@ -7846,13 +7986,13 @@ class MoonMindAgentRun:
                             )
                     except Exception:
                         self._get_logger().warning("Failed to cancel agent runtime on cancellation.", exc_info=True)
-                
+
                 tasks.append(asyncio.shield(_cancel_agent()))
 
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             raise
-            
+
         except Exception:
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
                 runtime_mapping = {"claude": "claude_code", "codex": "codex_cli"}

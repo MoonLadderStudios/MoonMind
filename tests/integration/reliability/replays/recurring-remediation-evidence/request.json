@@ -1,0 +1,17 @@
+{
+  "incidentWorkflowId": "mm:07161650-68db-4325-8583-c6711e2cb8bc-2026-09-13T08:21:51Z",
+  "request": {
+    "agentKind": "external",
+    "agentId": "omnigent",
+    "correlationId": "workflow-1",
+    "idempotencyKey": "step-1",
+    "inputRefs": [
+      "artifact://brief"
+    ],
+    "parameters": {
+      "gateResultRef": "artifact://gate",
+      "remainingWorkRef": "artifact://gate"
+    }
+  },
+  "failure": "Remediation attempt 4 received verifier refs only in parameters and no readable gateResultPath or remainingWorkPath."
+}

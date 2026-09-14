@@ -1,0 +1,13 @@
+{
+  "incident": "Recurring occurrence interrupted during host allocation, 2026-09-13",
+  "events": ["ActivityTaskTimedOut:Heartbeat", "ActivityTaskCompleted:integration_error"],
+  "bindingEvidence": {"state": "cleaned", "providerSessionCreated": false, "terminalResultPresent": false, "cleanupAttestationPresent": true},
+  "activityResult": {
+    "outputRefs": [],
+    "summary": "Admitted Omnigent execution-plan dispatch failed: an interrupted generic host allocation requires fenced cleanup",
+    "failureClass": "integration_error",
+    "providerErrorCode": "OMNIGENT_CLEANUP_DEFERRED",
+    "retryRecommendation": "delegate_to_janitor",
+    "metadata": {"dispatchError": "an interrupted generic host allocation requires fenced cleanup"}
+  }
+}

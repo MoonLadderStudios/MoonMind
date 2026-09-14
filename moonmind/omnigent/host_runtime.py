@@ -373,6 +373,9 @@ class GenericOmnigentHostRuntime:
             "hostClassRef": host_class.ref,
             "launchPolicyRef": launch_policy.ref,
             "workspacePath": "/workspaces/run",
+            "materializedInputPaths": dict(
+                prepared.workspace_attachment.get("materializedInputPaths") or {}
+            ),
             "hostLaunchSpec": spec.model_dump(by_alias=True, mode="json"),
             "hostCleanupRef": launch["hostCleanupRef"],
             "stateCleanupRef": launch["stateCleanupRef"],

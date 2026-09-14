@@ -51,6 +51,8 @@ def _ready_opencode_image_pair(monkeypatch: pytest.MonkeyPatch) -> None:
                     "failureCode": None,
                     "serverImageRef": _SERVER_IMAGE_REF,
                     "hostImageRef": _OPENCODE_IMAGE_REF,
+                    "hostBuildDigest": "sha256:" + "b" * 64,
+                    "hostVersion": "1.0.0",
                 }
             },
         ),
@@ -98,7 +100,6 @@ def _select_opencode_host_class(catalog):
     ).select(
         harness=catalog.harnesses[0],
         omnigent_version=catalog.omnigentVersion,
-        omnigent_build_digest=catalog.omnigentBuildDigest,
         integration_mode="native-server",
         materializer_refs=["opencode-auth-json@1"],
     )

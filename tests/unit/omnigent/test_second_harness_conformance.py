@@ -78,7 +78,7 @@ def _make_catalog(harness_id: str, digest: str):
     )
 
 
-def test_pi_harness_via_generic_host_no_realizer_change():
+def test_pi_harness_via_generic_host_no_realizer_change(monkeypatch):
     """Pi through omnigent-provider-config uses generic-omnigent-host@1 without code change."""
     harness_id = "pi-native"
     impl = _make_pi_impl()
@@ -147,6 +147,24 @@ def test_pi_harness_via_generic_host_no_realizer_change():
     os.environ["OMNIGENT_PI_HOST_IMAGE_REF"] = (
         "ghcr.io/moonladderstudios/omnigent-host-pi@sha256:" + "b" * 64
     )
+    from types import SimpleNamespace
+
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: SimpleNamespace(
+            details={
+                "hostImageProvenance": {
+                    os.environ["OMNIGENT_PI_HOST_IMAGE_REF"]: {
+                        "buildDigest": "sha256:" + "b" * 64,
+                        "version": "1.0.0",
+                    }
+                }
+            }
+        ),
+    )
     harness = catalog.harnesses[0]
     hc = OmnigentHostClassSelector(
         environment={
@@ -156,7 +174,6 @@ def test_pi_harness_via_generic_host_no_realizer_change():
     ).select(
         harness=harness,
         omnigent_version=catalog.omnigentVersion,
-        omnigent_build_digest=catalog.omnigentBuildDigest,
         integration_mode="native-server",
         materializer_refs=["omnigent-provider-config@1"],
     )

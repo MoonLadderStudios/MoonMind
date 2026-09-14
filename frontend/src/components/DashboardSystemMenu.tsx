@@ -27,7 +27,6 @@ const ICONS: Partial<Record<DashboardIconKey, typeof Settings>> = {
 
 const SECTION_LABELS: Record<string, string> = {
   recurring: 'Workflow resources',
-  manifests: 'Data & evidence',
   'omnigent-agents': 'Omnigent',
   remediation: 'Operations',
 };

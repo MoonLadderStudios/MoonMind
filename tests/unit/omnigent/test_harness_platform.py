@@ -1578,7 +1578,7 @@ def test_fresh_catalog_attests_immutable_profile_authority() -> None:
 
     changed_build = create_catalog_snapshot(
         endpointRef="default",
-        omnigentVersion="1.0.1",
+        omnigentVersion="1.1.0",
         omnigentBuildDigest="sha256:" + "f" * 64,
         sourceDigest="sha256:" + "1" * 64,
         harnesses=[
@@ -2119,3 +2119,49 @@ def test_compiled_plan_demotes_a_recorded_non_pass_support_row(
     promoted = _compile_opencode_plan().payload.runtimeProviderRollout
     assert promoted is not None
     assert promoted.state == "new_work_default"
+
+
+
+def test_plan_version_round_trip_preserves_historical_canonical_bytes():
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        OmnigentExecutionPlanEnvelope, compute_plan_ref,
+    )
+    plan = _compile_opencode_plan()
+    assert plan.payload.omnigentVersion is None
+    assert "omnigentVersion" not in plan.model_dump(mode="json")["payload"]
+    restored = OmnigentExecutionPlanEnvelope.model_validate_json(plan.model_dump_json(by_alias=True))
+    assert restored.planRef == plan.planRef
+    historical = plan.model_dump(mode="json", by_alias=True)
+    historical["payload"]["omnigentVersion"] = "1.0.0"
+    historical["planRef"] = compute_plan_ref(historical["payload"])
+    restored = OmnigentExecutionPlanEnvelope.model_validate(historical)
+    assert restored.payload.omnigentVersion == "1.0.0"
+    assert compute_plan_ref(restored.payload) == historical["planRef"]
+
+
+@pytest.mark.parametrize("harness_id", ["opencode-native", "codex-native", "claude-native", "pi-native"])
+@pytest.mark.parametrize("changed_contract", [False, True])
+def test_core_catalog_patch_refresh_preserves_contract(harness_id, changed_contract):
+    from moonmind.omnigent.harness_platform.catalog_service import _normalize_harness
+    row = {"id": harness_id, "label": harness_id, "capabilities": {"interrupt": True}}
+    authority = create_catalog_snapshot(
+        endpointRef="default", omnigentVersion="0.12.0",
+        omnigentBuildDigest="sha256:" + "a" * 64, sourceDigest="sha256:" + "b" * 64,
+        harnesses=[_normalize_harness(row, omnigent_version="0.12.0", omnigent_build_digest="sha256:" + "a" * 64).model_dump()],
+        observedAt=datetime.now(UTC),
+    )
+    if changed_contract:
+        row["capabilities"]["interrupt"] = False
+    observed = create_catalog_snapshot(
+        endpointRef="default", omnigentVersion="0.12.5",
+        omnigentBuildDigest="sha256:" + "c" * 64, sourceDigest="sha256:" + "d" * 64,
+        harnesses=[_normalize_harness(row, omnigent_version="0.12.5", omnigent_build_digest="sha256:" + "c" * 64).model_dump()],
+        observedAt=datetime.now(UTC),
+    )
+    kwargs = dict(authority=authority, observation=observed, harness_id=harness_id,
+                  implementation_ref=authority.harnesses[0].implementation.implementation_ref())
+    if changed_contract:
+        with pytest.raises(HarnessPlatformError):
+            assert_catalog_refresh_attests(**kwargs)
+    else:
+        assert_catalog_refresh_attests(**kwargs)

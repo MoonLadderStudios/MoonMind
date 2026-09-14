@@ -49,7 +49,7 @@ Write a manifest containing one complete `/api/executions` request per child:
           "task": {
             "title": "Implement GitHub issue #722",
             "instructions": "Implement GitHub issue MoonLadderStudios/MoonMind#722.",
-            "skill": {"name": "github-issue-implement"},
+            "taskTemplate": {"slug": "github-issue-implement", "scope": "global"},
             "inputs": {
               "github_issue_ref": "MoonLadderStudios/MoonMind#722"
             },
@@ -67,6 +67,13 @@ The helper supports both execution API shapes:
 - task-shaped wrapper: `{"type": "task", "payload": {...}}`
 - direct execution create body: `{"workflowType": "MoonMind.UserWorkflow", ...}`
 
+Author preset children with `task.taskTemplate: {"slug": "<preset-slug>",
+"scope": "global"}` so the execution API expands the exact registered
+preset. `github-issue-implement` is a preset (`preset:github-issue-implement`),
+not a Skill: do not queue it via `task.skill.name`. Reserve `task.tool:
+{"type": "skill", "name": ...}` for actual Skill identities and validate
+every example ref against the real capability catalog and admission contract.
+
 When `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE` or the direct
 `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN` value is present, only the task-shaped
 child form is accepted and the helper binds it to the caller with
@@ -83,10 +90,15 @@ For direct create requests, idempotency is stored at `request.idempotencyKey`.
 2. Run the helper:
 
    ```bash
-   python3 .agents/skills/queue-moonmind-workflows/scripts/queue_moonmind_workflows.py \
+   python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/queue-moonmind-workflows/scripts/queue_moonmind_workflows.py" \
      --manifest artifacts/queue-moonmind-workflows-manifest.json \
      --max-workflows 25
    ```
+
+   Resolve the helper exclusively from the resolved immutable bundle via
+   `$MOONMIND_ACTIVE_SKILLS_DIR`. The repo-relative
+   `.agents/skills/queue-moonmind-workflows/scripts/...` path is only a
+   portable-host fallback when no active Skill snapshot is set.
 
 3. Read the helper output. A successful queue has:
    - `submitted > 0`

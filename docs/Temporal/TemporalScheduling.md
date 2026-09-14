@@ -1,13 +1,13 @@
 # Temporal Scheduling
 
-**Document Class:** Canonical declarative  
-**Viewpoint:** Module Architecture View  
-**Status:** Draft  
-**Owner:** MoonMind Platform  
-**Updated:** 2026-09-06  
-**Audience:** Backend developers, UI developers, operators  
-**Authority:** Temporal-native timing mechanisms, recurring-definition reconciliation, occurrence input pinning, and scheduling lifecycle boundaries. Workflow Publishing owns publication resolution and scope inheritance.  
-**Owning Surface:** RecurringWorkflowDefinition, RecurringWorkflowsService, and Temporal scheduling adapter  
+**Document Class:** Canonical declarative
+**Viewpoint:** Module Architecture View
+**Status:** Draft
+**Owner:** MoonMind Platform
+**Updated:** 2026-09-13
+**Audience:** Backend developers, UI developers, operators
+**Authority:** Temporal-native timing mechanisms, recurring-definition reconciliation, occurrence input pinning, and scheduling lifecycle boundaries. Workflow Publishing owns publication resolution and scope inheritance.
+**Owning Surface:** RecurringWorkflowDefinition, RecurringWorkflowsService, and Temporal scheduling adapter
 **Related Implementation:** `api_service/services/recurring_workflows_service.py`, `api_service/api/routers/recurring_workflows.py`, and `TemporalClientAdapter`.
 
 Implementation sequencing and rollout evidence belong in issues or `docs/tmp/`, not this canonical specification. New authoring semantics here describe the target, not support claimed for current deployed API/worker versions.
@@ -76,6 +76,39 @@ It stores one authored workspace/repository context, one branch role, and one pu
 Create/update/pause/resume/delete commit product desired state and reconcile the corresponding Temporal operation through the existing service/adapter. Trigger-now uses the approved current definition without silently rewriting it.
 
 When DB desired state and Temporal differ after failure, the next successful reconciliation reapplies the validated desired revision. Reconciliation is not allowed to invent new defaults or permission grants. Concurrent edits use expected revisions and stable request identity; a stale reconciliation cannot overwrite a newer approved definition. Report pending/failed reconciliation and actual observed pause/timing separately from desired settings.
+
+Run-now request acceptance is distinct from an observed workflow start. The
+API and UI expose a verified workflow/run identity when Temporal starts one,
+an explicit overlap skip with the blocking occurrence when known, or a pending
+observation with a durable reconciliation owner when the result is not yet
+known. An empty immediate schedule description is not proof of either a start
+or a skip. No manual run is labelled enqueued merely because the trigger RPC
+returned successfully. Concurrent triggers use stable request identity and
+bounded observation; retrying a lost response cannot silently create another
+run. Overlap policy remains authoritative and is not silently changed by the
+Run-now button.
+
+Manual requests accept a UUID `Idempotency-Key`. The API persists the request
+before contacting Temporal and supplies its ID and exact authored `scheduled_time`
+to the schedule patch. The action's matching schedule time, workflow ID, and run
+ID prove the observed start; the latest action and lifetime skip count do not.
+For Skip, a positively observed running owner can answer "already running"
+without submitting another trigger. After an uncertain acknowledgement, the
+API-owned observer reads the recorded request every 30 seconds and after restart.
+It never resubmits a pending request. After five minutes from the persisted
+request creation time, a final exact-evidence observation either confirms the
+start or settles the request as `dispatch_error` with an explicit unconfirmed
+acceptance message and a schedule-history link before retry. This request
+disposition proves neither workflow failure nor permission to repeat uncertain
+remote effects. Historical ambiguous rows use the same bounded observation;
+lack of an execution ID never proves a skip. Reusing an idempotency key returns
+the existing request, including after response loss or observation exhaustion.
+
+An occurrence waiting for an absent worker release reports infrastructure
+unavailability and points to the deployment recovery owner. Recurring
+occurrences retain the same authored-input and recovery evidence contract as
+immediate API-created work; bypassing API creation is not permission to omit
+the snapshot needed for cancellation, retry, and failed-step recovery.
 
 ### 5.5 Overlap policy mapping
 

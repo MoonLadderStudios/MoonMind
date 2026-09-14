@@ -904,7 +904,6 @@ async def compile_and_persist_execution_plan(
         host_class = OmnigentHostClassSelector().select(
             harness=harness_record,
             omnigent_version=catalog_omnigent_version,
-            omnigent_build_digest=omnigent_build_digest,
             integration_mode=config["integrationMode"],
             materializer_refs=[config["materializerRef"]],
             requested_host_mode=str(effective_launch.get("hostMode") or ""),

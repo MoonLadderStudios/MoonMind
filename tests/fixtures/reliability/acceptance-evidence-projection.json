@@ -1,0 +1,20 @@
+{
+  "incident": "recurring verification 2026-09-13: nested acceptance evidence discarded by metadata projection",
+  "gatePayload": {
+    "verdict": "FULLY_IMPLEMENTED",
+    "recommendedNextAction": "advance",
+    "validatedRefs": {
+      "acceptance": {
+        "schemaVersion": "acceptance/v1",
+        "subject": {"repository": "example/repo", "revision": "candidate", "contentDigest": "git-tree:candidate"},
+        "scope": {"sourceRef": "example/repo#1", "sourceDigest": "sha256:source", "complete": true, "requirementIds": ["REQ-1", "ACC-1"]},
+        "completionTarget": {"ref": "refs/heads/main", "revision": "base", "contentDigest": "git-tree:base"},
+        "evidence": [
+          {"requirementId": "REQ-1", "evidenceRefs": ["artifact://implementation-check"]},
+          {"requirementId": "ACC-1", "evidenceRefs": ["artifact://boundary-check"]}
+        ],
+        "freshness": {"policy": "content"}
+      }
+    }
+  }
+}

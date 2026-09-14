@@ -4991,6 +4991,7 @@ describe('Workflow Detail Entrypoint', () => {
         canApprove: true,
         canReject: true,
         canCancel: true,
+        canForceCancel: true,
         canSendMessage: true,
         canBypassDependencies: true,
       },
@@ -5101,6 +5102,7 @@ describe('Workflow Detail Entrypoint', () => {
       actions: {
         canSetTitle: true,
         canCancel: true,
+        canForceCancel: true,
       },
       stepsHref: '/api/executions/test-123/steps',
     };
@@ -5147,6 +5149,7 @@ describe('Workflow Detail Entrypoint', () => {
         canSetTitle: true,
         canPause: true,
         canCancel: true,
+        canForceCancel: true,
       },
     };
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -5201,6 +5204,7 @@ describe('Workflow Detail Entrypoint', () => {
         }),
       );
     });
+    expect(await screen.findByText('Cancellation requested.')).toBeTruthy();
 
     menu = await openWorkflowActionsMenu('Force cancel');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Force cancel' }));
@@ -6720,6 +6724,7 @@ describe('Workflow Detail Entrypoint', () => {
                 ],
                 operatorControls: {
                   canCancel: true,
+                  canForceCancel: true,
                   canTakeOver: true,
                   canResume: false,
                   paused: false,
@@ -9247,6 +9252,7 @@ describe('Workflow Detail Entrypoint', () => {
         canResume: true,
         canApprove: true,
         canCancel: true,
+        canForceCancel: true,
         canReject: true,
         canSendMessage: true,
       },
@@ -9610,6 +9616,7 @@ describe('Workflow Detail Entrypoint', () => {
         canApprove: true,
         canResume: true,
         canCancel: true,
+        canForceCancel: true,
         canReject: true,
         canSendMessage: true,
       },
@@ -9714,6 +9721,7 @@ describe('Workflow Detail Entrypoint', () => {
       dependents: [],
       actions: {
         canCancel: true,
+        canForceCancel: true,
         canSkipDependencyWait: true,
       },
       interventionAudit: [],
@@ -9767,6 +9775,7 @@ describe('Workflow Detail Entrypoint', () => {
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
         canCancel: true,
+        canForceCancel: true,
       },
     };
 
@@ -9914,6 +9923,7 @@ describe('Workflow Detail Entrypoint', () => {
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
         canCancel: true,
+        canForceCancel: true,
       },
     };
 
@@ -10009,6 +10019,7 @@ describe('Workflow Detail Entrypoint', () => {
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
         canCancel: true,
+        canForceCancel: true,
       },
     };
 
@@ -10118,6 +10129,7 @@ describe('Workflow Detail Entrypoint', () => {
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
         canCancel: true,
+        canForceCancel: true,
       },
     };
     const executionDetailUrl = '/api/executions/test-123?source=temporal';
@@ -10305,6 +10317,7 @@ describe('Workflow Detail Entrypoint', () => {
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
         canCancel: true,
+        canForceCancel: true,
       },
     };
 
@@ -10404,6 +10417,7 @@ describe('Workflow Detail Entrypoint', () => {
       updatedAt: '2026-03-28T00:00:02Z',
       actions: {
         canCancel: true,
+        canForceCancel: true,
       },
     };
 

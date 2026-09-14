@@ -26,6 +26,26 @@ class ProfileExecutionConfiguration(BaseModel):
     digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
 
 
+def _expected_harness_for_runtime(runtime_id: Any) -> str | None:
+    """Return the native harness an execution runtime resolves through.
+
+    Legacy v1 configuration documents carry provider requirements but no
+    harness authority; when a document does name an explicit harness, a
+    cross-harness substitution must fail at the selection boundary rather
+    than resolve through the foreign harness configuration.
+    """
+    mapping = {
+        "opencode": "opencode-native",
+        "codex": "codex-native",
+        "codex_cli": "codex-native",
+        "codex_cloud": "codex-native",
+        "claude": "claude-native",
+        "claude_code": "claude-native",
+        "omnigent": "pi-native",
+    }
+    return mapping.get(str(runtime_id or ""))
+
+
 def configuration_accepts_profile(document: Mapping[str, Any], provider: Any) -> bool:
     from api_service.services.omnigent_agent_profile_selection import (
         _accepted_provider_ids,
@@ -42,16 +62,34 @@ def configuration_accepts_profile(document: Mapping[str, Any], provider: Any) ->
     def value(raw: Any) -> Any:
         return getattr(raw, "value", raw)
 
-    return bool(requirements) and all(
-        (
-            provider.runtime_id == requirements.get("runtimeId"),
-            value(provider.credential_source) == requirements.get("credentialSource"),
-            value(provider.runtime_materialization_mode)
-            == requirements.get("materializationMode"),
-            not requirements.get("providerIds")
-            or provider.provider_id in requirements["providerIds"],
+    if not (
+        bool(requirements)
+        and all(
+            (
+                provider.runtime_id == requirements.get("runtimeId"),
+                value(provider.credential_source)
+                == requirements.get("credentialSource"),
+                value(provider.runtime_materialization_mode)
+                == requirements.get("materializationMode"),
+                not requirements.get("providerIds")
+                or provider.provider_id in requirements["providerIds"],
+            )
         )
-    )
+    ):
+        return False
+
+    # An explicit harness naming a foreign native target must not resolve
+    # through this Profile, even when the legacy provider requirements match.
+    # Documents without a harness predate harness authority and stay accepted.
+    harness_raw = document.get("harness")
+    if harness_raw:
+        harness_id = canonical_harness_id(harness_raw)
+        expected = _expected_harness_for_runtime(
+            getattr(provider, "runtime_id", None)
+        )
+        if harness_id and expected and harness_id != expected:
+            return False
+    return True
 
 
 def profile_has_native_inventory_route(

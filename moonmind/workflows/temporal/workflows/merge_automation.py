@@ -93,6 +93,12 @@ MERGE_AUTOMATION_RESOLVER_ATTEMPT_TITLE_PATCH = (
 MERGE_AUTOMATION_OMNIGENT_RESOLVER_PLAN_PATCH = (
     "merge-automation-omnigent-resolver-plan-v1"
 )
+MERGE_AUTOMATION_RESOLVER_VERIFICATION_CAPABILITY_PATCH = (
+    "merge-automation-resolver-verification-capability-v1"
+)
+MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH = (
+    "merge-automation-resolver-merge-confirmation-v1"
+)
 # Request/remediate/request loop for one configured automated review provider.
 # Guarded so histories recorded before the loop existed keep replaying their
 # original gate decisions.
@@ -1773,6 +1779,9 @@ class MoonMindMergeAutomationWorkflow:
                         else None
                     ),
                     finish_mode=self._finish_mode(),
+                    legacy_capabilities=not workflow.patched(
+                        MERGE_AUTOMATION_RESOLVER_VERIFICATION_CAPABILITY_PATCH
+                    ),
                 )
                 resolver_workflow_id_factory = (
                     deterministic_resolver_idempotency_key
@@ -1994,6 +2003,28 @@ class MoonMindMergeAutomationWorkflow:
                             self._continuation_counters["continuation_wait_completed"] += 1
                             self._continuation_counters["continuation_cycle_completed"] += 1
                     continue
+                if resolver_disposition in {
+                    DISPOSITION_MERGED,
+                    DISPOSITION_ALREADY_MERGED,
+                } and workflow.patched(
+                    MERGE_AUTOMATION_RESOLVER_MERGE_CONFIRMATION_PATCH
+                ):
+                    # A resolver can repair and merge a newer revision without
+                    # returning a head SHA. Re-read the tracked PR through its
+                    # existing authority before finalizing either integration.
+                    # Resolver prose or an echoed pre-repair SHA is not proof.
+                    evaluation, evidence = await self._evaluate_readiness_once()
+                    if (
+                        not evidence.pull_request_merged
+                        or not self._refresh_tracked_head_sha(evaluation)
+                    ):
+                        return await self._failed_resolver_summary(
+                            summary=(
+                                "Re-read the tracked pull request to confirm its "
+                                "merge and exact head before post-merge finalization."
+                            ),
+                            blocker_kind="resolver_disposition_invalid",
+                        )
                 if resolver_disposition == DISPOSITION_ALREADY_MERGED:
                     if not await self._complete_post_merge_integrations(
                         resolver_disposition=resolver_disposition

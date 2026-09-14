@@ -15,6 +15,7 @@ describe('WorkflowRowActionsMenu', () => {
     actions: {
       canPause: true,
       canCancel: true,
+      canForceCancel: true,
       canRerun: true,
     },
   };
@@ -522,9 +523,15 @@ describe('WorkflowRowActionsMenu', () => {
   });
 
   it('posts a forced cancel request directly from the row menu', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => Promise.resolve({
+      ok: true,
+      json: async () => String(input).includes('?source=temporal')
+        ? { ...detailResponse, state: 'canceled', actions: { canCancel: false, canForceCancel: true } }
+        : { closeStatus: 'terminated' },
+    } as Response));
     renderMenu();
     fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
-    await waitForActionAvailability();
+    await waitForActionAvailability('Force cancel');
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Force cancel' }));
     expect(screen.queryByRole('dialog')).toBeNull();
 

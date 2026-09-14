@@ -154,6 +154,8 @@ def _resolved_state() -> SimpleNamespace:
                 "failureCode": None,
                 "serverImageRef": _SERVER_IMAGE_REF,
                 "hostImageRef": _HOST_IMAGE_REF,
+                "hostBuildDigest": "sha256:" + "b" * 64,
+                "hostVersion": "0.10.0",
             }
         },
     )

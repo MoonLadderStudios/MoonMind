@@ -238,7 +238,7 @@ async def test_candidate_canary_compare_and_set_and_inflight_upgrade(
         Worker(
             client,
             task_queue=activity_queue,
-            activities=[probe(a)],
+            activities=[probe(a), inspect_release_activity],
             deployment_config=config(a),
         ),
         Worker(
@@ -432,3 +432,64 @@ async def test_unversioned_inflight_workflow_moves_to_qualified_release(
             )
             await handle.signal(ReleaseUpgradeProbe.resume)
             assert await handle.result() == ["unversioned", release["digest"]]
+
+
+async def test_manual_trigger_correlates_authored_identity_and_reports_overlap():
+    from datetime import datetime, timezone
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    client = await connect()
+    definition = uuid4()
+    queue = f"manual-trigger-{definition.hex}"
+    adapter = TemporalClientAdapter(client=client)
+    async with Worker(
+        client,
+        task_queue=queue,
+        workflows=[ReleaseUpgradeProbe],
+        activities=[],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ):
+        schedule = await client.create_schedule(
+            f"mm-schedule:{definition}",
+            Schedule(
+                action=ScheduleActionStartWorkflow(
+                    ReleaseUpgradeProbe.run,
+                    queue,
+                    id=f"manual:{definition}",
+                    task_queue=queue,
+                    execution_timeout=timedelta(seconds=30),
+                ),
+                spec=ScheduleSpec(
+                    intervals=[ScheduleIntervalSpec(every=timedelta(days=1))]
+                ),
+            ),
+        )
+        marker = datetime.now(timezone.utc)
+        try:
+            result = await adapter.trigger_schedule(
+                definition_id=definition, request_id=str(uuid4()), scheduled_at=marker
+            )
+            for _ in range(50):
+                result = await adapter.observe_schedule_trigger(
+                    definition_id=definition, scheduled_at=marker
+                )
+                if result.disposition == "started":
+                    break
+                await asyncio.sleep(0.1)
+            assert result.disposition == "started"
+            assert result.scheduled_at == marker
+            assert result.workflow_id and result.run_id
+            assert (
+                await adapter.observe_schedule_trigger(
+                    definition_id=definition,
+                    scheduled_at=marker + timedelta(microseconds=1),
+                )
+            ).disposition == "pending"
+            skipped = await adapter.trigger_schedule(definition_id=definition)
+            assert skipped.disposition == "skipped"
+            assert skipped.workflow_id == result.workflow_id
+            assert len((await schedule.describe()).info.recent_actions) == 1
+        finally:
+            for action in (await schedule.describe()).info.running_actions:
+                await client.get_workflow_handle(action.workflow_id).terminate()
+            await schedule.delete()

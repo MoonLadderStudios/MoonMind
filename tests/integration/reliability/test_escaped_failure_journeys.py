@@ -4222,10 +4222,13 @@ async def test_fresh_omnigent_launch_is_not_reaped_before_materialization() -> N
     cleanup_records: list[dict] = []
 
     class Repository:
-        async def list_active_host_leases(self):
+
+        async def list_active_host_leases(self, *, failures=None):
             return [lease]
 
-        async def list_terminal_host_leases_with_active_provider_capacity(self):
+        async def list_terminal_host_leases_with_active_provider_capacity(
+            self, *, failures=None
+        ):
             return []
 
         async def get_binding_for_profile(self, _profile_id):
@@ -8515,9 +8518,8 @@ async def test_verified_no_commit_publication_reaches_the_workflow_publish_hando
     )
     assert parent._publish_status == expected["workflowPublishStatus"]
 
-    # Losing the exact remote-head proof must stay fatal: advance the remote
-    # branch behind the workspace's back so the stale local ref still reports
-    # zero commits ahead while the live remote head no longer matches.
+    # Ordinary base advancement retains saved work, but loses exact-tip write
+    # authority. It must not turn a no-change result into a provider failure.
     bystander = tmp_path / "bystander"
     subprocess.run(
         ["git", "clone", str(origin), str(bystander)], capture_output=True, check=True
@@ -8532,12 +8534,19 @@ async def test_verified_no_commit_publication_reaches_the_workflow_publish_hando
     _git(bystander, "commit", "-m", "Advance the remote base behind the workspace")
     _git(bystander, "push", "origin", starting_branch)
 
-    with pytest.raises(HarnessPlatformError) as unverified:
-        await realizer._publish_repository(
-            request,
-            AgentRunResult(summary="Created the pull request for the pushed work."),
+    saved = await realizer._publish_repository(
+        request,
+        AgentRunResult(summary="No repository edits."),
+    )
+    assert saved.metadata["acceptedRepositoryEvidence"]["headSha"] == remote_head
+    assert saved.metadata["acceptedRepositoryEvidence"]["remoteVerified"] is False
+    assert _git(repo, "rev-parse", "HEAD") == remote_head
+    assert (
+        parent._verified_headless_remediation_workspace_spec(
+            node_inputs={"repository": manifest["repository"]}, outputs=saved.metadata
         )
-    assert unverified.value.code == expected["staleRemoteEvidenceFailureCode"]
+        is None
+    )
 
 
 @pytest.mark.asyncio
