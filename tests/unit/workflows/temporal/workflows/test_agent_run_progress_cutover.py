@@ -120,15 +120,14 @@ def test_old_history_terminal_legacy_still_releases_slot(monkeypatch):
 
     # Old history for the progress projection, but the pre-existing
     # defensive-release patch stays enabled as on real old histories.
+    # Slot release is owned by the ProviderProfileManager through verified
+    # consumer teardown (MoonLadderStudios/MoonMind#1089): the terminal
+    # branch records the deprecated marker and emits no release.
     parent = _install_parent(
         monkeypatch, {RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH}
     )
     parent._assigned_profile_id = "profile-1"
     parent._assigned_child_workflow_id = CHILD_WF
-    released = []
-    monkeypatch.setattr(
-        parent, "_release_slot_defensive", lambda: released.append(True)
-    )
 
     parent.agent_run_progress(
         _projection_payload(
@@ -136,10 +135,8 @@ def test_old_history_terminal_legacy_still_releases_slot(monkeypatch):
         )
     )
     assert parent._agent_run_progress_by_child == {}
-    assert released == []
 
     parent.child_state_changed("completed", "done")
-    assert released == [True]
 
 
 # --- New-history replay ------------------------------------------------------
