@@ -30,6 +30,10 @@ from tests.integration.reliability.test_resolver_verification_capability_journey
 )
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 
+# The import registers the shared fixture; the alias keeps import linters that
+# do not model pytest fixture injection from flagging the registration.
+_JOURNEY_FIXTURE = journey
+
 pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.integration,

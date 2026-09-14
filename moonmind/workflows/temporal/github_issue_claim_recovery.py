@@ -17,7 +17,15 @@ import httpx
 from sqlalchemy import select
 from temporalio.client import WorkflowExecutionStatus
 
-from api_service.db.models import GitHubIssueClaim, OmnigentRuntimeBindingRecord
+from api_service.db.models import (
+    GitHubIssueClaim,
+    OmnigentRuntimeBindingRecord,
+    ProviderProfileSlotLease,
+)
+from moonmind.provider_profiles.lease_client import DurableLeaseState
+from moonmind.workflows.executions.repository_contract import (
+    github_repository_name_from_value,
+)
 from moonmind.workflows.temporal.github_issue_attempts import (
     parse_attempt_comment,
     reconstruct_from_comments,
@@ -36,9 +44,62 @@ MAX_CLAIM_SECONDS = 30
 MAX_SWEEP_SECONDS = 120
 
 
+def _repository_identity(value):
+    """Compare canonical repository identities, not authored spellings."""
+    slug = github_repository_name_from_value(value)
+    return (slug or str(value or "")).casefold()
+
+
+async def _continue_as_new_chain(client, workflow_id):
+    """Terminal-first ``(workflow_id, run_id)`` chain across continue-as-new.
+
+    Resolving ``(workflow_id, None)`` inspects only the latest execution, so
+    histories from earlier runs — including their ``MoonMind.AgentRun``
+    children and runtime bindings — would never be visited. Follow the exact
+    continue-as-new chain before authorizing release.
+    """
+    handle = client.get_workflow_handle(workflow_id)
+    described = await handle.describe()
+    terminal_run_id = getattr(described, "run_id", None)
+    chain = [(workflow_id, terminal_run_id)]
+    seen = {terminal_run_id}
+    run_id = terminal_run_id
+    while run_id:
+        scoped = client.get_workflow_handle(workflow_id, run_id=run_id)
+        first_event = None
+        events = scoped.fetch_history_events(page_size=1)
+        try:
+            async for event in events:
+                first_event = event
+                break
+        finally:
+            aclose = getattr(events, "aclose", None)
+            if aclose is not None:
+                await aclose()
+        previous = ""
+        if first_event is not None and first_event.HasField(
+            "workflow_execution_started_event_attributes"
+        ):
+            previous = (
+                first_event.workflow_execution_started_event_attributes.continued_execution_run_id
+                or ""
+            )
+        if not previous or previous in seen:
+            break
+        seen.add(previous)
+        chain.append((workflow_id, previous))
+        if len(chain) > MAX_EXECUTIONS:
+            raise ValueError("execution_scan_incomplete")
+        run_id = previous
+    return chain
+
+
 async def _closed_execution_tree(client, receipt, now):
     namespace, workflow_id = receipt.owner.split("/", 1)
-    pending = [(workflow_id, None)]
+    chain = await _continue_as_new_chain(client, workflow_id)
+    chain_ids = set(chain)
+    terminal = chain[0]
+    pending = list(chain)
     executions = set()
     agents = set()
     total_events = 0
@@ -51,21 +112,40 @@ async def _closed_execution_tree(client, receipt, now):
             raise ValueError("execution_scan_incomplete")
         handle = client.get_workflow_handle(identity[0], run_id=identity[1])
         described = await handle.describe()
-        if described.status in {
+        is_historical = (
+            identity in chain_ids and identity != terminal and identity[1] is not None
+        )
+        if is_historical:
+            # Historical continue-as-new link: the terminal liveness holds
+            # below do not apply, but the link must itself be closed via
+            # continue-as-new for the chain to authorize release. Its history
+            # still scans below for prior-run children and shared effects.
+            # Grace is inherited: the link closed before the terminal run
+            # started, so a terminal that clears the grace window implies the
+            # link does too.
+            if described.status in {
+                None,
+                WorkflowExecutionStatus.RUNNING,
+            }:
+                raise ValueError("owner_or_child_running")
+            if described.status != WorkflowExecutionStatus.CONTINUED_AS_NEW:
+                raise ValueError("continued_chain_broken")
+        elif described.status in {
             None,
             WorkflowExecutionStatus.RUNNING,
             WorkflowExecutionStatus.CONTINUED_AS_NEW,
         }:
             raise ValueError("owner_or_child_running")
-        if not described.close_time or now - described.close_time < CLEANUP_GRACE:
-            raise ValueError("cleanup_grace")
-        if identity[1] is None:
-            if described.status == WorkflowExecutionStatus.CANCELED:
-                raise ValueError("cancellation_hold")
-            if described.status == WorkflowExecutionStatus.COMPLETED:
-                # Success may still own PR review/finalization. Its ordinary
-                # completion owner retains authority; this repairs failed runs.
-                raise ValueError("successful_owner_requires_finalization")
+        if not is_historical:
+            if not described.close_time or now - described.close_time < CLEANUP_GRACE:
+                raise ValueError("cleanup_grace")
+            if identity == terminal:
+                if described.status == WorkflowExecutionStatus.CANCELED:
+                    raise ValueError("cancellation_hold")
+                if described.status == WorkflowExecutionStatus.COMPLETED:
+                    # Success may still own PR review/finalization. Its ordinary
+                    # completion owner retains authority; this repairs failed runs.
+                    raise ValueError("successful_owner_requires_finalization")
         if described.workflow_type == "MoonMind.AgentRun":
             agents.add((identity[0], described.run_id))
         initiated = {}
@@ -159,8 +239,8 @@ async def _runtime_no_work(store, agents, receipt, service):
         if (
             proof.get("schemaVersion") != "repository-worktree-state/v1"
             or proof.get("worktreeClean") is not True
-            or str(proof.get("repository", "")).casefold()
-            != receipt.repository.casefold()
+            or _repository_identity(proof.get("repository"))
+            != _repository_identity(receipt.repository)
             or not saved.get("checkpointRef")
             or not saved.get("archiveDigest")
             or proof.get("checkpointArchiveDigest") != saved.get("archiveDigest")
@@ -197,8 +277,36 @@ async def _runtime_no_work(store, agents, receipt, service):
         ):
             raise ValueError("saved_work_requires_recovery")
         checkpoints.append(saved["checkpointRef"])
-    if covered != agents:
-        raise ValueError("runtime_cleanup_evidence_missing")
+    uncovered = agents - covered
+    if uncovered:
+        # No binding row covers these agents: an Omnigent run that failed
+        # before binding creation, or a managed/external run whose runtime
+        # never writes this table. Fall back to the durable slot-lease
+        # ledger — the same authority the ProviderProfileManager uses for
+        # crash recovery — instead of stranding the claim forever. A closed
+        # run with no unreleased lease owns no provider capacity requiring
+        # MoonMind cleanup, and with no binding row there is no saved-work
+        # checkpoint to preserve.
+        missing = sorted({owner for owner, _ in uncovered})
+        async with store.sessions() as session:
+            leases = (
+                (
+                    await session.execute(
+                        select(ProviderProfileSlotLease).where(
+                            ProviderProfileSlotLease.workflow_id.in_(missing)
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        for lease in leases:
+            if lease.lease_state != DurableLeaseState.RELEASED.value:
+                # Held, cleanup-requested, or unreconciled: the slot manager
+                # owns the wait and reaps leases of dead owners, so recovery
+                # retries on a later sweep instead of releasing now.
+                raise ValueError("runtime_cleanup_pending")
+        covered |= uncovered
     return checkpoints
 
 
@@ -257,9 +365,26 @@ async def reconcile_local_claims(
                 client = await client_factory(
                     settings.temporal.address, receipt.owner.split("/", 1)[0]
                 )
-                agents = await _closed_execution_tree(client, receipt, now)
+                unannounced = (
+                    not receipt.announcement_started and not receipt.comment_id
+                )
+                try:
+                    agents = await _closed_execution_tree(client, receipt, now)
+                except ValueError as exc:
+                    if (
+                        not unannounced
+                        or str(exc).split(":", 1)[0]
+                        != "shared_mutation_outcome_unknown"
+                    ):
+                        raise
+                    # Proven-unannounced: the receipt proves no claim write
+                    # was authorized — announcement intent is committed before
+                    # any POST, and abandon_unannounced re-verifies the row
+                    # under lock. A tool failure before announcement must not
+                    # retain the reservation forever.
+                    agents = []
                 checkpoints = await _runtime_no_work(store, agents, receipt, service)
-                if not receipt.announcement_started and not receipt.comment_id:
+                if unannounced:
                     released = await store.abandon_unannounced(
                         receipt.owner, receipt.attempt_id
                     )
