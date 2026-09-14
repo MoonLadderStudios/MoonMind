@@ -43,6 +43,7 @@ with workflow.unsafe.imports_passed_through():
         assert_classified_child_signal,
         new_progress_parent_state,
         reduce_progress_to_step,
+        seal_terminal_result,
     )
     from moonmind.schemas.container_job_models import (
         ContainerJobState,
@@ -12858,6 +12859,20 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                                 self._active_agent_child_workflow_id = None
                                 self._active_agent_id = None
                             execution_result = self._map_agent_run_result(child_result)
+                            try:
+                                progress_state = self._agent_run_progress_by_child.get(
+                                    child_workflow_id
+                                )
+                                if progress_state is not None:
+                                    seal_terminal_result(
+                                        progress_state,
+                                        status=str(
+                                            execution_result.get("status")
+                                            or "COMPLETED"
+                                        ),
+                                    )
+                            except Exception:
+                                pass
                         except Exception as exc:
                             if self._should_propagate_agent_child_cancellation(exc):
                                 raise

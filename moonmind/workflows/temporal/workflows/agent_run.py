@@ -1487,6 +1487,7 @@ class MoonMindAgentRun:
         self._progress_next_revision = (
             int(payload.get("projectionRevision", 0)) + 1
         )
+        return
 
     def _record_provider_wait_observation(
         self,
