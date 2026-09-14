@@ -722,21 +722,257 @@ CANONICAL_WAITING_REASONS = (
 
 
 def canonical_waiting_reason(
-    reason: str, *, queue_position: int | None = None
+    reason: str,
+    *,
+    queue_position: int | None = None,
+    cooldown_until: str | None = None,
 ) -> str:
     """Map internal wait state to one bounded product reason.
 
-    Emits only the canonical reason plus an optional numeric queue position.
-    No lease, host, session, credential, repository, or Docker identity ever
-    enters the parent progress payload; terminal outcome remains owned by
-    child completion and AgentRunResult.
+    Emits only the canonical reason plus optional safe observation fragments
+    (numeric queue position from an ordered snapshot, authoritative cooldown
+    deadline). No lease, host, session, credential, repository, or Docker
+    identity ever enters the parent progress payload; terminal outcome
+    remains owned by child completion and AgentRunResult.
     """
     normalized = str(reason or "").strip()
     if normalized not in CANONICAL_WAITING_REASONS:
         normalized = "awaiting_provider_capacity"
+    fragments = ""
     if isinstance(queue_position, int) and queue_position > 0:
-        return f"{normalized}; queue_position={queue_position}"
-    return normalized
+        fragments += f"; queue_position={queue_position}"
+    deadline = str(cooldown_until or "").strip()
+    if deadline and len(deadline) <= 64 and not any(
+        ch.isspace() or ch in ";," for ch in deadline
+    ):
+        fragments += f"; cooldown_until={deadline}"
+    return f"{normalized}{fragments}"
+
+
+def build_provider_wait_identity(
+    *,
+    runtime_id: str,
+    requester_workflow_id: str,
+    profile_ref: str,
+) -> str:
+    """Return a stable, secret-free wait identity for one waiter.
+
+    MoonLadderStudios/MoonMind#1130: repeated identical observations must not
+    append timeline events. The identity binds the requesting workflow to its
+    selected profile/scope so cross-attempt or late observations cannot
+    retarget the displayed profile. Only safe routing ids enter the identity.
+    """
+
+    runtime = str(runtime_id or "").strip()
+    requester = str(requester_workflow_id or "").strip()
+    profile = str(profile_ref or "").strip()
+    return f"provider-wait:{runtime}:{requester}:{profile}"
+
+
+def next_provider_wait_transition(
+    *,
+    previous: Mapping[str, Any] | None,
+    wait_id: str,
+    revision: int | None,
+    reason: str,
+    cooldown_until: str | None = None,
+    queue_position: int | None = None,
+    queue_ordered: bool | None = None,
+    queue_fresh: bool | None = None,
+    next_check: str | None = None,
+    terminal: bool = False,
+    canceled: bool = False,
+    granted: bool = False,
+) -> dict[str, Any] | None:
+    """Decide whether one wait observation appends a timeline transition.
+
+    MoonLadderStudios/MoonMind#1130: emit changes, not polling noise. Returns
+    None when nothing should be appended. A new current snapshot never
+    reopens completed work, retargets another wait identity, or reorders on
+    a stale revision. Callers own persistence through the existing
+    timeline/progress pipeline; this helper creates no store. The
+    authoritative ``queue_ordered``/``queue_fresh`` flags travel with the
+    transition so the detail layer never has to infer them from fragment
+    presence; ``next_check`` travels only when an authoritative deadline is
+    observed (never invented here). Missing flags from histories recorded
+    before they existed stay None (unknown), never fabricated.
+    """
+
+    wait_id = str(wait_id or "").strip()
+    if not wait_id:
+        return None
+    normalized_reason = str(reason or "").strip() or "awaiting_provider_capacity"
+    normalized_cooldown = str(cooldown_until or "").strip() or None
+    normalized_queue = queue_position if isinstance(queue_position, int) and queue_position > 0 else None
+    normalized_ordered = (
+        bool(queue_ordered) if queue_ordered is not None else None
+    )
+    normalized_fresh = bool(queue_fresh) if queue_fresh is not None else None
+    normalized_next_check = str(next_check or "").strip() or None
+    normalized_revision = revision if isinstance(revision, int) and revision >= 0 else None
+    if previous is not None and not isinstance(previous, Mapping):
+        previous = None
+    if previous is not None and previous.get("completed") is True:
+        # Completed work stays completed; late observations are auxiliary.
+        return None
+    if previous is not None:
+        previous_id = str(previous.get("wait_id") or "").strip()
+        if previous_id and previous_id != wait_id:
+            return None
+        previous_revision = previous.get("revision")
+        if (
+            isinstance(previous_revision, int)
+            and normalized_revision is not None
+            and normalized_revision < previous_revision
+        ):
+            return None
+        if (
+            previous.get("reason") == normalized_reason
+            and (previous.get("cooldown_until") or None) == normalized_cooldown
+            and (previous.get("queue_position") or None) == normalized_queue
+            and (previous.get("queue_ordered")
+                 if isinstance(previous.get("queue_ordered"), bool)
+                 else None) == normalized_ordered
+            and (previous.get("queue_fresh")
+                 if isinstance(previous.get("queue_fresh"), bool)
+                 else None) == normalized_fresh
+            and (previous.get("next_check") or None) == normalized_next_check
+            and previous.get("canceled", False) is False
+            and not granted
+            and not canceled
+            and not terminal
+        ):
+            return None
+    if canceled:
+        transition: str = "cancellation"
+    elif granted or terminal:
+        transition = "grant_resume"
+    elif previous is None:
+        transition = "wait_entered"
+    elif (previous.get("reason") if previous else None) != normalized_reason:
+        transition = "reason_changed"
+    elif (previous.get("cooldown_until") if previous else None) != normalized_cooldown:
+        transition = "deadline_extended"
+    elif (previous.get("queue_position") if previous else None) != normalized_queue:
+        transition = "reason_changed"
+    elif (previous.get("queue_ordered") if previous else None) != normalized_ordered or (
+        previous.get("queue_fresh") if previous else None
+    ) != normalized_fresh:
+        transition = "reason_changed"
+    elif (previous.get("next_check") if previous else None) != normalized_next_check:
+        transition = "deadline_extended"
+    else:
+        transition = "wait_entered"
+    return {
+        "wait_id": wait_id,
+        "revision": normalized_revision,
+        "reason": normalized_reason,
+        "cooldown_until": normalized_cooldown,
+        "queue_position": normalized_queue,
+        "queue_ordered": normalized_ordered,
+        "queue_fresh": normalized_fresh,
+        "next_check": normalized_next_check,
+        "transition": transition,
+    }
+
+
+def format_provider_wait_timing(
+    *,
+    queue_position: int | None = None,
+    queue_ordered: bool = False,
+    queue_fresh: bool = False,
+    cooldown_until: str | None = None,
+    next_check: str | None = None,
+) -> dict[str, str | None]:
+    """Render honest wait timing labels without implying an ETA.
+
+    MoonLadderStudios/MoonMind#1130: queue position appears only from a
+    meaningful ordered scoped snapshot; cooldown renders only an
+    authoritative deadline when present; next-check timing is labeled as
+    such, never promised start time. Zero/missing deadlines never mean
+    immediate admission.
+    """
+
+    queue_label: str | None = None
+    if (
+        queue_ordered
+        and queue_fresh
+        and isinstance(queue_position, int)
+        and queue_position > 0
+    ):
+        queue_label = f"Queue position {queue_position} (ordered snapshot)"
+    cooldown_label: str | None = None
+    deadline = str(cooldown_until or "").strip()
+    if deadline:
+        cooldown_label = f"Cooldown until {deadline}"
+    next_check_label: str | None = None
+    check = str(next_check or "").strip()
+    if check:
+        next_check_label = f"Next check {check} (not a promised start time)"
+    return {
+        "queue_label": queue_label,
+        "cooldown_label": cooldown_label,
+        "next_check_label": next_check_label,
+    }
+
+
+def structured_manager_slot_wait(manager_state: Mapping[str, Any]) -> dict[str, Any]:
+    """Extract honest wait-observation fields from a compact manager snapshot.
+
+    MoonLadderStudios/MoonMind#1130: the timeline pipeline needs the
+    authoritative cooldown deadline, the ordered queue position, and the
+    monotonic manager revision alongside the mapped reason. This extractor
+    reads only the compact inspection contract (never the manager's full
+    lease state) and keeps technical lease/fence/credential/host handles
+    internal. Returns ``cooldown_until`` (profile cooldown first, else the
+    scope cooldown when ``scope_known``), ``queue_position`` (only when the
+    manager says its pending queue is ordered), ``queue_ordered`` (whether
+    the manager attests its pending queue is ordered), ``queue_fresh``
+    (ordered snapshot with a monotonic revision), ``next_check`` (always
+    None: the manager exposes no authoritative next-poll deadline, and this
+    pipeline never invents one), and ``revision``
+    (``event_count`` when it is an int, else None).
+    """
+
+    if not isinstance(manager_state, Mapping):
+        return {
+            "cooldown_until": None,
+            "queue_position": None,
+            "queue_ordered": False,
+            "queue_fresh": False,
+            "next_check": None,
+            "revision": None,
+        }
+    queue_ordered = manager_state.get("pending_requests_ordered") is True
+    queue_position: int | None = None
+    if queue_ordered:
+        raw_position = manager_state.get("requester_queue_position")
+        if isinstance(raw_position, int) and raw_position > 0:
+            queue_position = raw_position
+    cooldown_until: str | None = None
+    profile = manager_state.get("requested_profile")
+    if isinstance(profile, Mapping):
+        candidate = str(profile.get("cooldown_until") or "").strip()
+        if candidate:
+            cooldown_until = candidate
+        elif profile.get("scope_known") is True:
+            scope = profile.get("capacity_scope")
+            if isinstance(scope, Mapping):
+                scope_deadline = str(scope.get("cooldown_until") or "").strip()
+                if scope_deadline:
+                    cooldown_until = scope_deadline
+    revision = manager_state.get("event_count")
+    normalized_revision = (
+        revision if isinstance(revision, int) and revision >= 0 else None
+    )
+    return {
+        "cooldown_until": cooldown_until,
+        "queue_position": queue_position,
+        "queue_ordered": queue_ordered,
+        "queue_fresh": bool(queue_ordered and normalized_revision is not None),
+        "next_check": None,
+        "revision": normalized_revision,
+    }
 
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
@@ -913,6 +1149,14 @@ class MoonMindAgentRun:
         self._profile_snapshots: dict[str, dict[str, Any]] = {}
         self._awaiting_slot_reason_override: str | None = None
         self._slot_wait_timeout_override_seconds: int | None = None
+        # MoonLadderStudios/MoonMind#1130: durable provider-wait observation.
+        # Temporal replays workflow instance state, so these fields survive
+        # worker restart/reconnect/refresh without a second store. The last
+        # emitted transition owns dedup/ordering; current-wait entry time is
+        # kept separate from cumulative wait across requeues/grants.
+        self._provider_wait_state: dict[str, Any] | None = None
+        self._provider_wait_entered_at: str | None = None
+        self._provider_wait_cumulative_seconds: float = 0.0
         self._skip_default_profile_pin_once: bool = False
         self._provider_cooldown_retry_counts: dict[str, int] = {}
         self._provider_cooldown_retry_attempts: int = 0
@@ -1243,6 +1487,278 @@ class MoonMindAgentRun:
         self._progress_next_revision = (
             int(payload.get("projectionRevision", 0)) + 1
         )
+
+    def _record_provider_wait_observation(
+        self,
+        *,
+        runtime_id: str,
+        requester_workflow_id: str,
+        profile_ref: str,
+        reason: str,
+        cooldown_until: str | None = None,
+        queue_position: int | None = None,
+        queue_ordered: bool | None = None,
+        queue_fresh: bool | None = None,
+        next_check: str | None = None,
+        revision: int | None = None,
+        terminal: bool = False,
+        canceled: bool = False,
+        granted: bool = False,
+        now_iso: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Persist one wait observation through the existing pipeline state.
+
+        MoonLadderStudios/MoonMind#1130: emit changes, not polling noise.
+        Binds the observation to the requesting workflow/run/profile via
+        :func:`build_provider_wait_identity`, decides via
+        :func:`next_provider_wait_transition`, and persists the emitted
+        transition as ``self._provider_wait_state``. Repeated identical
+        observations, stale revisions, retargeted identities, and late
+        observations against completed work return None and persist nothing.
+        The authoritative ``queue_ordered``/``queue_fresh`` flags and the
+        observed ``next_check`` deadline (None when the manager exposes no
+        authoritative deadline — never invented here) travel with the
+        transition so the detail layer never infers them. Current-wait
+        entry time (``_provider_wait_entered_at``) stays separate from
+        ``_provider_wait_cumulative_seconds`` across grants/requeues; this
+        helper creates no store beyond the durable workflow instance
+        fields. ``now_iso`` is an explicit timestamp for tests; when
+        omitted the current UTC time is used best-effort.
+        """
+
+        wait_id = build_provider_wait_identity(
+            runtime_id=runtime_id,
+            requester_workflow_id=requester_workflow_id,
+            profile_ref=profile_ref,
+        )
+        transition = next_provider_wait_transition(
+            previous=self._provider_wait_state,
+            wait_id=wait_id,
+            revision=revision,
+            reason=reason,
+            cooldown_until=cooldown_until,
+            queue_position=queue_position,
+            queue_ordered=queue_ordered,
+            queue_fresh=queue_fresh,
+            next_check=next_check,
+            terminal=terminal,
+            canceled=canceled,
+            granted=granted,
+        )
+        if transition is None:
+            return None
+        previous = self._provider_wait_state
+        if now_iso is not None:
+            now_label = str(now_iso).strip() or None
+        else:
+            try:
+                now_label = datetime.now(timezone.utc).isoformat()
+            except Exception:
+                now_label = None
+        kind = str(transition.get("transition") or "")
+        if kind == "wait_entered" and previous is None:
+            self._provider_wait_entered_at = now_label
+        elif kind in ("grant_resume", "cancellation"):
+            try:
+                elapsed = 0.0
+                if self._provider_wait_entered_at and now_label:
+                    start = datetime.fromisoformat(
+                        self._provider_wait_entered_at.replace("Z", "+00:00")
+                    )
+                    end = datetime.fromisoformat(now_label.replace("Z", "+00:00"))
+                    elapsed = max(0.0, (end - start).total_seconds())
+            except Exception:
+                elapsed = 0.0
+            try:
+                self._provider_wait_cumulative_seconds = float(
+                    self._provider_wait_cumulative_seconds
+                ) + float(elapsed)
+            except Exception:
+                # Cumulative wait time is best-effort telemetry; preserve the
+                # prior total when the stored value or elapsed time is invalid.
+                pass
+            self._provider_wait_entered_at = None
+        self._provider_wait_state = dict(transition)
+        if terminal or canceled or granted:
+            self._provider_wait_state["completed"] = True
+        return dict(self._provider_wait_state)
+
+    def _reuse_recorded_provider_wait(self) -> dict[str, Any] | None:
+        """Return the recorded wait observation without inventing history.
+
+        MoonLadderStudios/MoonMind#1130: reconnect, refresh, worker restart
+        and retained-history reads reuse recorded observations through the
+        existing workflow instance owner. A new current snapshot never
+        reconstructs unobserved past transitions here; callers receive a copy
+        of the last emitted transition (or None when nothing was observed).
+        """
+
+        if self._provider_wait_state is None:
+            return None
+        return dict(self._provider_wait_state)
+
+    def _close_provider_wait_on_grant(
+        self,
+        *,
+        runtime_id: str,
+        request: AgentExecutionRequest,
+    ) -> None:
+        """Close the current wait best-effort after a slot grant.
+
+        MoonLadderStudios/MoonMind#1130: the slot grant ends the current
+        wait. Record grant/resume so the timeline closes without inventing
+        transitions when nothing was observed; failures here must not fail
+        admission that already succeeded.
+        """
+        try:
+            if self._provider_wait_state is not None:
+                stored_flags = self._provider_wait_state or {}
+                self._record_provider_wait_observation(
+                    runtime_id=runtime_id,
+                    requester_workflow_id=workflow.info().workflow_id,
+                    profile_ref=str(request.execution_profile_ref or ""),
+                    reason=str(
+                        (self._provider_wait_state or {}).get(
+                            "reason", "awaiting_provider_capacity"
+                        )
+                    ),
+                    cooldown_until=(self._provider_wait_state or {}).get(
+                        "cooldown_until"
+                    ),
+                    queue_position=(self._provider_wait_state or {}).get(
+                        "queue_position"
+                    ),
+                    queue_ordered=stored_flags.get("queue_ordered")
+                    if isinstance(stored_flags.get("queue_ordered"), bool)
+                    else None,
+                    queue_fresh=stored_flags.get("queue_fresh")
+                    if isinstance(stored_flags.get("queue_fresh"), bool)
+                    else None,
+                    next_check=(self._provider_wait_state or {}).get("next_check"),
+                    revision=(self._provider_wait_state or {}).get("revision"),
+                    granted=True,
+                )
+        except Exception:
+            # Grant observation is best-effort timeline telemetry;
+            # admission already succeeded so failures must not fail it.
+            pass
+
+    async def _signal_provider_slot_wait(
+        self,
+        parent_info: Any,
+        *,
+        runtime_id: str,
+        requester_workflow_id: str,
+        profile_ref: str,
+        reason: str,
+        cooldown_until: str | None = None,
+        queue_position: int | None = None,
+        queue_ordered: bool | None = None,
+        queue_fresh: bool | None = None,
+        next_check: str | None = None,
+        revision: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Signal awaiting_slot only when the observation is a new transition.
+
+        MoonLadderStudios/MoonMind#1130: repeated identical polls must not
+        append timeline events. When the canonical waiting-state patch is not
+        enabled this keeps the legacy always-signal behavior for replay
+        compatibility; otherwise the parent signal fires only when
+        :meth:`_record_provider_wait_observation` returns a transition.
+        """
+
+        try:
+            use_canonical = self._workflow_patch_enabled(CANONICAL_WAITING_STATE_PATCH_ID)
+        except Exception:
+            use_canonical = False
+        if not use_canonical:
+            self.run_status = RunStatus.awaiting_slot
+            await self._signal_parent_child_state_changed(
+                parent_info,
+                "awaiting_slot",
+                reason,
+            )
+            return None
+        transition = self._record_provider_wait_observation(
+            runtime_id=runtime_id,
+            requester_workflow_id=requester_workflow_id,
+            profile_ref=profile_ref,
+            reason=reason,
+            cooldown_until=cooldown_until,
+            queue_position=queue_position,
+            queue_ordered=queue_ordered,
+            queue_fresh=queue_fresh,
+            next_check=next_check,
+            revision=revision,
+        )
+        if transition is None:
+            return None
+        self.run_status = RunStatus.awaiting_slot
+        # MoonLadderStudios/MoonMind#1130 R5: the parent signal carries only
+        # the reason string (two-arg signal preserved for replay), so the
+        # authoritative structured fields travel as safe fragments the
+        # Workflow Detail parsers already understand. Never invent a
+        # deadline/position/flag here: append only observed values missing
+        # from the reason, sanitized exactly like canonical_waiting_reason.
+        # queue_ordered/queue_fresh travel as explicit flags so the detail
+        # layer never infers them from fragment presence; wait_entered_at
+        # lets the detail layer render honest elapsed wait; next_check
+        # travels only when the manager observes an authoritative deadline.
+        parent_reason = str(reason or "")
+        observed_queue = transition.get("queue_position")
+        if (
+            isinstance(observed_queue, int)
+            and observed_queue > 0
+            and "queue_position=" not in parent_reason
+        ):
+            parent_reason = f"{parent_reason}; queue_position={observed_queue}"
+        observed_deadline = str(transition.get("cooldown_until") or "").strip()
+        if (
+            observed_deadline
+            and len(observed_deadline) <= 64
+            and not any(
+                ch.isspace() or ch in ";," for ch in observed_deadline
+            )
+            and "cooldown_until=" not in parent_reason
+        ):
+            parent_reason = f"{parent_reason}; cooldown_until={observed_deadline}"
+        if (
+            transition.get("queue_ordered") is True
+            and "queue_ordered=" not in parent_reason
+        ):
+            parent_reason = f"{parent_reason}; queue_ordered=1"
+        if (
+            transition.get("queue_fresh") is True
+            and "queue_fresh=" not in parent_reason
+        ):
+            parent_reason = f"{parent_reason}; queue_fresh=1"
+        observed_next_check = str(transition.get("next_check") or "").strip()
+        if (
+            observed_next_check
+            and len(observed_next_check) <= 64
+            and not any(
+                ch.isspace() or ch in ";," for ch in observed_next_check
+            )
+            and "next_check=" not in parent_reason
+        ):
+            parent_reason = f"{parent_reason}; next_check={observed_next_check}"
+        entered_at = str(self._provider_wait_entered_at or "").strip()
+        if (
+            entered_at
+            and len(entered_at) <= 64
+            and not any(ch.isspace() or ch in ";," for ch in entered_at)
+            and "wait_entered_at=" not in parent_reason
+        ):
+            parent_reason = f"{parent_reason}; wait_entered_at={entered_at}"
+        await self._signal_parent_child_state_changed(
+            parent_info,
+            "awaiting_slot",
+            parent_reason,
+        )
+        return transition
+
+    @staticmethod
+    def _managed_runtime_id(agent_id: str) -> str:
         runtime_mapping = {
             "claude": "claude_code",
             "claude_code": "claude_code",
@@ -1466,25 +1982,75 @@ class MoonMindAgentRun:
     ) -> str:
         """Describe the manager-owned condition that is blocking slot assignment."""
 
-        queue_position = manager_state.get("requester_queue_position")
-        queue_number = (
-            queue_position if isinstance(queue_position, int) and queue_position > 0 else None
-        )
+        # MoonLadderStudios/MoonMind#1130 R5: queue position requires
+        # ordered current evidence. An unordered pending queue never lends
+        # its index as a display position.
+        queue_number: int | None = None
+        if manager_state.get("pending_requests_ordered") is True:
+            queue_position = manager_state.get("requester_queue_position")
+            if isinstance(queue_position, int) and queue_position > 0:
+                queue_number = queue_position
         try:
             use_canonical = workflow.patched(CANONICAL_WAITING_STATE_PATCH_ID)
         except Exception:
             use_canonical = False
         if use_canonical:
+            # MoonLadderStudios/MoonMind#1130: map only evidence-backed
+            # conditions to the canonical wait vocabulary. An explicit
+            # missing profile is a validation/setup condition, never another
+            # account's capacity. Maintenance, cleanup-pending and cooldown
+            # each require their owning observation; unknown remains without
+            # a fabricated capacity claim at the detail layer below.
+            if manager_state.get("requested_profile_missing") is True:
+                return canonical_waiting_reason(
+                    "awaiting_provider_validation", queue_position=queue_number
+                )
             profile = manager_state.get("requested_profile")
             if isinstance(profile, Mapping):
-                if str(profile.get("cooldown_until") or "").strip():
-                    return canonical_waiting_reason(
-                        "provider_cooldown", queue_position=queue_number
-                    )
                 if profile.get("enabled") is False or profile.get("launch_ready") is False:
                     return canonical_waiting_reason(
                         "awaiting_provider_validation", queue_position=queue_number
                     )
+                maintenance_waiters = profile.get("maintenance_waiters")
+                if profile.get("maintenance_waiter_position") is not None or (
+                    isinstance(maintenance_waiters, int) and maintenance_waiters > 0
+                ):
+                    return canonical_waiting_reason(
+                        "awaiting_profile_maintenance", queue_position=queue_number
+                    )
+                if (
+                    profile.get("requester_cleanup_requested") is True
+                    or profile.get("requester_unresolved_release") is True
+                    or manager_state.get("requester_cleanup_requested") is True
+                    or manager_state.get("requester_unresolved_release") is True
+                    or (
+                        isinstance(profile.get("profile_cleanup_pending_count"), int)
+                        and profile.get("profile_cleanup_pending_count") > 0
+                    )
+                    or (
+                        isinstance(profile.get("profile_unresolved_release_count"), int)
+                        and profile.get("profile_unresolved_release_count") > 0
+                    )
+                ):
+                    return canonical_waiting_reason(
+                        "cleanup_pending", queue_position=queue_number
+                    )
+                profile_deadline = str(profile.get("cooldown_until") or "").strip()
+                if profile_deadline:
+                    return canonical_waiting_reason(
+                        "provider_cooldown",
+                        queue_position=queue_number,
+                        cooldown_until=profile_deadline,
+                    )
+                scope = profile.get("capacity_scope")
+                if isinstance(scope, Mapping) and profile.get("scope_known") is True:
+                    scope_deadline = str(scope.get("cooldown_until") or "").strip()
+                    if scope_deadline:
+                        return canonical_waiting_reason(
+                            "provider_cooldown",
+                            queue_position=queue_number,
+                            cooldown_until=scope_deadline,
+                        )
             return canonical_waiting_reason(
                 "awaiting_provider_capacity", queue_position=queue_number
             )
@@ -3738,6 +4304,10 @@ class MoonMindAgentRun:
             "purpose": "execution_direct",
             "metadata": {
                 "workflowId": workflow.info().workflow_id,
+                # MoonLadderStudios/MoonMind#1089: bind liveness to the exact
+                # admitted run; the logical workflow ID alone is insufficient
+                # across replacement runs, reset, or Continue-As-New.
+                "runId": workflow.info().run_id,
                 "ownerIsWorkflow": True,
                 # MoonLadderStudios/MoonMind#3880: compact, non-secret fence
                 # identity the manager persists with the grant so the execution
@@ -3877,6 +4447,70 @@ class MoonMindAgentRun:
                 exc,
             )
         return waiting_reason
+
+    async def _inspected_provider_slot_wait(
+        self,
+        *,
+        manager_id: str,
+        runtime_id: str,
+        request: AgentExecutionRequest,
+    ) -> dict[str, Any]:
+        """Inspect the manager and return the wait observation with structure.
+
+        MoonLadderStudios/MoonMind#1130: the timeline pipeline needs the
+        mapped reason plus the authoritative cooldown deadline, the ordered
+        queue position with its ordered/fresh attestation, the observed
+        next-check deadline (None: the manager exposes none and this
+        pipeline never invents one), and the monotonic manager revision.
+        Falls back to the generic provider reason with unknown structure
+        when inspection fails; unknown stays unknown, never fabricated
+        capacity.
+        """
+
+        waiting_reason = self._build_provider_slot_waiting_reason(
+            runtime_id=runtime_id,
+            request=request,
+        )
+        structured: dict[str, Any] = {
+            "cooldown_until": None,
+            "queue_position": None,
+            "queue_ordered": None,
+            "queue_fresh": None,
+            "next_check": None,
+            "revision": None,
+        }
+        try:
+            manager_state = await self._manager_state_for_slot_wait(
+                runtime_id=runtime_id,
+                requester_workflow_id=workflow.info().workflow_id,
+                execution_profile_ref=request.execution_profile_ref,
+            )
+            if manager_state.get("running") is True:
+                waiting_reason = self._build_manager_slot_waiting_reason(
+                    runtime_id=runtime_id,
+                    request=request,
+                    manager_state=manager_state,
+                )
+                structured = structured_manager_slot_wait(manager_state)
+        except CancelledError:
+            raise
+        except Exception as exc:
+            self._get_logger().warning(
+                "Auth profile manager %s state inspection failed while building the slot wait observation; using generic reason: %s",
+                manager_id,
+                exc,
+            )
+        profile_ref = str(request.execution_profile_ref or "").strip()
+        return {
+            "reason": waiting_reason,
+            "cooldown_until": structured.get("cooldown_until"),
+            "queue_position": structured.get("queue_position"),
+            "queue_ordered": structured.get("queue_ordered"),
+            "queue_fresh": structured.get("queue_fresh"),
+            "next_check": structured.get("next_check"),
+            "revision": structured.get("revision"),
+            "profile_ref": profile_ref,
+        }
 
     async def _evaluate_omnigent_session_admission(
         self,
@@ -6339,17 +6973,19 @@ class MoonMindAgentRun:
                                 request=request,
                             )
                         )
+                        wait_observation: dict[str, Any] | None = None
                         if (
                             self._awaiting_slot_reason_override is None
                             and workflow.patched(ACCURATE_SLOT_WAIT_REASON_PATCH_ID)
                         ):
-                            waiting_reason = (
-                                await self._inspected_provider_slot_waiting_reason(
+                            wait_observation = (
+                                await self._inspected_provider_slot_wait(
                                     manager_id=manager_id,
                                     runtime_id=runtime_id,
                                     request=request,
                                 )
                             )
+                            waiting_reason = str(wait_observation.get("reason") or waiting_reason)
                         self._awaiting_slot_reason_override = None
                         # The inspection activity creates a workflow-task boundary;
                         # the manager can assign the slot while it runs.
@@ -6357,12 +6993,31 @@ class MoonMindAgentRun:
                             not self.slot_assigned_event.is_set()
                             and not self.runtime_selection_updated_event.is_set()
                         ):
-                            self.run_status = RunStatus.awaiting_slot
-                            await self._signal_parent_child_state_changed(
-                                parent_info,
-                                "awaiting_slot",
-                                waiting_reason,
-                            )
+                            if wait_observation is not None:
+                                await self._signal_provider_slot_wait(
+                                    parent_info,
+                                    runtime_id=runtime_id,
+                                    requester_workflow_id=workflow.info().workflow_id,
+                                    profile_ref=str(wait_observation.get("profile_ref") or ""),
+                                    reason=waiting_reason,
+                                    cooldown_until=wait_observation.get("cooldown_until"),
+                                    queue_position=wait_observation.get("queue_position"),
+                                    queue_ordered=wait_observation.get("queue_ordered")
+                                    if isinstance(wait_observation.get("queue_ordered"), bool)
+                                    else None,
+                                    queue_fresh=wait_observation.get("queue_fresh")
+                                    if isinstance(wait_observation.get("queue_fresh"), bool)
+                                    else None,
+                                    next_check=wait_observation.get("next_check"),
+                                    revision=wait_observation.get("revision"),
+                                )
+                            else:
+                                self.run_status = RunStatus.awaiting_slot
+                                await self._signal_parent_child_state_changed(
+                                    parent_info,
+                                    "awaiting_slot",
+                                    waiting_reason,
+                                )
 
                     if workflow.patched("agent_run_slot_wait_retry_v1"):
                         slot_recovery_attempts = 0
@@ -6380,20 +7035,34 @@ class MoonMindAgentRun:
                                         ACCURATE_SLOT_WAIT_REASON_PATCH_ID
                                     )
                                 ):
-                                    waiting_reason = await self._inspected_provider_slot_waiting_reason(
+                                    wait_observation = await self._inspected_provider_slot_wait(
                                         manager_id=manager_id,
                                         runtime_id=runtime_id,
                                         request=request,
+                                    )
+                                    waiting_reason = str(
+                                        wait_observation.get("reason") or waiting_reason
                                     )
                                     if (
                                         not self.slot_assigned_event.is_set()
                                         and not self.runtime_selection_updated_event.is_set()
                                     ):
-                                        self.run_status = RunStatus.awaiting_slot
-                                        await self._signal_parent_child_state_changed(
+                                        await self._signal_provider_slot_wait(
                                             parent_info,
-                                            "awaiting_slot",
-                                            waiting_reason,
+                                            runtime_id=runtime_id,
+                                            requester_workflow_id=workflow.info().workflow_id,
+                                            profile_ref=str(wait_observation.get("profile_ref") or ""),
+                                            reason=waiting_reason,
+                                            cooldown_until=wait_observation.get("cooldown_until"),
+                                            queue_position=wait_observation.get("queue_position"),
+                                            queue_ordered=wait_observation.get("queue_ordered")
+                                            if isinstance(wait_observation.get("queue_ordered"), bool)
+                                            else None,
+                                            queue_fresh=wait_observation.get("queue_fresh")
+                                            if isinstance(wait_observation.get("queue_fresh"), bool)
+                                            else None,
+                                            next_check=wait_observation.get("next_check"),
+                                            revision=wait_observation.get("revision"),
                                         )
                                         refresh_waiting_reason = False
                                 if self.runtime_selection_updated_event.is_set():
@@ -6556,7 +7225,10 @@ class MoonMindAgentRun:
 
                     self._awaiting_slot_reason_override = None
                     self._slot_wait_timeout_override_seconds = None
-
+                    self._close_provider_wait_on_grant(
+                        runtime_id=runtime_id,
+                        request=request,
+                    )
                     if self._paused:
                         await workflow.wait_condition(lambda: not self._paused)
 
@@ -6601,23 +7273,9 @@ class MoonMindAgentRun:
                     ):
                         self._synchronize_runtime_selection_authority(request)
 
-                    # Notify parent of the assigned profile so it can release the slot
-                    # if this child exits in a terminal state (fallback for cancelled
-                    # workflows that fail to release their own slot).
-                    if parent_info and self._assigned_profile_id:
-                        if workflow.patched("agent_run_parent_profile_assigned_signal"):
-                            parent_handle = workflow.get_external_workflow_handle(
-                                parent_info.workflow_id, run_id=parent_info.run_id
-                            )
-                            await parent_handle.signal(
-                                "profile_assigned",
-                                {
-                                    "profile_id": self._assigned_profile_id,
-                                    "child_workflow_id": workflow.info().workflow_id,
-                                    "runtime_id": runtime_id,
-                                },
-                            )
-
+                    # Slot release is owned by the ProviderProfileManager through
+                    # verified consumer teardown (MoonLadderStudios/MoonMind#1089):
+                    # the child no longer notifies the parent of its assignment.
                     request = await self._bind_deferred_workflow_scoped_session_after_slot(
                         request=request,
                         runtime_id=runtime_id,
@@ -6653,6 +7311,7 @@ class MoonMindAgentRun:
                             "purpose": "execution_direct",
                             "metadata": {
                                 "workflowId": wf_id,
+                                "runId": workflow.info().run_id,
                                 "ownerIsWorkflow": True,
                             },
                         }

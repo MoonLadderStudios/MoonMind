@@ -477,3 +477,71 @@ async def test_the_client_withdraws_its_waiter_when_reattachment_runs_out(
     assert withdrawal["requester_workflow_id"] == "repair-a"
     assert profile.maintenance_queue_position("repair-a") == -1
     assert profile.exclusive_maintenance_waiters == 0
+
+
+@pytest.mark.asyncio
+async def test_the_client_completes_a_cleanup_claim_through_verified_teardown() -> None:
+    """The executing owner reports positive teardown with the acquired fence.
+
+    MoonLadderStudios/MoonMind#1089 R4: the janitor-shaped consumer reads the
+    manager's stable claim and completes it through ``report_cleanup_verified``
+    quoting the fence and admitted identity with ``consumer_stopped=True``.
+    """
+
+    manager, adapter, client = _wire(2)
+    lease = await client.acquire_execution_lease(
+        runtime_id=RUNTIME_ID,
+        profile_id=PROFILE_ID,
+        owner_id="agent-run-0",
+        purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+        metadata={
+            "workflowId": "agent-run-0",
+            "runId": "run-admitted-0",
+            "evidenceIdentity": "evidence-admitted-0",
+        },
+    )
+    assert lease.fencing_generation is not None
+
+    await client.report_cleanup_verified(
+        lease,
+        run_id="run-admitted-0",
+        verified_by="omnigent-oauth-host-janitor",
+    )
+
+    assert [name for _, name, _ in adapter.signals] == ["report_cleanup_verified"]
+    _, _, payload = adapter.signals[0]
+    assert payload["lease_id"] == lease.lease_id
+    assert payload["profile_id"] == PROFILE_ID
+    assert payload["fencing_generation"] == lease.fencing_generation
+    evidence = payload["teardown_evidence"]
+    assert evidence["consumer_stopped"] is True
+    assert evidence["verified_by"] == "omnigent-oauth-host-janitor"
+    assert evidence["run_id"] == "run-admitted-0"
+    assert evidence["evidence_identity"] == "evidence-admitted-0"
+
+
+@pytest.mark.asyncio
+async def test_the_client_reads_stable_cleanup_claims_from_the_manager() -> None:
+    """Claims polled by the owner carry the stable ID, fence, and identities."""
+
+    manager, adapter, client = _wire(2)
+    lease = await client.acquire_execution_lease(
+        runtime_id=RUNTIME_ID,
+        profile_id=PROFILE_ID,
+        owner_id="agent-run-0",
+        purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+        metadata={
+            "workflowId": "agent-run-0",
+            "runId": "run-admitted-0",
+            "evidenceIdentity": "evidence-admitted-0",
+        },
+    )
+    manager._cleanup_requested_leases.add(lease.lease_id)
+    manager._cleanup_request_reasons[lease.lease_id] = "owner_terminal"
+
+    claims = await client.get_cleanup_obligations(runtime_id=RUNTIME_ID)
+
+    assert len(claims) == 1
+    assert claims[0]["claim_id"] == f"{lease.lease_id}:{lease.fencing_generation}"
+    assert claims[0]["runId"] == "run-admitted-0"
+    assert claims[0]["evidenceIdentity"] == "evidence-admitted-0"

@@ -82,6 +82,9 @@ from moonmind.workflows.skills.ops_diagnostics_execution import (
     OpsStackDiagnosisExecutor,
     register_ops_diagnose_stack_tool_handler,
 )
+from moonmind.workflows.skills.deployment_overview import (
+    register_deployment_overview_tool_handler,
+)
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
@@ -3075,6 +3078,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 dispatcher,
                 executor=_build_ops_diagnosis_executor(),
             )
+            register_deployment_overview_tool_handler(dispatcher)
 
         bindings = build_worker_activity_bindings(
             fleet=topology.fleet,

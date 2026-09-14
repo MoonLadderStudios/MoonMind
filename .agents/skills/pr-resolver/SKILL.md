@@ -184,8 +184,9 @@ metadata flag.
      evidence until a fresh `gh pr view` reports `state=MERGED`; merge-queue or
      still-open states remain transient.
    - `merge_conflicts`: the PR either conflicts with or is behind its base
-     branch; follow `fix-merge-conflicts` completely to merge the latest
-     `origin/main`, then push the synchronized branch.
+     branch; follow `fix-merge-conflicts` completely with the PR's actual
+     base branch (`inputs.base`), then push the synchronized branch. Never
+     substitute `origin/main` for a PR targeting another base.
    - `ci_failures`: follow `fix-ci` completely.
    - `actionable_comments`: follow `fix-comments` completely, including fresh
      comment retrieval, its disposition ledger, push verification, and resolving
