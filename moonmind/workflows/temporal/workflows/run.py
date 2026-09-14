@@ -1075,6 +1075,71 @@ def _legacy_manager_workflow_id(runtime_id: str) -> str:
     return f"auth-profile-manager:{runtime_id}"
 
 
+# Committed review-gate reuse for MoonLadderStudios/MoonMind#3945 (R5).
+#
+# The step.review Activity commits a completed verified verdict
+# (FULLY_IMPLEMENTED / ADDITIONAL_WORK_NEEDED) under its immutable
+# review-attempt identity, and the workflow persists the gate-result artifact
+# plus step-ledger check before acknowledging completion. A duplicate
+# delivery or lost-acknowledgment retry of the same admitted review must
+# reuse only that same committed decision: it may never overwrite a
+# committed verdict with an unavailable outcome or a divergent re-invocation,
+# and changed evidence (a different identity) is always a new attempt.
+# Unavailable results (NO_DETERMINATION) are never committed and never reused.
+_COMMITTED_GATE_REUSE_VERDICTS = frozenset(
+    {"FULLY_IMPLEMENTED", "ADDITIONAL_WORK_NEEDED"}
+)
+
+
+def resolve_committed_gate_reuse(
+    committed_gates: Mapping[str, Any],
+    gate: StepGateResult,
+    *,
+    validate_action_compatibility: bool = True,
+) -> tuple[StepGateResult, str] | None:
+    """Reuse the committed gate decision for a duplicate review delivery.
+
+    Returns the committed ``(gate_result, artifact_ref)`` when this delivery
+    carries the same review-attempt identity as an already committed decision,
+    otherwise None (the caller persists a new gate-result artifact). Pure and
+    deterministic: it reads workflow state only, so replay rebuilds it
+    identically. Deliveries without provenance (payloads recorded before the
+    binding) return None and follow the normal path.
+    """
+    try:
+        provenance = gate.review_provenance
+        identity = (
+            str(provenance.get("reviewAttemptIdentity") or "")
+            if isinstance(provenance, Mapping)
+            else ""
+        )
+        if not identity:
+            return None
+        stored = committed_gates.get(identity)
+        if not isinstance(stored, Mapping):
+            return None
+        payload = stored.get("payload")
+        artifact_ref = stored.get("artifactRef")
+        if not isinstance(payload, Mapping) or not artifact_ref:
+            return None
+        committed = parse_step_gate_result(
+            payload, validate_action_compatibility=validate_action_compatibility
+        )
+        stored_provenance = committed.review_provenance
+        stored_identity = (
+            str(stored_provenance.get("reviewAttemptIdentity") or "")
+            if isinstance(stored_provenance, Mapping)
+            else ""
+        )
+        if stored_identity != identity:
+            return None
+        if committed.verdict not in _COMMITTED_GATE_REUSE_VERDICTS:
+            return None
+        return (committed, str(artifact_ref))
+    except Exception:
+        return None
+
+
 class MoonMindRunWorkflow(RunFailureDiagnostics):
     def _expected_workflow_name(self) -> str:
         return WORKFLOW_NAME
@@ -1163,6 +1228,15 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._publish_status: Optional[str] = None
         self._publish_reason: Optional[str] = None
         self._publish_context: dict[str, Any] = {}
+        # Committed review-gate decisions keyed by immutable review-attempt
+        # identity (MoonLadderStudios/MoonMind#3945 R5). Duplicate deliveries
+        # and lost-acknowledgment retries of the same admitted review reuse
+        # only the same committed decision instead of persisting a divergent
+        # or unavailable redelivery. Updated only in deterministic workflow
+        # code from history-recorded activity results, so replay rebuilds it
+        # identically; entries are small (one bounded gate payload plus an
+        # artifact ref per committed attempt) and attempts are policy-bounded.
+        self._committed_review_gates: dict[str, dict[str, Any]] = {}
         self._canonical_git_repository_projection_enabled: bool = False
         self._canonical_no_commit_outcome_enabled: bool = False
         self._canonical_no_commit_search_preset_enabled: bool = False
@@ -5508,6 +5582,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         gate_result_ref: str,
         gate: StepGateResult,
     ) -> dict[str, Any]:
+        provenance = (
+            dict(gate.review_provenance)
+            if isinstance(gate.review_provenance, Mapping)
+            else None
+        )
         return {
             "gateResultRef": gate_result_ref,
             "gateVerdict": gate.verdict,
@@ -5520,6 +5599,23 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             "recommendedNextAction": gate.recommended_next_action,
             "invalid": gate.invalid,
             "degraded": gate.degraded,
+            # Immutable review-attempt binding (MoonLadderStudios/MoonMind#3945
+            # R2/R5): the step-ledger check names the exact committed attempt
+            # so duplicate deliveries can reuse it and operators can verify
+            # the binding without opening the artifact. None for payloads
+            # recorded before provenance; readers treat a missing identity as
+            # "no committed decision" and follow the normal path.
+            "reviewProvenance": provenance,
+            "reviewAttemptIdentity": (
+                str(provenance.get("reviewAttemptIdentity") or "") or None
+                if provenance is not None
+                else None
+            ),
+            "reviewEvidenceDigest": (
+                str(provenance.get("evidenceDigest") or "") or None
+                if provenance is not None
+                else None
+            ),
         }
 
     def _step_execution_for(self, logical_step_id: str) -> int | None:
@@ -13266,19 +13362,64 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
                     ),
                 )
-                review_verdict = gate_result.to_review_verdict()
-                step_execution = self._step_execution_for(node_id) or 0
-                gate_result_ref = await self._write_json_artifact(
-                    name=(
-                        "reports/gate_result_"
-                        f"{node_id}_attempt_{step_execution}.json"
+                # MoonLadderStudios/MoonMind#3945 (R5): a duplicate delivery
+                # or lost-acknowledgment retry of the same admitted review
+                # reuses only the same committed decision instead of
+                # persisting a divergent or unavailable redelivery. Changed
+                # evidence (a different attempt identity) misses and follows
+                # the normal path as a new attempt.
+                committed_reuse = resolve_committed_gate_reuse(
+                    self._committed_review_gates,
+                    gate_result,
+                    validate_action_compatibility=workflow.patched(
+                        RUN_VERIFIER_REMEDIATION_STOP_AUTHORITY_PATCH
                     ),
-                    payload=gate_result.to_payload(),
                 )
-                gate_check_metadata = self._gate_check_metadata(
-                    gate_result_ref=gate_result_ref,
-                    gate=gate_result,
-                )
+                if committed_reuse is not None:
+                    restored_gate_result, gate_result_ref = committed_reuse
+                    if restored_gate_result.verdict != gate_result.verdict:
+                        self._get_logger().warning(
+                            "Reusing committed review decision for duplicate "
+                            "delivery; discarding redelivered verdict %s",
+                            gate_result.verdict,
+                        )
+                    gate_result = restored_gate_result
+                    gate_check_metadata = self._gate_check_metadata(
+                        gate_result_ref=gate_result_ref,
+                        gate=gate_result,
+                    )
+                else:
+                    step_execution = self._step_execution_for(node_id) or 0
+                    gate_result_ref = await self._write_json_artifact(
+                        name=(
+                            "reports/gate_result_"
+                            f"{node_id}_attempt_{step_execution}.json"
+                        ),
+                        payload=gate_result.to_payload(),
+                    )
+                    gate_check_metadata = self._gate_check_metadata(
+                        gate_result_ref=gate_result_ref,
+                        gate=gate_result,
+                    )
+                    reuse_provenance = (
+                        gate_result.review_provenance
+                        if isinstance(gate_result.review_provenance, Mapping)
+                        else None
+                    )
+                    reuse_identity = (
+                        str(reuse_provenance.get("reviewAttemptIdentity") or "")
+                        if reuse_provenance is not None
+                        else ""
+                    )
+                    if (
+                        reuse_identity
+                        and gate_result.verdict in _COMMITTED_GATE_REUSE_VERDICTS
+                    ):
+                        self._committed_review_gates[reuse_identity] = {
+                            "payload": gate_result.to_payload(),
+                            "artifactRef": gate_result_ref,
+                        }
+                review_verdict = gate_result.to_review_verdict()
                 review_check_status = self._check_status_for_review_verdict(
                     review_verdict.verdict
                 )
