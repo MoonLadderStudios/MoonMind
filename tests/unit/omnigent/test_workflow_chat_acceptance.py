@@ -768,6 +768,55 @@ def test_every_claimed_combination_appears_in_the_protected_matrix() -> None:
     assert "cleanupSession" in on_demand and "cleanupSession" not in static
 
 
+def test_claimed_combinations_reference_the_resolvable_product_host_class() -> None:
+    """Claimed combinations must name the resolvable product Host Class.
+
+    Source issue: MoonLadderStudios/MoonMind#3932. The product registry points
+    Codex and Claude at ``omnigent-codex@1`` and ``omnigent-claude@1``; the
+    formerly unresolvable ``omnigent-codex-current@1`` class is retired and
+    must not be restored. A claimed combination that names it would pass
+    manifest shape checks while never resolving through
+    ``OmnigentHostClassSelector``.
+    """
+
+    from moonmind.omnigent.harness_platform.harness_registry import (
+        find_harness_registration,
+    )
+    from moonmind.omnigent.harness_platform.host_classes import (
+        DEFAULT_HOST_CLASS_TEMPLATES,
+    )
+
+    templates = {template.ref: template for template in DEFAULT_HOST_CLASS_TEMPLATES}
+    inventory = workflow_chat_combinations()
+    assert inventory
+    for combination in inventory.values():
+        if not combination.native_chat_claimed:
+            continue
+        assert combination.host_class_ref != "omnigent-codex-current@1", (
+            f"{combination.combination_id} names the retired unresolvable "
+            "Codex class; use omnigent-codex@1"
+        )
+        template = templates.get(combination.host_class_ref)
+        assert template is not None, (
+            f"{combination.combination_id} names Host Class "
+            f"{combination.host_class_ref} with no product template"
+        )
+        assert combination.harness_id in template.harness_ids, (
+            f"{combination.combination_id} harness {combination.harness_id} "
+            f"is not declared by Host Class template {template.ref}"
+        )
+        registration = find_harness_registration(combination.harness_id)
+        assert registration is not None, (
+            f"{combination.combination_id} harness {combination.harness_id} "
+            "has no product registration"
+        )
+        assert registration.hostClassRef == combination.host_class_ref, (
+            f"{combination.combination_id} Host Class "
+            f"{combination.host_class_ref} does not match the product "
+            f"registry {registration.hostClassRef}"
+        )
+
+
 def test_missing_claimed_combination_fails_closed(tmp_path: Path) -> None:
     manifest = build_workflow_chat_acceptance_manifest(
         _matrix(tmp_path), evidence_root=tmp_path

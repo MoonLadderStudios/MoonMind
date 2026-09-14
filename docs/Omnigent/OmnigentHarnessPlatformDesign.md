@@ -1669,7 +1669,7 @@ credentialBindings:
   primary-model:
     providerProfileRef: codex_openai_oauth
     materializerRef: codex-oauth-home@1
-hostClassRef: omnigent-codex-current@1
+hostClassRef: omnigent-codex@1
 launchPolicyRef: codex-on-demand@1
 executionRealizerRef: codex-profile-bound@1
 model:
