@@ -1,0 +1,6846 @@
+{
+  "metadata": {
+    "generated_by": "tools/config_consumer_inventory.py",
+    "issue": "MoonLadderStudios/MoonMind#3941",
+    "variable_count": 294,
+    "duplicate_names_in_template": [],
+    "first_run_required": [],
+    "first_run_recommended": [
+      {
+        "name": "OPENCODE_API_KEY",
+        "reason": "the only key the default Compose deployment needs to make 'OpenCode via Omnigent' launchable"
+      }
+    ],
+    "classification_precedence": "secret > product_preference > operation > infrastructure_bootstrap > deployment_override > dead"
+  },
+  "variables": {
+    "MOONMIND_IMAGE": {
+      "default": "\"ghcr.io/moonladderstudios/moonmind:latest\"",
+      "template_line": 15,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/deployment_operations.py",
+            "moonmind/workflows/skills/deployment_execution.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_API_HOST_PORT": {
+      "default": "7000",
+      "template_line": 16,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_CONTROL_PLANE_NETWORK": {
+      "default": "\"moonmind_control-plane-network\"",
+      "template_line": 19,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/docker_networks.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE": {
+      "default": "\"opt_in\"",
+      "template_line": 23,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/cutover.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE": {
+      "default": "\"opt_in\"",
+      "template_line": 24,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/cutover.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF": {
+      "default": "\"\"",
+      "template_line": 25,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/cutover.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF": {
+      "default": "\"\"",
+      "template_line": 29,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/remediation_matrix.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_EVIDENCE_DIR": {
+      "default": "\"./var/omnigent-evidence\"",
+      "template_line": 35,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_ENABLED": {
+      "default": "true",
+      "template_line": 38,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/concurrency_qualification.py",
+            "moonmind/omnigent/settings.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_SERVER_URL": {
+      "default": "\"http://omnigent:8000\"",
+      "template_line": 39,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/concurrency_qualification.py",
+            "moonmind/omnigent/host_services/attestation.py",
+            "moonmind/omnigent/oauth_host_runtime.py",
+            "moonmind/omnigent/settings.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_IMAGE_REF": {
+      "default": "\"\"",
+      "template_line": 42,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/bootstrap/controller.py",
+            "moonmind/omnigent/bootstrap/image_resolution.py",
+            "moonmind/omnigent/bootstrap/store.py",
+            "moonmind/omnigent/deployment_identity.py",
+            "moonmind/omnigent/execution_profiles.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_BUILD_DIGEST": {
+      "default": "\"\"",
+      "template_line": 43,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/bootstrap/image_resolution.py",
+            "moonmind/omnigent/deployment_identity.py",
+            "moonmind/omnigent/harness_platform/host_classes.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_IMAGE": {
+      "default": "\"ghcr.io/omnigent-ai/omnigent-server\"",
+      "template_line": 44,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/omnigent_policies.py",
+            "moonmind/omnigent/bootstrap/image_resolution.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_IMAGE_TAG": {
+      "default": "\"latest\"",
+      "template_line": 45,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/omnigent_policies.py",
+            "moonmind/omnigent/bootstrap/image_resolution.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_PORT": {
+      "default": "8000",
+      "template_line": 46,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_POSTGRES_USER": {
+      "default": "\"omnigent\"",
+      "template_line": 47,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_POSTGRES_PASSWORD": {
+      "default": "\"omnigent\"",
+      "template_line": 48,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_POSTGRES_DB": {
+      "default": "\"omnigent\"",
+      "template_line": 49,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_ARTIFACT_DIR": {
+      "default": "\"/data/artifacts\"",
+      "template_line": 50,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_AUTH_ENABLED": {
+      "default": "1",
+      "template_line": 51,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_AUTH_PROVIDER": {
+      "default": "\"\"",
+      "template_line": 52,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_ACCOUNTS_COOKIE_SECRET": {
+      "default": "\"\"",
+      "template_line": 53,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/omnigent_auth_qualification.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_ACCOUNTS_BASE_URL": {
+      "default": "\"\"",
+      "template_line": 54,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/omnigent_auth_qualification.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_WS_ALLOWED_ORIGINS": {
+      "default": "\"\"",
+      "template_line": 59,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD": {
+      "default": "\"\"",
+      "template_line": 60,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_ACCOUNTS_SESSION_TTL_HOURS": {
+      "default": "8",
+      "template_line": 61,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_ACCOUNTS_INVITE_TTL_HOURS": {
+      "default": "72",
+      "template_line": 62,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_ACCOUNTS_MAGIC_TTL_MINUTES": {
+      "default": "10",
+      "template_line": 63,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_ACCOUNTS_AUTO_OPEN": {
+      "default": "0",
+      "template_line": 64,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_OIDC_ISSUER": {
+      "default": "\"\"",
+      "template_line": 65,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/advanced_identity_4124.py",
+            "moonmind/security/omnigent_auth_qualification.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_OIDC_CLIENT_ID": {
+      "default": "\"\"",
+      "template_line": 66,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/advanced_identity_4124.py",
+            "moonmind/security/omnigent_auth_qualification.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_OIDC_CLIENT_SECRET": {
+      "default": "\"\"",
+      "template_line": 67,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/omnigent_auth_qualification.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_OIDC_COOKIE_SECRET": {
+      "default": "\"\"",
+      "template_line": 68,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/omnigent_auth_qualification.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_OIDC_SCOPES": {
+      "default": "\"openid profile email\"",
+      "template_line": 69,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_OIDC_SESSION_TTL_HOURS": {
+      "default": "8",
+      "template_line": 70,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_OIDC_ALLOWED_DOMAINS": {
+      "default": "\"\"",
+      "template_line": 71,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_OIDC_LOGOUT_REDIRECT_URI": {
+      "default": "\"\"",
+      "template_line": 72,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_OIDC_ALLOW_INVITES": {
+      "default": "\"\"",
+      "template_line": 73,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_DOMAIN": {
+      "default": "\"\"",
+      "template_line": 74,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_CONFIG": {
+      "default": "\"\"",
+      "template_line": 75,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_IMAGE_REF": {
+      "default": "\"\"",
+      "template_line": 81,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/api/routers/omnigent_catalog.py",
+            "moonmind/omnigent/execution_profiles.py",
+            "moonmind/omnigent/harness_platform/static_hosts.py",
+            "moonmind/omnigent/legacy_retirement.py",
+            "moonmind/omnigent/oauth_host_runtime.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_IMAGE": {
+      "default": "\"ghcr.io/omnigent-ai/omnigent-host\"",
+      "template_line": 82,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/omnigent_policies.py",
+            "moonmind/omnigent/legacy_retirement.py",
+            "moonmind/omnigent/oauth_host_runtime.py",
+            "tools/run_omnigent_live_conformance.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_IMAGE_TAG": {
+      "default": "\"latest\"",
+      "template_line": 83,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/omnigent_policies.py",
+            "moonmind/omnigent/legacy_retirement.py",
+            "moonmind/omnigent/oauth_host_runtime.py",
+            "tools/run_omnigent_live_conformance.py"
+          ]
+        }
+      ]
+    },
+    "OPENCODE_API_KEY": {
+      "default": "\"\"",
+      "template_line": 90,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/main.py",
+            "api_service/services/provider_profile_creation.py",
+            "moonmind/omnigent/settings.py",
+            "moonmind/provider_profiles/isolation_policy.py",
+            "tools/config_consumer_inventory.py"
+          ]
+        }
+      ]
+    },
+    "OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE": {
+      "default": "true",
+      "template_line": 94,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/settings.py"
+          ]
+        }
+      ]
+    },
+    "OPENCODE_MODEL_CATALOG_MAX_AGE_HOURS": {
+      "default": "6",
+      "template_line": 100,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/settings.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_OPENCODE_HOST_IMAGE_REF": {
+      "default": "\"\"",
+      "template_line": 117,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/bootstrap/controller.py",
+            "moonmind/omnigent/bootstrap/image_resolution.py",
+            "moonmind/omnigent/bootstrap/store.py",
+            "moonmind/omnigent/harness_platform/host_classes.py",
+            "moonmind/omnigent/legacy_retirement.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_OPENCODE_HOST_IMAGE": {
+      "default": "\"ghcr.io/moonladderstudios/omnigent-host-moonmind\"",
+      "template_line": 118,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/omnigent_policies.py",
+            "moonmind/omnigent/bootstrap/image_resolution.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_OPENCODE_HOST_IMAGE_TAG": {
+      "default": "\"1.18.11\"",
+      "template_line": 119,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/omnigent_policies.py",
+            "moonmind/omnigent/bootstrap/image_resolution.py",
+            "tools/run_omnigent_live_conformance.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_SHARED_HOST_IMAGE_REF": {
+      "default": "\"\"",
+      "template_line": 125,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/bootstrap/image_resolution.py",
+            "moonmind/omnigent/bootstrap/store.py",
+            "moonmind/omnigent/harness_platform/host_classes.py",
+            "moonmind/omnigent/harness_platform/static_hosts.py",
+            "moonmind/omnigent/legacy_retirement.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_SHARED_HOST_IMAGE": {
+      "default": "\"ghcr.io/moonladderstudios/omnigent-host-moonmind\"",
+      "template_line": 126,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/bootstrap/image_resolution.py",
+            "moonmind/omnigent/legacy_retirement.py",
+            "moonmind/omnigent/retirement_surfaces.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_SHARED_HOST_IMAGE_TAG": {
+      "default": "\"1.18.11\"",
+      "template_line": 127,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/bootstrap/image_resolution.py",
+            "moonmind/omnigent/legacy_retirement.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED": {
+      "default": "true",
+      "template_line": 131,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/settings.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_OPENCODE_ENABLED": {
+      "default": "true",
+      "template_line": 132,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/settings.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": {
+      "default": "false",
+      "template_line": 137,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/settings.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED": {
+      "default": "false",
+      "template_line": 138,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/settings.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLOUT": {
+      "default": "\"\"",
+      "template_line": 144,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/runtime_provider_rollout.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_RUNTIME_PROVIDER_ROLLBACK": {
+      "default": "\"\"",
+      "template_line": 150,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/runtime_provider_rollout.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_RUNTIME_PROVIDER_CANARY_COHORTS": {
+      "default": "\"\"",
+      "template_line": 152,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/runtime_provider_rollout.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_EVIDENCE_POLICY": {
+      "default": "either",
+      "template_line": 157,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/settings.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_HOST_SERVER_URL": {
+      "default": "\"http://omnigent:8000\"",
+      "template_line": 158,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/concurrency_qualification.py",
+            "moonmind/omnigent/host_services/launcher.py",
+            "moonmind/omnigent/production.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER": {
+      "default": "\"local\"",
+      "template_line": 159,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/concurrency_qualification.py",
+            "moonmind/omnigent/production.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY": {
+      "default": "8",
+      "template_line": 164,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/settings.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST": {
+      "default": "2",
+      "template_line": 165,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/settings.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS": {
+      "default": "30",
+      "template_line": 166,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/settings.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MACHINE_UTILIZATION_PERCENT": {
+      "default": "",
+      "template_line": 179,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/capacity/machine_reservations.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MACHINE_CPU_MILLIS": {
+      "default": "",
+      "template_line": 180,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/capacity/machine_reservations.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MACHINE_MEMORY_MIB": {
+      "default": "",
+      "template_line": 181,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/capacity/machine_reservations.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MACHINE_PROCESSES": {
+      "default": "",
+      "template_line": 182,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/capacity/machine_reservations.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MACHINE_TEMPORARY_STORAGE_MIB": {
+      "default": "",
+      "template_line": 183,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/capacity/machine_reservations.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MACHINE_MAX_CONCURRENT_INITIALIZING": {
+      "default": "",
+      "template_line": 189,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/capacity/machine_reservations.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MACHINE_PRELAUNCH_TTL_SECONDS": {
+      "default": "",
+      "template_line": 192,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/capacity/machine_reservations.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_HTTP_MAX_CONNECTIONS": {
+      "default": "64",
+      "template_line": 196,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/transport.py",
+            "moonmind/workflows/adapters/omnigent_client.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_HTTP_MAX_KEEPALIVE_CONNECTIONS": {
+      "default": "32",
+      "template_line": 197,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/transport.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_HTTP_KEEPALIVE_EXPIRY_SECONDS": {
+      "default": "30",
+      "template_line": 198,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/transport.py",
+            "moonmind/workflows/adapters/omnigent_client.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_PI_HOST_IMAGE_REF": {
+      "default": "\"\"",
+      "template_line": 202,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/bootstrap/image_resolution.py",
+            "moonmind/omnigent/harness_platform/host_classes.py",
+            "moonmind/omnigent/legacy_retirement.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OMNIGENT_TOOLS_VOLUME_REF": {
+      "default": "\"moonmind-omnigent-tools-gh-2.76.2\"",
+      "template_line": 203,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/host_services/mounted_tools.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_AUTH_PROFILE_ID": {
+      "default": "\"\"",
+      "template_line": 207,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/host_auth_profile.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_AUTH_CURRENT_SECRET_REF": {
+      "default": "\"\"",
+      "template_line": 208,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/host_auth_profile.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_AUTH_CURRENT_GENERATION": {
+      "default": "1",
+      "template_line": 209,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/host_auth_profile.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_AUTH_PREVIOUS_SECRET_REF": {
+      "default": "\"\"",
+      "template_line": 210,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/host_auth_profile.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_AUTH_PREVIOUS_GENERATION": {
+      "default": "\"\"",
+      "template_line": 211,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/host_auth_profile.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_AUTH_PREVIOUS_EXPIRES_AT": {
+      "default": "\"\"",
+      "template_line": 212,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/host_auth_profile.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_AUTH_ROTATED_AT": {
+      "default": "\"\"",
+      "template_line": 213,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/host_auth_profile.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_AUTH_PROTOCOL_PROFILE": {
+      "default": "\"omnigent.runner_tunnel.7da32637\"",
+      "template_line": 214,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/host_auth_profile.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_AUTH_ENABLED": {
+      "default": "1",
+      "template_line": 215,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/host_auth_profile.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_AUTH_REVOKED": {
+      "default": "0",
+      "template_line": 216,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/host_auth_profile.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_HOST_BASE_PATH": {
+      "default": "\"/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin\"",
+      "template_line": 219,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_TOOL_BUNDLE_VERSION": {
+      "default": "\"gh-2.74.2-1\"",
+      "template_line": 221,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "services/omnigent/tools/init_omnigent_tools.py"
+          ]
+        }
+      ]
+    },
+    "OMNIGENT_MOONMIND_WORKSPACE": {
+      "default": "\"./omnigent_workspaces/MoonMind\"",
+      "template_line": 222,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "tools/config_consumer_inventory.py"
+          ]
+        }
+      ]
+    },
+    "COMPOSE_PROFILES": {
+      "default": "\"\"",
+      "template_line": 225,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose-native",
+          "locations": [
+            "docker-compose.yaml",
+            "docker-compose.test.yaml",
+            "docker-compose.development.yaml"
+          ],
+          "note": "consumed by the Compose tool itself (service profiles)"
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "tools/config_consumer_inventory.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DEPLOYMENT_PROJECT_DIR": {
+      "default": "\"\"",
+      "template_line": 232,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/oauth_host_runtime.py",
+            "moonmind/workflows/temporal/worker_runtime.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DEPLOYMENT_COMPOSE_FILE": {
+      "default": "\"\"",
+      "template_line": 235,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/omnigent/oauth_host_runtime.py",
+            "moonmind/workflows/temporal/worker_runtime.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE": {
+      "default": "\"/workspace/deployment_state/.env.deploy\"",
+      "template_line": 238,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/worker_runtime.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE": {
+      "default": "\"/workspace/deployment_state/desired-state.json\"",
+      "template_line": 239,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/deployment_operations.py",
+            "moonmind/workflows/skills/deployment_execution.py",
+            "moonmind/workflows/skills/deployment_release.py",
+            "moonmind/workflows/temporal/worker_runtime.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DEPLOYMENT_LOCK_DIR": {
+      "default": "\"/workspace/deployment_state/locks\"",
+      "template_line": 240,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/worker_runtime.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DEPLOYMENT_PROJECT_NAME": {
+      "default": "\"moonmind\"",
+      "template_line": 241,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/omnigent_policies.py",
+            "moonmind/omnigent/bootstrap/image_resolution.py",
+            "moonmind/omnigent/oauth_host_runtime.py",
+            "moonmind/workflows/temporal/worker_runtime.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DEPLOYMENT_WORKER_IMAGE": {
+      "default": "\"\"",
+      "template_line": 245,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES": {
+      "default": "\"temporal-worker-deployment-control\"",
+      "template_line": 246,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/worker_runtime.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE": {
+      "default": "\"mm.activity.deployment\"",
+      "template_line": 247,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_DEPLOYMENT_WORKER_CONCURRENCY": {
+      "default": "\"1\"",
+      "template_line": 248,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "FASTAPI_RELOAD": {
+      "default": "\"\"",
+      "template_line": 249,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "AUTH_PROVIDER": {
+      "default": "\"\"",
+      "template_line": 264,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.test.yaml",
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py",
+            "moonmind/deployment_access.py",
+            "moonmind/security/auth_modes_4120.py",
+            "tools/_exact_artifact_runtime_probes.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_AUTH_MIGRATION_DECISION": {
+      "default": "\"\"",
+      "template_line": 267,
+      "classification": "operation",
+      "owner": "operations",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/auth_modes_4120.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_SESSION_SECRET": {
+      "default": "\"\"",
+      "template_line": 273,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/auth_providers.py",
+            "api_service/main.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_SESSION_KEY_PATH": {
+      "default": "\"/app/var/secrets/moonmind_session_key\"",
+      "template_line": 274,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/auth_modes_4120.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_API_PUBLISH_HOST": {
+      "default": "\"127.0.0.1\"",
+      "template_line": 277,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/main.py",
+            "moonmind/deployment_access.py",
+            "tools/_exact_artifact_runtime_probes.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_TRUSTED_INGRESS": {
+      "default": "\"\"",
+      "template_line": 278,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/main.py",
+            "api_service/services/advanced_auth_service_4124.py",
+            "moonmind/deployment_access.py",
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_PUBLIC_BASE_URL": {
+      "default": "\"\"",
+      "template_line": 283,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/api/routers/advanced_auth_4124.py",
+            "api_service/api/routers/auth_advanced_4124.py",
+            "moonmind/deployment_access.py",
+            "moonmind/security/advanced_identity_4124.py",
+            "moonmind/workflows/skills/deployment_surface.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_TRUSTED_PROXIES": {
+      "default": "\"\"",
+      "template_line": 284,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/main.py",
+            "api_service/services/advanced_auth_service_4124.py",
+            "moonmind/deployment_access.py",
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OIDC_ISSUER": {
+      "default": "\"\"",
+      "template_line": 292,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/advanced_auth_service_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OIDC_CLIENT_ID": {
+      "default": "\"\"",
+      "template_line": 293,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/advanced_auth_service_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OIDC_CLIENT_SECRET": {
+      "default": "\"\"",
+      "template_line": 294,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/advanced_auth_service_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OIDC_CALLBACK_URL": {
+      "default": "\"\"",
+      "template_line": 295,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/advanced_auth_service_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OIDC_AUTO_PROVISION": {
+      "default": "\"0\"",
+      "template_line": 296,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/api/routers/auth_advanced_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_PROXY_IDENTITY_NAMESPACE": {
+      "default": "\"\"",
+      "template_line": 305,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/advanced_auth_service_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_PROXY_IDENTITY_HEADER": {
+      "default": "\"\"",
+      "template_line": 306,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/advanced_auth_service_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_PROXY_ALLOW_EMAIL_IDENTITIES": {
+      "default": "\"0\"",
+      "template_line": 307,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/advanced_auth_service_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_CORS_ALLOWED_ORIGINS": {
+      "default": "\"\"",
+      "template_line": 313,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/main.py",
+            "moonmind/deployment_access.py"
+          ]
+        }
+      ]
+    },
+    "OIDC_ISSUER_URL": {
+      "default": "\"\"",
+      "template_line": 325,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/advanced_auth_service_4124.py",
+            "moonmind/config/settings.py",
+            "moonmind/deployment_access.py",
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "OIDC_CLIENT_ID": {
+      "default": "\"\"",
+      "template_line": 326,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/advanced_auth_service_4124.py",
+            "moonmind/config/settings.py",
+            "moonmind/deployment_access.py",
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "OIDC_CLIENT_SECRET": {
+      "default": "\"\"",
+      "template_line": 327,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/advanced_auth_service_4124.py",
+            "moonmind/config/settings.py",
+            "moonmind/deployment_access.py",
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OIDC_TIMEOUT_SECONDS": {
+      "default": "\"\"",
+      "template_line": 328,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OIDC_ALLOW_UNKNOWN_USERS": {
+      "default": "\"\"",
+      "template_line": 329,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OIDC_REQUIRE_MFA": {
+      "default": "\"\"",
+      "template_line": 330,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_OIDC_MFA_ACR_VALUES": {
+      "default": "\"\"",
+      "template_line": 331,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_TRUSTED_PROXY_NAMESPACE": {
+      "default": "\"\"",
+      "template_line": 339,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_TRUSTED_PROXY_HEADER": {
+      "default": "\"\"",
+      "template_line": 340,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_TRUSTED_PROXY_ALLOW_EMAIL_ONLY": {
+      "default": "\"\"",
+      "template_line": 341,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_TRUSTED_PROXY_ALLOW_UNKNOWN_USERS": {
+      "default": "\"\"",
+      "template_line": 342,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/security/advanced_identity_4124.py"
+          ]
+        }
+      ]
+    },
+    "JWT_SECRET_KEY": {
+      "default": "\"replace_with_a_strong_random_jwt_secret\"",
+      "template_line": 343,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ENCRYPTION_MASTER_KEY": {
+      "default": "\"\"",
+      "template_line": 347,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "FERNET_KEY": {
+      "default": "\"\"",
+      "template_line": 348,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_UI_DEV_SERVER_URL": {
+      "default": "\"\"",
+      "template_line": 353,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/ui_assets.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_BUILD_ID": {
+      "default": "\"\"",
+      "template_line": 358,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/utils/build_info.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_WORKDIR": {
+      "default": "\"/work/agent_jobs\"",
+      "template_line": 361,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/settings.py",
+            "moonmind/workflows/adapters/codex_session_adapter.py",
+            "moonmind/workflows/temporal/runtime/github_auth_broker.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_AGENT_WORKSPACES_VOLUME_NAME": {
+      "default": "\"agent_workspaces\"",
+      "template_line": 362,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py",
+            "moonmind/omnigent/host_services/workspace.py",
+            "moonmind/omnigent/oauth_host_runtime.py",
+            "moonmind/omnigent/production.py",
+            "moonmind/workflows/adapters/codex_session_adapter.py"
+          ]
+        }
+      ]
+    },
+    "CODEX_VOLUME_PATH": {
+      "default": "\"/home/app/.codex\"",
+      "template_line": 363,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/providers/registry.py"
+          ]
+        }
+      ]
+    },
+    "CODEX_HOME": {
+      "default": "\"/home/app/.codex\"",
+      "template_line": 364,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/base/adapter.py",
+            "moonmind/omnigent/harness_platform/shared_host_conformance.py",
+            "moonmind/workflows/adapters/materializer.py",
+            "moonmind/workflows/temporal/runtime/codex_session_runtime.py",
+            "moonmind/workflows/temporal/runtime/managed_session_controller.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_WORKER_CAPABILITIES": {
+      "default": "\"codex,git,gh,docker,execution.fanout\"",
+      "template_line": 365,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/cli.py",
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_UNREAL_ENGINE_IMAGE": {
+      "default": "\"ghcr.io/moonladderstudios/tactics-ue-base:5.8\"",
+      "template_line": 369,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY": {
+      "default": "\"if-missing\"",
+      "template_line": 370,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_UNREAL_ENGINE_REGISTRY_CREDENTIAL_REF": {
+      "default": "\"\"",
+      "template_line": 374,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_UNREAL_CCACHE_VOLUME_NAME": {
+      "default": "\"unreal_ccache_volume\"",
+      "template_line": 377,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_UNREAL_UBT_VOLUME_NAME": {
+      "default": "\"unreal_ubt_volume\"",
+      "template_line": 378,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MANAGED_SESSION_NON_SECRET_ENV_KEYS": {
+      "default": "\"MOONMIND_UNREAL_ENGINE_IMAGE\"",
+      "template_line": 394,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/activity_runtime.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED": {
+      "default": "\"true\"",
+      "template_line": 399,
+      "classification": "operation",
+      "owner": "operations",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/cleanup.py",
+            "moonmind/workflows/temporal/runtime/managed_runtime_cleanup.py",
+            "moonmind/workflows/temporal/runtime/workspace_janitor.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN": {
+      "default": "\"false\"",
+      "template_line": 400,
+      "classification": "operation",
+      "owner": "operations",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/cleanup.py",
+            "moonmind/workflows/temporal/runtime/managed_runtime_cleanup.py",
+            "moonmind/workflows/temporal/runtime/workspace_janitor.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS": {
+      "default": "\"10\"",
+      "template_line": 401,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/cleanup.py",
+            "moonmind/workflows/temporal/runtime/managed_runtime_cleanup.py",
+            "moonmind/workflows/temporal/runtime/workspace_janitor.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS": {
+      "default": "\"90\"",
+      "template_line": 402,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/cleanup.py",
+            "moonmind/workflows/temporal/runtime/managed_runtime_cleanup.py",
+            "moonmind/workflows/temporal/runtime/workspace_janitor.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS": {
+      "default": "\"\"",
+      "template_line": 404,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/cleanup.py",
+            "moonmind/workflows/temporal/runtime/managed_runtime_cleanup.py",
+            "moonmind/workflows/temporal/runtime/workspace_janitor.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS": {
+      "default": "\"3600\"",
+      "template_line": 409,
+      "classification": "operation",
+      "owner": "operations",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/cleanup.py",
+            "moonmind/workflows/temporal/runtime/managed_runtime_cleanup.py",
+            "moonmind/workflows/temporal/runtime/workspace_janitor.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS": {
+      "default": "\"100\"",
+      "template_line": 410,
+      "classification": "operation",
+      "owner": "operations",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/cleanup.py",
+            "moonmind/workflows/temporal/runtime/managed_runtime_cleanup.py",
+            "moonmind/workflows/temporal/runtime/workspace_janitor.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES": {
+      "default": "\"\"",
+      "template_line": 412,
+      "classification": "operation",
+      "owner": "operations",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/cleanup.py",
+            "moonmind/workflows/temporal/runtime/workspace_janitor.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH": {
+      "default": "\"/work/agent_jobs/.janitor.lock\"",
+      "template_line": 413,
+      "classification": "operation",
+      "owner": "operations",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/cleanup.py",
+            "moonmind/workflows/temporal/runtime/workspace_janitor.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_AGENT_RUNTIME_STORE": {
+      "default": "\"/work/agent_jobs\"",
+      "template_line": 415,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/activity_runtime.py",
+            "moonmind/workflows/temporal/runtime/cleanup.py",
+            "moonmind/workflows/temporal/runtime/docker_storage_maintenance.py",
+            "moonmind/workflows/temporal/runtime/launcher.py",
+            "moonmind/workflows/temporal/runtime/lore_repository_adapter.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_AGENT_RUNTIME_ARTIFACTS": {
+      "default": "\"/work/agent_jobs/artifacts\"",
+      "template_line": 416,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/cleanup.py",
+            "moonmind/workflows/temporal/runtime/paths.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DOCKER_STORAGE_JANITOR_ENABLED": {
+      "default": "\"true\"",
+      "template_line": 421,
+      "classification": "operation",
+      "owner": "operations",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/docker_storage_maintenance.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DOCKER_STORAGE_HIGH_WATERMARK_PERCENT": {
+      "default": "\"80\"",
+      "template_line": 422,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/docker_storage_maintenance.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT": {
+      "default": "\"90\"",
+      "template_line": 423,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/docker_storage_maintenance.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS": {
+      "default": "\"168\"",
+      "template_line": 424,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/docker_storage_maintenance.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS": {
+      "default": "\"24\"",
+      "template_line": 425,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/runtime/docker_storage_maintenance.py"
+          ]
+        }
+      ]
+    },
+    "MODEL_CACHE_REFRESH_INTERVAL": {
+      "default": "3600",
+      "template_line": 427,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "MODEL_CACHE_REFRESH_INTERVAL_SECONDS": {
+      "default": "3600",
+      "template_line": 428,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "POSTGRES_VERSION": {
+      "default": "17",
+      "template_line": 429,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_VERSION": {
+      "default": "\"1.29.1\"",
+      "template_line": 430,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ADMINTOOLS_VERSION": {
+      "default": "\"1.29.1-tctl-1.18.4-cli-1.5.0\"",
+      "template_line": 431,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_UI_VERSION": {
+      "default": "\"2.34.0\"",
+      "template_line": 432,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_POSTGRES_USER": {
+      "default": "\"temporal\"",
+      "template_line": 433,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_POSTGRES_PASSWORD": {
+      "default": "\"temporal\"",
+      "template_line": 434,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_POSTGRES_DB": {
+      "default": "\"temporal\"",
+      "template_line": 435,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_VISIBILITY_DB": {
+      "default": "\"temporal_visibility\"",
+      "template_line": 436,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ADDRESS": {
+      "default": "\"temporal:7233\"",
+      "template_line": 437,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py",
+            "tools/_exact_artifact_runtime_probes.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_NAMESPACE": {
+      "default": "\"default\"",
+      "template_line": 438,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_WORKFLOW_TASK_QUEUE": {
+      "default": "\"mm.workflow\"",
+      "template_line": 439,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_USER_WORKFLOW_CONTRACT_MODE": {
+      "default": "\"renamed_contract\"",
+      "template_line": 440,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE": {
+      "default": "\"mm.workflow.user.v2\"",
+      "template_line": 441,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py",
+            "services/temporal/scripts/start-workflow-worker-group.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ACTIVITY_ARTIFACTS_TASK_QUEUE": {
+      "default": "\"mm.activity.artifacts\"",
+      "template_line": 446,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ACTIVITY_LLM_TASK_QUEUE": {
+      "default": "\"mm.activity.llm\"",
+      "template_line": 447,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ACTIVITY_SANDBOX_TASK_QUEUE": {
+      "default": "\"mm.activity.sandbox\"",
+      "template_line": 448,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ACTIVITY_INTEGRATIONS_TASK_QUEUE": {
+      "default": "\"mm.activity.integrations\"",
+      "template_line": 449,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE": {
+      "default": "\"mm.activity.agent_runtime\"",
+      "template_line": 450,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_WORKFLOW_WORKER_CONCURRENCY": {
+      "default": "8",
+      "template_line": 452,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py",
+            "services/temporal/scripts/start-workflow-worker-group.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACTS_WORKER_CONCURRENCY": {
+      "default": "8",
+      "template_line": 453,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_LLM_WORKER_CONCURRENCY": {
+      "default": "4",
+      "template_line": 454,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_SANDBOX_WORKER_CONCURRENCY": {
+      "default": "2",
+      "template_line": 455,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_INTEGRATIONS_WORKER_CONCURRENCY": {
+      "default": "4",
+      "template_line": 456,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY": {
+      "default": "4",
+      "template_line": 457,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_NAMESPACE_RETENTION_DAYS": {
+      "default": "90",
+      "template_line": 458,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_RETENTION_MAX_STORAGE_GB": {
+      "default": "100",
+      "template_line": 459,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_NUM_HISTORY_SHARDS": {
+      "default": "1",
+      "template_line": 460,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_SHARD_DECISION_ACK": {
+      "default": "\"\"",
+      "template_line": 461,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_VISIBILITY_SCHEMA_DIR": {
+      "default": "\"/etc/temporal/schema/postgresql/v12/visibility/versioned\"",
+      "template_line": 462,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_DASHBOARD_SUBMIT_ENABLED": {
+      "default": "true",
+      "template_line": 463,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_WORKFLOW_EDITING_ENABLED": {
+      "default": "true",
+      "template_line": 464,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_UI_HOST_PORT": {
+      "default": "8088",
+      "template_line": 465,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_CODEX_QUEUE": {
+      "default": "\"codex\"",
+      "template_line": 466,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_GITHUB_REPOSITORY": {
+      "default": "\"MoonLadderStudios/MoonMind\"",
+      "template_line": 467,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_GIT_USER_NAME": {
+      "default": "\"\"",
+      "template_line": 468,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_GIT_USER_EMAIL": {
+      "default": "\"\"",
+      "template_line": 469,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_ARTIFACT_ROOT": {
+      "default": "\"var/artifacts/workflows\"",
+      "template_line": 470,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACT_ROOT": {
+      "default": "\"var/artifacts/temporal_artifacts\"",
+      "template_line": 473,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACT_BACKEND": {
+      "default": "\"s3\"",
+      "template_line": 474,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.test.yaml",
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACT_S3_ENDPOINT": {
+      "default": "\"http://moonmind-temporal-artifacts-s3:9000\"",
+      "template_line": 477,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py",
+            "moonmind/workflows/temporal/workers.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT": {
+      "default": "\"http://localhost:9000\"",
+      "template_line": 478,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACT_S3_BUCKET": {
+      "default": "\"moonmind-temporal-artifacts\"",
+      "template_line": 479,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.test.yaml",
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py",
+            "moonmind/workflows/temporal/workers.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID": {
+      "default": "\"minioadmin\"",
+      "template_line": 480,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.test.yaml",
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py",
+            "moonmind/workflows/temporal/workers.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY": {
+      "default": "\"minioadmin\"",
+      "template_line": 481,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.test.yaml",
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py",
+            "moonmind/workflows/temporal/workers.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACT_S3_REGION": {
+      "default": "\"us-east-1\"",
+      "template_line": 482,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACT_S3_USE_SSL": {
+      "default": "\"false\"",
+      "template_line": 483,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACT_PRESIGN_TTL_SECONDS": {
+      "default": "900",
+      "template_line": 484,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACT_DIRECT_UPLOAD_MAX_BYTES": {
+      "default": "10485760",
+      "template_line": 485,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "TEMPORAL_ARTIFACT_LIFECYCLE_HARD_DELETE_AFTER_SECONDS": {
+      "default": "3600",
+      "template_line": 486,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "MINIO_API_PORT": {
+      "default": "9000",
+      "template_line": 487,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "MINIO_ROOT_USER": {
+      "default": "\"minioadmin\"",
+      "template_line": 488,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.test.yaml",
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "MINIO_ROOT_PASSWORD": {
+      "default": "\"minioadmin\"",
+      "template_line": 489,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.test.yaml",
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "MINIO_CONSOLE_PORT": {
+      "default": "9001",
+      "template_line": 490,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_USE_SKILLS": {
+      "default": "\"true\"",
+      "template_line": 491,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_SKILLS_SHADOW_MODE": {
+      "default": "\"false\"",
+      "template_line": 494,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_SKILLS_FALLBACK_ENABLED": {
+      "default": "\"true\"",
+      "template_line": 497,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_SKILLS_CANARY_PERCENT": {
+      "default": "100",
+      "template_line": 500,
+      "classification": "product_preference",
+      "owner": "settings-system",
+      "sensitive": false,
+      "permitted_scopes": [
+        "workspace"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/settings_catalog.py",
+            "moonmind/config/settings.py"
+          ]
+        },
+        {
+          "kind": "settings-catalog",
+          "locations": [
+            "api_service/services/settings_catalog.py"
+          ],
+          "setting_key": "skills.canary_percent"
+        }
+      ],
+      "setting_key": "skills.canary_percent"
+    },
+    "WORKFLOW_DEFAULT_SKILL": {
+      "default": "\"auto\"",
+      "template_line": 503,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/cli.py",
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_DISCOVER_SKILL": {
+      "default": "\"\"",
+      "template_line": 504,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/cli.py",
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_SUBMIT_SKILL": {
+      "default": "\"\"",
+      "template_line": 505,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/cli.py",
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_PUBLISH_SKILL": {
+      "default": "\"\"",
+      "template_line": 506,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/cli.py",
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "WORKFLOW_SKILL_POLICY_MODE": {
+      "default": "\"permissive\"",
+      "template_line": 513,
+      "classification": "product_preference",
+      "owner": "settings-system",
+      "sensitive": false,
+      "permitted_scopes": [
+        "workspace"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/settings_catalog.py",
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/settings.py"
+          ]
+        },
+        {
+          "kind": "settings-catalog",
+          "locations": [
+            "api_service/services/settings_catalog.py"
+          ],
+          "setting_key": "skills.policy_mode"
+        }
+      ],
+      "setting_key": "skills.policy_mode"
+    },
+    "WORKFLOW_ALLOWED_SKILLS": {
+      "default": "\"auto\"",
+      "template_line": 516,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "MEMORY_ENABLED": {
+      "default": "\"true\"",
+      "template_line": 520,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/settings_catalog.py",
+            "moonmind/config/settings.py::MemorySettings"
+          ]
+        }
+      ]
+    },
+    "MEMORY_PLANNING": {
+      "default": "\"off\"",
+      "template_line": 521,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/settings_catalog.py",
+            "moonmind/config/settings.py::MemorySettings"
+          ]
+        }
+      ]
+    },
+    "MEMORY_HISTORY": {
+      "default": "\"off\"",
+      "template_line": 522,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/settings_catalog.py",
+            "moonmind/config/settings.py::MemorySettings"
+          ]
+        }
+      ]
+    },
+    "MEMORY_FAIL_OPEN": {
+      "default": "\"true\"",
+      "template_line": 523,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/settings_catalog.py",
+            "moonmind/config/settings.py::MemorySettings"
+          ]
+        }
+      ]
+    },
+    "MEMORY_CONTEXT_BUDGET_TOKENS": {
+      "default": "\"4096\"",
+      "template_line": 524,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/services/settings_catalog.py",
+            "moonmind/config/settings.py",
+            "moonmind/config/settings.py::MemorySettings"
+          ]
+        }
+      ]
+    },
+    "CODEX_LOGIN_CHECK_IMAGE": {
+      "default": "\"\"",
+      "template_line": 527,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "CODEX_MODEL": {
+      "default": "\"gpt-5.3-codex\"",
+      "template_line": 528,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/handlers.py",
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/settings.py",
+            "moonmind/workflows/executions/runtime_defaults.py"
+          ]
+        }
+      ]
+    },
+    "CODEX_PROFILE": {
+      "default": "\"\"",
+      "template_line": 529,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_CODEX_MODEL": {
+      "default": "\"gpt-5.3-codex\"",
+      "template_line": 532,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/handlers.py",
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/settings.py",
+            "moonmind/workflows/executions/runtime_defaults.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_CODEX_EFFORT": {
+      "default": "\"high\"",
+      "template_line": 533,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/handlers.py",
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/settings.py",
+            "moonmind/workflows/executions/runtime_defaults.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_CODEX_SANDBOX_MODE": {
+      "default": "\"danger-full-access\"",
+      "template_line": 534,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/handlers.py"
+          ]
+        }
+      ]
+    },
+    "POSTGRES_PASSWORD": {
+      "default": "\"\"",
+      "template_line": 552,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py",
+            "tools/_exact_artifact_runtime_probes.py"
+          ]
+        }
+      ]
+    },
+    "ANTHROPIC_API_KEY": {
+      "default": "\"\"",
+      "template_line": 555,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/base/adapter.py",
+            "moonmind/agents/codex_worker/cli.py",
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/auth/env_shaping.py",
+            "moonmind/claude/runtime.py"
+          ]
+        }
+      ]
+    },
+    "ANTHROPIC_CHAT_MODEL": {
+      "default": "\"claude-sonnet-4-6\"",
+      "template_line": 556,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ANTHROPIC_ENABLED": {
+      "default": "\"true\"",
+      "template_line": 557,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_CLAUDE_CLI_AUTH_MODE": {
+      "default": "\"api_key\"",
+      "template_line": 561,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/runtime_mode.py",
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "CLAUDE_HOME": {
+      "default": "\"/home/app/.claude\"",
+      "template_line": 562,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/base/adapter.py",
+            "moonmind/agents/codex_worker/cli.py",
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/settings.py",
+            "moonmind/omnigent/harness_platform/shared_host_conformance.py"
+          ]
+        }
+      ]
+    },
+    "CLAUDE_VOLUME_PATH": {
+      "default": "\"/home/app/.claude\"",
+      "template_line": 563,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py",
+            "moonmind/workflows/adapters/materializer.py",
+            "moonmind/workflows/temporal/runtime/providers/registry.py"
+          ]
+        }
+      ]
+    },
+    "CLAUDE_VOLUME_NAME": {
+      "default": "\"claude_auth_volume\"",
+      "template_line": 564,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py",
+            "moonmind/omnigent/oauth_host_runtime.py",
+            "moonmind/workflows/temporal/runtime/providers/registry.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_API_KEY": {
+      "default": "\"\"",
+      "template_line": 566,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "api_service/main.py",
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_API_KEY_SECRET_REF": {
+      "default": "\"\"",
+      "template_line": 567,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_AUTH_MODE": {
+      "default": "\"\"",
+      "template_line": 568,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_AUTH_MODE_SECRET_REF": {
+      "default": "\"\"",
+      "template_line": 569,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_CONFLUENCE_ENABLED": {
+      "default": "\"false\"",
+      "template_line": 570,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_CLOUD_ID": {
+      "default": "\"\"",
+      "template_line": 571,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_CLOUD_ID_SECRET_REF": {
+      "default": "\"\"",
+      "template_line": 572,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_EMAIL": {
+      "default": "\"\"",
+      "template_line": 573,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_EMAIL_SECRET_REF": {
+      "default": "\"\"",
+      "template_line": 574,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_JIRA_ENABLED": {
+      "default": "\"false\"",
+      "template_line": 575,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_JIRA_FETCH_BATCH_SIZE": {
+      "default": "\"50\"",
+      "template_line": 576,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_JIRA_JQL_QUERY": {
+      "default": "\"\"",
+      "template_line": 577,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_JIRA_ALLOWED_ACTIONS": {
+      "default": "\"\"",
+      "template_line": 578,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_JIRA_ALLOWED_PROJECTS": {
+      "default": "\"\"",
+      "template_line": 579,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_JIRA_PROJECT_DEFAULTS_BY_REPOSITORY": {
+      "default": "\"\"",
+      "template_line": 580,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_JIRA_CONNECT_TIMEOUT_SECONDS": {
+      "default": "\"10\"",
+      "template_line": 581,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_JIRA_READ_TIMEOUT_SECONDS": {
+      "default": "\"30\"",
+      "template_line": 582,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_JIRA_REQUIRE_EXPLICIT_TRANSITION_LOOKUP": {
+      "default": "\"true\"",
+      "template_line": 583,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_JIRA_RETRY_ATTEMPTS": {
+      "default": "\"3\"",
+      "template_line": 584,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_JIRA_TOOL_ENABLED": {
+      "default": "\"false\"",
+      "template_line": 585,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "JIRA_CREATE_PAGE_ENABLED": {
+      "default": "\"false\"",
+      "template_line": 589,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY": {
+      "default": "\"\"",
+      "template_line": 590,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "JIRA_CREATE_PAGE_DEFAULT_BOARD_ID": {
+      "default": "\"\"",
+      "template_line": 591,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION": {
+      "default": "\"true\"",
+      "template_line": 592,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "JIRA_CREATE_PAGE_RECENT_DONE_DAYS": {
+      "default": "\"30\"",
+      "template_line": 593,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_SERVICE_ACCOUNT_EMAIL": {
+      "default": "\"\"",
+      "template_line": 594,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_SERVICE_ACCOUNT_EMAIL_SECRET_REF": {
+      "default": "\"\"",
+      "template_line": 595,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_SITE_URL": {
+      "default": "\"\"",
+      "template_line": 596,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_SITE_URL_SECRET_REF": {
+      "default": "\"\"",
+      "template_line": 597,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_USERNAME": {
+      "default": "\"\"",
+      "template_line": 598,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "ATLASSIAN_URL": {
+      "default": "\"\"",
+      "template_line": 599,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "DEFAULT_CHAT_PROVIDER": {
+      "default": "\"google\"",
+      "template_line": 600,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "GITHUB_ENABLED": {
+      "default": "\"false\"",
+      "template_line": 601,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "GITHUB_REPOS": {
+      "default": "\"MoonLadderStudios/Moonmind\"",
+      "template_line": 602,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "GITHUB_TOKEN": {
+      "default": "\"\"",
+      "template_line": 603,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/cli.py",
+            "moonmind/agents/codex_worker/handlers.py",
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/auth/env_shaping.py",
+            "moonmind/auth/github_credentials.py",
+            "moonmind/workflows/adapters/github_client.py",
+            "moonmind/workflows/temporal/worker_runtime.py"
+          ]
+        }
+      ]
+    },
+    "MOONMIND_INSTALLATION_ID": {
+      "default": "\"\"",
+      "template_line": 612,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/workflows/temporal/github_issue_attempt.py",
+            "moonmind/workflows/temporal/github_issue_attempts.py",
+            "moonmind/workflows/temporal/story_output_tools.py"
+          ]
+        }
+      ]
+    },
+    "GOOGLE_API_KEY": {
+      "default": "\"\"",
+      "template_line": 613,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/base/adapter.py",
+            "moonmind/auth/env_shaping.py",
+            "moonmind/config/settings.py",
+            "moonmind/omnigent/harness_platform/runtime_packs.py",
+            "moonmind/omnigent/harness_platform/static_hosts.py"
+          ]
+        }
+      ]
+    },
+    "GOOGLE_CHAT_MODEL": {
+      "default": "\"models/gemini-3.1-pro\"",
+      "template_line": 614,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "GOOGLE_ENABLED": {
+      "default": "\"true\"",
+      "template_line": 615,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "OPENAI_API_KEY": {
+      "default": "\"\"",
+      "template_line": 616,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/base/adapter.py",
+            "moonmind/auth/env_shaping.py",
+            "moonmind/config/settings.py",
+            "moonmind/omnigent/harness_platform/materializers.py",
+            "moonmind/omnigent/harness_platform/runtime_packs.py"
+          ]
+        }
+      ]
+    },
+    "OPENAI_CHAT_MODEL": {
+      "default": "\"o3\"",
+      "template_line": 617,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "OPENAI_ENABLED": {
+      "default": "\"true\"",
+      "template_line": 618,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/config/settings.py"
+          ]
+        }
+      ]
+    },
+    "JULES_API_URL": {
+      "default": "\"\"",
+      "template_line": 621,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/jules_settings.py",
+            "moonmind/jules/runtime.py",
+            "moonmind/workflows/adapters/external_adapter_registry.py",
+            "moonmind/workflows/temporal/activities/jules_activities.py"
+          ]
+        }
+      ]
+    },
+    "JULES_API_KEY": {
+      "default": "\"\"",
+      "template_line": 622,
+      "classification": "secret",
+      "owner": "secrets-system",
+      "sensitive": true,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "shell",
+          "locations": [
+            "shell entrypoints/scripts"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/jules_settings.py",
+            "moonmind/jules/runtime.py",
+            "moonmind/workflows/adapters/external_adapter_registry.py",
+            "moonmind/workflows/temporal/activities/jules_activities.py"
+          ]
+        }
+      ]
+    },
+    "JULES_ENABLED": {
+      "default": "\"false\"",
+      "template_line": 623,
+      "classification": "infrastructure_bootstrap",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "pre_database",
+      "consumers": [
+        {
+          "kind": "compose",
+          "locations": [
+            "docker-compose.yaml"
+          ]
+        },
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/jules_settings.py",
+            "moonmind/jules/runtime.py"
+          ]
+        }
+      ]
+    },
+    "JULES_TIMEOUT_SECONDS": {
+      "default": "\"30.0\"",
+      "template_line": 624,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/jules_settings.py"
+          ]
+        }
+      ]
+    },
+    "JULES_RETRY_ATTEMPTS": {
+      "default": "\"3\"",
+      "template_line": 625,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/jules_settings.py"
+          ]
+        }
+      ]
+    },
+    "JULES_RETRY_DELAY_SECONDS": {
+      "default": "\"1.0\"",
+      "template_line": 626,
+      "classification": "deployment_override",
+      "owner": "deployment",
+      "sensitive": false,
+      "permitted_scopes": [
+        "deployment"
+      ],
+      "timing": "runtime",
+      "consumers": [
+        {
+          "kind": "python",
+          "locations": [
+            "moonmind/agents/codex_worker/worker.py",
+            "moonmind/config/jules_settings.py"
+          ]
+        }
+      ]
+    }
+  }
+}
