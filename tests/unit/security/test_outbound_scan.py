@@ -243,3 +243,38 @@ def test_audit_metadata_never_includes_raw_payload() -> None:
     assert "synthetic-blocked-value" not in str(blocked_metadata)
     assert blocked_metadata["findingCategories"] == ["credential"]
     assert blocked_metadata["findingLocations"] == ["comment.body"]
+
+
+def test_audit_metadata_sanitizes_caller_controlled_locations() -> None:
+    """MoonMind#809: a location carrying secret text must not leak via audit."""
+    from moonmind.security.outbound_scan import is_binary_git_diff_marker
+
+    blocked = scan_outbound_text(
+        "please post password=synthetic-location-secret",
+        location="artifact/password=synthetic-location-secret",
+        high_security_mode=True,
+    )
+    assert blocked.allowed is False
+    metadata = blocked.audit_metadata()
+    assert "synthetic-location-secret" not in str(metadata)
+    assert metadata["findingLocations"] == ["artifact/password=[REDACTED]"]
+    assert "synthetic-location-secret" not in "; ".join(
+        metadata["sanitizedDiagnostics"]
+    )
+
+    assert is_binary_git_diff_marker("Binary files a/b.bin and b/b.bin differ\n")
+    assert not is_binary_git_diff_marker("diff --git a/app.py b/app.py\n")
+    assert not is_binary_git_diff_marker("")
+
+    from moonmind.security.outbound_scan import push_scan_coverage_error
+
+    binary_reason = push_scan_coverage_error(
+        commit_range="origin/main..feature",
+        commit_metadata_len=10,
+        max_commit_metadata_chars=100_000,
+        changed_file_count=1,
+        max_changed_files=200,
+        binary_diff_path="assets/blob.bin",
+    )
+    assert binary_reason is not None
+    assert "is binary and was not inspected" in binary_reason

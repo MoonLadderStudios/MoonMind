@@ -3430,6 +3430,28 @@ def test_native_pr_push_status_gate_blocks_unrecovered_lease_conflict(
         mock_run_workflow._publish_reason or ""
     )
 
+def test_native_pr_push_status_gate_blocks_scan_blocked_as_terminal(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonMind#809: a high-security scan block is terminal, not a stale-branch PR."""
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={
+            "outputs": {
+                "push_status": "blocked",
+                "push_branch": "feature/existing",
+                "push_error": "outbound git push blocked: high security scan coverage incomplete",
+            }
+        },
+    )
+
+    assert mock_run_workflow._native_pr_push_status_blocks_creation("blocked") is True
+    assert mock_run_workflow._publish_status == "failed"
+    assert "coverage incomplete" in (mock_run_workflow._publish_reason or "")
+
 def test_publish_failure_preservation_is_patch_gated(
     mock_run_workflow: MoonMindRunWorkflow,
     monkeypatch: pytest.MonkeyPatch,
