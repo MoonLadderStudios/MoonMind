@@ -122,10 +122,11 @@ def test_implement_failure_uses_bounded_retry_not_unconditional_halt():
 
 def test_specify_preserves_technical_acceptance_criteria():
     text = _read_skill("moonspec-specify")
+    norm = re.sub(r"\s+", " ", text)
     assert "Define measurable, technology-agnostic success criteria." not in text
     assert "keeps its explicit interface names" in text
-    assert "Do not rewrite a technical requirement as a business metric" in text
-    assert "do not invent performance, retention, or concurrency numbers" in text.lower()
+    assert "Do not rewrite a technical requirement as a business metric" in norm
+    assert "do not invent performance, retention, or concurrency numbers" in norm.lower()
 
 
 def test_align_preserves_genuine_authority_boundaries():

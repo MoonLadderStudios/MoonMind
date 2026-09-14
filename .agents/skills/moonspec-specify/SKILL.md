@@ -175,10 +175,9 @@ Fill the template with concrete details derived from the feature description:
     Preserve the request's own acceptance language: a technical API, protocol,
     migration, or infrastructure requirement keeps its explicit interface names,
     numerical thresholds, platform constraints, and negative requirements
-    unchanged in meaning. Do not rewrite a technical requirement as a business
-    metric and do not invent performance, retention, or concurrency numbers to
-    fill the template. Qualitative criteria are valid when they have an
-    objective verification method.
+    unchanged in meaning. Do not rewrite a technical requirement as a business metric
+    and do not invent performance, retention, or concurrency numbers to fill the template.
+    Qualitative criteria are valid when they have an objective verification method.
 12. Include key entities only if the feature involves data.
 13. Apply the intent guard:
    - For `runtime` intent, the spec must describe observable system behavior and validation outcomes, not merely edits to documentation.
