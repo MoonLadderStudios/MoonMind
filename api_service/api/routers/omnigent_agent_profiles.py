@@ -45,6 +45,7 @@ from api_service.services.omnigent_agent_bundle_service import (
 from api_service.services.omnigent_agent_profile_service import (
     projection_identity,
     projection_readiness,
+    readiness_actionable_detail,
     synchronize_upstream_inventory,
 )
 from api_service.services.omnigent_agent_smoke_service import (
@@ -1600,7 +1601,17 @@ async def resolve_snapshot(
             required_capabilities=target.document.get("requiredCapabilities", []),
         )
         if not upstream_readiness["ready"]:
-            raise HTTPException(409, upstream_readiness["reason"])
+            raise HTTPException(
+                409,
+                readiness_actionable_detail(
+                    upstream_readiness,
+                    profile_id=profile.profile_id,
+                    version=target.version,
+                    endpoint_ref=str(target.document.get("endpointRef") or ""),
+                    upstream_id=str(source.get("upstreamId") or ""),
+                    upstream_version=source.get("upstreamVersion"),
+                ),
+            )
     allowed_overrides = {"model", "capture", "rag", "publish"}
     rejected = set(body.overrides) - allowed_overrides
     if rejected:
