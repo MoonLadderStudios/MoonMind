@@ -1,6 +1,16 @@
 # Explicit live-source development overlay. Do not use for releases.
 services:
   api:
+    # /healthz recomputes a package digest over the bind-mounted checkout on
+    # every probe (~9s on Docker Desktop Windows shared filesystems vs ms on
+    # in-image layers), so the 10s release healthcheck timeout flaps here.
+    # Dev-only relief; the release timeout stays as is.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 30s
+      timeout: 60s
+      retries: 3
+      start_period: 60s
     volumes:
       - ./api_service:/app/api_service
       - ./moonmind:/app/moonmind:ro
