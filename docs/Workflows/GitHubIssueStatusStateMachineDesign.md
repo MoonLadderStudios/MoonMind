@@ -122,6 +122,8 @@ The trusted brief carries the exact owner, attempt, repository, issue, and comme
 
 A renewal persists its exact PATCH intent, rereads GitHub after an uncertain response, and extends authority only after confirmation. An expired attempt cannot revive its old lease, even if no successor is visible; it requires a new admission and attempt identity. Expired comments remain intact for prior-work assessment and retry reconstruction. A lease is never a substitute for stop/preservation evidence in a terminal `released` handoff.
 
+Agent completion cancels the auxiliary renewal loop. Wrapped Activity cancellation remains cancellation rather than a renewal retry, so an in-flight renewal cannot trap an already-completed primary result or keep extending its claim.
+
 Comment creation and updates are serialized per attempt within the owning deployment. A retried create first checks for the same attempt marker. A lost HTTP response is an unknown result, not proof that the operation failed. Duplicate comments with the same attempt identity are one logical attempt, not extra retry allowance. Conflicting copies require reconciliation, not choosing whichever timestamp is newest.
 
 Before announcement, the owning deployment validates live comment evidence
