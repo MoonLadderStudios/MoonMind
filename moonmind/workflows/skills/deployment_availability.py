@@ -322,12 +322,12 @@ async def supervise_availability(client, spec, metadata, *, stop=None):
                 await executor.lock_manager.acquire("moonmind"),
                 asyncio.timeout(300),
             ):
-                metadata["releaseAvailability"] = await reconcile_availability(
+                inventory = await installed_fleet_inventory(runner)
+                availability = await reconcile_availability(
                     client, deployment=spec.deployment_id, runner=runner, root=root
                 )
-                observed = metadata["releaseAvailability"]["current"]
+                observed = availability["current"]
                 spec_candidate = f"{spec.deployment_id}.{spec.build_id}"
-                inventory = await installed_fleet_inventory(runner)
                 distinct = inventory["distinctBuildIds"]
                 has_inventory = bool(distinct)
                 if inventory["coherent"]:
@@ -404,7 +404,10 @@ async def supervise_availability(client, spec, metadata, *, stop=None):
                 metadata["releaseRouting"] = routing
                 # Retained pollers prove availability of the current route, not
                 # activation of the installed fix. Preserve both facts durably.
-                metadata["releaseAvailability"]["routing"] = routing
+                # Publish versions and routing atomically so observers never see
+                # versions without their matching routing decision.
+                availability["routing"] = routing
+                metadata["releaseAvailability"] = availability
                 write_record(
                     root / "availability.json", metadata["releaseAvailability"]
                 )
