@@ -207,6 +207,14 @@ RELIABILITY_JOURNEY_EXACT = {
 }
 
 RELIABILITY_JOURNEY_PREFIXES = (
+    "moonmind/schemas/container_job_models.py",
+    "tests/unit/capacity/",
+    "moonmind/capacity/",
+    "tests/integration/resource_allocation/",
+    "tools/test_resource_allocation.sh",
+    "tools/test_worker_count.py",
+    "moonmind/container_job_cli.py",
+    "services/omnigent/scripts/moonmind-container-cli.py",
     "moonmind/workflows/skills/deployment_",
     "tests/fixtures/reliability/",
     ".agents/skills/",
