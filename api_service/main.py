@@ -1008,6 +1008,8 @@ async def _observe_manual_schedule_requests():
     )
 
     while True:
+        if not getattr(app.state, "github_claim_recovery_schedule_ready", False):
+            await _ensure_github_claim_recovery_schedule()
         try:
             async with asyncio.timeout(25), get_async_session_context() as session:
                 await RecurringWorkflowsService(session).reconcile_manual_runs()
@@ -2850,12 +2852,27 @@ async def ensure_omnigent_oauth_host_janitor_schedule_started() -> None:
     logger.info("Ensured Omnigent OAuth host janitor schedule")
 
 
+async def _ensure_github_claim_recovery_schedule() -> None:
+    """The existing API schedule observer retries transient startup failures."""
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    try:
+        async with asyncio.timeout(25):
+            await TemporalClientAdapter().ensure_github_issue_reconcile_schedule(enabled=True)
+        app.state.github_claim_recovery_schedule_ready = True
+    except Exception:
+        app.state.github_claim_recovery_schedule_ready = False
+        logger.warning("Automatic GitHub claim recovery registration deferred; API observer will retry")
+
+
 async def ensure_recurring_workflow_schedules_reconciled() -> None:
     """Best-effort repair for persisted recurring workflow Temporal schedules."""
     from api_service.db.base import get_async_session_context
     from api_service.services.recurring_workflows_service import (
         RecurringWorkflowsService,
     )
+
+    await _ensure_github_claim_recovery_schedule()
 
     try:
         async with get_async_session_context() as session:

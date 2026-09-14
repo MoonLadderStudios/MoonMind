@@ -243,6 +243,37 @@ async def test_default_search_claim_survives_assessment_and_blocker_handoffs(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [{}, {"includeAllAuthors": False}, {"includeAllAuthors": True}])
+async def test_search_reports_unresolved_attempt_instead_of_empty_backlog(journey, scope):
+    state, issue, invoke, _, _ = journey
+    handoff = AttemptHandoff.from_dict({
+        "formatVersion": 1, "attemptId": "att-stranded-selection",
+        "deploymentId": "inst-other-deployment", "repository": REPO,
+        "issueNumber": 4271, "workflowId": "default/mm:previous-scheduled-run",
+        "activity": "preparing", "writersStopped": False,
+        "outcome": "in_progress", "nextAction": "continue_implementation",
+    })
+    state["comments"].append({
+        "id": 123, "body": render_attempt_comment(handoff), "user": issue["user"],
+    })
+    result = await invoke(tools.GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME,
+                          {"repository": REPO, "issueSearch": "", **scope})
+    assert result.status == "COMPLETED", result.outputs
+    assert result.completion_disposition == "idle"
+    evidence = result.outputs["searchEvidence"]
+    assert evidence["rejectionCounts"] == {"lifecycle_ineligible": 1, "active_attempt_conflict": 1}
+    rejected = evidence["rejectedCandidates"][-1]
+    assert rejected["issueNumber"] == 4271
+    assert rejected["claimEvidence"]["attempts"][0]["workflowId"] == handoff.workflow_id
+    assert rejected["claimEvidence"]["attempts"][0]["commentId"] == "123"
+    assert "unresolved attempt" in result.outputs["summary"]
+    assert "#4271" in result.outputs["summary"]
+    assert "selectedIssueAuthor" not in evidence
+    assert state["receipt"] is None
+    assert state["writes"] == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "damage",
     [

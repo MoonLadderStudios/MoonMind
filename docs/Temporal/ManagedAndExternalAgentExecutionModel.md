@@ -11,6 +11,15 @@ restore. An `external_state_ref` proves session continuity only and cannot satis
 workspace restore preflight. Recovery uses the versioned, digested snapshot admitted
 with the run rather than rewriting it after registry or credential changes.
 
+Generic workspace capture retains the authored repository and source branch in
+the compact runtime recovery request. A successful save may carry an auxiliary
+`repository-worktree-state/v1` observation outside the versioned checkpoint:
+the repository, source branch, exact head, clean worktree (including untracked
+files), and archive digest. Failure to capture this observation does not overwrite
+successful preservation. The issue recovery owner combines it with completed
+fenced runtime cleanup and fresh remote ancestry evidence before releasing a
+no-work claim; the observation alone grants no release or publication authority.
+
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  

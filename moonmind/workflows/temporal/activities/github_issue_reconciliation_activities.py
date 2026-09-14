@@ -721,6 +721,34 @@ async def _probe_reconciliation_access(
     return True, "", True
 
 
+async def reconcile_local_github_issue_claims(*, state_dir=None):
+    """Default maintenance discovers scope from durable local claim receipts."""
+    from moonmind.workflows.temporal.github_issue_claim_recovery import (
+        reconcile_local_claims,
+    )
+
+    path = _state_dir(state_dir) / "local_claims.json"
+    state = _load_json(path)
+    result = await reconcile_local_claims(state=state)
+    _save_json(path, state)
+    routine = {
+        "owner_or_child_running",
+        "cleanup_grace",
+        "cancellation_hold",
+        "successful_owner_requires_finalization",
+    }
+    failures = [
+        item
+        for item in result["results"]
+        if not item["released"] and item.get("reasonCode") not in routine
+    ]
+    return {
+        "status": "succeeded",
+        "localClaims": result,
+        "diagnostics": {"actionableFailures": failures},
+    }
+
+
 async def reconcile_github_issue_handoffs(
     *,
     repository: str,

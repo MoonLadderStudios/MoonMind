@@ -86,6 +86,13 @@ async def journey(tmp_path, monkeypatch, request):
                         "html_url": f"https://github.com/{repository}/issues/42",
                     }
                 )
+            elif "/compare/" in path and "comparison_provider" in state:
+                if state.get("compare_failures_remaining", 0):
+                    state["compare_failures_remaining"] -= 1
+                    self.respond({"message": "temporary comparison outage"}, 503)
+                else:
+                    payload, status = state["comparison_provider"](unquote(path.rsplit("/compare/", 1)[1]))
+                    self.respond(payload, status)
             elif path.endswith("/issues"):
                 self.respond(
                     ([self.issue()] if state.get("state", "open") == "open" else [])
@@ -452,6 +459,15 @@ async def test_search_skips_remote_contender_before_authorizing_announcement(
         assert result.completion_disposition == "idle"
         assert state["posts"] == 0
         assert retained is None
+    if when == "before_selection":
+        evidence = result.outputs["searchEvidence"]
+        assert evidence["rejectionCounts"]["active_attempt_conflict"] == 1
+        rejected = evidence["rejectedCandidates"][0]
+        assert rejected["issueNumber"] == 3970
+        assert rejected["claimEvidence"]["attempts"][0]["workflowId"] == old_owner
+        if not eligible_successor:
+            assert "unresolved attempt" in result.outputs["summary"]
+            assert "selectedIssueAuthor" not in evidence
 
 
 @pytest.mark.asyncio

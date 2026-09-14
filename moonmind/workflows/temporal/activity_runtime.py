@@ -5291,9 +5291,10 @@ class TemporalIntegrationActivities:
 
         repository = str(_first("repository", "repo") or "").strip()
         if not repository:
-            raise TemporalActivityRuntimeError(
-                "github_issue.reconcile_handoffs requires repository"
+            from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import (
+                reconcile_local_github_issue_claims,
             )
+            return await reconcile_local_github_issue_claims(state_dir=_first("stateDir", "state_dir"))
         raw_numbers = _first("issueNumbers", "issue_numbers")
         issue_numbers = None
         if isinstance(raw_numbers, (list, tuple)):
