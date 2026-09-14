@@ -146,7 +146,11 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
    - `FAIL`: at least one in-scope item is `not_met` — including the main/trunk case where no implementing change can be found and the requirements are concrete enough to expect one.
    - `BLOCKED`: trusted Jira content or Jira comment access is unavailable, OR both branch mode and main/trunk mode failed to produce any usable evidence and the requirements are too ambiguous to assess from repository state alone. Simply being on `main` with a clean tree is NOT, by itself, a `BLOCKED` condition.
 
-6. If `update status` is true, decide whether to update Jira status.
+6. Draft and post the Jira verification comment before any status mutation (evidence-first).
+   - Draft the comment per section 7, scan for secrets, and post per section 8.
+   - If posting fails, keep the comment body artifact, report the exact trusted-tool blocker, do not claim Jira was updated, and do not attempt a completion transition.
+
+7. Only after a successful comment receipt, and only when `update status` is true, decide whether to update Jira status.
    - Do not attempt a terminal status update unless the result is `PASS` and objective evidence satisfies the freshly resolved intended completion target. Candidate-only PASS preserves the review/publication path.
    - Treat an issue that is already in a done-category status as already done; record that no transition was needed.
    - Fetch available transitions through the trusted Jira tool surface.
@@ -156,7 +160,7 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
    - Execute the selected transition only through `jira.transition_issue`, then record selected transition ID/name, whether the issue was already done, and whether the transition succeeded.
    - If transition execution fails, keep the verification verdict as decided above but report the status update failure separately. Do not claim the issue was moved.
 
-7. Draft the Jira comment.
+7. Draft the Jira comment (posted in step 6 before any transition).
    - Start with the verdict, issue key, the verification mode used (`branch` or `main/trunk`), branch name, commit SHA, and comparison ref (or "verified against current state of default branch" for main/trunk mode).
    - In main/trunk mode, list the merge commit SHA(s) or merged PR number(s) identified as the implementation evidence, when known.
    - Include blockers or gaps first for `PARTIAL`, `FAIL`, or `BLOCKED`.
@@ -213,7 +217,7 @@ Status update:
 - <omitted when `update status` is false; otherwise already done / transitioned / skipped / blocked>
 ```
 
-8. Scan and post to Jira.
+8. Scan and post to Jira (executed as part of step 6, before any status transition).
    - Before posting, scan the outgoing comment for secret-like patterns such as `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
    - If any secret-like content appears, do not post. Redact and re-scan.
    - If the bundled helper is materialized, post with:

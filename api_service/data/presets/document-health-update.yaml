@@ -66,7 +66,7 @@ steps:
     Scope this review strictly to the documentation scope above. Do not broaden scope
     or audit unrelated documents.'
   skill:
-    id: auto
+    id: document-health-review
     args: {}
     requiredCapabilities:
     - git
@@ -112,7 +112,7 @@ steps:
     Report which findings were remediated, which were intentionally left for follow-up,
     and the evidence for each change.'
   skill:
-    id: auto
+    id: document-health-remediate
     args: {}
     requiredCapabilities:
     - git

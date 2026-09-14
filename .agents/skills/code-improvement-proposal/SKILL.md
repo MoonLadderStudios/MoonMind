@@ -127,7 +127,7 @@ Prefer findings that are:
 - evidence-backed and tied to exact files and line ranges,
 - likely to improve correctness, performance, maintainability, modularity, or architecture alignment,
 - specific enough for an engineer to implement,
-- validated by a test or manual verification plan.
+- validated by a test or executable verification plan.
 
 Avoid findings that are:
 
@@ -366,7 +366,9 @@ Rationale: `<why this matters now>`
 - [ ] Integration test for `<flow>`
 - [ ] Existing test suite passes
 - [ ] Linter/typechecker passes
-- [ ] Manual smoke test for `<user-facing flow>`
+- [ ] Executable acceptance for `<user-facing flow>` (command, fixture, or automated check; not a mandatory human smoke test)
+
+A clean review may legitimately produce no findings: report `no_findings` with the reviewed scope and evidence instead of inventing a ticket to fill a quota.
 
 ## Architecture alignment
 
