@@ -430,7 +430,7 @@ async def test_continue_as_new_chain_visits_prior_run_children():
         )
 
     terminal = SimpleNamespace(
-        describe=AsyncMock(return_value=closed("MoonMind.Run", "terminal-run")),
+        describe=AsyncMock(return_value=closed("MoonMind.UserWorkflow", "terminal-run")),
         fetch_history_events=lambda **kwargs: history_events([terminal_started]),
     )
     prior = SimpleNamespace(
@@ -438,7 +438,7 @@ async def test_continue_as_new_chain_visits_prior_run_children():
             return_value=SimpleNamespace(
                 status=WorkflowExecutionStatus.CONTINUED_AS_NEW,
                 close_time=now - timedelta(minutes=30),
-                workflow_type="MoonMind.Run",
+                workflow_type="MoonMind.UserWorkflow",
                 run_id="prev-run",
             )
         ),
