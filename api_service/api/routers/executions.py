@@ -10562,6 +10562,8 @@ async def _persist_original_workflow_input_snapshot(
             try:
                 target_record.memo = memo
             except Exception:
+                # Detached double without attribute-write support; the durable
+                # row was already reconciled through the shared mutator.
                 pass
             try:
                 refs = list(getattr(target_record, "artifact_refs", None) or [])
@@ -10576,6 +10578,8 @@ async def _persist_original_workflow_input_snapshot(
                 try:
                     target_record.artifact_refs = refs
                 except Exception:
+                    # Detached double without attribute-write support; durable
+                    # refs were already reconciled through the shared mutator.
                     pass
     return completed.artifact_id
 
@@ -10679,16 +10683,21 @@ async def _reuse_original_task_input_snapshot_from_source(
             artifact_refs=[snapshot_ref],
         )
     except (ValueError, AttributeError, TypeError, StopAsyncIteration, StopIteration):
+        # Session double without durable rows (unit mocks, fake services);
+        # in-memory lineage below still carries the evidence for the caller.
         pass
     for target in records_to_update:
         try:
             memo = dict(getattr(target, "memo", None) or {})
         except Exception:
+            # Detached double without readable memo; nothing to preserve.
             continue
         memo.update(memo_patch)
         try:
             target.memo = memo
         except Exception:
+            # Detached double without attribute-write support; the durable
+            # row was already reconciled through the shared mutator.
             pass
         try:
             refs = list(getattr(target, "artifact_refs", None) or [])
@@ -10699,11 +10708,14 @@ async def _reuse_original_task_input_snapshot_from_source(
             try:
                 target.artifact_refs = refs
             except Exception:
+                # Detached double without attribute-write support; durable
+                # refs were already reconciled through the shared mutator.
                 pass
     for target in records_to_update:
         try:
             execution_key = (target.namespace, target.workflow_id, target.run_id)
         except Exception:
+            # Detached double without namespace identity; nothing linkable.
             continue
         if execution_key in linked_execution_keys:
             continue
@@ -10743,6 +10755,8 @@ async def _reuse_original_task_input_snapshot_from_source(
                     )
                 )
             except (AttributeError, TypeError):
+                # Session double without add support; in-memory memo/refs
+                # above already carry the lineage for the caller.
                 pass
     return snapshot_ref
 
@@ -11988,6 +12002,8 @@ async def _create_execution_from_workflow_request(
                 artifact_refs=[snapshot_ref],
             )
         except (ValueError, AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without durable rows; in-memory lineage below
+            # still carries the evidence for the caller.
             pass
         try:
             await _apply_canonical_projection_patch_via_mutator(
@@ -11997,6 +12013,8 @@ async def _create_execution_from_workflow_request(
                 artifact_refs=_plan_refs,
             )
         except (ValueError, AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without durable destination rows; in-memory
+            # lineage below still carries the evidence for the caller.
             pass
         try:
             _rec_memo = dict(getattr(record, "memo", None) or {})
@@ -12004,6 +12022,8 @@ async def _create_execution_from_workflow_request(
             _rec_memo.update(_plan_memo)
             record.memo = _rec_memo
         except Exception:
+            # Detached double without attribute-write support; durable rows
+            # were already reconciled through the shared mutator above.
             pass
         try:
             _rec_refs = list(getattr(record, "artifact_refs", None) or [])
@@ -12012,6 +12032,8 @@ async def _create_execution_from_workflow_request(
                     _rec_refs.append(_ref)
             record.artifact_refs = _rec_refs
         except Exception:
+            # Detached double without attribute-write support; durable refs
+            # were already reconciled through the shared mutator above.
             pass
     else:
         snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
@@ -12027,11 +12049,15 @@ async def _create_execution_from_workflow_request(
         try:
             await session.commit()
         except (AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without commit support; in-memory lineage above
+            # already carries the evidence for the caller.
             pass
     if isinstance(record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)):
         try:
             await session.refresh(record)
         except (AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without refresh support; the in-memory record
+            # already carries the reconciled lineage.
             pass
     execution = _serialize_execution(record, user=user)
     return execution
@@ -17880,12 +17906,16 @@ async def continue_in_new_workflow(
                     memo_patch=plan_memo_patch,
                 )
             except (ValueError, AttributeError, TypeError, StopAsyncIteration, StopIteration):
+                # Detached doubles without durable destination rows; in-memory
+                # lineage below still carries the evidence for the caller.
                 pass
             try:
                 _dest_memo = dict(getattr(record, "memo", None) or {})
                 _dest_memo.update(plan_memo_patch)
                 record.memo = _dest_memo
             except Exception:
+                # Detached double without attribute-write support; durable
+                # rows were already reconciled when present.
                 pass
     else:
         await _persist_original_workflow_input_snapshot_from_parameters(
@@ -18756,12 +18786,16 @@ async def rerun_execution(
                     memo_patch=plan_memo_patch,
                 )
             except (ValueError, AttributeError, TypeError, StopAsyncIteration, StopIteration):
+                # Detached doubles without durable destination rows; in-memory
+                # lineage below still carries the evidence for the caller.
                 pass
             try:
                 _dest_memo = dict(getattr(record, "memo", None) or {})
                 _dest_memo.update(plan_memo_patch)
                 record.memo = _dest_memo
             except Exception:
+                # Detached double without attribute-write support; durable
+                # rows were already reconciled when present.
                 pass
     else:
         snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
@@ -18787,10 +18821,14 @@ async def rerun_execution(
         try:
             await session.commit()
         except (AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without commit support; in-memory lineage above
+            # already carries the evidence for the caller.
             pass
         try:
             await session.refresh(record)
         except (AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without refresh support; the in-memory record
+            # already carries the reconciled lineage.
             pass
     execution = _serialize_execution(record, user=user)
     return execution

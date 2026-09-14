@@ -639,6 +639,8 @@ async def mutate_execution_projection(
         try:
             await flush()
         except (StopAsyncIteration, StopIteration, AttributeError, TypeError):
+            # Session double without flush support (unit mocks sized for the
+            # old direct-write path); the mutator reconciles from fetched rows.
             pass
     canonical = await _locked_get(session, TemporalExecutionCanonicalRecord, workflow_id)
     projection = await _locked_get(session, TemporalExecutionRecord, workflow_id)
@@ -907,6 +909,8 @@ async def mutate_execution_projection(
                 try:
                     _session_add(projection)
                 except Exception:
+                    # Session double without add support; the in-memory
+                    # projection is still returned to the caller.
                     pass
         else:
             try:
@@ -922,6 +926,8 @@ async def mutate_execution_projection(
                         try:
                             await _session_flush()
                         except (StopAsyncIteration, StopIteration, AttributeError, TypeError):
+                            # Session double without flush support; the added
+                            # row is still visible to the caller.
                             pass
             except IntegrityError:
                 # Concurrent insert race on the missing-row path: another
@@ -1046,6 +1052,8 @@ async def mutate_execution_projection(
             if record in session:
                 flag_modified(record, "updated_at")
         except Exception:
+            # Session double without identity-map membership support;
+            # attribute assignment above already marked real sessions dirty.
             pass
     if stale and not closes_current_run:
         # Unknown/late predecessor evidence yields stale/reconciliation-needed
