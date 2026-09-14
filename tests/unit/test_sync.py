@@ -1311,7 +1311,7 @@ async def test_batch_item_failure_does_not_poison_sibling(tmp_path, monkeypatch)
     from types import SimpleNamespace
 
     from api_service.db.models import Base
-    import api_service.core.sync as sync_module
+    from api_service.core import sync as sync_module
 
     engine, session_factory = _sqlite_session_factory(tmp_path)
     async with engine.begin() as conn:
@@ -1359,7 +1359,7 @@ async def test_single_item_failure_rolls_back_and_keeps_session_usable(tmp_path)
     """REQ-04: the single-item wrapper must roll back its failed transaction
     so the session can process later work."""
     from api_service.db.models import Base
-    import api_service.core.sync as sync_module
+    from api_service.core import sync as sync_module
 
     engine, session_factory = _sqlite_session_factory(tmp_path)
     async with engine.begin() as conn:
