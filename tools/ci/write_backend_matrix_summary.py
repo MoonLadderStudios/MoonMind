@@ -144,8 +144,10 @@ def classify_outcome(selected: bool, junit_exists: bool, test_outcome: str) -> s
     if not junit_exists:
         if normalized == "cancelled":
             return "canceled (interrupted -- no final JUnit report)"
-        if normalized in ("success", "failure"):
-            return f"{normalized} (interrupted -- no final JUnit report)"
+        if normalized == "success":
+            return "passed (interrupted -- no final JUnit report)"
+        if normalized == "failure":
+            return "failed (interrupted -- no final JUnit report)"
         return "unavailable (no final JUnit report)"
     if normalized == "cancelled":
         return "canceled"
