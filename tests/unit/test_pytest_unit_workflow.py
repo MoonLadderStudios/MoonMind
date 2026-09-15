@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -291,9 +292,16 @@ def test_parallel_shards_bound_hung_tests_and_spread_large_modules() -> None:
     assert "--dist load " in api_command or api_command.rstrip().endswith("--dist load")
     assert "--dist loadfile" not in api_command
     assert "--dist loadfile" in temporal_command
-    # Reliability shards run serially with their own per-test bound.
+    # Reliability shards run serially with their own short per-test bound
+    # (MoonLadderStudios/MoonMind#4369): a hung journey fails in 300s
+    # instead of holding a shard for the serial-era 600s.
     assert "-n auto" not in reliability_command
-    assert "--timeout 600" in reliability_command
+    assert "--timeout 300" in reliability_command
+    assert "--timeout 600" not in reliability_command
+    # ... under an 8-minute hard step ceiling that preserves the original
+    # pytest outcome for the evidence hook.
+    assert "timeout 480s python -m pytest" in reliability_command
+    assert "status=${PIPESTATUS[0]}" in reliability_command
 
 
 def test_deterministic_conformance_is_selection_gated() -> None:
@@ -692,8 +700,16 @@ def test_backend_matrix_records_attempted_cancellation_diagnostics() -> None:
     upload = steps["Upload backend-matrix cancellation diagnostics"]
     assert "failure()" in upload["if"] and "cancelled()" in upload["if"]
     assert upload["with"]["name"] == "backend-matrix-${{ matrix.suite }}-cancellation-attempt-${{ github.run_attempt }}"
+    # MoonLadderStudios/MoonMind#4371: shard diagnostics (compose logs plus
+    # scoped manifests) are collected and uploaded on every selected run so
+    # a slow but passing shard stays diagnosable; cancellation-only
+    # bookkeeping above is unchanged.
     collect = steps["Collect reliability shard diagnostics"]
-    assert "failure()" in collect["if"] and "cancelled()" in collect["if"]
+    assert collect["if"].startswith("always()")
+    assert "needs.select-test-suites.outputs.reliability_journey" in collect["if"]
+    shard_upload = steps["Upload reliability shard diagnostics"]
+    assert shard_upload["if"].startswith("always()")
+    assert "needs.select-test-suites.outputs.reliability_journey" in shard_upload["if"]
 
 
 def test_backend_matrix_rows_are_selection_gated() -> None:
@@ -739,3 +755,74 @@ def test_ci_required_consumes_backend_matrix_aggregate() -> None:
         'require_selected "reliability-journey-checkpoint-resume"',
     ):
         assert removed not in script
+
+
+def test_reliability_shards_enforce_short_step_and_test_deadlines() -> None:
+    """MoonLadderStudios/MoonMind#4369: short reliability budgets.
+
+    Each reliability shard bounds a hung test at 300s (down from the
+    serial-era 600s) and caps the whole pytest invocation at 8 minutes via
+    ``timeout 480s``. The 124 exit from ``timeout`` flows through
+    ``PIPESTATUS`` so the evidence hook reports an interrupted run instead
+    of masking it, and the 30-minute job timeout stays the outer backstop
+    while per-shard setup variance is measured.
+    """
+    workflow = _load_workflow()
+    job = workflow["jobs"]["backend-matrix"]
+    assert job["timeout-minutes"] == 30
+    steps = {step["name"]: step for step in job["steps"]}
+    command = steps["Run hermetic reliability shard"]["run"]
+    assert "timeout 480s python -m pytest" in command
+    assert "--timeout 300" in command
+    assert "status=${PIPESTATUS[0]}" in command
+    # The step cap must wrap the test process itself, not the log pipe, and
+    # the per-shard JUnit report keeps its unique name.
+    assert "2>&1 | tee artifacts/pytest-backend-${{ matrix.suite }}.log" in command
+    assert "--junitxml=artifacts/pytest-backend-${{ matrix.suite }}.xml" in command
+
+
+def test_step_timeout_wrapper_fails_fast_on_a_hung_process() -> None:
+    """Disposable probe: the ``timeout`` mechanism used for the 8-minute
+    reliability step ceiling terminates a non-returning process quickly with
+    a non-success exit instead of waiting out a production budget."""
+    import shutil
+    import subprocess
+    import time
+
+    if shutil.which("timeout") is None:
+        pytest.skip("coreutils timeout is unavailable")
+    start = time.monotonic()
+    proc = subprocess.run(
+        ["timeout", "2s", "sleep", "300"],
+        capture_output=True,
+        timeout=30,
+    )
+    elapsed = time.monotonic() - start
+    assert proc.returncode == 124
+    assert elapsed < 10
+
+
+def test_reliability_fixtures_reuse_registry_layers_without_shared_state() -> None:
+    """MoonLadderStudios/MoonMind#4376: no redundant cache subsystem.
+
+    The reliability Compose file builds no images (dependency layers are
+    registry layers reused natively by ``docker compose up``) and mounts no
+    mutable release state -- only the read-only Temporal dynamic config.
+    Isolation comes from per-shard Compose project names in the workflow,
+    so shards never share services, networks, or volumes.
+    """
+    compose_path = REPO_ROOT / "tests" / "integration" / "reliability" / "compose.yaml"
+    compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    assert set(compose["services"]) >= {"postgres", "temporal", "minio"}
+    for name, service in compose["services"].items():
+        assert "build" not in service, f"{name} must not build a local image"
+        assert "image" in service, f"{name} must come from a registry layer"
+        for volume in service.get("volumes", []):
+            assert ":ro" in str(volume), f"{name} must not share mutable state: {volume}"
+    workflow = _load_workflow()
+    steps = {step["name"]: step for step in workflow["jobs"]["backend-matrix"]["steps"]}
+    assert "moonmind-reliability-${{ matrix.suite }}" in steps["Start isolated reliability dependencies"]["run"]
+    assert "moonmind-reliability-${{ matrix.suite }}" in steps["Remove isolated reliability dependencies"]["run"]
+    assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" in steps[
+        "Start isolated reliability dependencies"
+    ]["run"]

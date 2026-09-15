@@ -156,9 +156,12 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   `MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-<suite>_default` so
   fixture tests attach to their row's isolated Compose network instead of
   the retired single-job `moonmind-reliability-qualification_default`.
-- Per-test (`--timeout 600`), job (`timeout-minutes: 30`), and cleanup
-  (`always()` compose `down -v`, wrapped in `timeout 100s`) bounds are
-  preserved on every row. Reliability collection steps are additionally
+- Per-test (`--timeout 600` on fast rows, `--timeout 300` on reliability
+  shards), step (`timeout 480s` around each reliability pytest invocation:
+  the 8-minute hard step ceiling from MoonLadderStudios/MoonMind#4369), job
+  (`timeout-minutes: 30` as the outer backstop while per-shard setup
+  variance is measured), and cleanup (`always()` compose `down -v`,
+  wrapped in `timeout 100s`) bounds are preserved on every row. Reliability collection steps are additionally
   wrapped in `timeout 100s`/`timeout 60s` so one slow diagnostic command
   cannot stall the row; each command records its own failure to
   `collection-status.txt` without stopping the remaining bounded collection
@@ -181,8 +184,9 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   files (JUnit XML, text log, slowest report, duration-hints snapshot) with
   `retention-days: 7` and `if-no-files-found: warn`, on success, failure,
   and (best-effort) normal cancellation via `always()` plus the native
-  selection guard. Reliability Compose logs and scoped manifests upload
-  separately with the same retention. No hidden environment files, tokens,
+  selection guard. Reliability Compose logs and scoped manifests upload the
+  same way on every selected run (MoonLadderStudios/MoonMind#4371) with the
+  same retention. No hidden environment files, tokens,
   unrestricted workspaces, or whole source trees are staged.
 - Each row appends a per-job `$GITHUB_STEP_SUMMARY` (via the same hook)
   with suite/shard identity, tested revision, run/attempt, JUnit counts
@@ -233,8 +237,9 @@ success-path text log/JUnit upload, `-q` reliability verbosity):
    `ls tests/integration/reliability/test_*.py | sort`).
 2. Fix the revision/configuration: compare runs on the same commit (or
    adjacent commits with no test/workflow changes), same workflow file,
-   same `--timeout 600` / `timeout-minutes: 30` bounds, same runner class
-   (`ubuntu-latest`).
+   same fast-row (`--timeout 600`) and reliability-shard (`--timeout 300`
+   with a `timeout 480s` step cap) bounds, same `timeout-minutes: 30`
+   outer job backstop, same runner class (`ubuntu-latest`).
 3. Repeat each side at least twice to separate ordinary timing noise from a
    real shift; do not add a performance gate on the result.
 4. Separate cold and warm setup: record dependency-install/Compose-pull
@@ -445,7 +450,9 @@ The archive replay deliberately destroys the source workspace before using
 durable artifact evidence to restore a distinct destination and retries the
 restore idempotently. It exercises production capture/restore engines and the
 artifact boundary, but does not substitute for the Temporal-to-managed-AgentRun
-journey. The required CI reliability job has a 30-minute budget.
+journey. Each reliability pytest invocation is capped by an 8-minute step
+timeout with a 300-second per-test bound; the 30-minute job timeout remains
+the outer backstop.
 
 Verify that every eligible provider-free node has exactly one owner:
 
