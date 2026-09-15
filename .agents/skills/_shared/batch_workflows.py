@@ -1688,6 +1688,8 @@ def _run_repository_batch(args: argparse.Namespace, artifacts_dir: Path) -> int:
                 run_ref=str(args.run_ref),
             )
         except Exception:
+            # Translation is best-effort for the legacy Skill contract; the
+            # primary repository aggregate is already persisted above.
             pass
         print(json.dumps(aggregate, indent=2))
         return exit_code
@@ -2059,6 +2061,8 @@ def _run_repository_batch(args: argparse.Namespace, artifacts_dir: Path) -> int:
                     run_ref=run_ref,
                 )
             except Exception:
+                # Interim translation is best-effort; the interim repository
+                # aggregate is already persisted above.
                 pass
     except _BATCH_TARGETS.RepositoryBatchError as exc:
         return _fail_aggregate(
@@ -2085,13 +2089,14 @@ def _run_repository_batch(args: argparse.Namespace, artifacts_dir: Path) -> int:
                     moonmind_url=moonmind_url, workflow_id=workflow_id
                 )
             except Exception:
+                # Best-effort rollback; per-target status is still updated to
+                # canceled below to preserve fail-before-dispatch semantics.
                 pass
         for item in per_target:
             if item.get("status") == "queued" and item.get("workflowId") in owned:
                 item["status"] = "canceled"
                 item["reason"] = "rollback_after_admission_failure"
         owned.clear()
-        submit_errors = submit_errors
     queued = sum(1 for item in per_target if item.get("status") == "queued")
     terminal_bad = sum(
         1
