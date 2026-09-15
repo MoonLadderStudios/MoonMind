@@ -20,7 +20,7 @@ The entrypoint fetches the selected branch without checking out or resetting loc
 
 The selected image supplies the canonical Compose definition, application code, migrations, portable Skills and release controller. Deployment-owned `.env`, interfaces, authentication and explicit configuration retain their existing authority. The image-owned controller is the portable semantic entrypoint for both this Skill and MoonMind's deployment tool. Docker, durable state storage and Temporal supply the execution substrate.
 
-The controller records an immutable submission, starts one named updater with durable ownership, qualifies every affected worker queue with a pinned canary, promotes routing with a compare-and-set operation, reconciles the installed fleet, and drains temporary workers. The updater can replace the deployment-control service that launched it. A terminal release receipt and verified installed readiness establish completion. An image pull, process exit, or successful container start alone does not.
+The controller records an immutable submission, starts one named updater with durable ownership, qualifies every affected worker queue with a pinned canary, promotes routing with a compare-and-set operation, reconciles the installed fleet, migrates the singular Omnigent release (server/host digests, launch policy versions, recurring schedule admissions) to the resolved digests, and drains temporary workers. The updater can replace the deployment-control service that launched it. A terminal release receipt and verified installed readiness establish completion. An image pull, process exit, or successful container start alone does not.
 
 ## Recovery
 
@@ -28,7 +28,17 @@ If the caller disappears, resume the printed submission with `--resume <submissi
 
 ## Options
 
-Optional arguments are `--compose-project <name>`, `--image-repository <repository>`, and `--dry-run` (show the intended release operation without fetching or deploying). The deployment-owned `docker-compose.override.yaml` (or `.yml`) accompanies the image's base configuration. Individual service restarts, live source overlays and source-only rebuilds are development operations and are outside this release contract.
+Optional arguments are `--compose-project <name>`, `--image-repository <repository>`, and `--dry-run` (show the intended release operation without fetching or deploying). The deployment-owned `docker-compose.override.yaml` (or `.yml`) accompanies the image's base configuration.
+
+`--local-build` is an explicit development-only escape hatch for exercising an
+unpublished working tree (for example a feature branch awaiting its published
+image). It recreates the stack on the repo's live-source development overlay,
+writes no release submission, and claims no digest; it is never an immutable
+release and must not be used for promotion or qualification. It preserves the
+deployment-owned `.env`, requires published bindings to be unchanged
+afterwards, and verifies each `--operator-url` health check. Roll back with a
+plain `docker compose up -d`. Individual service restarts and source-only
+image rebuilds remain outside this contract.
 
 Use `--operator-url <existing-origin>` (repeatable) to declare the installed dashboard/API addresses for verification, especially for wildcard bindings without an authentication base URL. The declaration belongs to the immutable release submission and does not modify `.env`, authentication, or published bindings. Use addresses resolvable from the Docker backend, such as a full VPN hostname. Resume retains the original addresses. A configured `MOONMIND_PUBLIC_BASE_URL` remains a required verification target as well.
 
