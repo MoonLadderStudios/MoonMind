@@ -1895,6 +1895,48 @@ async def test_writer_ref_converts_pull_timeout_to_materialization_failure() -> 
 
 
 @pytest.mark.asyncio
+async def test_writer_ref_reuses_compatible_local_instead_of_pulling(
+    monkeypatch,
+) -> None:
+    """Patch/SHA drift reuses the same-repo local image without a 7GB pull."""
+
+    requested = "ghcr.io/example/opencode@sha256:" + "a" * 64
+    fallback = "ghcr.io/example/opencode@sha256:" + "b" * 64
+
+    import moonmind.omnigent.credential_materializers as materializers_mod
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_image_drift.compatible_deployed_fallback",
+        lambda _ref: fallback,
+    )
+
+    class DriftBackend(_DockerBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pulls: list[list[str]] = []
+
+        async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                inspected = command[3] if len(command) > 3 else ""
+                if inspected == fallback:
+                    return 0, b"sha256:fallback\n", b""
+                return 1, b"", b"No such image"
+            if command[:2] == ["docker", "pull"]:
+                self.pulls.append(command)
+                return 0, b"Pulled\n", b""
+            return await super().run(
+                argv, input_bytes=input_bytes, timeout_seconds=timeout_seconds
+            )
+
+    backend = DriftBackend()
+    materializer = DockerOpencodeAuthJsonMaterializer(backend)
+    resolved = await materializer._resolve_writer_ref(requested)
+    assert resolved == fallback
+    assert backend.pulls == []
+
+
+@pytest.mark.asyncio
 async def test_opencode_materialize_recovers_missing_writer_via_pull() -> None:
     """Full materialize (production boundary) recovers a historic digest."""
 
@@ -2633,7 +2675,10 @@ async def test_bound_host_retry_rejects_mismatched_attestation() -> None:
         async def read_bytes(self, _ref: str) -> bytes:
             return _canonical_json_bytes(
                 {
-                    "imageRef": "ghcr.io/example/opencode@sha256:" + "9" * 64,
+                    # Different repository is never compatible drift: patch
+                    # and SHA may evolve within the same image family, but a
+                    # foreign image family must still fail closed.
+                    "imageRef": "ghcr.io/example/other@sha256:" + "9" * 64,
                     "architecture": plan.payload.hostArchitecture,
                     "omnigentBuildDigest": plan.payload.omnigentHostBuildDigest,
                     "harnessId": plan.payload.harnessId,
@@ -2653,6 +2698,43 @@ async def test_bound_host_retry_rejects_mismatched_attestation() -> None:
                 "hostHarnessAttestationRef": "artifact:host-attestation",
             },
         )
+
+
+@pytest.mark.asyncio
+async def test_bound_host_retry_allows_same_repo_sha_drift() -> None:
+    """Same-repository SHA/patch drift survives attested retries.
+
+    Rebuilt host images change digests while keeping major.minor. Retries must
+    not fail on SHA alone; major.minor compatibility is enforced downstream.
+    """
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _exact_plan("opencode-go/model")
+
+    class Artifacts:
+        async def read_bytes(self, _ref: str) -> bytes:
+            return _canonical_json_bytes(
+                {
+                    "imageRef": "ghcr.io/example/opencode@sha256:" + "9" * 64,
+                    "architecture": plan.payload.hostArchitecture,
+                    "omnigentBuildDigest": plan.payload.omnigentHostBuildDigest,
+                    "harnessId": plan.payload.harnessId,
+                    "harnessImplementationRef": (
+                        plan.payload.harnessImplementationRef
+                    ),
+                    "omnigentHostId": "host-1",
+                }
+            )
+
+    harness.realizer._artifacts = Artifacts()
+    # Same repo, different SHA: must not raise.
+    await harness.realizer._validate_bound_host_identity(
+        plan=plan,
+        host_context={
+            "omnigentHostId": "host-1",
+            "hostHarnessAttestationRef": "artifact:host-attestation",
+        },
+    )
 
 
 @pytest.mark.asyncio

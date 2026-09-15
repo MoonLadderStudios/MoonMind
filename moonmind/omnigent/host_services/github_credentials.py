@@ -140,6 +140,51 @@ class OmnigentGithubCredentialService:
             "chown -R \"$1:$2\" /config; "
             "chmod 0700 /config; chmod 0600 /config/hosts.yml"
         )
+        # Same-repo SHA drift recovery as credential writers: reuse the
+        # deployment's current local image when the plan-pinned digest is
+        # absent, avoiding a 7GB exact pull for patch rebuilds.
+        effective_writer = str(writer_image_ref or "").strip()
+        if "@sha256:" in effective_writer:
+            try:
+                from moonmind.omnigent.host_image_drift import (
+                    compatible_deployed_fallback,
+                )
+
+                fallback = compatible_deployed_fallback(effective_writer)
+            except Exception:
+                fallback = None
+            if fallback is not None:
+                try:
+                    fcode, _, _ = await self._backend.run(
+                        [
+                            "docker",
+                            "image",
+                            "inspect",
+                            fallback,
+                            "--format",
+                            "{{.Id}}",
+                        ],
+                        check=False,
+                    )
+                except Exception:
+                    fcode = 1
+                if fcode == 0:
+                    try:
+                        rcode, _, _ = await self._backend.run(
+                            [
+                                "docker",
+                                "image",
+                                "inspect",
+                                effective_writer,
+                                "--format",
+                                "{{.Id}}",
+                            ],
+                            check=False,
+                        )
+                    except Exception:
+                        rcode = 1
+                    if rcode != 0:
+                        effective_writer = fallback
         try:
             await self._backend.run(
                 [
@@ -159,7 +204,7 @@ class OmnigentGithubCredentialService:
                     f"type=volume,src={volume},dst=/config",
                     "--entrypoint",
                     "/bin/sh",
-                    writer_image_ref,
+                    effective_writer,
                     "-ceu",
                     script,
                     "--",

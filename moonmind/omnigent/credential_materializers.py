@@ -146,15 +146,45 @@ class _DockerMaterializerBackendMixin:
         # Fail closed on digest-pinned writers: the selected Host Class image
         # is immutable launch authority, and a mutable-tag fallback would grant
         # a different image read-write access to persistent OAuth credentials.
-        # A missing digest-pinned image is recovered by pulling that exact
-        # digest (immutable, so no substitution); only a pull failure or a
-        # mutable ref falls through to the previous fail-closed behavior.
+        # A missing digest-pinned image is recovered by reusing the deployment's
+        # current same-repository image when present locally (patch/SHA drift
+        # with the same major.minor), else by pulling that exact digest
+        # (immutable, so no substitution); only a pull failure or a mutable ref
+        # falls through to the previous fail-closed behavior.
         code, _, _ = await self._backend.run(
             ["docker", "image", "inspect", ref, "--format", "{{.Id}}"]
         )
         if code == 0:
             return ref
         if "@sha256:" in ref:
+            # Prefer a compatible local image over a 7GB exact pull: rebuilt
+            # images change SHA/patch while keeping major.minor. The fallback
+            # is always the deployment's currently qualified same-repo digest,
+            # never a mutable tag; downstream major.minor gates still enforce
+            # release compatibility.
+            try:
+                from moonmind.omnigent.host_image_drift import (
+                    compatible_deployed_fallback,
+                )
+
+                fallback = compatible_deployed_fallback(ref)
+            except Exception:
+                fallback = None
+            if fallback is not None:
+                fallback_code, _, _ = await self._backend.run(
+                    ["docker", "image", "inspect", fallback, "--format", "{{.Id}}"]
+                )
+                if fallback_code == 0:
+                    import logging
+
+                    logging.getLogger(__name__).info(
+                        "writer image drift: reusing compatible local image "
+                        "for same repository instead of pulling stale digest "
+                        "(requested=%s fallback=%s)",
+                        ref[:80],
+                        fallback[:80],
+                    )
+                    return fallback
             try:
                 pull_code, pull_out, pull_err = await self._backend.run(
                     ["docker", "pull", ref],
