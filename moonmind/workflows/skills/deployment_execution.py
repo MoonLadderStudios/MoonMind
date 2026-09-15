@@ -471,19 +471,24 @@ async def _probe_docker_desktop_daemon() -> bool | None:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+    except OSError:
+        result = None
+    else:
         try:
             stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
-        except BaseException:
+        except TimeoutError:
             if process.returncode is None:
                 process.kill()
-            await process.wait()
-            raise
-        if process.returncode == 0:
-            result = stdout.decode("utf-8", errors="replace").strip() == (
-                "Docker Desktop"
-            )
-    except (OSError, TimeoutError):
-        result = None
+                await process.wait()
+            result = None
+        except OSError:
+            result = None
+        else:
+            if process.returncode == 0:
+                result = (
+                    stdout.decode("utf-8", errors="replace").strip()
+                    == "Docker Desktop"
+                )
     _desktop_daemon_probe_cache[key] = result
     return result
 

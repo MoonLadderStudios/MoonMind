@@ -2220,10 +2220,9 @@ async def test_desktop_rewrite_decision_uses_daemon_signal_for_wsl(
 ):
     from unittest.mock import AsyncMock
 
-    import moonmind.workflows.skills.deployment_execution as execution
-
     monkeypatch.setattr(
-        execution, "_probe_docker_desktop_daemon", AsyncMock(return_value=probe_result)
+        "moonmind.workflows.skills.deployment_execution._probe_docker_desktop_daemon",
+        AsyncMock(return_value=probe_result),
     )
     runner = HostDockerComposeRunner(
         project_dir=project_dir, local_project_dir=str(tmp_path)
@@ -2237,10 +2236,11 @@ async def test_desktop_rewrite_requires_a_local_checkout_for_daemon_input(
 ):
     from unittest.mock import AsyncMock
 
-    import moonmind.workflows.skills.deployment_execution as execution
-
     probe = AsyncMock(return_value=True)
-    monkeypatch.setattr(execution, "_probe_docker_desktop_daemon", probe)
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.deployment_execution._probe_docker_desktop_daemon",
+        probe,
+    )
     runner = HostDockerComposeRunner(project_dir="/mnt/d/code/MoonMind")
     assert await runner._use_desktop_host_rewrite() is False
     probe.assert_not_awaited()
