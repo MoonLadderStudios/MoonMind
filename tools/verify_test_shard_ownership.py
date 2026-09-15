@@ -43,6 +43,7 @@ def reliability_shard_for_path(path: str) -> str:
         if filename in candidates:
             return RELIABILITY_SHARD_NAMES[candidates.index(filename) % RELIABILITY_SHARD_COUNT]
     except OSError:
+        # Reliability directory unreadable; fall through to hash-based sharding.
         pass
     digest = int(hashlib.md5(path.encode("utf-8")).hexdigest(), 16)
     return RELIABILITY_SHARD_NAMES[digest % RELIABILITY_SHARD_COUNT]
