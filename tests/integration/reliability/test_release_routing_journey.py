@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -158,7 +158,14 @@ async def test_schedule_recovers_when_installed_release_replaces_absent_current_
         )
         adapter = TemporalClientAdapter(client=client)
         try:
-            await adapter.trigger_schedule(definition_id=definition_id)
+            # Pin both manual triggers to one scheduled instant so Temporal
+            # derives the same occurrence ID deterministically. Wall-clock
+            # triggers straddle a second boundary and flake the same-ID
+            # assertion below with IDs like ...42Z vs ...43Z.
+            scheduled_at = datetime.now(timezone.utc)
+            await adapter.trigger_schedule(
+                definition_id=definition_id, scheduled_at=scheduled_at
+            )
             for _ in range(50):
                 actions = (await schedule.describe()).info.recent_actions
                 if actions:
@@ -168,7 +175,9 @@ async def test_schedule_recovers_when_installed_release_replaces_absent_current_
             started = client.get_workflow_handle(actions[-1].action.workflow_id)
             assert await started.result() == {"digest": current, "status": "verified"}
             first_run_id = (await started.describe()).run_id
-            await adapter.trigger_schedule(definition_id=definition_id)
+            await adapter.trigger_schedule(
+                definition_id=definition_id, scheduled_at=scheduled_at
+            )
             for _ in range(50):
                 actions = (await schedule.describe()).info.recent_actions
                 if len(actions) == 2:
