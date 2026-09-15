@@ -107,7 +107,7 @@ When writing code that interacts with skills:
 
 ## UI and Visual Changes
 
-- All dashboard styling lives in one stylesheet: `frontend/src/styles/dashboard.css`. Shared design tokens (`--mm-*`) are defined at the top in `:root` (light theme) and `.dark` (dark theme); prefer tokens overhardcoded values.
+- All dashboard styling lives in one stylesheet: `frontend/src/styles/dashboard.css`. Shared design tokens (`--mm-*`) are defined at the top in `:root` (light theme) and `.dark` (dark theme); prefer tokens over hardcoded values.
 - Brand-critical rules are pinned by `frontend/src/styles/dashboardBrand.test.ts`; update its assertions in the same change as the style change.
 - Global element rules (for example the `button` rules) cascade into components, so a control's visible style may not be fully described by its own class rule. Check the full cascade, and remember `<a>`-based and `<button>`-based controls pick up different globals.
 - The masthead/nav renders its desktop layout at `min-width: 1181px`; below that it collapses to the mobile hamburger nav. Verify desktop visuals at a viewport at least that wide.
@@ -238,7 +238,7 @@ When asked to check on a workflow, follow this procedure in order. If the root c
    docker exec moonmind-temporal-1 temporal workflow show \
      --namespace default --workflow-id "<workflow-id>" | tail -30
    ```
-   A healthy agent poll loop looks like: `ActivityTaskScheduled → Started → Completed → TimerStarted → Fired` repeating on ~10s intervals. If the last event is an `ActivityTaskScheduled` with no `Started` for minutes, the worker may be down or the task queue starved.
+   A healthy agent poll loop looks like: `ActivityTaskScheduled → Started → Completed → TimerStarted → TimerFired` repeating on ~10s intervals. If the last event is an `ActivityTaskScheduled` with no `Started` for minutes, the worker may be down or the task queue starved.
 
 4. **List workflows** when the ID is unknown or to find related runs:
    ```
