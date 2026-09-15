@@ -236,7 +236,7 @@ def test_frontend_workflow_does_not_upload_dashboard_dist() -> None:
 
 
 def test_unit_fast_physically_ignores_heavy_collection_paths() -> None:
-    command = _run_command("unit-fast", "Run selected unit suite")
+    command = _run_command("backend-matrix", "Run selected unit suite")
 
     assert "python -m pytest tests/unit \\" in command
     assert "--ignore=tests/unit/workflows/temporal" in command
@@ -246,9 +246,9 @@ def test_unit_fast_physically_ignores_heavy_collection_paths() -> None:
         '-m "unit_fast and not provider_verification and not requires_credentials"'
         in command
     )
-    assert "--junitxml=artifacts/pytest-unit-fast.xml" in command
+    assert "--junitxml=artifacts/pytest-backend-unit-fast.xml" in command
     assert "full_backend" not in command
-    unit_fast_steps = _load_workflow()["jobs"]["unit-fast"]["steps"]
+    unit_fast_steps = _load_workflow()["jobs"]["backend-matrix"]["steps"]
     assert not any(
         (step.get("uses") or "").startswith("actions/setup-node@")
         or "npm run ui:build" in (step.get("run") or "")
@@ -257,28 +257,29 @@ def test_unit_fast_physically_ignores_heavy_collection_paths() -> None:
 
 
 def test_unit_workflow_keeps_api_and_temporal_ownership() -> None:
-    api_command = _run_command("api-component", "Run API/component suite")
-    temporal_command = _run_command("temporal-boundary", "Run Temporal boundary suite")
+    api_command = _run_command("backend-matrix", "Run API/component suite")
+    temporal_command = _run_command("backend-matrix", "Run Temporal boundary suite")
 
     assert "tests/unit/api tests/unit/api_service tests/component/api" in api_command
     assert (
         '-m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials"'
         in api_command
     )
-    assert "--junitxml=artifacts/pytest-api-component.xml" in api_command
+    assert "--junitxml=artifacts/pytest-backend-api-component.xml" in api_command
 
     assert "python -m pytest tests/unit/workflows/temporal" in temporal_command
     assert (
         '-m "temporal_boundary and not slow and not provider_verification and not requires_credentials"'
         in temporal_command
     )
-    assert "--junitxml=artifacts/pytest-temporal-boundary.xml" in temporal_command
+    assert "--junitxml=artifacts/pytest-backend-temporal-boundary.xml" in temporal_command
 
 
 def test_parallel_shards_bound_hung_tests_and_spread_large_modules() -> None:
-    unit_fast = _run_command("unit-fast", "Run selected unit suite")
-    api_command = _run_command("api-component", "Run API/component suite")
-    temporal_command = _run_command("temporal-boundary", "Run Temporal boundary suite")
+    unit_fast = _run_command("backend-matrix", "Run selected unit suite")
+    api_command = _run_command("backend-matrix", "Run API/component suite")
+    temporal_command = _run_command("backend-matrix", "Run Temporal boundary suite")
+    reliability_command = _run_command("backend-matrix", "Run hermetic reliability shard")
 
     for command in (unit_fast, api_command, temporal_command):
         assert "-n auto" in command
@@ -290,6 +291,9 @@ def test_parallel_shards_bound_hung_tests_and_spread_large_modules() -> None:
     assert "--dist load " in api_command or api_command.rstrip().endswith("--dist load")
     assert "--dist loadfile" not in api_command
     assert "--dist loadfile" in temporal_command
+    # Reliability shards run serially with their own per-test bound.
+    assert "-n auto" not in reliability_command
+    assert "--timeout 600" in reliability_command
 
 
 def test_deterministic_conformance_is_selection_gated() -> None:
@@ -361,14 +365,14 @@ def test_shard_ownership_verifier_always_runs() -> None:
 
 
 def test_reliability_job_runs_the_canonical_journey_suite() -> None:
-    job = "reliability-journey-checkpoint-resume"
-    command = _run_command(job, "Run hermetic checkpoint-resume reliability journey")
+    job = "backend-matrix"
+    command = _run_command(job, "Run hermetic reliability shard")
 
-    assert "python -m pytest tests/integration/reliability" in command
+    assert "tests/integration/reliability/test_" in command or "shard_files" in command
     assert "-m reliability_journey" in command
     assert "skipping until #3145 lands" not in command
 
-    diagnostics = _run_command(job, "Collect reliability journey diagnostics")
+    diagnostics = _run_command(job, "Collect reliability shard diagnostics")
     assert "tests/integration/reliability/replays" in diagnostics
 
 
@@ -412,12 +416,9 @@ def test_ci_required_is_pure_result_aggregator() -> None:
         "select-test-suites",
         "preflight-policy",
         "moonspec-projection",
-        "unit-fast",
+        "backend-matrix",
         "unit-slow",
-        "api-component",
-        "temporal-boundary",
         "integration-ci",
-        "reliability-journey-checkpoint-resume",
         "omnigent-exact-artifact",
         "omnigent-deterministic-conformance",
         "verify-test-shard-ownership",
@@ -425,6 +426,13 @@ def test_ci_required_is_pure_result_aggregator() -> None:
         "check-generated-contracts",
     ):
         assert dependency in job["needs"]
+    for removed in (
+        "unit-fast",
+        "api-component",
+        "temporal-boundary",
+        "reliability-journey-checkpoint-resume",
+    ):
+        assert removed not in job["needs"]
 
 
 def test_ci_required_reports_all_failures_before_exiting() -> None:
@@ -444,12 +452,9 @@ def test_ci_required_reports_all_failures_before_exiting() -> None:
         "select-test-suites",
         "preflight-policy",
         "moonspec-projection",
-        "unit-fast",
+        "backend-matrix",
         "unit-slow",
-        "api-component",
-        "temporal-boundary",
         "integration-ci",
-        "reliability-journey-checkpoint-resume",
         "omnigent-exact-artifact",
         "omnigent-deterministic-conformance",
         "verify-test-shard-ownership",
@@ -498,7 +503,7 @@ def test_preflight_policy_runs_in_parallel_and_owns_policy_guards() -> None:
 
 def test_unit_fast_no_longer_duplicates_policy_checks() -> None:
     workflow = _load_workflow()
-    job = workflow["jobs"]["unit-fast"]
+    job = workflow["jobs"]["backend-matrix"]
 
     checkout = job["steps"][0]
     assert "submodules" not in checkout.get("with", {})
@@ -539,7 +544,7 @@ def test_preflight_blocks_deployment_safety_when_changed_files_are_unknown() -> 
 
 
 def test_unit_fast_initializes_moonspec_test_fixtures() -> None:
-    job = _load_workflow()["jobs"]["unit-fast"]
+    job = _load_workflow()["jobs"]["backend-matrix"]
     scripts = "\n".join(step.get("run", "") for step in job["steps"])
     assert "git submodule update --init --depth 1 -- moonspec" in scripts
 
@@ -583,3 +588,154 @@ def test_generated_contract_detector_uses_shared_helper() -> None:
     assert "tools/ci/compute_changed_files.sh" in command
     assert "tools/check_openapi_affecting_changes.sh" in command
     assert "resolution=unknown" in command
+
+
+def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> None:
+    workflow = _load_workflow()
+    assert "backend-matrix" in workflow["jobs"]
+    for removed in (
+        "unit-fast",
+        "api-component",
+        "temporal-boundary",
+        "reliability-journey-checkpoint-resume",
+    ):
+        assert removed not in workflow["jobs"], removed
+    job = workflow["jobs"]["backend-matrix"]
+    assert job["needs"] == "select-test-suites"
+    # Runs when any primary backend suite is selected; empty selection skips
+    # the matrix intentionally without instantiating tests.
+    job_if = job["if"]
+    assert "needs.select-test-suites.outputs.unit_fast" in job_if
+    assert "needs.select-test-suites.outputs.api_component" in job_if
+    assert "needs.select-test-suites.outputs.temporal_boundary" in job_if
+    assert "needs.select-test-suites.outputs.reliability_journey" in job_if
+    assert job["timeout-minutes"] == 30
+    strategy = job["strategy"]
+    # Native matrix fail-fast for PR/merge-group validation, disabled for
+    # scheduled diagnostics.
+    assert "schedule" in str(strategy["fail-fast"])
+    assert "github.event_name" in str(strategy["fail-fast"])
+    suites = [entry["suite"] for entry in strategy["matrix"]["include"]]
+    assert suites == [
+        "unit-fast",
+        "api-component",
+        "temporal-boundary",
+        "reliability-shard-1",
+        "reliability-shard-2",
+        "reliability-shard-3",
+        "reliability-shard-4",
+    ]
+    shards = [
+        entry.get("shard")
+        for entry in strategy["matrix"]["include"]
+        if entry["suite"].startswith("reliability-")
+    ]
+    assert shards == ["0", "1", "2", "3"]
+
+
+def test_backend_matrix_keeps_setup_isolated_per_row() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["backend-matrix"]
+    steps = {step["name"]: step for step in job["steps"]}
+    # Fast rows never build images or start shared services.
+    scripts = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "docker/build-push-action" not in scripts
+    assert "moonmind-python-tests:ci" not in scripts
+    # Reliability rows keep isolated Compose with per-shard project names.
+    start = steps["Start isolated reliability dependencies"]["run"]
+    assert "moonmind-reliability-${{ matrix.suite }}" in start
+    assert "tests/integration/reliability/compose.yaml up -d --wait" in start
+    assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" in start
+    assert steps["Start isolated reliability dependencies"].get("if", "").startswith(
+        "startsWith(matrix.suite, 'reliability-')"
+    )
+    cleanup = steps["Remove isolated reliability dependencies"]
+    assert cleanup["if"].startswith("always()")
+    assert "moonmind-reliability-${{ matrix.suite }}" in cleanup["run"]
+    # Only reliability rows touch Docker Compose; fast test commands do not.
+    for name in (
+        "Run selected unit suite",
+        "Run API/component suite",
+        "Run Temporal boundary suite",
+    ):
+        assert "docker compose" not in steps[name]["run"]
+        assert "compose.yaml" not in steps[name]["run"]
+
+
+def test_backend_matrix_reports_are_uniquely_named() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["backend-matrix"]
+    steps = {step["name"]: step for step in job["steps"]}
+    assert "artifacts/pytest-backend-unit-fast.xml" in steps["Run selected unit suite"]["run"]
+    assert "artifacts/pytest-backend-api-component.xml" in steps["Run API/component suite"]["run"]
+    assert (
+        "artifacts/pytest-backend-temporal-boundary.xml"
+        in steps["Run Temporal boundary suite"]["run"]
+    )
+    reliability_run = steps["Run hermetic reliability shard"]["run"]
+    assert "artifacts/pytest-backend-${{ matrix.suite }}.xml" in reliability_run
+    # Deterministic sharding matches the ownership tool's round-robin rule.
+    assert "ls tests/integration/reliability/test_*.py | sort" in reliability_run
+    assert "NR % 4" in reliability_run
+    upload = steps["Upload reliability shard diagnostics"]
+    assert upload["with"]["name"] == "pytest-${{ matrix.suite }}-diagnostics"
+    assert upload["with"]["path"] == "/tmp/pytest-${{ matrix.suite }}"
+
+
+def test_backend_matrix_records_attempted_cancellation_diagnostics() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["backend-matrix"]
+    steps = {step["name"]: step for step in job["steps"]}
+    record = steps["Record backend-matrix cancellation diagnostics"]
+    assert "failure()" in record["if"] and "cancelled()" in record["if"]
+    assert "attempted-cancellation" in record["run"]
+    upload = steps["Upload backend-matrix cancellation diagnostics"]
+    assert "failure()" in upload["if"] and "cancelled()" in upload["if"]
+    assert upload["with"]["name"] == "backend-matrix-${{ matrix.suite }}-cancellation"
+    collect = steps["Collect reliability shard diagnostics"]
+    assert "failure()" in collect["if"] and "cancelled()" in collect["if"]
+
+
+def test_backend_matrix_rows_are_selection_gated() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["backend-matrix"]
+    steps = {step["name"]: step for step in job["steps"]}
+    assert (
+        steps["Run selected unit suite"]["if"]
+        == "matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'"
+    )
+    assert (
+        steps["Run API/component suite"]["if"]
+        == "matrix.suite == 'api-component' && needs.select-test-suites.outputs.api_component == 'true'"
+    )
+    assert (
+        steps["Run Temporal boundary suite"]["if"]
+        == "matrix.suite == 'temporal-boundary' && needs.select-test-suites.outputs.temporal_boundary == 'true'"
+    )
+    assert (
+        steps["Run hermetic reliability shard"]["if"]
+        == "startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'"
+    )
+
+
+def test_ci_required_consumes_backend_matrix_aggregate() -> None:
+    workflow = _load_workflow()
+    job = workflow["jobs"]["ci-required"]
+    assert "backend-matrix" in job["needs"]
+    script = "\n".join(step.get("run", "") for step in job["steps"])
+    assert 'require_selected "backend-matrix"' in script
+    assert "needs.backend-matrix.result" in script
+    # Selection derives from all four primary selector outputs.
+    assert "needs.select-test-suites.outputs.unit_fast" in script
+    assert "needs.select-test-suites.outputs.api_component" in script
+    assert "needs.select-test-suites.outputs.temporal_boundary" in script
+    assert "needs.select-test-suites.outputs.reliability_journey" in script
+    # Never consume last-writer matrix outputs as per-row evidence.
+    assert "needs.backend-matrix.outputs" not in script
+    for removed in (
+        'require_selected "unit-fast"',
+        'require_selected "api-component"',
+        'require_selected "temporal-boundary"',
+        'require_selected "reliability-journey-checkpoint-resume"',
+    ):
+        assert removed not in script
