@@ -42,6 +42,41 @@ def test_ci_test_suite_is_the_only_integration_ci_workflow() -> None:
     assert not STANDALONE_INTEGRATION_PATH.exists()
 
 
+def test_reliability_budgets_and_evidence_4365() -> None:
+    """MoonLadderStudios/MoonMind#4365: short budgets, every-run evidence."""
+    workflow = _load_workflow()
+    job = workflow["jobs"]["backend-matrix"]
+    steps = {step["name"]: step for step in job["steps"]}
+
+    # Short reliability budgets: 12-minute job ceiling, 8-minute test step.
+    assert job["timeout-minutes"] == 12
+    reliability_run = steps["Run hermetic reliability shard"]["run"]
+    assert "timeout 480s python -m pytest" in reliability_run
+    assert "--timeout 180" in reliability_run
+
+    # Every-run evidence: fault-lab upload and reliability diagnostics run
+    # on always(); heavy compose logs stay failure-gated inside the script.
+    faultlab = steps["Upload generated fault-lab diagnostics"]
+    assert faultlab["if"].startswith("always()")
+    upload = steps["Upload reliability shard diagnostics"]
+    assert upload["if"].startswith("always()")
+
+    # Dependency-layer reuse without shared mutable state (#4376): the pip
+    # cache covers reliability rows with a content-derived key while each
+    # shard keeps its own isolated Compose project/network.
+    cache = steps["Cache pip dependencies"]
+    assert "reliability-" in cache["if"]
+    assert "hashFiles('**/pyproject.toml')" in cache["with"]["key"]
+    start = steps["Start isolated reliability dependencies"]["run"]
+    assert "moonmind-reliability-${{ matrix.suite }}" in start
+
+    # Slow unit evidence is retained on every run, not only on failure.
+    slow_steps = {step["name"]: step for step in workflow["jobs"]["unit-slow"]["steps"]}
+    slow_upload = slow_steps["Upload slow unit evidence"]
+    assert slow_upload["if"] == "always()"
+    assert slow_upload["with"]["path"] == "artifacts/pytest-unit-slow.xml"
+
+
 def test_ci_test_suite_selects_integration_ci_for_required_events() -> None:
     workflow = _load_workflow()
 
@@ -291,9 +326,13 @@ def test_parallel_shards_bound_hung_tests_and_spread_large_modules() -> None:
     assert "--dist load " in api_command or api_command.rstrip().endswith("--dist load")
     assert "--dist loadfile" not in api_command
     assert "--dist loadfile" in temporal_command
-    # Reliability shards run serially with their own per-test bound.
+    # Reliability shards run serially with short per-test and test-step
+    # bounds (MoonLadderStudios/MoonMind#4369): a hung journey fails its own
+    # shard inside 180s per test / 480s per step instead of running to the
+    # job timeout.
     assert "-n auto" not in reliability_command
-    assert "--timeout 600" in reliability_command
+    assert "--timeout 180" in reliability_command
+    assert "timeout 480s python -m pytest" in reliability_command
 
 
 def test_deterministic_conformance_is_selection_gated() -> None:
@@ -609,7 +648,7 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     assert "needs.select-test-suites.outputs.api_component" in job_if
     assert "needs.select-test-suites.outputs.temporal_boundary" in job_if
     assert "needs.select-test-suites.outputs.reliability_journey" in job_if
-    assert job["timeout-minutes"] == 30
+    assert job["timeout-minutes"] == 12
     strategy = job["strategy"]
     # Native matrix fail-fast for PR/merge-group validation, disabled for
     # scheduled diagnostics.
@@ -674,9 +713,9 @@ def test_backend_matrix_reports_are_uniquely_named() -> None:
     )
     reliability_run = steps["Run hermetic reliability shard"]["run"]
     assert "artifacts/pytest-backend-${{ matrix.suite }}.xml" in reliability_run
-    # Deterministic sharding matches the ownership tool's round-robin rule.
-    assert "ls tests/integration/reliability/test_*.py | sort" in reliability_run
-    assert "NR % 4" in reliability_run
+    # Duration-balanced sharding matches the ownership tool's LPT partition.
+    assert "tools/ci/partition_reliability_shards.py --shard" in reliability_run
+    assert "NR % 4" not in reliability_run
     upload = steps["Upload reliability shard diagnostics"]
     assert upload["with"]["name"] == "pytest-${{ matrix.suite }}-diagnostics-attempt-${{ github.run_attempt }}"
     assert upload["with"]["path"] == "/tmp/pytest-${{ matrix.suite }}"
@@ -693,7 +732,11 @@ def test_backend_matrix_records_attempted_cancellation_diagnostics() -> None:
     assert "failure()" in upload["if"] and "cancelled()" in upload["if"]
     assert upload["with"]["name"] == "backend-matrix-${{ matrix.suite }}-cancellation-attempt-${{ github.run_attempt }}"
     collect = steps["Collect reliability shard diagnostics"]
-    assert "failure()" in collect["if"] and "cancelled()" in collect["if"]
+    # Every-run lightweight evidence with failure-only heavy logs
+    # (MoonLadderStudios/MoonMind#4371): always collect, bound each command,
+    # never replace the original test outcome.
+    assert collect["if"].startswith("always()")
+    assert "test step succeeded; skipping compose log dump" in collect["run"]
 
 
 def test_backend_matrix_rows_are_selection_gated() -> None:

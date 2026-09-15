@@ -214,17 +214,19 @@ jobs:
     # Per-row setup stays isolated: fast rows never build images or start
     # Compose services; each reliability shard starts its own isolated
     # Compose PostgreSQL/Temporal/MinIO under its own Docker project name.
-    # Per-test (--timeout 600), job (timeout-minutes: 30) and cleanup
-    # (always() compose down) bounds are preserved; each row writes a
-    # uniquely named junit report and attempted cancellation diagnostics.
+    # Per-test (--timeout 600 on fast rows, --timeout 180 on reliability
+    # rows), test-step (reliability pytest wrapped in `timeout 480s`), job
+    # (timeout-minutes: 12) and cleanup (always() compose down) bounds are
+    # preserved; each row writes a uniquely named junit report and
+    # attempted cancellation diagnostics.
     needs: select-test-suites
     if: >-
       needs.select-test-suites.outputs.unit_fast == 'true' ||
       needs.select-test-suites.outputs.api_component == 'true' ||
       needs.select-test-suites.outputs.temporal_boundary == 'true' ||
-      needs.select-test-suites.outputs.reliability_journey == 'true'
+       needs.select-test-suites.outputs.reliability_journey == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 12
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
       matrix:
@@ -266,7 +268,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libcairo2-dev pkg-config
       - name: Cache pip dependencies
-        if: matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
+        # MoonLadderStudios/MoonMind#4376: read-only dependency-layer reuse
+        # for the warm rows. The cache key is content-derived
+        # (pyproject.toml); each reliability shard keeps its own isolated
+        # Compose project and Docker network, so no mutable release state
+        # is shared between shards. No custom cache subsystem: native
+        # GitHub Actions caching plus the runner Docker layer cache supply
+        # the reuse.
+        if: (matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true') || (startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true')
         uses: actions/cache@v6
         with:
           path: ~/.cache/pip
@@ -364,22 +373,26 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           shard="${{ matrix.shard }}"
-          case "$shard" in
-            0) filter='NR % 4 == 1' ;;
-            1) filter='NR % 4 == 2' ;;
-            2) filter='NR % 4 == 3' ;;
-            3) filter='NR % 4 == 0' ;;
-            *) echo "::error::unknown reliability shard $shard" >&2; exit 1 ;;
-          esac
-          mapfile -t shard_files < <(ls tests/integration/reliability/test_*.py | sort | awk "$filter")
+          # Duration-balanced assignment (MoonLadderStudios/MoonMind#4367):
+          # the same longest-processing-time partition the ownership
+          # verifier enforces, so CI executes each file in its owned shard.
+          # Timing hints are an optimization hint only; new files still run
+          # exactly once via the default weight.
+          mapfile -t shard_files < <(python3 tools/ci/partition_reliability_shards.py --shard "$shard")
           echo "Reliability shard ${{ matrix.suite }} runs ${#shard_files[@]} files"
           test_start=$SECONDS
           set +e
-          python -m pytest "${shard_files[@]}" \
+          # Short reliability budgets (MoonLadderStudios/MoonMind#4369):
+          # 180s per-test and an 8-minute test-step ceiling keep a hung
+          # journey inside its shard instead of running to the job timeout.
+          timeout 480s python -m pytest "${shard_files[@]}" \
             -m reliability_journey \
-            -vv --tb=short --durations=25 --timeout 600 \
+            -vv --tb=short --durations=25 --timeout 180 \
             --junitxml=artifacts/pytest-backend-${{ matrix.suite }}.xml 2>&1 | tee artifacts/pytest-backend-${{ matrix.suite }}.log
           status=${PIPESTATUS[0]}
+          if [[ $status -eq 124 ]]; then
+            echo "::error::reliability shard ${{ matrix.suite }} exceeded its 8-minute test-step budget"
+          fi
           echo $((SECONDS - test_start)) > "/tmp/backend-${{ matrix.suite }}-test-seconds.txt" || true
           exit $status
       - name: Write backend-matrix evidence summary
@@ -443,7 +456,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Upload generated fault-lab diagnostics
-        if: failure() && matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
+        if: always() && matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: faultlab-generated-diagnostics-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
@@ -451,13 +464,22 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Collect reliability shard diagnostics
-        if: (failure() || cancelled()) && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
+        if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         run: |
           set -uo pipefail
           mkdir -p /tmp/pytest-${{ matrix.suite }}
           echo "collection started" > /tmp/pytest-${{ matrix.suite }}/collection-status.txt
-          timeout 100s docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml logs --no-color > /tmp/pytest-${{ matrix.suite }}/dependencies.log 2>&1 \
-            || echo "compose logs failed or timed out (exit=$?)" > /tmp/pytest-${{ matrix.suite }}/dependencies.log
+          # Every-run lightweight evidence (MoonLadderStudios/MoonMind#4371):
+          # junit/log/slowest/durations copies are always retained. The
+          # heavier Compose logs run only after a failure/cancellation and
+          # stay bounded so diagnostics cannot stall the row or overwrite
+          # the original test outcome.
+          if [[ "${{ steps.run-reliability.outcome }}" == "success" ]]; then
+            echo "test step succeeded; skipping compose log dump (lightweight evidence only)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
+          else
+            timeout 100s docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml logs --no-color > /tmp/pytest-${{ matrix.suite }}/dependencies.log 2>&1 \
+              || echo "compose logs failed or timed out (exit=$?)" > /tmp/pytest-${{ matrix.suite }}/dependencies.log
+          fi
           for known in "artifacts/pytest-backend-${{ matrix.suite }}.xml" "artifacts/pytest-backend-${{ matrix.suite }}.log" "artifacts/pytest-backend-${{ matrix.suite }}-slowest.txt" "artifacts/pytest-backend-${{ matrix.suite }}-durations.json"; do
             if [[ -e "$known" ]]; then
               cp --parents "$known" /tmp/pytest-${{ matrix.suite }}/ 2>/dev/null \
@@ -474,12 +496,12 @@ jobs:
             || echo "scoped manifest copy failed or timed out (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
           echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > /tmp/pytest-${{ matrix.suite }}/cancellation-context.txt
       - name: Upload reliability shard diagnostics
-        if: (failure() || cancelled()) && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
+        if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: pytest-${{ matrix.suite }}-diagnostics-attempt-${{ github.run_attempt }}
           path: /tmp/pytest-${{ matrix.suite }}
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
       - name: Record backend-matrix cancellation diagnostics
         if: (failure() || cancelled())
@@ -560,10 +582,19 @@ jobs:
       - name: Run slow unit suite
         run: |
           set -euo pipefail
+          mkdir -p artifacts
           python -m pytest tests/unit \
             -m "slow and not provider_verification and not requires_credentials and not integration" \
             -q --durations=50 \
             --junitxml=artifacts/pytest-unit-slow.xml
+      - name: Upload slow unit evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-unit-slow-attempt-${{ github.run_attempt }}
+          path: artifacts/pytest-unit-slow.xml
+          if-no-files-found: warn
+          retention-days: 7
 
   integration-ci:
     needs: select-test-suites

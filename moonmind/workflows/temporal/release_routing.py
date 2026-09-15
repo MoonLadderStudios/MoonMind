@@ -20,6 +20,15 @@ from temporalio.service import RPCError, RPCStatusCode
 logger = logging.getLogger(__name__)
 
 
+# Module-scoped time indirection for the routing-aging waits below
+# (MoonLadderStudios/MoonMind#4374). Production resolves these to the real
+# asyncio.sleep/time.monotonic; tests replace them with a fake clock through
+# narrowly scoped monkeypatching of this module only -- never a global
+# asyncio.sleep or clock patch that would also affect Temporal machinery.
+_routing_sleep = asyncio.sleep
+_routing_monotonic = time.monotonic
+
+
 async def routing_snapshot(client, deployment: str):
     return await client.workflow_service.describe_worker_deployment(
         DescribeWorkerDeploymentRequest(
@@ -199,7 +208,7 @@ async def await_registered_queues(
         except RPCError as exc:
             if exc.status != RPCStatusCode.NOT_FOUND:
                 raise
-        await asyncio.sleep(1)
+        await _routing_sleep(1)
     raise RuntimeError(
         "Temporal did not register every candidate workflow and Activity queue"
     )
@@ -399,7 +408,7 @@ async def _await_no_live_pollers(client, version: str) -> dict | None:
     unregisters mid-watch.
     """
     observation = None
-    deadline = time.monotonic() + _ROUTE_DEATH_TIMEOUT_SECONDS
+    deadline = _routing_monotonic() + _ROUTE_DEATH_TIMEOUT_SECONDS
     while True:
         try:
             observation = await version_availability(client, version)
@@ -407,9 +416,9 @@ async def _await_no_live_pollers(client, version: str) -> dict | None:
             if exc.status != RPCStatusCode.NOT_FOUND:
                 raise
             return None
-        if not _has_live_pollers(observation) or time.monotonic() >= deadline:
+        if not _has_live_pollers(observation) or _routing_monotonic() >= deadline:
             return observation
-        await asyncio.sleep(_ROUTE_DEATH_POLL_SECONDS)
+        await _routing_sleep(_ROUTE_DEATH_POLL_SECONDS)
 
 
 async def steward_abandoned_routing(
