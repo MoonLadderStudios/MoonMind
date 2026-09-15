@@ -120,6 +120,9 @@ async def journey(tmp_path, monkeypatch, request):
                     "body": payload["body"],
                     "user": state.get("actor", {"id": 123, "login": "fixture-owner"}),
                     "author_association": "COLLABORATOR",
+                    # GitHub always timestamps a comment; reservation policy
+                    # reads announcement time from this field, never locally.
+                    "created_at": state.get("created_at", "2026-09-01T00:00:00Z"),
                 }
                 issue_state["comments"].append(comment)
                 if state["lost_ack"]:
@@ -474,12 +477,16 @@ async def test_search_skips_remote_contender_before_authorizing_announcement(
         assert retained is None
     if when == "before_selection":
         evidence = result.outputs["searchEvidence"]
-        assert evidence["rejectionCounts"]["active_attempt_conflict"] == 1
+        assert evidence["rejectionCounts"]["live_reservation"] == 1
         rejected = evidence["rejectedCandidates"][0]
         assert rejected["issueNumber"] == 3970
         assert rejected["claimEvidence"]["attempts"][0]["workflowId"] == old_owner
+        assert (
+            rejected["claimEvidence"]["attempts"][0]["reservationStatus"]
+            == "live_reservation"
+        )
         if not eligible_successor:
-            assert "unresolved attempt" in result.outputs["summary"]
+            assert "reserved by another attempt" in result.outputs["summary"]
             assert "selectedIssueAuthor" not in evidence
 
 
