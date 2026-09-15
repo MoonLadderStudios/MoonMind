@@ -4,14 +4,7 @@ MoonMind is a single-user application for secure, resilient, observable automati
 
 ## Read Documentation
 
-Read relevant documents in the following order before implementing tasks:
-
-1. **Project guidance:** this `AGENTS.md` file for MoonMind principles, non-negotiable constraints, testing discipline, and repo-specific agent rules.
-2. **Standards:** Code style and guidance in `README.md`.
-3. **Docs:** `docs/*.md` as needed for system architecture (see **Documentation: canonical vs feature artifacts** below).
-   - Start here for Agent Skills: `docs/Steps/SkillSystem.md`
-   - For Executable Tools: `docs/Workflows/SkillAndPlanContracts.md`
-   - For Runtime boundaries: `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+Before implementation, check `docs/` for relevant documents and read any that apply.
 
 ## MoonMind Principles
 
@@ -22,7 +15,6 @@ These principles govern design decisions. When a subsystem specification or issu
 - **Orchestrate, don't recreate agents.** Reuse provider-maintained capabilities through thin adapters and existing interfaces. Keep harness-specific details out of shared orchestration. Portability comes from replaceable boundaries and portable data, not maintaining several implementations of the same runtime responsibilities indefinitely.
 - **Loosely couple versions.** Judge interoperability by the interfaces and capabilities an operation actually needs, not equality of source SHAs, image digests, or patch versions. Build and patch changes alone must not break compatibility. Do not replace exact matching with blanket major/minor equality or another compatibility fingerprint. Preserve artifact integrity and reject actual unsupported behavior at its owning boundary.
 - **Preserve intent across system boundaries.** Carry the requested outcome and its constraints through planning, delegation, retries, recovery, and updates. Implementation details and temporary system state must not silently redefine the task, weaken its permissions, or invalidate verified progress. Adapt the mechanism to preserve the request, not the request to preserve the mechanism. Resolve genuine uncertainty about intent or authority rather than guessing.
-- **Security protects real boundaries.** Protect operator access, credentials, workspaces, Docker, network access, publication, and destructive operations at the boundaries controlling those resources. Uncertain authorization stops the affected action. Stale discovery or deployment metadata is not automatically an authorization failure. Never recover by silently changing accounts, billing-relevant choices, source or publication intent, or weakening isolation. A denial must not erase saved work or disable authorized diagnostics.
 - **Recover before failing.** Before failing, MoonMind should try to use agentic intelligence to recover unless the recovery would violate the intention of the workflow. Use ordinary retry and reconciliation for ordinary transient failures, with bounded agentic diagnosis when adaptation is needed. Preserve useful progress, reconcile uncertain effects before repeating them, and expose recovery progress and budget exhaustion. Do not accumulate incident-specific fallbacks or endless waits.
 - **Saved work outlives its host.** Checkpoints preserve content and accepted progress independently of the original container and expired runtime credentials. Distinguish live-session reattachment from restoration into a new authorized runtime. Preserve content integrity and safe restoration, and never delete the only recoverable copy before durable preservation succeeds. Auxiliary reporting or cleanup failures must not overwrite the primary outcome.
 - **Observability survives execution failure.** Authorized reads of recorded status, errors, logs, transcripts, and checkpoints must not require a healthy agent, native chat, or successful launch qualification. Record useful progress and errors at their source, preserve the original failure, and show partial or unavailable data honestly. A broken runtime must not blank the workflow detail page. Basic diagnostics must not depend on an LLM.
