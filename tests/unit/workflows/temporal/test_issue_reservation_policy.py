@@ -103,8 +103,8 @@ async def test_announced_reservation_carries_the_short_preparing_deadline(journe
         handoff.lease_renewed_at
     )
     assert handoff.activity == "preparing"
-    assert window == leases.PREPARING_LEASE_DURATION
-    assert window < leases.LEASE_DURATION
+    assert window == leases.lease_duration_for("preparing")
+    assert window == timedelta(minutes=5) < leases.LEASE_DURATION
 
 
 @pytest.mark.asyncio

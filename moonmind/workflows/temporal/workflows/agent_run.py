@@ -1121,6 +1121,11 @@ class MoonMindAgentRun:
     def __init__(self):
         self.completion_event = asyncio.Event()
         self.slot_assigned_event = asyncio.Event()
+        # True only while this run is queued for provider/host capacity it has
+        # requested but not been granted. An issue reservation is not renewed
+        # during that wait: the run has started no work, so holding the issue
+        # behind a queue this deployment cannot drain helps nobody.
+        self._capacity_requested = False
         self.run_status = RunStatus.queued
         self.final_result: AgentRunResult | None = None
         # MoonLadderStudios/MoonMind#1088: deterministic emitter state for
@@ -4334,6 +4339,7 @@ class MoonMindAgentRun:
         for attempt in range(2):
             try:
                 await manager_handle.signal("request_slot", signal_payload)
+                self._capacity_requested = True
                 return manager_handle
             except ApplicationError as exc:
                 if "ExternalWorkflowExecutionNotFound" not in (
@@ -6709,6 +6715,10 @@ class MoonMindAgentRun:
         }
         return AgentRunStatusModel(**payload)
 
+    def _capacity_blocked(self) -> bool:
+        """Queued for capacity this run asked for and has not been granted."""
+        return self._capacity_requested and not self.slot_assigned_event.is_set()
+
     @workflow.run
     async def run(self, request: AgentExecutionRequest) -> AgentRunResult:
         lease = request.parameters.get("issueClaimLease")
@@ -6727,7 +6737,7 @@ class MoonMindAgentRun:
                 execute=lambda: self._run_under_claim(request), renew=renew,
                 # A run queued behind unavailable provider/host capacity has
                 # not started work; it must not keep the issue reserved.
-                should_renew=lambda: self.slot_assigned_event.is_set())
+                should_renew=lambda: not self._capacity_blocked())
         return await self._run_under_claim(request)
 
     async def _run_under_claim(self, request: AgentExecutionRequest) -> AgentRunResult:

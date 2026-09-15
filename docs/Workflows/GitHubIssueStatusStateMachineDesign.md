@@ -136,12 +136,12 @@ Progress updates are coalesced and rate-bounded rather than emitted on every run
 
 | Reservation phase | Deadline | Renewal |
 | --- | --- | --- |
-| Preparing (announced, execution not started) | 5 minutes | every minute |
+| Preparing (announced, execution not started) | 5 minutes | at one sixth of the running cadence |
 | Running (active or awaiting review) | 30 minutes | every 5 minutes |
 | Waiting for unavailable local capacity | not renewed | the reservation lapses and the issue returns to assessment |
 | Execution ends | renewal stops | the reservation is relinquished promptly |
 
-These are policy choices, not measured optima. The short announcement deadline exists because the gap between selection and dispatch is where a deployment most often dies while holding an issue; five minutes bounds that cost. A deployment queued behind unavailable capacity does not renew: holding the backlog behind a queue it cannot drain is worse than releasing the issue and backing off. The renewal is maintained in the same attempt comment. Participants maintain synchronized UTC clocks; the owner begins cancellation one minute before its last confirmed expiry to allow for bounded request latency and clock skew. This margin is cooperative protection, not a fence against delayed or nonparticipating writers.
+These are policy choices, not measured optima. The announcement deadline is one sixth of the running lease, so shortening one shortens both and the two phases cannot drift apart. The short announcement deadline exists because the gap between selection and dispatch is where a deployment most often dies while holding an issue; five minutes bounds that cost. A deployment queued behind unavailable capacity does not renew: holding the backlog behind a queue it cannot drain is worse than releasing the issue and backing off. The renewal is maintained in the same attempt comment. Participants maintain synchronized UTC clocks; the owner begins cancellation one minute before its last confirmed expiry to allow for bounded request latency and clock skew. This margin is cooperative protection, not a fence against delayed or nonparticipating writers.
 
 The trusted brief carries the exact owner, attempt, repository, issue, and comment identity into `AgentExecutionRequest.parameters.issueClaimLease`. The canonical `MoonMind.AgentRun` entrypoint confirms this identity against its own durable receipt and GitHub before launch, then owns renewal across managed and external runtimes. Renewal failure retries only inside the last confirmed lease. Loss of authority invokes the runtime's existing cancellation, preservation, and cleanup owner. Parent integration execution uses the same guard. Requests recorded without a lease retain their historical execution path.
 

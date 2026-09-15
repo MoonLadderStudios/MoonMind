@@ -229,7 +229,10 @@ async def test_startup_installs_automatic_recovery_and_restart_releases_claim(
             monkeypatch.setattr(settings.workflow, "github_repository", "example/repo")
             monkeypatch.setattr(service, "probe_token", AsyncMock(return_value={"repositoryAccessible": True}))
             now = leases.utc_now()
-            monkeypatch.setattr(leases, "utc_now", lambda: now + timedelta(minutes=10))
+            # The failed run announced its attempt and died before execution
+            # started, so the announcement deadline governs, not the longer
+            # running lease. Inside it, a foreign consumer must not reclaim.
+            monkeypatch.setattr(leases, "utc_now", lambda: now + timedelta(minutes=2))
             state["actor"] = {"id": 456, "login": "independent-consumer"}
             foreign_original = state["comments"][0]["body"]
 
@@ -304,7 +307,7 @@ async def test_startup_installs_automatic_recovery_and_restart_releases_claim(
                 assert state["labels"] == ["status: in-progress"]
                 assert state["comments"][0]["body"] == foreign_original
                 assert not recovered.is_set()
-                monkeypatch.setattr(leases, "utc_now", lambda: now + timedelta(minutes=31))
+                monkeypatch.setattr(leases, "utc_now", lambda: now + timedelta(minutes=6))
             await asyncio.wait_for(recovered.wait(), timeout=45)
             assert (await store.get(receipt.owner)).released is not foreign
             if foreign:
