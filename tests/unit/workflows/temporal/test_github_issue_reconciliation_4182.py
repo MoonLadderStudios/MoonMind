@@ -95,6 +95,9 @@ class FakeGitHubService:
     async def resolve_github_token(self, explicit_token=None, *, repo=None):
         return "fake-token", None
 
+    async def issue_claim_actor(self, *, repo: str) -> dict[str, Any]:
+        return {"ok": True, "actorId": "42"}
+
     async def get_issue(self, *, repo: str, issue_number: int) -> dict[str, Any]:
         if self.read_issue_result is not None:
             return dict(self.read_issue_result)
@@ -332,8 +335,8 @@ def test_reconciler_never_rewrites_attempt_comments_and_coalesces() -> None:
 @pytest.mark.asyncio
 async def test_two_reconciler_runs_produce_one_observation(tmp_path) -> None:
     service = FakeGitHubService(
-        issues={11: _issue("status: in-progress")},
-        comments={11: []},
+        issues={11: _issue("status: in-progress", "status: needs-attention")},
+        comments={11: [_handoff_body()]},
     )
     kwargs: dict[str, Any] = {"repository": REPO, "issue_numbers": [11], "state_dir": str(tmp_path), "service": service}
     first = await acts.reconcile_github_issue_handoffs(**kwargs)
@@ -345,6 +348,30 @@ async def test_two_reconciler_runs_produce_one_observation(tmp_path) -> None:
     # Only targeted single-label ops; no whole-set replacement exists.
     for _, labels in service.added:
         assert len(labels) == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_status_label_without_attempt_evidence_is_reclaimed(tmp_path) -> None:
+    """An advisory label alone is bookkeeping, not ownership.
+
+    The protocol always announces its attempt comment before applying the
+    label, so a label with no attempt evidence at all is left-over bookkeeping.
+    It returns the issue to assessment instead of demanding an operator.
+    """
+    service = FakeGitHubService(
+        issues={11: _issue("status: in-progress")},
+        comments={11: []},
+    )
+    result = await acts.reconcile_github_issue_handoffs(
+        repository=REPO, issue_numbers=[11], state_dir=str(tmp_path), service=service
+    )
+    outcome = result["results"][0]
+    assert outcome["action"] == recon.ACTION_COMPLETE
+    assert outcome["reasonCode"] == "stale_status_label"
+    assert service.removed == [(11, "status: in-progress")]
+    # No operator is summoned and no attempt history is invented.
+    assert service.created == []
+    assert service.added == []
 
 
 # -- Acceptance: uncertainty preserved across failure modes --------------------

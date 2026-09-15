@@ -10,8 +10,15 @@ RENEW_SECONDS = 300
 STOP_MARGIN_SECONDS = 60
 
 
-async def execute_with_issue_lease(*, lease, execute, renew):
-    """All runtimes use their existing cancellation and preservation owner."""
+async def execute_with_issue_lease(*, lease, execute, renew, should_renew=None):
+    """All runtimes use their existing cancellation and preservation owner.
+
+    ``should_renew`` reports whether this deployment currently holds the local
+    capacity the reservation was acquired for. Waiting for unavailable capacity
+    must not keep an issue reserved: the lease simply lapses, the issue returns
+    to assessment for anyone, and this deployment backs off instead of holding
+    the backlog behind a queue it cannot drain.
+    """
     expires = None
 
     async def refresh():
@@ -59,6 +66,11 @@ async def execute_with_issue_lease(*, lease, execute, renew):
                     "GitHub issue claim lease expired", non_retryable=True
                 )
             await workflow.sleep(min(delay, remaining))
+            if should_renew is not None and not should_renew():
+                # Queued behind unavailable local capacity: stop renewing and
+                # let the reservation lapse on its own deadline.
+                delay = min(30, remaining)
+                continue
             delay = RENEW_SECONDS if await refresh() else min(30, remaining)
 
     execution = asyncio.create_task(execute())

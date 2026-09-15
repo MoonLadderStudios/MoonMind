@@ -1562,8 +1562,25 @@ class RecurringWorkflowsService:
             self._record_trigger_observation(run, observation)
         except Exception:
             # The service may have accepted a request whose acknowledgement was
-            # lost. The observation owner resumes this exact identity on restart.
-            logger.warning("Manual trigger observation pending for %s", run.id)
+            # lost. Take one immediate read-only observation for this exact
+            # identity before leaving the row pending: if Temporal accepted
+            # the trigger, adopt its evidence now instead of waiting for the
+            # background sweep. Never resubmit the trigger here.
+            logger.warning(
+                "Manual trigger observation pending for %s", run.id, exc_info=True
+            )
+            try:
+                observation = await self._adapter.observe_schedule_trigger(
+                    definition_id=definition.id,
+                    scheduled_at=run.scheduled_for,
+                )
+                self._record_trigger_observation(run, observation)
+            except Exception:
+                logger.warning(
+                    "Manual trigger evidence unavailable for %s",
+                    run.id,
+                    exc_info=True,
+                )
         definition.last_scheduled_for = run.scheduled_for
         definition.last_dispatch_status = run.outcome.value
         definition.last_dispatch_error = None
@@ -1619,7 +1636,11 @@ class RecurringWorkflowsService:
                     )
                 self._record_trigger_observation(run, observation)
             except Exception:
-                logger.warning("Manual trigger evidence unavailable for %s", run.id)
+                logger.warning(
+                    "Manual trigger evidence unavailable for %s",
+                    run.id,
+                    exc_info=True,
+                )
             if (
                 run.outcome == RecurringWorkflowRunOutcome.PENDING_DISPATCH
                 and now >= _coerce_utc(run.created_at) + timedelta(minutes=5)

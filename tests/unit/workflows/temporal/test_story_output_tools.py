@@ -381,9 +381,16 @@ async def test_load_github_issue_preset_brief_uses_requested_artifact_path(
 
 
 @pytest.mark.asyncio
-async def test_load_github_issue_preset_brief_rejects_direct_in_progress_load(
+async def test_direct_load_reassesses_a_status_label_with_no_attempt_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    """An advisory label is bookkeeping, not ownership.
+
+    The protocol announces its attempt comment before applying the label, so a
+    label with no attempt evidence behind it prompts reassessment rather than
+    rejecting the issue. A live reservation still rejects it; that path is
+    covered by the claim-evidence journeys.
+    """
     monkeypatch.setattr(story_tools.httpx, "AsyncClient", _FakeHttpClient)
     service = _FakeGitHubService()
     _fake_issue_entry("MoonLadderStudios/MoonMind", 1067)["labels"] = [
@@ -398,8 +405,13 @@ async def test_load_github_issue_preset_brief_rejects_direct_in_progress_load(
         github_service_factory=lambda: service,
     )
 
-    assert result.status == "FAILED"
-    assert "lifecycle admission" in result.outputs["error"]
+    assert result.status == "COMPLETED", result.outputs
+    assert result.outputs["issue"]["number"] == 1067
+    assert {
+        "repo": "MoonLadderStudios/MoonMind",
+        "issue_number": 1067,
+        "label": "status: in-progress",
+    } in service.removed_labels
 
 
 @pytest.mark.asyncio

@@ -151,6 +151,31 @@ async def _closed_execution_tree(client, receipt, now):
         initiated = {}
         settled_starts = set()
         shared_effects = set()
+        shared_started = set()
+        def _scheduled_id(attrs, *names):
+            for name in names:
+                value = getattr(attrs, name, None)
+                if value:
+                    return value
+            return None
+
+        def _terminal_scheduled_id(event, *field_names):
+            for field_name in field_names:
+                try:
+                    if not event.HasField(field_name):
+                        continue
+                except Exception:
+                    continue
+                attrs = getattr(event, field_name, None)
+                if attrs is None:
+                    continue
+                scheduled_id = _scheduled_id(
+                    attrs, "scheduled_event_id", "scheduled_eventId"
+                )
+                if scheduled_id:
+                    return scheduled_id
+            return None
+
         async for event in handle.fetch_history_events(page_size=500):
             total_events += 1
             if total_events > MAX_HISTORY_EVENTS:
@@ -189,6 +214,24 @@ async def _closed_execution_tree(client, receipt, now):
                 shared_effects.discard(
                     event.activity_task_completed_event_attributes.scheduled_event_id
                 )
+            started_id = _terminal_scheduled_id(
+                event, "activity_task_started_event_attributes"
+            )
+            if started_id:
+                shared_started.add(started_id)
+            for terminal_field in (
+                "activity_task_timed_out_event_attributes",
+                "activity_task_cancelled_event_attributes",
+                "activity_task_canceled_event_attributes",
+            ):
+                terminal_id = _terminal_scheduled_id(event, terminal_field)
+                if terminal_id and terminal_id not in shared_started:
+                    # Scheduled but never started: a schedule-to-start timeout
+                    # (for example renew_claim waiting for an unavailable
+                    # worker) proves no activity code ran, so it cannot hold
+                    # shared-mutation uncertainty. Activities that started
+                    # before timing out or canceling may still have executed.
+                    shared_effects.discard(terminal_id)
         if set(initiated) - settled_starts:
             raise ValueError("child_start_unsettled")
         if shared_effects:
@@ -281,12 +324,12 @@ async def _runtime_no_work(store, agents, receipt, service):
     if uncovered:
         # No binding row covers these agents: an Omnigent run that failed
         # before binding creation, or a managed/external run whose runtime
-        # never writes this table. Fall back to the durable slot-lease
-        # ledger — the same authority the ProviderProfileManager uses for
-        # crash recovery — instead of stranding the claim forever. A closed
-        # run with no unreleased lease owns no provider capacity requiring
-        # MoonMind cleanup, and with no binding row there is no saved-work
-        # checkpoint to preserve.
+        # never writes this table. A missing or released slot lease proves no
+        # provider capacity needs MoonMind cleanup, but it proves nothing about
+        # repository work the agent may have edited or committed before
+        # failing. Without a binding row there is no inspected checkpoint, so
+        # the claim must stay recoverable until runtime-specific workspace or
+        # saved-work evidence is verified.
         missing = sorted({owner for owner, _ in uncovered})
         async with store.sessions() as session:
             leases = (
@@ -306,7 +349,7 @@ async def _runtime_no_work(store, agents, receipt, service):
                 # owns the wait and reaps leases of dead owners, so recovery
                 # retries on a later sweep instead of releasing now.
                 raise ValueError("runtime_cleanup_pending")
-        covered |= uncovered
+        raise ValueError("saved_work_requires_recovery")
     return checkpoints
 
 
@@ -481,6 +524,9 @@ async def reconcile_local_claims(
                     "issueNumber",
                     "repository",
                     "released",
+                    # Ownership can end while the terminal bookkeeping is still
+                    # pending; the sweep must report both facts, not one.
+                    "ownershipEnded",
                     "reasonCode",
                 )
                 if key in result
@@ -495,5 +541,6 @@ async def reconcile_local_claims(
         "repositories": sorted({receipt.repository for receipt in receipts}),
         "examined": len(results),
         "released": sum(bool(item["released"]) for item in results),
+        "ownershipEnded": sum(bool(item.get("ownershipEnded")) for item in results),
         "results": results,
     }

@@ -221,15 +221,11 @@ A source-kind difference changes policy and evidence. It never creates a second 
 
 ### Recorded authority
 
-`schedule_occurrence`, `edit`, `rerun`, and `linked_continuation` preserve their recorded target unless the caller passes `upgrade_to_qualified_target=True`. A recorded target that is no longer registered or no longer authorable stays visible with `available=False` and `replacement_required=True`; it never silently becomes a different harness, profile, model, policy, Host Class, runtime pack, materializer, or realizer. `retry_as_fresh_execution` is new work and takes the promoted target.
+`edit`, `rerun`, and `linked_continuation` preserve their recorded target unless the caller passes `upgrade_to_qualified_target=True`. A recorded target that is no longer registered or no longer authorable stays visible with `available=False` and `replacement_required=True`; it never silently becomes a different harness, profile, model, policy, Host Class, runtime pack, materializer, or realizer. `retry_as_fresh_execution` is new work and takes the promoted target. `schedule_occurrence` is new work on every firing and takes the promoted target; a schedule never pins a runtime-provider target of its own.
 
 ### Schedules
 
-A schedule pins its runtime-provider target in `target.runtimeProviderTarget` and declares
-`target.runtimeProviderTargetUpdatePolicy`:
-
-- `pinned` (default) — advancing time-limited admission evidence must not move the schedule onto another rollout row. A target change is rejected with an actionable error and the schedule keeps its recorded authority until an operator revises it explicitly.
-- `follow_qualified_default` — a newly qualified target is adopted, and that default change advances the schedule revision (`definition.version`) alongside the new plan authority.
+Every schedule occurrence resolves the current promoted default at launch time, exactly like ad-hoc work. There is one runtime-provider authority for the whole deployment — schedules cannot pin a different target, policy version, or image from the rest of the app. `target.runtimeProviderTarget` on a schedule definition is historical evidence of what the last occurrence used, never launch authority for the next one. The former `target.runtimeProviderTargetUpdatePolicy` (`pinned` / `follow_qualified_default`) is removed: its only remaining behavior is the old `follow_qualified_default`, now unconditional. Already-started occurrences retain their immutable inputs.
 
 ## 10. Operator-visible migration status
 

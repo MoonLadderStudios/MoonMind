@@ -30,9 +30,10 @@ from tests.integration.reliability.test_resolver_verification_capability_journey
 )
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 
-# The import registers the shared fixture for pytest; the guard keeps checkers
-# that do not model fixture injection from flagging the registration import.
-assert journey is not None
+# The import registers the shared fixture; the alias keeps import linters that
+# do not model pytest fixture injection from flagging the registration.
+_JOURNEY_FIXTURE = journey  # noqa: F841 -- referenced below to keep fixture registration explicit
+assert _JOURNEY_FIXTURE is journey
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -86,6 +87,10 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
     assert lease_workflow.RENEW_SECONDS == 300
     assert lease_workflow.STOP_MARGIN_SECONDS == 60
     # Shorten wall-clock deadlines only; retain real SQL, HTTP, and durable timers.
+    # The announcement phase is a fixed fraction of the running lease, so scale
+    # it to 1:1 here: this journey owns the running lease, and a sub-second
+    # announcement deadline could never clear the launch stop margin.
+    monkeypatch.setattr(leases, "PREPARING_LEASE_DIVISOR", 1)
     monkeypatch.setattr(
         leases,
         "LEASE_DURATION",
