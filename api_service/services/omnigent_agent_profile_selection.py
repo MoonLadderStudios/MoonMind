@@ -733,6 +733,8 @@ async def resolve_default_agent_profile_snapshot(
                 try:
                     session.expunge(user)
                 except Exception:
+                    # Best effort only: detached/test principals are not in
+                    # this session, and expire_all must still run below.
                     pass
             session.expire_all()
             return await resolve_default_agent_profile_snapshot(
