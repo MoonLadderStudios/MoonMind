@@ -144,6 +144,12 @@ def test_batch_child_with_explicit_authority_is_accepted(
         json={"type": "task", "payload": _batch_task_payload()},
     )
     assert response.status_code == 201, response.json()
+    assert service.create_execution.await_count == 1
+    _, kwargs = service.create_execution.call_args
+    initial = kwargs.get("initial_parameters") or {}
+    assert initial.get("batchDigest") == "sha256:approved"
+    assert isinstance(initial.get("batchTarget"), dict)
+    assert initial["batchTarget"]["repository"] == "acme/one"
 
 
 def test_batch_child_without_explicit_connection_is_rejected(
@@ -203,6 +209,30 @@ def test_batch_child_with_credential_material_is_rejected(
     service.create_execution.assert_not_awaited()
 
 
+def test_batch_child_with_nested_credential_material_is_rejected(
+    batch_client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = batch_client
+    service.describe_execution.return_value = _parent_record(user)
+    for nested in (
+        {"repositoryTarget": {"token": "ghp_example"}},
+        {"repositoryTarget": {"secret": "shhh"}},
+        {"token": "ghp_example"},
+        {"password": "hunter2"},
+    ):
+        payload = _batch_task_payload()
+        assert isinstance(payload["batchTarget"], dict)
+        payload["batchTarget"] = {**payload["batchTarget"], **nested}
+        response = test_client.post(
+            "/api/executions",
+            headers=_fanout_headers(),
+            json={"type": "task", "payload": payload},
+        )
+        assert response.status_code == 422, nested
+        assert "credential" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
 def test_legacy_fanout_child_without_batch_fields_is_unchanged(
     batch_client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -220,3 +250,49 @@ def test_legacy_fanout_child_without_batch_fields_is_unchanged(
         json={"type": "task", "payload": payload},
     )
     assert response.status_code == 201, response.json()
+
+
+def test_batch_target_must_match_executable_repository(
+    batch_client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = batch_client
+    service.describe_execution.return_value = _parent_record(user)
+    payload = _batch_task_payload()
+    assert isinstance(payload["batchTarget"], dict)
+    payload["batchTarget"] = dict(payload["batchTarget"], repository="evil/other")
+    response = test_client.post(
+        "/api/executions",
+        headers=_fanout_headers(),
+        json={"type": "task", "payload": payload},
+    )
+    assert response.status_code == 422
+    assert "batchTarget" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_fanout_capability_can_cancel_owned_child(
+    batch_client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = batch_client
+    parent = _parent_record(user)
+    child = _build_execution_record(owner_id=str(user.id))
+    child.workflow_id = "mm:child-1"
+    child.parameters = {"parentWorkflowId": "mm:batch-parent"}
+    child.owner_id = str(user.id)
+    child.owner_type = "user"
+
+    async def _describe(workflow_id: str, *args: Any, **kwargs: Any) -> Any:
+        if workflow_id == "mm:batch-parent":
+            return parent
+        return child
+
+    service.describe_execution.side_effect = _describe
+    service.describe_cancel_target_execution.return_value = child
+    service.cancel_execution.return_value = child
+    response = test_client.post(
+        "/api/executions/mm:child-1/cancel",
+        headers=_fanout_headers(),
+        json={"reason": "repository batch cancel"},
+    )
+    assert response.status_code == 202, response.json()
+    service.cancel_execution.assert_awaited_once()

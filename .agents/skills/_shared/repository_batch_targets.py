@@ -62,7 +62,19 @@ ALLOWED_EVIDENCE_KINDS = frozenset({"revision", "artifact"})
 
 _GITHUB_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _FORBIDDEN_TARGET_KEYS = frozenset(
-    {"tokens", "token_bundle", "tokenbundle", "credentials", "secrets", "pat"}
+    {
+        "token",
+        "tokens",
+        "token_bundle",
+        "tokenbundle",
+        "secret",
+        "secrets",
+        "credential",
+        "credentials",
+        "password",
+        "passwords",
+        "pat",
+    }
 )
 
 
@@ -268,10 +280,14 @@ def normalize_repository_batch(
 ) -> NormalizedRepositoryBatch:
     """Normalize a bounded explicit target list.
 
-    Exact duplicates (same endpoint, repository, branch, operation, and
-    connection) collapse with evidence. Identical repository names on
-    different endpoints stay distinct. The same repository with conflicting
-    connection selections fails closed instead of silently picking one.
+    Exact duplicates (same endpoint, repository, branch, operation,
+    connection, revision, dependencies, evidence kind, and target ref)
+    collapse with evidence. Identical repository names on different endpoints
+    stay distinct. The same repository with conflicting connection selections
+    fails closed instead of silently picking one. Entries sharing routing
+    identity but differing in revision, dependencies, evidence kind, or
+    target ref are not collapsed: they proceed as distinct targets so a
+    conflicting target ref fails closed instead of silently dropping one.
     """
 
     if not isinstance(entries, list) or not entries:
@@ -309,7 +325,13 @@ def normalize_repository_batch(
                 "connections within one batch; declare one explicit "
                 "connection per repository",
             )
-        key = f"{target_identity_key(target)}#{target.connection_ref}"
+        key = (
+            f"{target_identity_key(target)}#{target.connection_ref}"
+            f"#{target.revision or ''}"
+            f"#{','.join(sorted(target.depends_on))}"
+            f"#{target.evidence_kind or ''}"
+            f"#{target.target_ref}"
+        )
         if key in seen:
             normalized.duplicates.append(
                 {
@@ -415,22 +437,15 @@ def parse_batch_budget(value: Any) -> RepositoryBatchBudget:
         )
     spend = raw.get("maxChildSpendUsd")
     if spend is not None:
-        try:
-            spend = float(spend)
-        except (TypeError, ValueError) as exc:
-            raise RepositoryBatchError(
-                "REPOSITORY_BATCH_BUDGET_INVALID",
-                "maxChildSpendUsd must be numeric",
-            ) from exc
-        if spend <= 0:
-            raise RepositoryBatchError(
-                "REPOSITORY_BATCH_BUDGET_INVALID",
-                "maxChildSpendUsd must be positive when declared",
-            )
+        raise RepositoryBatchError(
+            "REPOSITORY_BATCH_BUDGET_UNSUPPORTED",
+            "maxChildSpendUsd is not bound to an enforceable execution "
+            "budget; omit it until a budget owner enforces per-child spend",
+        )
     return RepositoryBatchBudget(
         max_targets=max_targets,
         max_concurrency=max_concurrency,
-        max_child_spend_usd=spend,
+        max_child_spend_usd=None,
         max_attempts_per_child=max_attempts,
     )
 
@@ -544,16 +559,31 @@ class PreflightReport:
 def default_accessibility_probe(target: ParsedRepositoryTarget) -> tuple[bool, str]:
     """Structural admissibility probe (server admission rechecks authority).
 
-    Real repository permission and revocation are rechecked at child admission
-    through the existing repository contract; this probe fails closed on
-    anything the batch authoring boundary can already prove inadmissible.
+    Real repository permission, revocation, and wrong-owner authority are
+    rechecked at child admission through the existing repository contract;
+    this probe fails closed on anything the batch authoring boundary can
+    already prove inadmissible. Callers requiring fail-before-dispatch for
+    revoked/inaccessible targets must supply an authority-aware probe or
+    rely on the engine's pre-dispatch verification and rollback: the engine
+    pre-builds every child envelope before the first POST and rolls back
+    already-queued children when admission fails without explicit
+    ``allow_partial``.
     """
 
     if not target.connection_ref:
         return False, "missing_connection"
     if target.operation not in ALLOWED_OPERATIONS:
         return False, "unsupported_operation"
-    return True, "structurally_admissible"
+    return True, "structurally_admissible:authority_rechecked_at_admission"
+
+
+def _required_publish_for_operation(operation: str) -> str:
+    """Map a declared target operation to its required publish mode."""
+
+    normalized = (operation or "").strip().lower()
+    if normalized == "read":
+        return "none"
+    return normalized
 
 
 def preflight_repository_batch(
@@ -587,12 +617,16 @@ def preflight_repository_batch(
                 )
             )
             continue
-        if (
-            accessible
-            and target.operation == "read"
-            and normalized_publish != "none"
-        ):
-            accessible, reason = False, "read_only_publish_mismatch"
+        if accessible:
+            required = _required_publish_for_operation(target.operation)
+            if normalized_publish != required:
+                if target.operation == "read":
+                    accessible, reason = False, "read_only_publish_mismatch"
+                else:
+                    accessible, reason = False, (
+                        "operation_publish_mismatch:"
+                        f"{target.operation}!={normalized_publish}"
+                    )
         report.targets.append(
             PreflightTarget(
                 target_ref=target.target_ref,
@@ -653,10 +687,14 @@ def gate_dependent_targets(
 ) -> tuple[list[ParsedRepositoryTarget], list[dict[str, str]]]:
     """Release dependents only on verified upstream revision/artifact evidence.
 
-    ``verify_upstream_evidence`` must return a mapping with ``verified: True``
-    plus a ``revision`` or ``artifactRef``. A bare PR number or URL, an
-    unverified claim, or a missing verifier keeps the dependent blocked:
-    PR creation alone never satisfies a merged-code dependency.
+    ``verify_upstream_evidence`` must return a typed mapping bound to the
+    requested upstream target: ``verified: True``, ``kind``,
+    ``targetRef`` equal to the dependency ref, a well-formed
+    ``revision`` (hex 7..64) or ``artifactRef``, plus ``verifiedBy`` and
+    ``observedAt``. A bare PR number or URL, an unverified claim, a
+    mismatched target binding, or a missing verifier/freshness keeps the
+    dependent blocked: PR creation alone never satisfies a merged-code
+    dependency.
     """
 
     releasable: list[ParsedRepositoryTarget] = []
@@ -672,7 +710,8 @@ def gate_dependent_targets(
                 if verify_upstream_evidence is not None
                 else None
             )
-            if not _evidence_is_verified_merge(evidence):
+            if not _evidence_is_verified_merge(evidence, expected_target_ref=dependency):
+                unsatisfied.append(dependency)
                 unsatisfied.append(dependency)
         if unsatisfied:
             blocked.append(
@@ -687,7 +726,9 @@ def gate_dependent_targets(
     return releasable, blocked
 
 
-def _evidence_is_verified_merge(evidence: Any) -> bool:
+def _evidence_is_verified_merge(
+    evidence: Any, *, expected_target_ref: str | None = None
+) -> bool:
     if not isinstance(evidence, dict):
         return False
     if evidence.get("verified") is not True:
@@ -695,9 +736,24 @@ def _evidence_is_verified_merge(evidence: Any) -> bool:
     kind = str(evidence.get("kind") or "").strip().lower()
     if kind not in ALLOWED_EVIDENCE_KINDS:
         return False
+    bound_ref = _text(evidence.get("targetRef"))
+    if expected_target_ref is not None:
+        if bound_ref != expected_target_ref:
+            return False
+    elif bound_ref is None:
+        return False
     if kind == "revision":
-        return bool(_text(evidence.get("revision")))
-    return bool(_text(evidence.get("artifactRef")))
+        revision = _text(evidence.get("revision"))
+        if revision is None or not re.fullmatch(r"[0-9a-fA-F]{7,64}", revision):
+            return False
+    else:
+        if _text(evidence.get("artifactRef")) is None:
+            return False
+    if _text(evidence.get("verifiedBy")) is None:
+        return False
+    if _text(evidence.get("observedAt")) is None:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -711,6 +767,7 @@ def multi_repo_child_idempotency_key(
     target: ParsedRepositoryTarget,
     run_ref: str,
     attempt: int = 0,
+    parent_execution_ref: str | None = None,
 ) -> str:
     """Bind a child request to the approved manifest and target authority.
 
@@ -718,7 +775,10 @@ def multi_repo_child_idempotency_key(
     canceled, or unknown target advances the attempt so the retry admits a
     fresh child instead of resolving to the terminal prior admission; the
     execution API still dedupes lost acknowledgments within one attempt.
-    Completed repositories are never assigned a new attempt.
+    Completed repositories are never assigned a new attempt. The parent
+    step execution scope (``MOONMIND_STEP_EXECUTION_ID``) is part of the
+    key so two independent parent workflows dispatching the same manifest
+    do not collide on the execution API's user-plus-key workflow identity.
     """
 
     canonical = _canonical_json(
@@ -728,6 +788,7 @@ def multi_repo_child_idempotency_key(
             "connectionRef": target.connection_ref,
             "endpoint": target.endpoint,
             "operation": target.operation,
+            "parentExecutionRef": (_text(parent_execution_ref) or ""),
             "repository": target.repository.lower(),
             "runRef": run_ref,
             "targetRef": target.target_ref,
@@ -760,6 +821,7 @@ def build_multi_repo_child_request(
     runtime_provider_profile: str | None,
     max_attempts: int,
     attempt: int = 0,
+    parent_execution_ref: str | None = None,
 ) -> dict[str, Any]:
     """Build one isolated child request for a single repository target."""
 
@@ -769,10 +831,19 @@ def build_multi_repo_child_request(
         f"in {target.repository} via {target.connection_ref}]"
     )
     normalized_publish = (publish_mode or "pr").strip().lower()
-    if target.operation == "read" and normalized_publish != "none":
+    required_publish = _required_publish_for_operation(target.operation)
+    if normalized_publish != required_publish:
+        if target.operation == "read":
+            raise RepositoryBatchError(
+                "REPOSITORY_BATCH_READ_ONLY_PUBLISH_MISMATCH",
+                f"read-only target {target.target_ref!r} must use publishMode none",
+            )
         raise RepositoryBatchError(
-            "REPOSITORY_BATCH_READ_ONLY_PUBLISH_MISMATCH",
-            f"read-only target {target.target_ref!r} must use publishMode none",
+            "REPOSITORY_BATCH_OPERATION_PUBLISH_MISMATCH",
+            f"target {target.target_ref!r} declares operation "
+            f"{target.operation!r} but batch publishMode is "
+            f"{normalized_publish!r}; use a homogeneous batch or compile "
+            "publication from the target operation",
         )
     task_payload: dict[str, Any] = {
         "goal": scoped_goal,
@@ -793,20 +864,44 @@ def build_multi_repo_child_request(
     if kind.strip().lower() == "skill" and slug.strip():
         task_payload["tool"] = {"type": "skill", "name": slug.strip()}
     elif kind.strip().lower() == "preset" and slug.strip():
-        task_payload["taskTemplate"] = {"slug": slug.strip(), "scope": "global"}
+        raise RepositoryBatchError(
+            "REPOSITORY_BATCH_RUN_REF_PRESET_UNSUPPORTED",
+            f"repository batch runRef {run_ref!r} names a preset, but "
+            "repository batches supply only generic repository inputs; "
+            "presets such as github-issue-implement require preset-specific "
+            "inputs (e.g. github_issue) that this path does not bind, so "
+            "production admission would reject every child. Use "
+            "skill:<name> for repository batches or bind the preset's "
+            "required inputs before dispatch",
+        )
     else:
         raise RepositoryBatchError(
             "REPOSITORY_BATCH_RUN_REF_INVALID",
             "batch runRef must use skill:<name> or preset:<slug>",
         )
+    if target.revision is not None and target.operation != "read":
+        raise RepositoryBatchError(
+            "REPOSITORY_BATCH_REVISION_UNENFORCEABLE",
+            f"target {target.target_ref!r} carries revision intent "
+            f"{target.revision!r} but declares mutating operation "
+            f"{target.operation!r}; pinned revisions are supported only "
+            "for read-only work (publishMode none), otherwise the checkout "
+            "would use the branch tip instead of the approved revision",
+        )
+    repository_payload: dict[str, Any] = {
+        "provider": "git",
+        "connectionRef": target.connection_ref,
+        "repository": {"name": target.repository},
+        "branch": {"name": target.branch},
+    }
+    if target.revision is not None:
+        repository_payload["revision"] = {
+            "kind": "git_commit",
+            "commitSha": target.revision,
+        }
     payload: dict[str, Any] = {
         "requiredCapabilities": ["git", "gh"],
-        "repository": {
-            "provider": "git",
-            "connectionRef": target.connection_ref,
-            "repository": {"name": target.repository},
-            "branch": {"name": target.branch},
-        },
+        "repository": repository_payload,
         "runtimeInheritance": "caller",
         "task": task_payload,
         "batchDigest": manifest_digest,
@@ -823,6 +918,7 @@ def build_multi_repo_child_request(
             target=target,
             run_ref=run_ref,
             attempt=attempt,
+            parent_execution_ref=parent_execution_ref,
         ),
     }
     runtime_payload: dict[str, Any] = {}
@@ -922,9 +1018,11 @@ def reconcile_with_prior_result(
         if status in TERMINAL_PER_TARGET and not retry_failed_only and status in {
             "failed",
             "blocked",
+            "canceled",
         }:
-            # Without an explicit selected retry, terminal failures stay put
-            # so a blind rerun cannot republish or duplicate work.
+            # Without an explicit selected retry, terminal outcomes stay put
+            # so a blind rerun cannot reverse an explicit cancellation,
+            # republish, or duplicate work.
             reused.append(
                 {
                     "targetRef": target.target_ref,

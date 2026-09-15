@@ -92,14 +92,14 @@ def test_two_repositories_build_distinct_isolated_children() -> None:
     assert len(normalized.targets) == 2
     manifest = module.freeze_repository_batch_manifest(
         normalized,
-        task={"runRef": "preset:github-issue-implement", "publishMode": "pr"},
+        task={"runRef": "skill:repository-batch-test", "publishMode": "pr"},
         budget=module.parse_batch_budget({}),
     )
     children = [
         module.build_multi_repo_child_request(
             target,
             manifest_digest=str(manifest["digest"]),
-            run_ref="preset:github-issue-implement",
+            run_ref="skill:repository-batch-test",
             goal="Apply the security patch.",
             constraints="",
             publish_mode="pr",
@@ -132,13 +132,13 @@ def test_child_payload_carries_no_credential_material() -> None:
     normalized = _normalize(module, [_targets_module_entry()])
     manifest = module.freeze_repository_batch_manifest(
         normalized,
-        task={"runRef": "preset:github-issue-implement", "publishMode": "pr"},
+        task={"runRef": "skill:repository-batch-test", "publishMode": "pr"},
         budget=module.parse_batch_budget({}),
     )
     child = module.build_multi_repo_child_request(
         normalized.targets[0],
         manifest_digest=str(manifest["digest"]),
-        run_ref="preset:github-issue-implement",
+        run_ref="skill:repository-batch-test",
         goal="Apply the patch.",
         constraints="",
         publish_mode="pr",
@@ -204,6 +204,31 @@ def test_same_name_on_different_hosts_stays_distinct() -> None:
     assert normalized.duplicates == []
 
 
+def test_dedup_preserves_revision_and_dependency_intent() -> None:
+    module = _load_targets_module()
+    with pytest.raises(module.RepositoryBatchError) as exc:
+        _normalize(
+            module,
+            [
+                _targets_module_entry(repository="acme/one", revision="abc1234"),
+                _targets_module_entry(repository="acme/one", revision="def5678"),
+            ],
+        )
+    assert exc.value.code == "REPOSITORY_BATCH_TARGET_REF_CONFLICT"
+    normalized = _normalize(
+        module,
+        [
+            _targets_module_entry(
+                repository="acme/one", revision="abc1234", targetRef="one-a"
+            ),
+            _targets_module_entry(
+                repository="acme/one", revision="def5678", targetRef="one-b"
+            ),
+        ],
+    )
+    assert len(normalized.targets) == 2
+
+
 def test_conflicting_connections_for_one_repository_fail_closed() -> None:
     module = _load_targets_module()
     with pytest.raises(module.RepositoryBatchError) as exc:
@@ -248,7 +273,7 @@ def test_post_approval_injection_changes_digest_and_is_rejected() -> None:
     normalized = _normalize(module, [_targets_module_entry()])
     manifest = module.freeze_repository_batch_manifest(
         normalized,
-        task={"runRef": "preset:github-issue-implement", "publishMode": "pr"},
+        task={"runRef": "skill:repository-batch-test", "publishMode": "pr"},
         budget=module.parse_batch_budget({}),
     )
     approved = str(manifest["digest"])
@@ -312,6 +337,62 @@ def test_read_only_target_requires_none_publish_mode() -> None:
     assert allowed.blocked is False
 
 
+def test_operation_publish_mode_must_match_declared_operation() -> None:
+    module = _load_targets_module()
+    branch_batch = _normalize(module, [_targets_module_entry(operation="branch")])
+    blocked = module.preflight_repository_batch(branch_batch, publish_mode="pr")
+    assert blocked.blocked is True
+    assert "operation_publish_mismatch" in blocked.targets[0].reason
+    allowed = module.preflight_repository_batch(branch_batch, publish_mode="branch")
+    assert allowed.blocked is False
+    merge_batch = _normalize(
+        module, [_targets_module_entry(operation="pr_with_merge_automation")]
+    )
+    blocked_merge = module.preflight_repository_batch(merge_batch, publish_mode="pr")
+    assert blocked_merge.blocked is True
+
+
+def test_revision_intent_enforced_at_checkout() -> None:
+    module = _load_targets_module()
+    read_batch = _normalize(
+        module,
+        [_targets_module_entry(operation="read", revision="abc1234")],
+    )
+    child = module.build_multi_repo_child_request(
+        read_batch.targets[0],
+        manifest_digest="sha256:x",
+        run_ref="skill:x",
+        goal="g",
+        constraints="",
+        publish_mode="none",
+        runtime_mode=None,
+        runtime_model=None,
+        runtime_effort=None,
+        runtime_provider_profile=None,
+        max_attempts=3,
+    )
+    assert child["payload"]["repository"]["revision"]["commitSha"] == "abc1234"
+    mut_batch = _normalize(
+        module,
+        [_targets_module_entry(operation="pr", revision="abc1234")],
+    )
+    with pytest.raises(module.RepositoryBatchError) as exc:
+        module.build_multi_repo_child_request(
+            mut_batch.targets[0],
+            manifest_digest="sha256:x",
+            run_ref="skill:x",
+            goal="g",
+            constraints="",
+            publish_mode="pr",
+            runtime_mode=None,
+            runtime_model=None,
+            runtime_effort=None,
+            runtime_provider_profile=None,
+            max_attempts=3,
+        )
+    assert exc.value.code == "REPOSITORY_BATCH_REVISION_UNENFORCEABLE"
+
+
 # ---------------------------------------------------------------------------
 # R3: reconciliation, idempotency, capacity, budgets.
 # ---------------------------------------------------------------------------
@@ -329,7 +410,7 @@ def _manifest_with_two_targets(module: Any) -> tuple[Any, Any]:
     )
     manifest = module.freeze_repository_batch_manifest(
         normalized,
-        task={"runRef": "preset:github-issue-implement", "publishMode": "pr"},
+        task={"runRef": "skill:repository-batch-test", "publishMode": "pr"},
         budget=module.parse_batch_budget({}),
     )
     return normalized, manifest
@@ -369,13 +450,44 @@ def test_restart_discovers_accepted_children_without_duplicates() -> None:
     assert reused[0]["workflowId"] == "mm:child-one"
 
 
+def test_canceled_stays_terminal_without_explicit_retry() -> None:
+    module = _load_targets_module()
+    normalized, manifest = _manifest_with_two_targets(module)
+    digest = str(manifest["digest"])
+    prior = module.build_batch_aggregate_result(
+        manifest=manifest,
+        per_target=[
+            {
+                "targetRef": normalized.targets[0].target_ref,
+                "status": "canceled",
+                "attempt": 0,
+            },
+        ],
+        batch_status="partial",
+    )
+    to_submit, reused = module.reconcile_with_prior_result(
+        manifest_digest=digest,
+        targets=[normalized.targets[0]],
+        prior_result=prior,
+    )
+    assert to_submit == []
+    assert [item["reason"] for item in reused] == ["terminal_preserved"]
+    to_retry, _ = module.reconcile_with_prior_result(
+        manifest_digest=digest,
+        targets=[normalized.targets[0]],
+        prior_result=prior,
+        retry_failed_only=True,
+    )
+    assert len(to_retry) == 1
+
+
 def test_ambiguous_attempt_keeps_key_while_retry_advances_attempt() -> None:
     module = _load_targets_module()
     normalized, manifest = _manifest_with_two_targets(module)
     digest = str(manifest["digest"])
     target = normalized.targets[0]
     first_key = module.multi_repo_child_idempotency_key(
-        manifest_digest=digest, target=target, run_ref="preset:github-issue-implement"
+        manifest_digest=digest, target=target, run_ref="skill:repository-batch-test"
     )
     # Lost acknowledgment: no workflowId, so the retry keeps the same key and
     # the execution API dedupes instead of duplicating work.
@@ -397,7 +509,7 @@ def test_ambiguous_attempt_keeps_key_while_retry_advances_attempt() -> None:
         module.multi_repo_child_idempotency_key(
             manifest_digest=digest,
             target=target,
-            run_ref="preset:github-issue-implement",
+            run_ref="skill:repository-batch-test",
             attempt=to_submit[0][1],
         )
         == first_key
@@ -427,7 +539,7 @@ def test_ambiguous_attempt_keeps_key_while_retry_advances_attempt() -> None:
         module.multi_repo_child_idempotency_key(
             manifest_digest=digest,
             target=target,
-            run_ref="preset:github-issue-implement",
+            run_ref="skill:repository-batch-test",
             attempt=1,
         )
         != first_key
@@ -440,18 +552,45 @@ def test_idempotency_key_stable_and_manifest_bound() -> None:
     digest = str(manifest["digest"])
     target = normalized.targets[0]
     first = module.multi_repo_child_idempotency_key(
-        manifest_digest=digest, target=target, run_ref="preset:github-issue-implement"
+        manifest_digest=digest, target=target, run_ref="skill:repository-batch-test"
     )
     second = module.multi_repo_child_idempotency_key(
-        manifest_digest=digest, target=target, run_ref="preset:github-issue-implement"
+        manifest_digest=digest, target=target, run_ref="skill:repository-batch-test"
     )
     assert first == second
     other = module.multi_repo_child_idempotency_key(
         manifest_digest="sha256:other",
         target=target,
-        run_ref="preset:github-issue-implement",
+        run_ref="skill:repository-batch-test",
     )
     assert other != first
+
+
+def test_idempotency_key_scoped_to_parent_execution() -> None:
+    module = _load_targets_module()
+    normalized, manifest = _manifest_with_two_targets(module)
+    digest = str(manifest["digest"])
+    target = normalized.targets[0]
+    first_parent = module.multi_repo_child_idempotency_key(
+        manifest_digest=digest,
+        target=target,
+        run_ref="skill:repository-batch-test",
+        parent_execution_ref="parent-1",
+    )
+    second_parent = module.multi_repo_child_idempotency_key(
+        manifest_digest=digest,
+        target=target,
+        run_ref="skill:repository-batch-test",
+        parent_execution_ref="parent-2",
+    )
+    assert first_parent != second_parent
+    same_parent = module.multi_repo_child_idempotency_key(
+        manifest_digest=digest,
+        target=target,
+        run_ref="skill:repository-batch-test",
+        parent_execution_ref="parent-1",
+    )
+    assert first_parent == same_parent
 
 
 def test_capacity_gate_and_budget_bounds() -> None:
@@ -469,10 +608,13 @@ def test_capacity_gate_and_budget_bounds() -> None:
         )
     with pytest.raises(module.RepositoryBatchError):
         module.parse_batch_budget({"maxTargets": 99})
-    budget = module.parse_batch_budget(
-        {"maxTargets": 5, "maxConcurrency": 2, "maxChildSpendUsd": 1.5}
-    )
-    assert budget.max_targets == 5 and budget.max_child_spend_usd == 1.5
+    budget = module.parse_batch_budget({"maxTargets": 5, "maxConcurrency": 2})
+    assert budget.max_targets == 5 and budget.max_child_spend_usd is None
+    with pytest.raises(module.RepositoryBatchError) as exc:
+        module.parse_batch_budget(
+            {"maxTargets": 5, "maxConcurrency": 2, "maxChildSpendUsd": 1.5}
+        )
+    assert exc.value.code == "REPOSITORY_BATCH_BUDGET_UNSUPPORTED"
 
 
 # ---------------------------------------------------------------------------
@@ -528,12 +670,26 @@ def test_dependency_phases_require_verified_evidence() -> None:
         verify_upstream_evidence=lambda ref: {"pr": 42, "url": "https://example/x"},
     )
     assert releasable == [] and len(blocked) == 1
+    # A fabricated boolean without target binding, verifier, or freshness
+    # must not release dependents.
     releasable, blocked = module.gate_dependent_targets(
         phases[1],
         verify_upstream_evidence=lambda ref: {
             "verified": True,
             "kind": "revision",
             "revision": "abc1234",
+        },
+    )
+    assert releasable == [] and len(blocked) == 1
+    releasable, blocked = module.gate_dependent_targets(
+        phases[1],
+        verify_upstream_evidence=lambda ref: {
+            "verified": True,
+            "kind": "revision",
+            "targetRef": ref,
+            "revision": "abc1234",
+            "verifiedBy": "batch-parent:mm:batch-parent",
+            "observedAt": "2026-09-15T00:00:00Z",
         },
     )
     assert len(releasable) == 1 and blocked == []
@@ -649,7 +805,7 @@ def _run_helper(
             sys.executable,
             str(snapshot / "batch-github-workflows" / "bin" / "batch_workflows.py"),
             "--run-ref",
-            "preset:github-issue-implement",
+            "skill:repository-batch-test",
             "--repository-targets-file",
             str(targets_path),
             "--artifacts-dir",
@@ -840,8 +996,8 @@ def test_engine_dispatch_verifies_restart_reuses_and_retry_advances(
         assert attempts == {0, 1}
         assert any(
             item.get("reason") == "retry_skipped_completed"
+            and item.get("status") == "succeeded"
             for item in retry_result["targets"]
-            if item.get("status") == "skipped"
         )
         resubmitted = [
             item

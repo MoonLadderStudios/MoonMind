@@ -11639,6 +11639,12 @@ async def _create_execution_from_workflow_request(
         initial_parameters["parentWorkflowId"] = principal.workflow_id
     if isinstance(payload.get("omnigent"), Mapping):
         initial_parameters["omnigent"] = dict(payload["omnigent"])
+    if isinstance(payload.get("batchDigest"), str) and payload.get("batchDigest", "").strip():
+        initial_parameters["batchDigest"] = payload["batchDigest"].strip()
+    if isinstance(payload.get("batchTarget"), Mapping):
+        initial_parameters["batchTarget"] = dict(payload["batchTarget"])
+    if isinstance(payload.get("batchTargets"), list):
+        initial_parameters["batchTargets"] = list(payload["batchTargets"])
     # Built-in vector retrieval authoring retired (#4105): explicit `rag` /
     # `followUpRetrieval` requirements fail before scheduling with an
     # actionable validation result. Absent/empty/disabled values are stripped
@@ -11693,6 +11699,12 @@ async def _create_execution_from_workflow_request(
             },
         )
     initial_parameters = skill_validation.parameters
+    if isinstance(payload.get("batchDigest"), str) and payload.get("batchDigest", "").strip():
+        initial_parameters.setdefault("batchDigest", payload["batchDigest"].strip())
+    if isinstance(payload.get("batchTarget"), Mapping):
+        initial_parameters.setdefault("batchTarget", dict(payload["batchTarget"]))
+    if isinstance(payload.get("batchTargets"), list):
+        initial_parameters.setdefault("batchTargets", list(payload["batchTargets"]))
 
     # Reserve the canonical identity before launch so profile readiness and the
     # immutable effective snapshot are persisted in the same transaction as the
@@ -14141,9 +14153,41 @@ def _validate_execution_fanout_create_request(
 
 _FANOUT_BATCH_REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _FANOUT_BATCH_FORBIDDEN_KEYS = frozenset(
-    {"tokens", "token_bundle", "tokenbundle", "credentials", "secrets", "pat"}
+    {
+        "token",
+        "tokens",
+        "token_bundle",
+        "tokenbundle",
+        "secret",
+        "secrets",
+        "credential",
+        "credentials",
+        "password",
+        "passwords",
+        "pat",
+    }
 )
 _FANOUT_BATCH_MAX_LISTED_TARGETS = 25
+
+
+def _fanout_batch_contains_forbidden_key(value: Any) -> str | None:
+    """Recursively detect credential material keys in a batch target."""
+
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            normalized = str(key).lower().replace("-", "_")
+            if normalized in _FANOUT_BATCH_FORBIDDEN_KEYS:
+                return str(key)
+            found = _fanout_batch_contains_forbidden_key(nested)
+            if found is not None:
+                return found
+        return None
+    if isinstance(value, list):
+        for item in value:
+            found = _fanout_batch_contains_forbidden_key(item)
+            if found is not None:
+                return found
+    return None
 
 
 def _validate_execution_fanout_batch_target(
@@ -14173,12 +14217,12 @@ def _validate_execution_fanout_batch_target(
     if batch_target is not None and not isinstance(batch_target, dict):
         reject("Execution fan-out batchTarget must be an object.")
     if isinstance(batch_target, dict):
-        for key in batch_target:
-            if str(key).lower().replace("-", "_") in _FANOUT_BATCH_FORBIDDEN_KEYS:
-                reject(
-                    "Execution fan-out batchTarget must not carry credential "
-                    "material; children use their explicit connectionRef."
-                )
+        forbidden = _fanout_batch_contains_forbidden_key(batch_target)
+        if forbidden is not None:
+            reject(
+                "Execution fan-out batchTarget must not carry credential "
+                "material; children use their explicit connectionRef."
+            )
         repository_target = batch_target.get("repositoryTarget")
         explicit_target = batch_target if repository_target is None else repository_target
         if not isinstance(explicit_target, Mapping):
@@ -14217,6 +14261,58 @@ def _validate_execution_fanout_batch_target(
             or "*" in branch_name
         ):
             reject("Execution fan-out batchTarget branch must be explicit.")
+        executable = payload.get("repository")
+        if isinstance(batch_target, dict) and executable is not None:
+            if isinstance(executable, Mapping):
+                exe_conn = executable.get("connectionRef")
+                exe_repo_node = executable.get("repository")
+                exe_repo = (
+                    exe_repo_node.get("name")
+                    if isinstance(exe_repo_node, Mapping)
+                    else exe_repo_node
+                    if isinstance(exe_repo_node, str)
+                    else executable.get("repository")
+                )
+                exe_branch_node = executable.get("branch")
+                exe_branch = (
+                    exe_branch_node.get("name")
+                    if isinstance(exe_branch_node, Mapping)
+                    else exe_branch_node
+                    if isinstance(exe_branch_node, str)
+                    else executable.get("branch")
+                )
+            elif isinstance(executable, str):
+                exe_conn = None
+                exe_repo = executable
+                exe_branch = None
+            else:
+                exe_conn = exe_repo = exe_branch = None
+            batch_conn = str(connection_ref or "").strip() if "connection_ref" in locals() else ""
+            batch_repo = str(repository_name or "").strip() if "repository_name" in locals() else ""
+            batch_branch = str(branch_name or "").strip() if "branch_name" in locals() else ""
+            if isinstance(exe_conn, str) and exe_conn.strip() != batch_conn:
+                reject(
+                    "Execution fan-out batchTarget connectionRef must match "
+                    "payload.repository; audit metadata disconnected from side effect.",
+                    code="execution_fanout_batch_target_mismatch",
+                )
+            if isinstance(exe_repo, str) and exe_repo.strip().lower() != batch_repo.lower():
+                reject(
+                    "Execution fan-out batchTarget repository must match "
+                    "payload.repository; audit metadata disconnected from side effect.",
+                    code="execution_fanout_batch_target_mismatch",
+                )
+            if (
+                isinstance(exe_branch, str)
+                and isinstance(batch_branch, str)
+                and batch_branch
+                and exe_branch.strip() != batch_branch
+            ):
+                reject(
+                    "Execution fan-out batchTarget branch must match "
+                    "payload.repository; audit metadata disconnected from side effect.",
+                    code="execution_fanout_batch_target_mismatch",
+                )
     if listed_targets is not None:
         if not isinstance(listed_targets, list) or len(listed_targets) > (
             _FANOUT_BATCH_MAX_LISTED_TARGETS
@@ -18763,9 +18859,27 @@ async def cancel_execution(
     response: Response,
     payload: CancelExecutionRequest | None = None,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | None = Depends(get_current_user_optional()),
     _actions_enabled: None = Depends(_ensure_actions_enabled),
+    authorization: str | None = Header(None, alias="Authorization"),
+    execution_fanout: str | None = Header(None, alias=EXECUTION_FANOUT_HEADER),
 ) -> ExecutionModel:
+    capability = resolve_execution_fanout_capability(
+        marker=execution_fanout,
+        authorization=authorization,
+    )
+    authority = await resolve_execution_request_authority(
+        user=user,
+        service=service,
+        capability=capability,
+    )
+    user = authority.user
+    if capability is not None:
+        await enforce_fanout_child_visibility(
+            service=service,
+            workflow_id=workflow_id,
+            authority=authority,
+        )
     await _get_owned_execution(
         service=service,
         workflow_id=workflow_id,

@@ -121,7 +121,7 @@ promise cross-repository atomicity.
 
    ```bash
    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py" \
-     --run-ref preset:github-issue-implement \
+     --run-ref skill:<name> \
      --repository-targets-file <targets.json> \
      --preflight-only
    ```
@@ -140,7 +140,7 @@ promise cross-repository atomicity.
 
    ```bash
    python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py" \
-     --run-ref preset:github-issue-implement \
+     --run-ref skill:<name> \
      --repository-targets-file <targets.json> \
      --approved-batch-digest <sha256:...> \
      [--allow-partial] [--retry-failed-only] \
@@ -150,9 +150,13 @@ promise cross-repository atomicity.
 
    A target injected after approval changes the digest, so
    `--approved-batch-digest` mismatches and dispatch refuses. Each target
-   gets a stable child identity bound to the manifest digest, its own
+   gets a stable child identity bound to the manifest digest and parent
+   execution, its own
    `repositoryTarget` (separate workspace), artifact namespace, and cleanup
-   owner. Every admission is verified via `GET /api/executions/{workflowId}`
+   owner. Repository batches require `skill:<name>` run-refs with generic
+   repository inputs; `preset:` run-refs (e.g. `preset:github-issue-implement`)
+   are rejected because they require preset-specific inputs such as
+   `github_issue` that this path does not bind. Every admission is verified via `GET /api/executions/{workflowId}`
    before it counts as queued; ambiguous submissions retry under the same
    idempotency key, and a parent restart discovers accepted children from
    the prior `artifacts/batch-repositories-result.json` instead of
@@ -163,8 +167,10 @@ promise cross-repository atomicity.
 
 4. Dependent phases use explicit `dependsOn` edges plus verified evidence:
    `--upstream-evidence-file` maps upstream refs to `{verified: true,
-   kind: revision|artifact, revision|artifactRef}`. A bare PR number never
-   satisfies a merged-code dependency; without verified evidence the
+   kind: revision|artifact, targetRef: <upstream ref>,
+   revision: <hex 7..64>|artifactRef: <ref>, verifiedBy: <verifier>,
+   observedAt: <timestamp>}`. A bare PR number never
+   satisfies a merged-code dependency; without bound, verifiable evidence the
    dependent stays `blocked`.
 
 5. Report `artifacts/batch-repositories-result.json` honestly:
