@@ -896,6 +896,49 @@ class ReleaseCohort:
                     raise RuntimeError("Candidate worker did not drain")
                 await docker("rm", name)
 
+    async def migrate_omnigent(self, image, *, actor="release"):
+        """Advance the singular Omnigent release; no-op when already aligned.
+
+        Runs inside the primary success path so an omnigent migration failure
+        blocks the release receipt exactly like a fleet verification failure:
+        the retained fleet owns recovery and a resume converges instead of
+        duplicating completed steps.
+        """
+        from moonmind.workflows.skills.deployment_execution import (
+            FileDesiredStateStore,
+        )
+        from moonmind.workflows.skills.omnigent_release import (
+            migrate_omnigent_release,
+            production_drivers,
+        )
+
+        store = FileDesiredStateStore(
+            env_file_path=os.environ.get(
+                "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", ""
+            ),
+            json_file_path=os.environ.get(
+                "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", ""
+            )
+            or None,
+        )
+        if not str(
+            os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE") or ""
+        ).strip():
+            # No durable desired-state file: the singular record has nowhere
+            # to live, so there is nothing to migrate. The receipt says so
+            # explicitly instead of pretending alignment was verified.
+            return {"status": "skipped", "reason": "no durable desired-state file"}
+        return await migrate_omnigent_release(
+            store=store,
+            runner=self.runner,
+            owner=self.owner,
+            moonmind_image=image,
+            drivers=production_drivers(
+                runner=self.runner, moonmind_image=image, actor=actor
+            ),
+            actor=actor,
+        )
+
 
 async def verify_operator_access(image, urls, owner, *, expected_release=None):
     """Probe published origins through the daemon's declared host transport."""
@@ -1106,6 +1149,29 @@ async def _run_job_body(request_file):
                         outputs={
                             **result.outputs,
                             "releaseReadinessArtifactRef": readiness_ref,
+                        },
+                    )
+                    try:
+                        omnigent_receipt = await cohort.migrate_omnigent(
+                            record["image"]
+                        )
+                    except Exception as exc:
+                        write_record(
+                            request_file.parent / "attempt-result.json",
+                            {
+                                "owner": owner,
+                                "result": result.to_payload(),
+                            },
+                        )
+                        raise RuntimeError(
+                            f"Omnigent release migration did not establish "
+                            f"completion ({exc}); retained workers own recovery"
+                        ) from exc
+                    result = replace(
+                        result,
+                        outputs={
+                            **result.outputs,
+                            "omnigentRelease": omnigent_receipt,
                         },
                     )
             write_record(primary_file, {"owner": owner, "result": result.to_payload()})
