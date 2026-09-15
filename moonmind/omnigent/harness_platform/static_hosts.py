@@ -486,6 +486,37 @@ def admit_static_host_compose_launch(
     """
 
     rendered = render_static_service_env(raw_service_env, operator_env)
+    return admit_static_host_effective_launch(
+        service=service,
+        pack_ref=pack_ref,
+        materializer_ref=materializer_ref,
+        rendered_env=rendered,
+        operator_env=operator_env,
+    )
+
+
+def admit_static_host_effective_launch(
+    *,
+    service: str,
+    pack_ref: str,
+    materializer_ref: str,
+    rendered_env: Mapping[str, str],
+    operator_env: Mapping[str, str],
+) -> dict[str, object]:
+    """Admit one static Compose service from its rendered effective inputs.
+
+    This is the same trusted admission as
+    :func:`admit_static_host_compose_launch` for callers that already hold
+    the rendered environment a container would receive (the managed launch
+    path ``OmnigentOAuthHostRuntime._compose_static_check`` in
+    ``moonmind/omnigent/oauth_host_runtime.py`` calls this immediately
+    before ``docker compose up``): the rendered mapping is judged through
+    :func:`validate_static_combination` and the effective launch image is
+    resolved through :func:`resolve_effective_static_host_image`, which
+    fails closed on unset, mutable-tag, or invalid configuration.
+    """
+
+    rendered = dict(rendered_env)
     row = validate_static_combination(
         service=service,
         pack_ref=pack_ref,
@@ -526,6 +557,52 @@ STATIC_ENROLLMENT_WAITING_FOR_PROJECTION = "waiting-for-projection"
 STATIC_ENROLLMENT_FAILED_ENROLLMENT_TIMEOUT = "failed-enrollment-timeout"
 STATIC_ENROLLMENT_FAILED_PROJECTION_TIMEOUT = "failed-projection-timeout"
 STATIC_ENROLLMENT_UNQUALIFIED = "unqualified"
+
+
+#: Operator-wait bounds shared by the packaged entrypoint and workflow-side
+#: admission. The entrypoint reads the same names with the same defaults;
+#: a workflow caller must bound its own wait with identical values so the
+#: two sides never disagree about how long enrollment may wait.
+STATIC_CREDENTIAL_TIMEOUT_ENV = (
+    "MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS"
+)
+STATIC_SKILL_TIMEOUT_ENV = "MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS"
+STATIC_DEFAULT_CREDENTIAL_TIMEOUT_SECONDS = 1800
+STATIC_DEFAULT_SKILL_TIMEOUT_SECONDS = 600
+
+
+def static_enrollment_timeouts_from_env(
+    environment: Mapping[str, str] | None = None,
+) -> tuple[int, int]:
+    """Read the bounded static-enrollment waits with entrypoint parity.
+
+    Returns ``(credential_timeout_seconds, skill_timeout_seconds)`` using
+    the same variable names and defaults as
+    ``services/omnigent/scripts/start-omnigent-host.sh``. Non-integer or
+    non-positive values fail closed instead of waiting indefinitely.
+    """
+
+    source: Mapping[str, str] = os.environ if environment is None else environment
+    timeouts: list[int] = []
+    for key, default in (
+        (STATIC_CREDENTIAL_TIMEOUT_ENV, STATIC_DEFAULT_CREDENTIAL_TIMEOUT_SECONDS),
+        (STATIC_SKILL_TIMEOUT_ENV, STATIC_DEFAULT_SKILL_TIMEOUT_SECONDS),
+    ):
+        raw = str(source.get(key) or "").strip()
+        if not raw:
+            timeouts.append(default)
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 0
+        if value <= 0:
+            raise HarnessPlatformError(
+                f"static enrollment {key} must be a positive integer",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        timeouts.append(value)
+    return (timeouts[0], timeouts[1])
 
 
 def classify_static_enrollment_status(
@@ -800,12 +877,16 @@ __all__ = [
     "STATIC_CODEX_PROFILE",
     "STATIC_CODEX_SERVICE",
     "STATIC_CREDENTIAL_EXECUTION_MODES",
+    "STATIC_CREDENTIAL_TIMEOUT_ENV",
+    "STATIC_DEFAULT_CREDENTIAL_TIMEOUT_SECONDS",
+    "STATIC_DEFAULT_SKILL_TIMEOUT_SECONDS",
     "STATIC_ENROLLMENT_FAILED_ENROLLMENT_TIMEOUT",
     "STATIC_ENROLLMENT_FAILED_PROJECTION_TIMEOUT",
     "STATIC_ENROLLMENT_READY",
     "STATIC_ENROLLMENT_UNQUALIFIED",
     "STATIC_ENROLLMENT_WAITING_FOR_ENROLLMENT",
     "STATIC_ENROLLMENT_WAITING_FOR_PROJECTION",
+    "STATIC_SKILL_TIMEOUT_ENV",
     "STATIC_HOST_ROWS",
     "StaticHostRow",
     "FORBIDDEN_STATIC_AMBIENT_KEYS",
@@ -815,10 +896,12 @@ __all__ = [
     "classify_effective_static_host_image",
     "classify_static_enrollment_status",
     "admit_static_host_compose_launch",
+    "admit_static_host_effective_launch",
     "resolve_effective_static_host_image",
     "render_static_service_env",
     "resolve_static_host_image_ref",
     "static_claude_disposition",
+    "static_enrollment_timeouts_from_env",
     "static_host_authority_notes",
     "static_host_row",
     "trace_static_credential_ownership",

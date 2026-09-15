@@ -10,14 +10,16 @@ import re
 import shutil
 import tarfile
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from moonmind.config.settings import settings
 from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
+from moonmind.omnigent.harness_platform import static_hosts
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.mounted_tool_preflight import (
     MountedToolPreflightError,
@@ -287,6 +289,40 @@ _RUNTIME_ADAPTERS = {
         ),
     },
 }
+
+# Static prelaunch platform codes to host preflight codes
+# (MoonLadderStudios/MoonMind#3936 R3/R4). Platform failures that already
+# name a host-domain outcome keep that outcome; the unqualified-image code
+# has no host-domain member, so the exact platform code is preserved.
+_STATIC_PRELAUNCH_HOST_CODES = {
+    "OMNIGENT_CREDENTIAL_GENERATION_FENCED": (
+        HostPreflightFailure.GENERATION_STALE.value
+    ),
+    "OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT": (
+        HostPreflightFailure.COMPETING_CREDENTIAL.value
+    ),
+    "OMNIGENT_RUNTIME_PACK_MISMATCH": (
+        HostPreflightFailure.BINDING_MISMATCH.value
+    ),
+    "OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE": (
+        HostPreflightFailure.BINDING_MISMATCH.value
+    ),
+    "OMNIGENT_EXECUTION_PLAN_CONFLICT": (
+        HostPreflightFailure.BINDING_MISMATCH.value
+    ),
+}
+
+# Static-enrollment outcomes that spend this admission attempt's budget. A
+# ``waiting-*`` observation keeps the original probe error (operator
+# enrollment pending, retryable as a new attempt); anything else raises the
+# distinct failed/unqualified outcome instead.
+_STATIC_ENROLLMENT_TERMINAL_STATUSES = frozenset(
+    {
+        static_hosts.STATIC_ENROLLMENT_FAILED_ENROLLMENT_TIMEOUT,
+        static_hosts.STATIC_ENROLLMENT_FAILED_PROJECTION_TIMEOUT,
+        static_hosts.STATIC_ENROLLMENT_UNQUALIFIED,
+    }
+)
 
 
 class OmnigentOAuthHostRuntime:
@@ -676,8 +712,16 @@ class OmnigentOAuthHostRuntime:
                 egress_attestation=egress_attestation,
             )
         else:
+            # Workflow-side static-enrollment wait starts at the Compose
+            # launch admission (MoonLadderStudios/MoonMind#3936 R5). The
+            # packaged entrypoint bounds the operator waiting state with
+            # the same timeout names; the classification below bounds the
+            # workflow admission/retry wait and never treats process
+            # existence as admitted capacity.
+            static_enrollment_started = time.monotonic()
             static_compose_env = await self._compose_static_check(
                 binding=binding,
+                host_lease=host_lease,
                 workspace_source=daemon_workspace_source,
                 skill_projection=daemon_skill_projection,
                 effective_launch=launch,
@@ -840,13 +884,57 @@ class OmnigentOAuthHostRuntime:
                 await self._exec_check(attachment_identity)
                 await self._exec_tools_check(attachment_identity)
             else:
-                await self._compose_static_exec_check(
-                    binding=binding,
-                    env=static_compose_env,
+                try:
+                    await self._compose_static_exec_check(
+                        binding=binding,
+                        env=static_compose_env,
+                    )
+                except Exception as exc:
+                    # The failing probe is the Skill-projection gate; the
+                    # service already passed Compose launch admission above.
+                    self._raise_static_enrollment_failure(
+                        binding=binding,
+                        host_lease=host_lease,
+                        credential_ready=True,
+                        projection_ready=False,
+                        elapsed_seconds=(
+                            time.monotonic() - static_enrollment_started
+                        ),
+                        fallback=exc,
+                    )
+            try:
+                host = await self._resolve_exact_host(
+                    binding=binding, host_lease=host_lease
                 )
-            host = await self._resolve_exact_host(
-                binding=binding, host_lease=host_lease
-            )
+            except Exception as exc:
+                if binding.host_launch_profile_ref:
+                    raise
+                # Registration never observed exactly one compatible online
+                # host within the bounded wait: enrollment, not capacity.
+                self._raise_static_enrollment_failure(
+                    binding=binding,
+                    host_lease=host_lease,
+                    credential_ready=False,
+                    projection_ready=False,
+                    elapsed_seconds=time.monotonic() - static_enrollment_started,
+                    fallback=exc,
+                )
+            if not binding.host_launch_profile_ref:
+                # Both probes report ready, but process existence (or probe
+                # success) is still not admitted capacity: the staged
+                # generation must match the live lease, or this launch is
+                # unqualified even with a running container.
+                self._require_static_enrollment_admitted(
+                    self._classify_static_enrollment(
+                        binding=binding,
+                        host_lease=host_lease,
+                        credential_ready=True,
+                        projection_ready=True,
+                        elapsed_seconds=(
+                            time.monotonic() - static_enrollment_started
+                        ),
+                    )
+                )
             host_id = str(
                 host.get("id") or host.get("host_id") or host.get("hostId") or ""
             )
@@ -3575,10 +3663,203 @@ class OmnigentOAuthHostRuntime:
                 },
             )
 
+    @staticmethod
+    def _admit_static_compose_prelaunch(
+        *,
+        binding: OmnigentOAuthHostBinding,
+        host_lease: OmnigentHostLease,
+        operator_env: Mapping[str, str],
+    ) -> dict[str, object]:
+        """Admit a static Compose launch before ``docker compose up``.
+
+        This is the production caller of the static prelaunch admission
+        boundary (MoonLadderStudios/MoonMind#3936 R3/R4): it judges the
+        rendered effective environment and the effective launch image
+        through
+        ``static_hosts.admit_static_host_effective_launch`` (fails closed
+        on unset, mutable-tag, or invalid image configuration instead of
+        launching the mutable Compose default), then binds the staged
+        credential generation to the live Provider Profile lease through
+        ``verify_staged_generation_against_lease`` and
+        ``trace_static_credential_ownership`` (profile -> lease -> exact
+        registered host -> one-session exclusivity on the static mode).
+        The staged marker alone is never admission evidence.
+        """
+
+        adapter = OmnigentOAuthHostRuntime._runtime_adapter(binding)
+        try:
+            row = static_hosts.static_host_row(str(adapter["compose_service"]))
+            if str(adapter["generation_env"]) != row.generation_env:
+                raise HarnessPlatformError(
+                    "static host adapter and static row disagree on the "
+                    "credential generation variable",
+                    code="OMNIGENT_HOST_BINDING_MISMATCH",
+                )
+            rendered = dict(operator_env)
+            admission = static_hosts.admit_static_host_effective_launch(
+                service=row.service,
+                pack_ref=row.runtime_pack_ref,
+                materializer_ref=row.materializer_ref,
+                rendered_env=rendered,
+                operator_env=operator_env,
+            )
+            staged_generation = str(rendered.get(row.generation_env) or "")
+            registered_host_id = str(
+                binding.static_host_id
+                or host_lease.omnigent_host_id
+                or row.service
+            )
+            static_hosts.verify_staged_generation_against_lease(
+                staged_generation=staged_generation,
+                lease_generation=str(host_lease.credential_generation),
+                provider_profile_id=str(binding.provider_profile_id),
+                registered_host_id=registered_host_id,
+            )
+            static_hosts.trace_static_credential_ownership(
+                provider_profile_id=str(binding.provider_profile_id),
+                provider_lease_ref=str(host_lease.provider_lease_id),
+                credential_generation=str(host_lease.credential_generation),
+                registered_host_id=registered_host_id,
+                active_session_count=(
+                    1 if host_lease.omnigent_session_id else 0
+                ),
+                execution_modes_observed=("static",),
+            )
+        except HarnessPlatformError as exc:
+            platform_code = str(getattr(exc, "code", "") or "")
+            raise OmnigentOAuthHostError(
+                f"static Compose prelaunch admission rejected: {exc}",
+                code=_STATIC_PRELAUNCH_HOST_CODES.get(
+                    platform_code, platform_code
+                ),
+            ) from exc
+        admission = dict(admission)
+        admission["registered_host_id"] = registered_host_id
+        return admission
+
+    @staticmethod
+    def _classify_static_enrollment(
+        *,
+        binding: OmnigentOAuthHostBinding,
+        host_lease: OmnigentHostLease,
+        credential_ready: bool,
+        projection_ready: bool,
+        elapsed_seconds: float,
+    ) -> dict[str, object]:
+        """Classify one static-enrollment observation for workflow admission.
+
+        This is the production caller of
+        ``static_hosts.classify_static_enrollment_status``
+        (MoonLadderStudios/MoonMind#3936 R5): the workflow-side bounded
+        admission/retry wait with the same timeout names and defaults as
+        the packaged entrypoint. Only ``ready`` is admitted usable
+        capacity; ``waiting-*`` keeps operator enrollment pending
+        distinguishable from a decision. The stream-admission deadline in
+        ``moonmind.omnigent.execute`` is unrelated (first-message stream
+        admission) and is never enrollment evidence.
+        """
+
+        try:
+            credential_timeout, skill_timeout = (
+                static_hosts.static_enrollment_timeouts_from_env(os.environ)
+            )
+        except HarnessPlatformError as exc:
+            raise OmnigentOAuthHostError(
+                f"static enrollment wait is not admitted: {exc}",
+                code=str(getattr(exc, "code", "") or ""),
+            ) from exc
+        generation_fenced_ok = str(
+            binding.credential_mount_ref.auth_volume_ref.credential_generation
+        ) == str(host_lease.credential_generation)
+        return dict(
+            static_hosts.classify_static_enrollment_status(
+                credential_ready=credential_ready,
+                projection_ready=projection_ready,
+                generation_fenced_ok=generation_fenced_ok,
+                elapsed_seconds=elapsed_seconds,
+                credential_timeout_seconds=credential_timeout,
+                skill_timeout_seconds=skill_timeout,
+            )
+        )
+
+    @staticmethod
+    def _require_static_enrollment_admitted(
+        classification: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Require an admitted static-enrollment classification.
+
+        A stale or mismatched generation is ``unqualified`` even when both
+        probes report ready: process existence (or probe success) is never
+        admitted usable capacity on a fenced generation.
+        """
+
+        if classification.get("admitted") is True:
+            return dict(classification)
+        status = str(classification.get("status"))
+        reason = str(classification.get("reason"))
+        if status == static_hosts.STATIC_ENROLLMENT_UNQUALIFIED:
+            code = HostPreflightFailure.GENERATION_STALE.value
+        elif (
+            status
+            == static_hosts.STATIC_ENROLLMENT_FAILED_ENROLLMENT_TIMEOUT
+        ):
+            code = HostPreflightFailure.HOST_NOT_REGISTERED.value
+        elif (
+            status
+            == static_hosts.STATIC_ENROLLMENT_FAILED_PROJECTION_TIMEOUT
+        ):
+            code = HostPreflightFailure.LOGIN_STATUS_FAILED.value
+        else:
+            code = HostPreflightFailure.HOST_NOT_REGISTERED.value
+        raise OmnigentOAuthHostError(
+            "static host enrollment is not admitted capacity: "
+            f"{status} ({reason})",
+            code=code,
+        )
+
+    def _raise_static_enrollment_failure(
+        self,
+        *,
+        binding: OmnigentOAuthHostBinding,
+        host_lease: OmnigentHostLease,
+        credential_ready: bool,
+        projection_ready: bool,
+        elapsed_seconds: float,
+        fallback: BaseException,
+    ) -> NoReturn:
+        """Raise a static readiness failure with a bounded terminal outcome.
+
+        When the bounded enrollment wait is spent (or the generation is
+        fenced), the distinct ``failed-*``/``unqualified`` outcome replaces
+        the probe error so this attempt's budget is spent instead of
+        waiting indefinitely. Otherwise the original probe error propagates
+        (operator enrollment pending, retryable as a new attempt).
+        """
+
+        classification = OmnigentOAuthHostRuntime._classify_static_enrollment(
+            binding=binding,
+            host_lease=host_lease,
+            credential_ready=credential_ready,
+            projection_ready=projection_ready,
+            elapsed_seconds=elapsed_seconds,
+        )
+        if (
+            str(classification.get("status"))
+            in _STATIC_ENROLLMENT_TERMINAL_STATUSES
+        ):
+            try:
+                OmnigentOAuthHostRuntime._require_static_enrollment_admitted(
+                    classification
+                )
+            except OmnigentOAuthHostError as terminal:
+                raise terminal from fallback
+        raise fallback
+
     async def _compose_static_check(
         self,
         *,
         binding: OmnigentOAuthHostBinding | None = None,
+        host_lease: OmnigentHostLease | None = None,
         workspace_source: Path,
         skill_projection: Path | None = None,
         effective_launch: Mapping[str, Any] | None = None,
@@ -3656,6 +3937,19 @@ class OmnigentOAuthHostRuntime:
             if binding is not None
             else _RUNTIME_ADAPTERS["codex_cli"]
         )
+        if binding is not None and host_lease is not None:
+            # Static prelaunch admission (MoonLadderStudios/MoonMind#3936
+            # R3/R4): judge the rendered effective environment and the
+            # effective launch image, and bind the staged generation to
+            # the live lease, before `docker compose up` admits the
+            # service. Anything but a digest-pinned image or a
+            # lease-verified generation fails here instead of launching
+            # an unqualified static host.
+            self._admit_static_compose_prelaunch(
+                binding=binding,
+                host_lease=host_lease,
+                operator_env=child_env,
+            )
         await self._run(
             *self._deployment_compose_command(),
             "--profile",
