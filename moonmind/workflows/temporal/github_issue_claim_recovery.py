@@ -481,6 +481,9 @@ async def reconcile_local_claims(
                     "issueNumber",
                     "repository",
                     "released",
+                    # Ownership can end while the terminal bookkeeping is still
+                    # pending; the sweep must report both facts, not one.
+                    "ownershipEnded",
                     "reasonCode",
                 )
                 if key in result
@@ -495,5 +498,6 @@ async def reconcile_local_claims(
         "repositories": sorted({receipt.repository for receipt in receipts}),
         "examined": len(results),
         "released": sum(bool(item["released"]) for item in results),
+        "ownershipEnded": sum(bool(item.get("ownershipEnded")) for item in results),
         "results": results,
     }

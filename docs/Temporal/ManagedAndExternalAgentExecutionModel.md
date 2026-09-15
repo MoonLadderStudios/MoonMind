@@ -22,14 +22,18 @@ no-work claim; the observation alone grants no release or publication authority.
 
 New GitHub issue attempts carry a version-2 comment lease through the trusted
 brief and canonical AgentRun request. The AgentRun workflow confirms ownership
-before launch and renews the same GitHub comment every five minutes, with a
-30-minute deadline. Loss of the last confirmed lease cancels execution through
+before launch and renews the same GitHub comment: a five-minute deadline while
+the attempt is only announced, and a 30-minute deadline renewed every five
+minutes once it is running. A run queued behind unavailable provider or host
+capacity has not started work, so its reservation is not renewed and lapses;
+the deployment backs off instead of holding the issue behind a queue it cannot
+drain. Loss of the last confirmed lease cancels execution through
 the runtime's existing preservation and cleanup owner. Foreign consumers need
 only GitHub labels and comments to assess expiry; no foreign runtime or database
 access is required. Expiry grants no workspace-deletion or completion authority.
 See [GitHub Issue Status State Machine](../Workflows/GitHubIssueStatusStateMachineDesign.md)
-for the cooperative timing contract, prior-work handling, and non-expiring
-version-1 history compatibility.
+for the cooperative timing contract, prior-work handling, and the operator
+cutover that migrates version-1 history.
 
 **Document Class:** Canonical declarative  
 **Status:** Current  

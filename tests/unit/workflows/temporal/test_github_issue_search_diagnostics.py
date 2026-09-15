@@ -66,8 +66,10 @@ async def test_late_owner_conflicts_remain_visible_after_many_exclusions(
     assert result["reasonCode"] == "unresolved_issue_attempts"
     assert "#42" in result["summary"]
     evidence = result["searchEvidence"]
+    # No reconciliation hook is supplied here, so the advisory labels report
+    # exactly that rather than an ownership verdict they cannot support.
     assert evidence["rejectionCounts"] == {
-        "lifecycle_ineligible": 40,
+        "stale_status_label_unreconciled": 40,
         "blocked_prerequisite": 1,
         "active_attempt_conflict": 1,
     }

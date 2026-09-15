@@ -6724,7 +6724,10 @@ class MoonMindAgentRun:
                 )
 
             return await execute_with_issue_lease(lease=lease,
-                execute=lambda: self._run_under_claim(request), renew=renew)
+                execute=lambda: self._run_under_claim(request), renew=renew,
+                # A run queued behind unavailable provider/host capacity has
+                # not started work; it must not keep the issue reserved.
+                should_renew=lambda: self.slot_assigned_event.is_set())
         return await self._run_under_claim(request)
 
     async def _run_under_claim(self, request: AgentExecutionRequest) -> AgentRunResult:
