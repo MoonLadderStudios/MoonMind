@@ -764,8 +764,10 @@ class GenericOmnigentHostRealizer:
         ]
         if mismatches:
             # SHA/patch drift: rebuilt images change digests and build labels
-            # while keeping major.minor. Allow same-repository image and build
-            # drift so in-flight retries survive app updates; different
+            # while keeping major.minor. Excuse same-repository image drift so
+            # in-flight retries survive app updates, and excuse build drift
+            # only alongside such image drift (a lone build mismatch against
+            # the expected image is corruption, not a rebuild). Different
             # repositories, architectures, harnesses, or host IDs still fail.
             # Major.minor release compatibility is enforced by deployment
             # identity and attestation version gates, not by digests here.
@@ -774,24 +776,20 @@ class GenericOmnigentHostRealizer:
                     is_compatible_image_drift,
                 )
 
-                image_drift_ok = (
-                    "imageRef" not in mismatches
-                    or is_compatible_image_drift(
-                        expected["imageRef"], evidence.get("imageRef")
-                    )
-                )
-                build_drift_ok = (
-                    "omnigentBuildDigest" not in mismatches
-                    or is_compatible_image_drift(
+                image_drifted = "imageRef" in mismatches and bool(
+                    is_compatible_image_drift(
                         expected["imageRef"], evidence.get("imageRef")
                     )
                 )
             except Exception:
-                image_drift_ok = False
-                build_drift_ok = False
+                image_drifted = False
             excusable = {"imageRef", "omnigentBuildDigest"}
+            build_only_mismatch = mismatches == ["omnigentBuildDigest"]
             if not (
-                set(mismatches) <= excusable and image_drift_ok and build_drift_ok
+                set(mismatches) <= excusable
+                and ("imageRef" not in mismatches or image_drifted)
+                and ("omnigentBuildDigest" not in mismatches or image_drifted)
+                and not build_only_mismatch
             ):
                 raise HarnessPlatformError(
                     "attested host retry identity conflicts with the execution plan",

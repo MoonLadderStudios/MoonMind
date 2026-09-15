@@ -73,14 +73,18 @@ class DockerOmnigentHostLauncher:
             "accessMode": "read-only",
         }
 
-    async def _resolve_launch_image(self, requested_ref: str) -> str:
-        """Return the image to launch: exact when present, else compatible local.
+    async def _resolve_launch_image(
+        self, requested_ref: str, host_class: HostClass | None = None
+    ) -> str:
+        """Return the image to launch: exact when present, else qualified local.
 
         Rebuilt host images change SHA/patch while keeping major.minor. When
-        the plan-pinned digest is absent locally, reuse the deployment's
-        current same-repository digest if present instead of forcing a 7GB
-        exact pull or failing. Same-repository is the bound; downstream
-        major.minor gates (attestation) still enforce release compatibility.
+        the plan-pinned digest is absent locally, reuse a qualified
+        same-repository digest (digest-pinned, deployment-observed or
+        operator-pinned, same admitted series) if present instead of forcing a
+        7GB exact pull or failing. Qualification happens before any bearer or
+        credential reaches the fallback image; attestation re-verifies the
+        series with live probes before any session starts.
         """
 
         requested = str(requested_ref or "").strip()
@@ -102,7 +106,12 @@ class DockerOmnigentHostLauncher:
                 compatible_deployed_fallback,
             )
 
-            fallback = compatible_deployed_fallback(requested)
+            fallback = compatible_deployed_fallback(
+                requested,
+                expected_omnigent_version=host_class.omnigentVersion
+                if host_class is not None
+                else "",
+            )
         except Exception:
             fallback = None
         if fallback is not None:
@@ -194,7 +203,9 @@ class DockerOmnigentHostLauncher:
         # Resolve SHA drift once so every container creation below uses the
         # same effective image. Exact digest when present; otherwise the
         # deployment's current same-repository digest when present locally.
-        launch_image = await self._resolve_launch_image(host_class.imageRef)
+        launch_image = await self._resolve_launch_image(
+            host_class.imageRef, host_class
+        )
         await self._backend.run(
             [
                 "docker",

@@ -79,6 +79,7 @@ class OmnigentGithubCredentialService:
         writer_image_ref: str,
         runtime_uid: int,
         runtime_gid: int,
+        expected_omnigent_version: str = "",
     ) -> dict[str, Any] | None:
         attachment = self.anticipated_attachment(resolved_tools, owner_ref=owner_ref)
         if attachment is None:
@@ -140,9 +141,11 @@ class OmnigentGithubCredentialService:
             "chown -R \"$1:$2\" /config; "
             "chmod 0700 /config; chmod 0600 /config/hosts.yml"
         )
-        # Same-repo SHA drift recovery as credential writers: reuse the
-        # deployment's current local image when the plan-pinned digest is
-        # absent, avoiding a 7GB exact pull for patch rebuilds.
+        # Same-repo SHA drift recovery as credential writers: reuse a qualified
+        # deployment image when the plan-pinned digest is absent, avoiding a
+        # 7GB exact pull for patch rebuilds. Qualification (digest pin plus
+        # observed or operator-pinned authority plus admitted series) happens
+        # before the token reaches the fallback image.
         effective_writer = str(writer_image_ref or "").strip()
         if "@sha256:" in effective_writer:
             try:
@@ -150,7 +153,10 @@ class OmnigentGithubCredentialService:
                     compatible_deployed_fallback,
                 )
 
-                fallback = compatible_deployed_fallback(effective_writer)
+                fallback = compatible_deployed_fallback(
+                    effective_writer,
+                    expected_omnigent_version=expected_omnigent_version,
+                )
             except Exception:
                 fallback = None
             if fallback is not None:
