@@ -15242,26 +15242,26 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 onSettled={commitBranchSettled}
                 extraOnChange={markBranchTouchedLive}
               />
+              {branchControlDisabled ? null : branchSearchRequested ? (
+                <button
+                  type="button"
+                  className="secondary small queue-branch-search"
+                  onClick={clearBranchSearch}
+                  title="Hide broader GitHub branch search results; typing always filters local suggestions."
+                >
+                  Hide search
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="secondary small queue-branch-search"
+                  onClick={requestBranchSearch}
+                  title="Search other branches on GitHub (one bounded request). Typing, pasting, and submitting never require this."
+                >
+                  Search other branches
+                </button>
+              )}
             </div>
-            {branchControlDisabled ? null : branchSearchRequested ? (
-              <button
-                type="button"
-                className="small"
-                onClick={clearBranchSearch}
-                title="Hide broader GitHub branch search results; typing always filters local suggestions."
-              >
-                Hide search
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="small"
-                onClick={requestBranchSearch}
-                title="Search other branches on GitHub (one bounded request). Typing, pasting, and submitting never require this."
-              >
-                Search other branches
-              </button>
-            )}
             <div
               className="queue-inline-selector queue-inline-selector--publish"
               title={publishModeTooltip}
