@@ -11,8 +11,12 @@ qualify-or-retire items for the static Claude path against effective inputs:
   digest, conflicting settings) through the trusted boundary
   ``resolve_effective_static_host_image``, not raw-YAML equality; the
   Compose prelaunch admission boundary
-  ``admit_static_host_compose_launch`` and the bootstrap persistence gate
+  ``admit_static_host_compose_launch`` (and its rendered-env equivalent
+  ``admit_static_host_effective_launch``) and the bootstrap persistence gate
   ``require_static_host_image_authority`` enforce it at their callers.
+  The managed launch path admits through
+  ``OmnigentOAuthHostRuntime._compose_static_check`` immediately before
+  ``docker compose up``.
 - R4: credential generation fencing is verified through rendered effective
   environments plus the packaged startup read-back check; the staged marker
   is fenced against the live lease via
@@ -21,7 +25,11 @@ qualify-or-retire items for the static Claude path against effective inputs:
 - R5: readiness waits are bounded with distinct waiting vs failed outcomes
   at the script level and through the deterministic workflow-side
   ``classify_static_enrollment_status`` (the stream-admission deadline in
-  ``execute.py`` is unrelated and is not enrollment evidence).
+  ``execute.py`` is unrelated and is not enrollment evidence). The
+  production caller is ``OmnigentOAuthHostRuntime.prepare_host`` via
+  ``_classify_static_enrollment`` / ``_require_static_enrollment_admitted``
+  with entrypoint-parity timeouts from
+  ``static_enrollment_timeouts_from_env``.
 - R6: isolation is verified through rendered effective inputs, effective
   mounts, and executed packaged-script fragments (GH_TOKEN write/rotate/
   preserve/reject, generation fencing, ambient/cross-runtime rejection,
@@ -40,7 +48,9 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -50,6 +60,15 @@ from moonmind.omnigent.bootstrap import image_resolution
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.harness_platform.host_classes import (
     DEFAULT_HOST_CLASS_TEMPLATES,
+)
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
+from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.oauth_hosts import HostPreflightFailure
+from moonmind.schemas.agent_runtime_models import (
+    AuthVolumeRef,
+    CredentialMountRef,
+    OmnigentHostLease,
+    OmnigentOAuthHostBinding,
 )
 from moonmind.omnigent.legacy_retirement import (
     RETIREMENT_INVENTORY,
@@ -1067,6 +1086,413 @@ def test_packaged_github_token_block_rotates_and_preserves() -> None:
         )
         assert result.returncode != 0
         assert (config_home / "gh" / "hosts.yml").read_text() == before
+    finally:
+        import shutil
+
+        shutil.rmtree(config_home, ignore_errors=True)
+
+
+# --------------------------------- R3: effective-launch production parity
+
+
+def test_admit_static_host_effective_launch_matches_compose_boundary() -> None:
+    raw = _claude_raw_env()
+    operator_env = {"OMNIGENT_SHARED_HOST_IMAGE_REF": FAKE_DIGEST}
+    rendered = static_hosts.render_static_service_env(raw, operator_env)
+    via_compose = static_hosts.admit_static_host_compose_launch(
+        service="omnigent-host-claude",
+        pack_ref="claude-native-pack@1",
+        materializer_ref="claude-oauth-home@1",
+        operator_env=operator_env,
+        raw_service_env=raw,
+    )
+    via_effective = static_hosts.admit_static_host_effective_launch(
+        service="omnigent-host-claude",
+        pack_ref="claude-native-pack@1",
+        materializer_ref="claude-oauth-home@1",
+        rendered_env=rendered,
+        operator_env=operator_env,
+    )
+    assert via_effective == via_compose
+    assert via_effective["image_ref"] == FAKE_DIGEST
+    # The effective boundary fails closed on the same unqualified inputs.
+    for bad_operator in (
+        {},
+        {"OMNIGENT_SHARED_HOST_IMAGE_TAG": "1.18.11"},
+        {"OMNIGENT_SHARED_HOST_IMAGE_REF": "some-image:latest"},
+    ):
+        with pytest.raises(HarnessPlatformError):
+            static_hosts.admit_static_host_effective_launch(
+                service="omnigent-host-claude",
+                pack_ref="claude-native-pack@1",
+                materializer_ref="claude-oauth-home@1",
+                rendered_env=rendered,
+                operator_env=bad_operator,
+            )
+    poisoned = dict(rendered)
+    poisoned["ANTHROPIC_API_KEY"] = "secret"
+    with pytest.raises(HarnessPlatformError):
+        static_hosts.admit_static_host_effective_launch(
+            service="omnigent-host-claude",
+            pack_ref="claude-native-pack@1",
+            materializer_ref="claude-oauth-home@1",
+            rendered_env=poisoned,
+            operator_env=operator_env,
+        )
+
+
+# --------------------------------- R5: enrollment timeout parity
+
+
+def test_static_enrollment_timeouts_from_env_match_entrypoint_defaults() -> None:
+    assert static_hosts.static_enrollment_timeouts_from_env({}) == (1800, 600)
+    assert static_hosts.static_enrollment_timeouts_from_env(
+        {
+            "MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS": "60",
+            "MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS": "30",
+        }
+    ) == (60, 30)
+    # An explicitly empty value selects the entrypoint `:-` default, exactly
+    # as `start-omnigent-host.sh` models it.
+    assert static_hosts.static_enrollment_timeouts_from_env(
+        {"MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS": ""}
+    ) == (1800, 600)
+    for bad in (
+        {"MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS": "0"},
+        {"MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS": "-5"},
+        {"MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS": "soon"},
+        {"MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS": "1.5"},
+    ):
+        with pytest.raises(HarnessPlatformError):
+            static_hosts.static_enrollment_timeouts_from_env(bad)
+
+
+# --------------------------------- R3/R4: production prelaunch gate
+
+
+def _production_claude_binding(*, generation: int = 7) -> OmnigentOAuthHostBinding:
+    return OmnigentOAuthHostBinding(
+        bindingRef="omnigent-oauth:claude",
+        providerProfileId="claude-oauth",
+        endpointRef="default",
+        harness="claude-native",
+        credentialMountRef=CredentialMountRef(
+            authVolumeRef=AuthVolumeRef(
+                providerProfileId="claude-oauth",
+                runtimeId="claude_code",
+                providerId="anthropic",
+                volumeRef="claude_auth_volume",
+                credentialGeneration=generation,
+                ownerUserId="user-1",
+            ),
+            targetPath="/home/app/.claude",
+            runtimeUid=1000,
+            runtimeGid=1000,
+        ),
+        staticHostId="omnigent-host-claude",
+    )
+
+
+def _production_claude_lease(
+    *, generation: int = 7, session_id: str | None = None
+) -> OmnigentHostLease:
+    now = datetime(2026, 9, 15, tzinfo=UTC)
+    return OmnigentHostLease(
+        leaseId="host-lease-claude-1",
+        providerProfileId="claude-oauth",
+        providerLeaseId="provider-lease-claude-1",
+        bindingRef="omnigent-oauth:claude",
+        credentialGeneration=generation,
+        omnigentHostId="omnigent-host-claude",
+        omnigentSessionId=session_id,
+        status="starting",
+        acquiredAt=now,
+        lastHeartbeatAt=now,
+        expiresAt=now + timedelta(hours=1),
+    )
+
+
+def _pinned_claude_operator_env() -> dict[str, str]:
+    return {
+        "OMNIGENT_SHARED_HOST_IMAGE_REF": FAKE_DIGEST,
+        "CLAUDE_CREDENTIAL_GENERATION": "7",
+    }
+
+
+def test_production_prelaunch_gate_admits_pinned_claude_launch() -> None:
+    admission = OmnigentOAuthHostRuntime._admit_static_compose_prelaunch(
+        binding=_production_claude_binding(),
+        host_lease=_production_claude_lease(),
+        operator_env=_pinned_claude_operator_env(),
+    )
+    assert admission["service"] == "omnigent-host-claude"
+    assert admission["image_ref"] == FAKE_DIGEST
+    assert admission["registered_host_id"] == "omnigent-host-claude"
+
+
+def test_production_prelaunch_gate_binds_staged_marker_to_lease() -> None:
+    # The staged marker alone is not admission evidence: a stale marker
+    # against the live lease fails closed with the generation-stale outcome.
+    with pytest.raises(OmnigentOAuthHostError) as excinfo:
+        OmnigentOAuthHostRuntime._admit_static_compose_prelaunch(
+            binding=_production_claude_binding(generation=7),
+            host_lease=_production_claude_lease(generation=8),
+            operator_env=_pinned_claude_operator_env(),
+        )
+    assert excinfo.value.code == HostPreflightFailure.GENERATION_STALE.value
+
+
+def test_production_prelaunch_gate_rejects_unpinned_image_at_launch() -> None:
+    binding = _production_claude_binding()
+    lease = _production_claude_lease()
+    # Unset configuration: rejected with the exact platform authority code
+    # instead of launching the mutable Compose default.
+    with pytest.raises(OmnigentOAuthHostError) as excinfo:
+        OmnigentOAuthHostRuntime._admit_static_compose_prelaunch(
+            binding=binding,
+            host_lease=lease,
+            operator_env={"CLAUDE_CREDENTIAL_GENERATION": "7"},
+        )
+    assert excinfo.value.code == "OMNIGENT_HARNESS_BUILD_MISMATCH"
+    # Mutable tag construction: rejected at the launch boundary, not launched.
+    with pytest.raises(OmnigentOAuthHostError) as excinfo:
+        OmnigentOAuthHostRuntime._admit_static_compose_prelaunch(
+            binding=binding,
+            host_lease=lease,
+            operator_env={
+                "OMNIGENT_SHARED_HOST_IMAGE": (
+                    "ghcr.io/moonladderstudios/omnigent-host-moonmind"
+                ),
+                "OMNIGENT_SHARED_HOST_IMAGE_TAG": "1.18.11",
+                "CLAUDE_CREDENTIAL_GENERATION": "7",
+            },
+        )
+    assert excinfo.value.code == "OMNIGENT_HARNESS_BUILD_MISMATCH"
+
+
+def test_production_prelaunch_gate_rejects_ambient_selector() -> None:
+    poisoned = _pinned_claude_operator_env()
+    poisoned["ANTHROPIC_API_KEY"] = "secret"
+    with pytest.raises(OmnigentOAuthHostError) as excinfo:
+        OmnigentOAuthHostRuntime._admit_static_compose_prelaunch(
+            binding=_production_claude_binding(),
+            host_lease=_production_claude_lease(),
+            operator_env=poisoned,
+        )
+    assert excinfo.value.code == HostPreflightFailure.COMPETING_CREDENTIAL.value
+
+
+@pytest.mark.asyncio
+async def test_compose_static_check_runs_prelaunch_gate_before_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_COMPOSE_FILE", str(REPO_ROOT / "docker-compose.yaml")
+    )
+    for key in (
+        "MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS",
+        "MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    calls: list[tuple[str, ...]] = []
+
+    async def fake_run(*args: str, env=None, check=True):  # type: ignore[no-untyped-def]
+        calls.append(tuple(args))
+        return 0, "", ""
+
+    runtime._run = fake_run  # type: ignore[method-assign]
+    binding = _production_claude_binding()
+    lease = _production_claude_lease()
+    effective_launch = {
+        "hostImageRef": FAKE_DIGEST,
+        "serverImageRef": FAKE_DIGEST,
+        "snapshotRef": "omnigent-launch:sha256:" + "c" * 64,
+        "providerRuntime": "claude_code",
+        "harness": "claude-native",
+        "hostMode": "static_compose",
+        "runtimeUid": 1000,
+        "runtimeGid": 1000,
+        "limits": {
+            "cpuMillis": 2000,
+            "memoryMiB": 4096,
+            "processes": 256,
+            "temporaryStorageMiB": 256,
+            "timeoutSeconds": 5400,
+        },
+        "capture": {"retentionDays": 30},
+        "controlCapabilities": ["interrupt", "terminate"],
+    }
+    env = await runtime._compose_static_check(
+        binding=binding,
+        host_lease=lease,
+        workspace_source=tmp_path,
+        skill_projection=None,
+        effective_launch=effective_launch,
+        egress_attestation=None,
+    )
+    assert env["OMNIGENT_SHARED_HOST_IMAGE_REF"] == FAKE_DIGEST
+    assert env["CLAUDE_CREDENTIAL_GENERATION"] == "7"
+    up_calls = [args for args in calls if "up" in args]
+    assert len(up_calls) == 1
+    assert "omnigent-host-claude" in up_calls[0]
+
+    # An unqualified image never reaches `docker compose up`: the gate fails
+    # first at the production launch boundary.
+    calls.clear()
+    bad_launch = dict(
+        effective_launch,
+        hostImageRef=(
+            "ghcr.io/moonladderstudios/omnigent-host-moonmind:1.18.11"
+        ),
+    )
+    with pytest.raises(OmnigentOAuthHostError):
+        await runtime._compose_static_check(
+            binding=binding,
+            host_lease=lease,
+            workspace_source=tmp_path,
+            skill_projection=None,
+            effective_launch=bad_launch,
+            egress_attestation=None,
+        )
+    assert calls == []
+
+
+# --------------------------------- R5: production enrollment admission
+
+
+def test_production_enrollment_admits_ready_and_rejects_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in (
+        "MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS",
+        "MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    binding = _production_claude_binding(generation=7)
+    lease = _production_claude_lease(generation=7)
+    ready = OmnigentOAuthHostRuntime._classify_static_enrollment(
+        binding=binding,
+        host_lease=lease,
+        credential_ready=True,
+        projection_ready=True,
+        elapsed_seconds=3.0,
+    )
+    assert ready["status"] == "ready"
+    admitted = OmnigentOAuthHostRuntime._require_static_enrollment_admitted(ready)
+    assert admitted["admitted"] is True
+
+    # Stale lease generation: unqualified even when both probes report ready.
+    # Probe success (or process existence) is never admitted capacity on a
+    # fenced generation.
+    stale_lease = _production_claude_lease(generation=8)
+    unqualified = OmnigentOAuthHostRuntime._classify_static_enrollment(
+        binding=binding,
+        host_lease=stale_lease,
+        credential_ready=True,
+        projection_ready=True,
+        elapsed_seconds=3.0,
+    )
+    assert unqualified["status"] == "unqualified"
+    with pytest.raises(OmnigentOAuthHostError) as excinfo:
+        OmnigentOAuthHostRuntime._require_static_enrollment_admitted(unqualified)
+    assert excinfo.value.code == HostPreflightFailure.GENERATION_STALE.value
+
+
+def test_production_enrollment_failure_spends_budget_past_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS", "60")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS", "30")
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    binding = _production_claude_binding()
+    lease = _production_claude_lease()
+    probe_error = RuntimeError("projection probe failed")
+    # Past the Skill-projection deadline: the distinct failed outcome
+    # replaces the probe error so this attempt's budget is spent.
+    with pytest.raises(OmnigentOAuthHostError) as excinfo:
+        runtime._raise_static_enrollment_failure(
+            binding=binding,
+            host_lease=lease,
+            credential_ready=True,
+            projection_ready=False,
+            elapsed_seconds=30.0,
+            fallback=probe_error,
+        )
+    assert excinfo.value.code == HostPreflightFailure.LOGIN_STATUS_FAILED.value
+    assert excinfo.value.__cause__ is probe_error
+    # Within budget: the original probe error propagates (operator
+    # enrollment pending, retryable as a new attempt).
+    with pytest.raises(RuntimeError) as excinfo2:
+        runtime._raise_static_enrollment_failure(
+            binding=binding,
+            host_lease=lease,
+            credential_ready=True,
+            projection_ready=False,
+            elapsed_seconds=3.0,
+            fallback=probe_error,
+        )
+    assert excinfo2.value is probe_error
+
+
+# --------------------------------- R6: packaged-script isolation
+
+
+def test_packaged_startup_rejects_opencode_ambient_selectors() -> None:
+    ambient, _cross = _startup_control_fragments()
+    harness = ambient + 'printf "ADMITTED\\n"\n'
+    # The packaged ambient fence covers the on-demand runtime's selectors on
+    # the static rows too: presence alone fails closed, even empty-valued.
+    for poison in (
+        {"OPENCODE_AUTH_CONTENT": "secret"},
+        {"OPENCODE_AUTH_CONTENT": ""},
+        {"OPENCODE_CONFIG": "/tmp/evil-config"},
+        {"OPENCODE_CONFIG_CONTENT": "config"},
+    ):
+        result = _run_shell_fragment(harness, dict(poison))
+        assert result.returncode == 64, poison
+        assert "ambient credential selector" in result.stderr
+    result = _run_shell_fragment(harness, {})
+    assert result.returncode == 0
+    assert "ADMITTED" in result.stdout
+
+
+def test_github_token_block_preserves_unrelated_config_contents() -> None:
+    base_env = {
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/home/app",
+    }
+    pid = str(subprocess.os.getpid())
+    config_home = Path(f"/home/app/.cache/mm-gh-token-preserve-test-{pid}")
+    try:
+        gh_dir = config_home / "gh"
+        gh_dir.mkdir(parents=True, exist_ok=True)
+        (gh_dir / "hosts.yml").write_text(
+            "github.com:\n    oauth_token: STALE_1\n"
+        )
+        (gh_dir / "config.yml").write_text("editor: vim\n")
+        before_hosts = (gh_dir / "hosts.yml").read_text()
+        before_config = (gh_dir / "config.yml").read_text()
+        # Restart without a token preserves every persisted file untouched:
+        # the block has no deletion or directory-reset path.
+        result = _run_github_token_block(
+            {**base_env, "XDG_CONFIG_HOME": str(config_home)}, gh_dir
+        )
+        assert result.returncode == 0, result.stderr
+        assert (gh_dir / "hosts.yml").read_text() == before_hosts
+        assert (gh_dir / "config.yml").read_text() == before_config
+        # A rejected token preserves the previous connection and its neighbors.
+        result = _run_github_token_block(
+            {
+                **base_env,
+                "XDG_CONFIG_HOME": str(config_home),
+                "GH_TOKEN": "bad-token!",
+            },
+            gh_dir,
+        )
+        assert result.returncode != 0
+        assert (gh_dir / "hosts.yml").read_text() == before_hosts
+        assert (gh_dir / "config.yml").read_text() == before_config
     finally:
         import shutil
 

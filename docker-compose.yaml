@@ -40,7 +40,14 @@
 # effective environment and resolves the effective image through
 # `resolve_effective_static_host_image` for every operator configuration
 # (shared digest, missing ref, mutable tag, legacy-only digest, conflicting
-# settings) and fails closed on anything but a digest pin.
+# settings) and fails closed on anything but a digest pin. The managed
+# launch path calls the same boundary through
+# `OmnigentOAuthHostRuntime._compose_static_check` (which admits the
+# rendered effective environment via `admit_static_host_effective_launch`
+# and binds the staged generation to the live lease) immediately before
+# `docker compose up`; a direct `docker compose up` that bypasses the
+# bootstrap pass or that admission gate launches the mutable fallback below
+# and is not a qualified static launch.
 x-omnigent-static-host:
   image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
   user: "1000:1000"
