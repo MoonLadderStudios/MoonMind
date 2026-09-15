@@ -460,6 +460,297 @@ def resolve_effective_static_host_image(
     )
 
 
+def admit_static_host_compose_launch(
+    *,
+    service: str,
+    pack_ref: str,
+    materializer_ref: str,
+    operator_env: Mapping[str, str],
+    raw_service_env: Mapping[str, str],
+) -> dict[str, object]:
+    """Admit one static Compose service at the prelaunch boundary.
+
+    This is the trusted Python admission boundary for the Compose launch
+    path (MoonLadderStudios/MoonMind#3936 R3): it judges the service's
+    *rendered effective* environment — the values a container would
+    receive — through :func:`validate_static_combination`, and resolves
+    the *effective* launch image through
+    :func:`resolve_effective_static_host_image`, which fails closed on
+    unset, mutable-tag, or invalid operator configuration. A helper-level
+    classification alone is not launch authority; callers must pass
+    through this boundary before ``docker compose up`` admits the service.
+
+    ``operator_env`` is the operator shell environment;
+    ``raw_service_env`` is the service's ``environment`` mapping as parsed
+    from ``docker-compose.yaml`` (interpolation expressions included).
+    """
+
+    rendered = render_static_service_env(raw_service_env, operator_env)
+    row = validate_static_combination(
+        service=service,
+        pack_ref=pack_ref,
+        materializer_ref=materializer_ref,
+        environment=rendered,
+    )
+    image_ref = resolve_effective_static_host_image(operator_env)
+    return {
+        "service": row.service,
+        "compose_profile": row.compose_profile,
+        "host_class_ref": row.host_class_ref,
+        "image_ref": image_ref,
+        "rendered_env": rendered,
+    }
+
+
+# --- R5: workflow-side bounded static enrollment -----------------------------
+#
+# The script-level readiness loops bound the *operator waiting state* with
+# distinct nonzero exits. A workflow must additionally bound its own
+# admission/retry wait and must never treat process existence as admitted
+# capacity. The helpers below are pure functions of explicit inputs (no
+# clock reads, no environment reads) so Temporal workflow and Activity
+# callers stay deterministic: the caller supplies the elapsed wait and the
+# observed readiness probes, and the classifier returns the waiting /
+# ready / failed / unqualified separation. The stream-admission deadline
+# in ``moonmind.omnigent.execute`` is unrelated (first-message stream
+# admission) and must not be used as static-enrollment evidence.
+
+#: Distinct static-enrollment outcomes. Only ``ready`` is admitted usable
+#: capacity; ``waiting-*`` keeps the operator wait distinguishable from a
+#: decision; ``failed-*`` spends this attempt's budget (a new admission
+#: attempt may start only after operator action); ``unqualified`` fails
+#: closed without consuming the enrollment budget.
+STATIC_ENROLLMENT_READY = "ready"
+STATIC_ENROLLMENT_WAITING_FOR_ENROLLMENT = "waiting-for-enrollment"
+STATIC_ENROLLMENT_WAITING_FOR_PROJECTION = "waiting-for-projection"
+STATIC_ENROLLMENT_FAILED_ENROLLMENT_TIMEOUT = "failed-enrollment-timeout"
+STATIC_ENROLLMENT_FAILED_PROJECTION_TIMEOUT = "failed-projection-timeout"
+STATIC_ENROLLMENT_UNQUALIFIED = "unqualified"
+
+
+def classify_static_enrollment_status(
+    *,
+    credential_ready: bool,
+    projection_ready: bool,
+    generation_fenced_ok: bool = True,
+    elapsed_seconds: float = 0.0,
+    credential_timeout_seconds: int = 1800,
+    skill_timeout_seconds: int = 600,
+) -> dict[str, object]:
+    """Classify one static-enrollment observation for workflow admission.
+
+    ``credential_ready`` mirrors the ``check-omnigent-host.sh`` gate
+    (authenticated credentials enrolled and generation-fenced);
+    ``projection_ready`` mirrors the ``check-runner-projections.sh`` gate
+    (resolved Skill projection present). ``elapsed_seconds`` is this
+    admission attempt's waited time; the attempt fails with a distinct
+    ``failed-*`` outcome once its deadline passes instead of waiting
+    indefinitely. A stale or mismatched generation (``generation_fenced_ok``
+    false) is ``unqualified``: fail-closed, never admitted, never retried
+    as the same attempt.
+    """
+
+    for label, value in (
+        ("credential_timeout_seconds", credential_timeout_seconds),
+        ("skill_timeout_seconds", skill_timeout_seconds),
+    ):
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value <= 0
+        ):
+            raise HarnessPlatformError(
+                f"static enrollment {label} must be a positive integer",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+    if not generation_fenced_ok:
+        return {
+            "status": STATIC_ENROLLMENT_UNQUALIFIED,
+            "admitted": False,
+            "retryable": False,
+            "reason": (
+                "stale or mismatched credential generation: fail closed, "
+                "never admitted usable capacity"
+            ),
+        }
+    if not credential_ready:
+        if elapsed_seconds >= credential_timeout_seconds:
+            return {
+                "status": STATIC_ENROLLMENT_FAILED_ENROLLMENT_TIMEOUT,
+                "admitted": False,
+                "retryable": False,
+                "reason": (
+                    "waiting-for-enrollment deadline exceeded: authenticated "
+                    "credentials not ready (operator enrollment pending, "
+                    "not admitted capacity)"
+                ),
+            }
+        return {
+            "status": STATIC_ENROLLMENT_WAITING_FOR_ENROLLMENT,
+            "admitted": False,
+            "retryable": True,
+            "reason": (
+                "operator enrollment pending: waiting state, "
+                "not admitted capacity"
+            ),
+        }
+    if not projection_ready:
+        if elapsed_seconds >= skill_timeout_seconds:
+            return {
+                "status": STATIC_ENROLLMENT_FAILED_PROJECTION_TIMEOUT,
+                "admitted": False,
+                "retryable": False,
+                "reason": (
+                    "Skill-projection deadline exceeded: no resolved Skill "
+                    "projection (missing projection, not admitted capacity)"
+                ),
+            }
+        return {
+            "status": STATIC_ENROLLMENT_WAITING_FOR_PROJECTION,
+            "admitted": False,
+            "retryable": True,
+            "reason": (
+                "resolved Skill projection missing: waiting state, "
+                "not admitted capacity"
+            ),
+        }
+    return {
+        "status": STATIC_ENROLLMENT_READY,
+        "admitted": True,
+        "retryable": False,
+        "reason": "credential and Skill-projection gates both report ready",
+    }
+
+
+# --- R4: staged-marker vs live-lease credential ownership --------------------
+#
+# ``start-omnigent-host.sh`` stages the supplied generation marker and
+# verifies the write by reading it back. That read-back proves staging
+# integrity only; admission authority stays with the Provider Profile
+# lease/generation, host binding/lease, and attestation owners named in
+# :func:`static_host_authority_notes`. The helpers below fence the staged
+# value against the live lease at the admission boundary instead of
+# trusting the marker alone. Lease acquisition, binding, attestation,
+# session/turn ownership, and cleanup ordering themselves stay owned by
+# the existing planner, lease, attestation, session, and cleanup modules
+# (referenced, not reimplemented, here).
+
+#: Execution modes across which one credential generation may rotate.
+STATIC_CREDENTIAL_EXECUTION_MODES: tuple[str, ...] = (
+    "static",
+    "direct",
+    "on-demand",
+)
+
+
+def verify_staged_generation_against_lease(
+    *,
+    staged_generation: str,
+    lease_generation: str,
+    provider_profile_id: str,
+    registered_host_id: str,
+) -> dict[str, str]:
+    """Fence a staged generation marker against the live Provider lease.
+
+    Both values must be present and equal; a missing or mismatched marker
+    fails closed. The staged file is staging evidence only — this check
+    is what binds it to current lease authority before admission.
+    """
+
+    staged = str(staged_generation or "").strip()
+    live = str(lease_generation or "").strip()
+    profile = str(provider_profile_id or "").strip()
+    host = str(registered_host_id or "").strip()
+    if not staged or not live:
+        raise HarnessPlatformError(
+            "staged credential generation is not lease-verified: "
+            "marker or live lease generation is missing",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
+        )
+    if not profile or not host:
+        raise HarnessPlatformError(
+            "staged credential generation is not lease-verified: "
+            "provider profile or registered host identity is missing",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
+        )
+    if staged != live:
+        raise HarnessPlatformError(
+            "staged credential generation does not match the live Provider "
+            f"Profile lease generation for {profile} on {host}",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
+        )
+    return {
+        "provider_profile_id": profile,
+        "registered_host_id": host,
+        "verified_generation": staged,
+    }
+
+
+def trace_static_credential_ownership(
+    *,
+    provider_profile_id: str,
+    provider_lease_ref: str,
+    credential_generation: str,
+    registered_host_id: str,
+    active_session_count: int,
+    execution_modes_observed: tuple[str, ...] | list[str],
+) -> dict[str, object]:
+    """Trace one static credential-ownership claim to its lease authority.
+
+    Binds the selected Provider Profile to its current lease ref and
+    generation, to the exact registered host, and to one-session/lease
+    exclusivity: more than one active session on the same lease fails
+    closed instead of sharing the lease. ``execution_modes_observed``
+    records which of the ``static`` / ``direct`` / ``on-demand`` modes
+    have consumed this generation, so rotation across modes stays
+    evidenced against the same lease rather than assumed from the
+    staged marker.
+    """
+
+    profile = str(provider_profile_id or "").strip()
+    lease_ref = str(provider_lease_ref or "").strip()
+    generation = str(credential_generation or "").strip()
+    host = str(registered_host_id or "").strip()
+    modes = [str(mode).strip() for mode in (execution_modes_observed or [])]
+    if not profile or not lease_ref or not generation or not host:
+        raise HarnessPlatformError(
+            "static credential ownership is incomplete: provider profile, "
+            "lease ref, generation, and registered host are all required",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
+        )
+    unknown_modes = [mode for mode in modes if mode not in STATIC_CREDENTIAL_EXECUTION_MODES]
+    if unknown_modes:
+        raise HarnessPlatformError(
+            "static credential ownership names an unknown execution mode: "
+            + ", ".join(sorted(set(unknown_modes))),
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT,
+        )
+    if (
+        not isinstance(active_session_count, int)
+        or isinstance(active_session_count, bool)
+        or active_session_count < 0
+    ):
+        raise HarnessPlatformError(
+            "static credential ownership requires a non-negative active "
+            "session count",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT,
+        )
+    if active_session_count > 1:
+        raise HarnessPlatformError(
+            f"static credential lease {lease_ref} is not exclusive: "
+            f"{active_session_count} active sessions",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT,
+        )
+    return {
+        "provider_profile_id": profile,
+        "provider_lease_ref": lease_ref,
+        "verified_generation": generation,
+        "registered_host_id": host,
+        "exclusive": active_session_count <= 1,
+        "execution_modes_observed": tuple(modes),
+    }
+
+
 def static_host_authority_notes() -> dict[str, str]:
     """Name the durable owners for static-row authority handoffs.
 
@@ -508,6 +799,13 @@ __all__ = [
     "STATIC_CODEX_PACK_REF",
     "STATIC_CODEX_PROFILE",
     "STATIC_CODEX_SERVICE",
+    "STATIC_CREDENTIAL_EXECUTION_MODES",
+    "STATIC_ENROLLMENT_FAILED_ENROLLMENT_TIMEOUT",
+    "STATIC_ENROLLMENT_FAILED_PROJECTION_TIMEOUT",
+    "STATIC_ENROLLMENT_READY",
+    "STATIC_ENROLLMENT_UNQUALIFIED",
+    "STATIC_ENROLLMENT_WAITING_FOR_ENROLLMENT",
+    "STATIC_ENROLLMENT_WAITING_FOR_PROJECTION",
     "STATIC_HOST_ROWS",
     "StaticHostRow",
     "FORBIDDEN_STATIC_AMBIENT_KEYS",
@@ -515,13 +813,17 @@ __all__ = [
     "GENERIC_STATIC_ENTRYPOINT",
     "GENERIC_STATIC_HEALTHCHECK",
     "classify_effective_static_host_image",
+    "classify_static_enrollment_status",
+    "admit_static_host_compose_launch",
     "resolve_effective_static_host_image",
     "render_static_service_env",
     "resolve_static_host_image_ref",
     "static_claude_disposition",
     "static_host_authority_notes",
     "static_host_row",
+    "trace_static_credential_ownership",
     "validate_static_combination",
     "validate_static_materializer_selection",
     "validate_static_pack_selection",
+    "verify_staged_generation_against_lease",
 ]
