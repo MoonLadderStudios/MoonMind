@@ -803,6 +803,56 @@ def test_step_timeout_wrapper_fails_fast_on_a_hung_process() -> None:
     assert elapsed < 10
 
 
+def test_pytest_timeout_fails_a_hanging_test_fast(tmp_path) -> None:
+    """Disposable probe (MoonLadderStudios/MoonMind#4365 R11): the per-test
+    ``--timeout 300`` bound used on reliability shards fails a hanging test
+    with non-success instead of holding the shard."""
+    import subprocess
+    import sys
+    import time
+
+    probe = tmp_path / "test_hang_probe_4365.py"
+    probe.write_text(
+        "import time\n\ndef test_hang_forever():\n    time.sleep(300)\n",
+        encoding="utf-8",
+    )
+    start = time.monotonic()
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", str(probe), "--timeout", "2", "-q"],
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    elapsed = time.monotonic() - start
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    if "unrecognized arguments: --timeout" in combined:
+        pytest.skip("pytest-timeout plugin is unavailable")
+    assert proc.returncode != 0
+    assert elapsed < 60
+
+
+def test_timeout_bounds_a_hanging_teardown_phase() -> None:
+    """Disposable probe (MoonLadderStudios/MoonMind#4365 R11): a teardown
+    phase that never returns (EXIT trap sleeping) is terminated by the
+    ``timeout`` step wrapper with a non-success exit instead of hanging
+    the shard's bounded diagnostics/cleanup."""
+    import shutil
+    import subprocess
+    import time
+
+    if shutil.which("timeout") is None or shutil.which("bash") is None:
+        pytest.skip("coreutils timeout or bash is unavailable")
+    start = time.monotonic()
+    proc = subprocess.run(
+        ["timeout", "5s", "bash", "-c", "cleanup(){ sleep 300; }; trap cleanup EXIT; sleep 1"],
+        capture_output=True,
+        timeout=60,
+    )
+    elapsed = time.monotonic() - start
+    assert proc.returncode == 124
+    assert elapsed < 30
+
+
 def test_reliability_fixtures_reuse_registry_layers_without_shared_state() -> None:
     """MoonLadderStudios/MoonMind#4376: no redundant cache subsystem.
 
