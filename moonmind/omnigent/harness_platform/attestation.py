@@ -143,7 +143,7 @@ def validate_exact_host_attestation(
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
     if attestation.hostImageRef != expectedImageRef:
-        # Rebuilt images change SHA/patch while keeping major.minor. Accept
+        # Rebuilt images change SHA/patch/minor while keeping major. Accept
         # same-repository drift here; series compatibility was proven by the
         # launch-time version gates and is re-checked below for vendors. A
         # foreign repository is never compatible drift.

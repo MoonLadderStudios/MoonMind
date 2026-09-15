@@ -763,13 +763,13 @@ class GenericOmnigentHostRealizer:
             if str(evidence.get(key) or "") != str(value or "")
         ]
         if mismatches:
-            # SHA/patch drift: rebuilt images change digests and build labels
-            # while keeping major.minor. Excuse same-repository image drift so
+            # SHA/patch/minor drift: rebuilt images change digests and build labels
+            # while keeping major. Excuse same-repository image drift so
             # in-flight retries survive app updates, and excuse build drift
             # only alongside such image drift (a lone build mismatch against
             # the expected image is corruption, not a rebuild). Different
             # repositories, architectures, harnesses, or host IDs still fail.
-            # Major.minor release compatibility is enforced by deployment
+            # Major release compatibility is enforced by deployment
             # identity and attestation version gates, not by digests here.
             try:
                 from moonmind.omnigent.host_image_drift import (

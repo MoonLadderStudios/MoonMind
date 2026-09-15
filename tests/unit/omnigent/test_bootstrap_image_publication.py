@@ -493,7 +493,7 @@ async def test_resolution_accepts_an_explicit_independently_paired_build(
 async def test_resolution_quarantines_server_and_host_build_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Replay the 0.12 server / 0.11 OpenCode host production failure."""
+    """Replay the 0.12 server / 1.x OpenCode host production failure."""
 
     from moonmind.omnigent.bootstrap import store
 
@@ -529,7 +529,7 @@ async def test_resolution_quarantines_server_and_host_build_drift(
             "--entrypoint",
             "/opt/venv/bin/omnigent",
         ]:
-            version = "0.12.0" if cmd[-2] == SERVER_REF else "0.11.0"
+            version = "0.12.0" if cmd[-2] == SERVER_REF else "1.0.0"
             return 0, f"omnigent {version} (built for test)\n", ""
         raise AssertionError(cmd)
 
@@ -550,7 +550,7 @@ async def test_resolution_quarantines_server_and_host_build_drift(
         "serverBuildDigest": server_build,
         "hostBuildDigest": stale_host_build,
         "serverVersion": "0.12.0",
-        "hostVersion": "0.11.0",
+        "hostVersion": "1.0.0",
         "pendingHost": None,
     }
 
@@ -590,7 +590,7 @@ async def test_resolution_quarantines_mislabeled_host_version_drift(
             "--entrypoint",
             "/opt/venv/bin/omnigent",
         ]:
-            version = "0.12.0" if cmd[-2] == SERVER_REF else "0.11.0"
+            version = "0.12.0" if cmd[-2] == SERVER_REF else "1.0.0"
             return 0, f"omnigent {version} (built for test)\n", ""
         raise AssertionError(cmd)
 
@@ -853,7 +853,7 @@ def test_host_selection_preserves_adjacent_image_failures(
 #
 # Replay of the 2026-09-09 production failure: the host publish workflow
 # tracks ``omnigent-server:latest`` and republished the mutable ``1.18.11`` tag
-# for Omnigent 0.13.0 while Compose was still running the 0.12.0 server. The
+# for Omnigent 1.0.0 while Compose was still running the 0.12.0 server. The
 # resolver must keep the admitted compatible host as launch authority and
 # surface the newer image as pending instead of quarantining the Host Class.
 
@@ -863,7 +863,7 @@ NEWER_SERVER_BUILD = "sha256:" + "9" * 64
 ADMITTED_HOST = HOST_REPOSITORY + "@sha256:" + "a" * 64
 NEWER_HOST = HOST_REPOSITORY + "@sha256:" + "b" * 64
 _HOST_BUILDS = {ADMITTED_HOST: RUNNING_SERVER_BUILD, NEWER_HOST: NEWER_SERVER_BUILD}
-_HOST_VERSIONS = {ADMITTED_HOST: "0.12.0", NEWER_HOST: "0.13.0"}
+_HOST_VERSIONS = {ADMITTED_HOST: "0.12.0", NEWER_HOST: "1.0.0"}
 
 
 def _install_paired_runtime_fakes(
@@ -954,7 +954,7 @@ def _admitted_previous(host: str = ADMITTED_HOST) -> ResolvedOmnigentDeploymentS
 async def test_newer_host_for_a_newer_server_keeps_the_admitted_compatible_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Replay: registry host moved to 0.13.0 while Compose still runs 0.12.0."""
+    """Replay: registry host moved to 1.0.0 while Compose still runs 0.12.0."""
 
     observed = _install_paired_runtime_fakes(
         monkeypatch,
@@ -985,7 +985,7 @@ async def test_newer_host_for_a_newer_server_keeps_the_admitted_compatible_host(
         "pendingHost": {
             "imageRef": NEWER_HOST,
             "buildDigest": NEWER_SERVER_BUILD,
-            "version": "0.13.0",
+            "version": "1.0.0",
             "failureCode": "omnigent_server_host_version_mismatch",
         },
     }
@@ -997,12 +997,12 @@ async def test_newer_host_for_a_newer_server_keeps_the_admitted_compatible_host(
 async def test_updated_server_adopts_the_pending_host(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The operator recovery path: once Compose runs 0.13.0 the fresh tag wins."""
+    """The operator recovery path: once Compose runs 1.0.0 the fresh tag wins."""
 
     observed = _install_paired_runtime_fakes(
         monkeypatch,
         server_build=NEWER_SERVER_BUILD,
-        server_version="0.13.0",
+        server_version="1.0.0",
         fresh_host=NEWER_HOST,
         shared_host=NEWER_HOST,
         previous=_admitted_previous(),
@@ -1030,7 +1030,7 @@ async def test_no_compatible_host_quarantines_the_fresh_candidate(
     observed = _install_paired_runtime_fakes(
         monkeypatch,
         server_build=unrelated_server_build,
-        server_version="0.14.0",
+        server_version="2.0.0",
         fresh_host=NEWER_HOST,
         previous=_admitted_previous(),
     )
@@ -1140,7 +1140,7 @@ def test_quarantine_error_names_the_judged_pair(
                 "serverBuildDigest": RUNNING_SERVER_BUILD,
                 "hostBuildDigest": NEWER_SERVER_BUILD,
                 "serverVersion": "0.12.0",
-                "hostVersion": "0.13.0",
+                "hostVersion": "1.0.0",
             }
         }
     )
@@ -1153,7 +1153,7 @@ def test_quarantine_error_names_the_judged_pair(
     message = str(caught.value)
     assert "omnigent_server_host_version_mismatch" in message
     assert "server omnigent 0.12.0 build sha256:111111111111" in message
-    assert "host omnigent 0.13.0 built for sha256:999999999999" in message
+    assert "host omnigent 1.0.0 built for sha256:999999999999" in message
     assert "update the omnigent server image" in message
 
 

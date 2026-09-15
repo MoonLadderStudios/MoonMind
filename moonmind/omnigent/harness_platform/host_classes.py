@@ -450,7 +450,7 @@ class OmnigentHostClassSelector:
                 if not versions_compatible(omnigent_version, provenance.get("version")):
                     reasons.append(
                         f"{template.ref}: selected host image lacks compatible "
-                        "Omnigent major.minor version evidence"
+                        "Omnigent major version evidence"
                     )
                     continue
             candidates.append(

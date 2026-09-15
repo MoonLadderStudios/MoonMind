@@ -90,7 +90,7 @@ class CredentialMaterializationContext:
     provider_route_ref: str = ""
     profile_credential_home: ProfileCredentialHome | None = None
     # Admitted Omnigent series the writer fallback must match (same
-    # major.minor). Empty means provenance-only qualification.
+    # major). Empty means provenance-only qualification.
     expected_omnigent_version: str = ""
 
 
@@ -153,7 +153,7 @@ class _DockerMaterializerBackendMixin:
         # a different image read-write access to persistent OAuth credentials.
         # A missing digest-pinned image is recovered by reusing a qualified
         # same-repository image when present locally (digest-pinned,
-        # deployment-observed or operator-pinned, same major.minor series),
+        # deployment-observed or operator-pinned, same major series),
         # else by pulling that exact digest (immutable, so no substitution);
         # only a pull failure or a mutable ref falls through to the previous
         # fail-closed behavior.
@@ -164,7 +164,7 @@ class _DockerMaterializerBackendMixin:
             return ref
         if "@sha256:" in ref:
             # Prefer a qualified local image over a 7GB exact pull: rebuilt
-            # images change SHA/patch while keeping major.minor. Qualification
+            # images change SHA/patch/minor while keeping major. Qualification
             # happens before any secret reaches the fallback image.
             try:
                 from moonmind.omnigent.host_image_drift import (

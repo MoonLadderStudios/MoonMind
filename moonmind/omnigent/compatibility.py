@@ -1,4 +1,4 @@
-"""Omnigent interoperability is scoped to major.minor, independently of builds."""
+"""Omnigent interoperability is scoped to major, independently of builds."""
 
 from __future__ import annotations
 
@@ -14,13 +14,19 @@ _VERSION = re.compile(
 _VENDOR_VERSION = re.compile(r"(\d+)\.(\d+)(?:\.\d+)?")
 
 
-def compatibility_series(version: object) -> tuple[int, int] | None:
-    """Parse a release version without treating unknown input as compatible."""
+def compatibility_series(version: object) -> tuple[int] | None:
+    """Parse a release version without treating unknown input as compatible.
+
+    Minor and patch may evolve without breaking dispatch: a plan admitted
+    against one minor must still dispatch after a server minor update, so
+    only the major release steers compatibility.
+    """
     match = _VERSION.fullmatch(str(version or "").strip())
-    return (int(match[1]), int(match[2])) if match else None
+    return (int(match[1]),) if match else None
 
 
 def versions_compatible(expected: object, observed: object) -> bool:
+    """Return whether two Omnigent versions share the same major release."""
     series = compatibility_series(expected)
     return series is not None and series == compatibility_series(observed)
 

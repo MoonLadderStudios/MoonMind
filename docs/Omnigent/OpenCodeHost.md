@@ -591,7 +591,7 @@ Before runner or session creation, the exact OpenCode host proves:
 ```text
 selected image digest matches the selected Host Class
 moonmind.omnigent.build_digest matches the pinned Host Class provenance
-omnigent --version matches the server major.minor series
+omnigent --version matches the server major series
 command -v opencode succeeds
 opencode --version is within >=1.17.7,<1.19.0
 selected runtime pack matches opencode-native
@@ -629,8 +629,8 @@ Mutable image and tag coordinates are resolution inputs only. Launch authority
 is always the resolved digest, and explicit pins are never silently replaced.
 
 The deployment resolver treats the current Omnigent server and OpenCode host as
-compatible when their executable Omnigent versions share the same major.minor
-series. Patch releases and independently rebuilt images are compatible within
+compatible when their executable Omnigent versions share the same major
+series. Minor/patch releases and independently rebuilt images are compatible within
 that series, including `0.x` releases. It executes `omnigent --version` in both
 immutable images and records each build identity separately. The host's
 `moonmind.omnigent.build_digest` label is provenance, not a server equality gate. It also runs
@@ -649,7 +649,7 @@ the admitted compatible host stays authoritative and the newer image is
 recorded as `opencodeHostCompatibility.pendingHost` (image ref, host build,
 host version, and the failure code it would raise). The API logs that pending
 pair on every reconciliation pass together with the remediation derived from
-its failure code: a server/host major.minor difference is adopted by updating
+its failure code: a server/host major difference is adopted by updating
 the `omnigent` Compose service, while a host that failed its own qualification
 or contradicts `OMNIGENT_BUILD_DIGEST` must be repaired or republished and never
 prompts a server update. Once the failure is cured the fresh tag passes and
@@ -661,7 +661,7 @@ case where no candidate is compatible with the running server. An explicit
 pin is a single candidate: it is quarantined, never replaced. When the shared
 host coordinates resolve to the same image the OpenCode path judged, the
 shared ref follows the admitted digest so Codex and Claude Host Classes never
-launch a host from an incompatible major.minor series.
+launch a host from an incompatible major series.
 
 `OMNIGENT_BUILD_DIGEST` optionally pins the host build label. Server catalog and plan provenance always use the resolved server image digest; the host pin never masks a server version change. Each selected host image retains its own observed build label and executable version.
 

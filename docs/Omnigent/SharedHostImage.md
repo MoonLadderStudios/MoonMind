@@ -20,8 +20,8 @@
 
 ## Server compatibility and deployment readiness
 
-Omnigent server/host interoperability uses equal major.minor release series;
-patch versions and build digests may differ. This rule also applies to `0.x`
+Omnigent server/host interoperability uses equal major release series;
+minor/patch versions and build digests may differ. This rule also applies to `0.x`
 releases. Required capabilities, credential boundaries, runtime-pack checks,
 and the exact selected host image remain enforced. Server digests record
 observed deployment provenance; host build labels record the selected host's

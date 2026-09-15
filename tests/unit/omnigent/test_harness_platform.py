@@ -1578,7 +1578,7 @@ def test_fresh_catalog_attests_immutable_profile_authority() -> None:
 
     changed_build = create_catalog_snapshot(
         endpointRef="default",
-        omnigentVersion="1.1.0",
+        omnigentVersion="2.0.0",
         omnigentBuildDigest="sha256:" + "f" * 64,
         sourceDigest="sha256:" + "1" * 64,
         harnesses=[
