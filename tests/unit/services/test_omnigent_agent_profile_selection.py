@@ -977,3 +977,138 @@ async def test_mm3788_generic_v2_selection_rejects_a_harness_the_materializer_re
     assert caught.value.status_code == 409
     assert "mm3788-openai-profile" in caught.value.detail
     assert session.added == []
+
+
+@pytest.mark.asyncio
+async def test_default_drift_recovery_retries_once_after_catalog_sync(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Default float recovers from one version-drift 409, then stops."""
+
+    import contextlib
+
+    session = _Session()
+    session.expire_all = lambda: None
+    calls = {"resolve": 0, "sync": 0}
+
+    async def _flaky_resolve(session, *, selection, consumer_type, consumer_id, user):
+        calls["resolve"] += 1
+        if calls["resolve"] == 1:
+            raise HTTPException(
+                409,
+                "stable upstream identity is unavailable (profile team-codex@2)",
+            )
+        return {"profileId": "team-codex", "version": 2}
+
+    async def _fake_sync(sync_session):
+        calls["sync"] += 1
+        return {}
+
+    @contextlib.asynccontextmanager
+    async def _fake_maker():
+        yield object()
+
+    monkeypatch.setattr(
+        selection_module, "resolve_agent_profile_snapshot", _flaky_resolve
+    )
+    monkeypatch.setattr(
+        selection_module, "synchronize_omnigent_harness_catalog", _fake_sync
+    )
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker", _fake_maker
+    )
+
+    snapshot = await resolve_default_agent_profile_snapshot(
+        session,
+        provider_profile_ref="oauth-team",
+        launch_policy_ref=None,
+        consumer_type="workflow",
+        consumer_id="drift-recovery-1",
+        user=SimpleNamespace(id=uuid4()),
+    )
+
+    assert snapshot["version"] == 2
+    assert calls == {"resolve": 2, "sync": 1}
+
+
+@pytest.mark.asyncio
+async def test_default_drift_recovery_stops_after_second_409(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import contextlib
+
+    session = _Session()
+    session.expire_all = lambda: None
+
+    async def _always_409(session, *, selection, consumer_type, consumer_id, user):
+        raise HTTPException(409, "stable upstream identity is unavailable")
+
+    sync_calls = {"count": 0}
+
+    async def _fake_sync(sync_session):
+        sync_calls["count"] += 1
+        return {}
+
+    @contextlib.asynccontextmanager
+    async def _fake_maker():
+        yield object()
+
+    monkeypatch.setattr(
+        selection_module, "resolve_agent_profile_snapshot", _always_409
+    )
+    monkeypatch.setattr(
+        selection_module, "synchronize_omnigent_harness_catalog", _fake_sync
+    )
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker", _fake_maker
+    )
+
+    with pytest.raises(HTTPException, match="stable upstream identity is unavailable"):
+        await resolve_default_agent_profile_snapshot(
+            session,
+            provider_profile_ref="oauth-team",
+            launch_policy_ref=None,
+            consumer_type="workflow",
+            consumer_id="drift-recovery-2",
+            user=SimpleNamespace(id=uuid4()),
+        )
+
+    assert sync_calls["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_default_drift_recovery_skips_non_drift_409(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Incompatible/capacity/usage 409s fail fast without catalog load."""
+
+    session = _Session()
+    session.expire_all = lambda: None
+
+    async def _incompatible(session, *, selection, consumer_type, consumer_id, user):
+        raise HTTPException(409, "stable upstream identity is incompatible")
+
+    sync_calls = {"count": 0}
+
+    async def _fake_sync(sync_session):
+        sync_calls["count"] += 1
+        return {}
+
+    monkeypatch.setattr(
+        selection_module, "resolve_agent_profile_snapshot", _incompatible
+    )
+    monkeypatch.setattr(
+        selection_module, "synchronize_omnigent_harness_catalog", _fake_sync
+    )
+
+    with pytest.raises(HTTPException, match="incompatible"):
+        await resolve_default_agent_profile_snapshot(
+            session,
+            provider_profile_ref="oauth-team",
+            launch_policy_ref=None,
+            consumer_type="workflow",
+            consumer_id="drift-recovery-3",
+            user=SimpleNamespace(id=uuid4()),
+        )
+
+    assert sync_calls["count"] == 0
