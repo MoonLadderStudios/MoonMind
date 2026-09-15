@@ -474,7 +474,6 @@ async def test_wsl_updater_launch_uses_daemon_visible_state_bind(
     """
     import time
 
-    import moonmind.workflows.skills.deployment_execution as execution_module
     from moonmind.workflows.skills.deployment_release import launch_updater
 
     replay_id = "deployment-update-wsl-updater-bind-source"
@@ -548,11 +547,19 @@ async def test_wsl_updater_launch_uses_daemon_visible_state_bind(
     monkeypatch.setenv("MM_DEPLOYMENT_REPLAY_STATE", str(state_path))
     monkeypatch.setenv("MM_DEPLOYMENT_REPLAY_REAL_DOCKER", real_docker)
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
-    # Reset the daemon-platform probe cache when the implementation under
-    # test provides one; parent implementations without the WSL/Desktop gate
-    # skip this and proceed to the daemon-visibility assertion below.
-    if hasattr(execution_module, "_desktop_daemon_probe_cache"):
-        monkeypatch.setattr(execution_module, "_desktop_daemon_probe_cache", {})
+    # Isolate the daemon-platform probe cache per test through a distinct
+    # DOCKER_HOST key: the fake `docker info` above answers per platform.
+    monkeypatch.setenv("DOCKER_HOST", f"replay-wsl-updater-{leaf}")
+    # The read alias (host project dir symlinked into the worker) cannot be
+    # created on CI runners, where /mnt is root-owned, and it is orthogonal
+    # to the daemon-observed bind asserted here: the rewrite path renders
+    # from the local checkout, and the direct path never reaches a real
+    # daemon in this journey. Alias creation stays covered by its own unit.
+    monkeypatch.setattr(
+        HostDockerComposeRunner,
+        "_ensure_host_project_read_alias",
+        lambda self: None,
+    )
 
     runner = HostDockerComposeRunner(
         project_dir=host_project_dir,
