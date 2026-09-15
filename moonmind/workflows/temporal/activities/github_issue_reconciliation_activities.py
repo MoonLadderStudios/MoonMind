@@ -420,30 +420,47 @@ async def _reconcile_one_issue(
         return outcome
     from moonmind.workflows.temporal.github_issue_claim_lease import classified_attempts, reconcile_expired_issue
     try:
-        active_claims, expired_claims = classified_attempts(comments,
+        active_claims, expired_claims, attempts_seen = classified_attempts(comments,
             repository=repository, issue_number=issue_number)
     except ValueError:
-        active_claims, expired_claims = [], []
+        active_claims, expired_claims, attempts_seen = [], [], 1
     if any(handoff.lease_expires_at and handoff.activity in {"preparing", "active", "awaiting-review"}
            for _, handoff in active_claims):
         outcome.update(action=recon.ACTION_NO_ACTION, reasonCode="claim_lease_active",
             summary="A live GitHub claim lease retains ownership; no foreign runtime observation is required.")
         return outcome
-    if expired_claims and not active_claims:
+    # A stale advisory label with no attempt evidence at all is bookkeeping
+    # left behind, not ownership: announcement always posts its comment first.
+    stale_status_label = not attempts_seen and "status: in-progress" in names
+    if (expired_claims or stale_status_label) and not active_claims:
         if not _spend(9):
             outcome.update(reasonCode="request_budget_exhausted")
             return outcome
-        expired_result = await reconcile_expired_issue(service=service,
-            repository=repository, issue_number=issue_number)
+        try:
+            expired_result = await reconcile_expired_issue(service=service,
+                repository=repository, issue_number=issue_number)
+        except (ValueError, AttributeError) as exc:
+            outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN,
+                reasonCode=str(exc).split(":", 1)[0] if isinstance(exc, ValueError)
+                else "claim_reconciliation_unavailable",
+                summary="Reservation reassessment could not complete; deferred without ownership decisions.")
+            return outcome
         if expired_result.get("reclaimed"):
-            outcome.update(action=recon.ACTION_COMPLETE, reasonCode="lease_expired",
-                summary="Expired GitHub claim no longer excludes assessment; prior comments and work references retained.",
+            outcome.update(action=recon.ACTION_COMPLETE,
+                reasonCode=expired_result.get("reasonCode", "lease_expired"),
+                summary="Expired or unowned GitHub advisory status no longer excludes assessment; "
+                "prior comments and work references retained.",
                 expiredAttempts=expired_result["expiredAttempts"])
             return outcome
-        outcome.update(action=recon.ACTION_NO_ACTION,
-            reasonCode=expired_result.get("reasonCode", "claim_changed"),
-            summary="Current GitHub ownership or lifecycle state prevents lease reclamation.")
-        return outcome
+        if expired_result.get("reasonCode") == "nothing_to_reconcile":
+            # No attempt evidence and no advisory label: nothing owns this
+            # issue, so fall through to the ordinary handoff reconciliation.
+            pass
+        else:
+            outcome.update(action=recon.ACTION_NO_ACTION,
+                reasonCode=expired_result.get("reasonCode", "claim_changed"),
+                summary="Current GitHub ownership or lifecycle state prevents lease reclamation.")
+            return outcome
     handoffs, malformed = _validated_handoffs(
         comments, repository=repository, issue_number=issue_number, service=service
     )

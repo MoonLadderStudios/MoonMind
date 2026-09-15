@@ -4,7 +4,7 @@
 **Viewpoint:** System / Feature Design View  
 **Status:** Proposed (legacy cutover §12 implemented; remainder desired behavior)  
 **Owners:** MoonMind Platform + Workflow Runtime + GitHub Integration  
-**Updated:** 2026-09-14
+**Updated:** 2026-09-14  
 **Audience:** Workflow, preset, GitHub adapter, recovery, and dashboard contributors and operators  
 **Authority:** GitHub issue lifecycle labels, selection eligibility, attempt handoffs, and cross-deployment recovery behavior. Existing execution, checkpoint, publishing, and merge contracts retain their respective authority.  
 **Owning Surface:** Trusted GitHub issue operations and workflow terminal/reconciliation boundaries  
@@ -25,6 +25,21 @@ The supported topology includes three independent MoonMind deployments on differ
 **Available work has no MoonMind status label. There is no required `status: todo` or `status: ready`.** Availability means eligible for assessment, not approved for unrestricted execution and not proof that no previous work exists.
 
 **Coordination is explicitly best-effort.** Labels and comments support discoverable ownership announcements, failure handoffs, conflict detection, and finite claim leases. They do not provide an exclusive distributed lock or fence an obsolete writer. Simultaneous duplicate starts remain possible. A participating owner must renew its GitHub-visible lease or lose permission to perform shared writes; another consumer can reassess the issue after expiry using GitHub alone. Strict single-writer enforcement would require an additional coordination capability and is not an implicit promise of this state machine.
+
+**Reservations are expiring and advisory.**
+
+> An issue reservation suppresses duplicate work only while its owner maintains a valid, bounded lease. Historical comments, stale labels, and incomplete cleanup never independently create permanent ownership. Losing ownership does not authorize discarding work or overwriting another contributor's changes.
+
+The objective is therefore not "never risk a duplicate attempt". It is: avoid duplicates where practical, preserve work, and guarantee that an abandoned reservation stops blocking progress. Four concerns stay separate, and each has exactly one authority:
+
+| Concern | What determines it |
+| --- | --- |
+| What stage is the issue in? | Issue lifecycle, requirements, and PR evidence |
+| Is another MoonMind attempt currently reserving it? | A valid, unexpired reservation |
+| Does an old attempt still owe cleanup or preservation? | Its outstanding cleanup record |
+| Has someone intentionally stopped automatic work? | An explicit, attributable hold |
+
+A stale `status: in-progress` label prompts reassessment; it never rejects an issue on its own. An expired reservation never erases a saved branch, asserts that a process stopped, or declares implementation complete: it means only that the old attempt no longer holds a current reservation. Ordinary worker disappearance is not routed to `status: needs-attention`; attention is reserved for a concrete unresolved decision or safety problem.
 
 ## 2. State vocabulary
 
@@ -104,6 +119,7 @@ The comment carries only the information required to interpret and continue the 
 | Lineage | Predecessor attempt/comment when continuing previous work |
 | Activity | Preparing, active, awaiting review, releasing, released, or attention, with last reported activity |
 | Claim lease | Version 2 declares `leaseRenewedAt` and `leaseExpiresAt` as timezone-aware UTC timestamps, at most 30 minutes apart; version 1 has no lease |
+| Reservation status | Derived, never stored: live, expired, released, operator hold, legacy awaiting migration, legacy retired, or unreadable |
 | Stop evidence | Whether all associated writers have stopped and publication requests have a known outcome |
 | Preserved work | PR identity, exact verified head/base, and any GitHub-accessible saved branch/commit |
 | Result | Failure or completion category, met/unmet requirements, and a concise verification summary |
@@ -116,13 +132,33 @@ A marker and body do not authenticate themselves. The integration validates comm
 
 ### 4.2 Write and release behavior
 
-Progress updates are coalesced and rate-bounded rather than emitted on every runtime poll. Ordinary activity timestamps remain observations. New claims use version 2 with an explicit 30-minute lease, renewed in the same attempt comment every five minutes. Participants maintain synchronized UTC clocks; the owner begins cancellation one minute before its last confirmed expiry to allow for bounded request latency and clock skew. This margin is cooperative protection, not a fence against delayed or nonparticipating writers.
+Progress updates are coalesced and rate-bounded rather than emitted on every runtime poll. Ordinary activity timestamps remain observations. New claims use version 2 with an explicit lease whose length matches the phase it covers:
+
+| Reservation phase | Deadline | Renewal |
+| --- | --- | --- |
+| Preparing (announced, execution not started) | 5 minutes | every minute |
+| Running (active or awaiting review) | 30 minutes | every 5 minutes |
+| Waiting for unavailable local capacity | not renewed | the reservation lapses and the issue returns to assessment |
+| Execution ends | renewal stops | the reservation is relinquished promptly |
+
+These are policy choices, not measured optima. The short announcement deadline exists because the gap between selection and dispatch is where a deployment most often dies while holding an issue; five minutes bounds that cost. A deployment queued behind unavailable capacity does not renew: holding the backlog behind a queue it cannot drain is worse than releasing the issue and backing off. The renewal is maintained in the same attempt comment. Participants maintain synchronized UTC clocks; the owner begins cancellation one minute before its last confirmed expiry to allow for bounded request latency and clock skew. This margin is cooperative protection, not a fence against delayed or nonparticipating writers.
 
 The trusted brief carries the exact owner, attempt, repository, issue, and comment identity into `AgentExecutionRequest.parameters.issueClaimLease`. The canonical `MoonMind.AgentRun` entrypoint confirms this identity against its own durable receipt and GitHub before launch, then owns renewal across managed and external runtimes. Renewal failure retries only inside the last confirmed lease. Loss of authority invokes the runtime's existing cancellation, preservation, and cleanup owner. Parent integration execution uses the same guard. Requests recorded without a lease retain their historical execution path.
 
 A renewal persists its exact PATCH intent, rereads GitHub after an uncertain response, and extends authority only after confirmation. An expired attempt cannot revive its old lease, even if no successor is visible; it requires a new admission and attempt identity. Expired comments remain intact for prior-work assessment and retry reconstruction. A lease is never a substitute for stop/preservation evidence in a terminal `released` handoff.
 
 Agent completion cancels the auxiliary renewal loop. Wrapped Activity cancellation remains cancellation rather than a renewal retry, so an in-flight renewal cannot trap an already-completed primary result or keep extending its claim.
+
+### 4.3 Relinquishing a reservation
+
+Two decisions are separate and must not be entangled:
+
+* **Permission to continue shared work** requires current ownership and no winning competing claim.
+* **Permission to retire your own reservation** requires authentic ownership of that attempt record only. It does not require the absence of competitors.
+
+An attempt can therefore record its withdrawal even when another contributor has already claimed the issue: the operation that resolves contention is never blocked by contention. A withdrawing attempt still may not clear the successor's labels, overwrite their PR, or report stopped writers it did not observe. Reading back its own pending comment update is likewise never gated on contenders. When GitHub is unavailable, immediate withdrawal can fail; expiry is the backstop, so a cleanup failure cannot make a reservation permanent.
+
+Ownership and bookkeeping are also separate facts. Once an attempt is proven stopped, settled, and preserved, its reservation ends even if the terminal label change is denied, the read-back is unknown, or the released comment is unconfirmed. Finalization reports `released` (bookkeeping complete) and `ownershipEnded` (this attempt no longer reserves the issue) independently; the pending bookkeeping stays recorded and retryable. A delayed finalizer that observes a successor retires its own attempt instead of remaining an unresolved contender forever.
 
 Comment creation and updates are serialized per attempt within the owning deployment. A retried create first checks for the same attempt marker. A lost HTTP response is an unknown result, not proof that the operation failed. Duplicate comments with the same attempt identity are one logical attempt, not extra retry allowance. Conflicting copies require reconciliation, not choosing whichever timestamp is newest.
 
@@ -150,7 +186,13 @@ Search results and cached local records are candidate discovery aids. Direct iss
 
 ### 5.1 Candidate eligibility
 
-An issue is eligible only when it is open, within the authorized repository/query scope, free of applicable blockers, in Available or Recovery needed state, and not contradicted by unexpired or legacy active attempts, operator holds, unknown prior work, or exhausted retry restrictions. Search and explicit issue loading reconcile expired in-progress labels using fresh GitHub reads before applying this policy. Lease expiry permits assessment; the successor must inspect the retained attempt history and linked PRs before editing.
+An issue is eligible only when it is open, within the authorized repository/query scope, free of applicable start-blocking prerequisites, in Available or Recovery needed state, and not contradicted by a live reservation, a legacy reservation awaiting migration, an operator hold, unreadable attempt evidence, unknown prior work, or exhausted retry restrictions. Search and explicit issue loading reconcile advisory in-progress labels using fresh GitHub reads before applying this policy. Lease expiry permits assessment; the successor must inspect the retained attempt history and linked PRs before editing.
+
+Selection does not begin by skipping every in-progress label. An advisory label is reassessed against current attempt evidence, and the protocol always announces its attempt comment before applying the label, so a label with no attempt evidence behind it is left-over bookkeeping rather than ownership. Other settled statuses (`status: code-review`, `status: recovery-needed`, `status: needs-attention`) still decide eligibility on their own and are never age-cleared.
+
+Search, explicit issue loading, continuation, publication checks, and maintenance all resolve effective ownership through one interpreter, so one path cannot reclaim an issue while another keeps treating its historical comment as a lock. Maintenance sweeps remain useful, but ordinary selection recovers an expired reservation without waiting for one.
+
+Exclusions are reported as actionable distinctions rather than one undifferentiated conflict — live reservation (with its deadline), expired reservation eligible for reassessment, legacy reservation awaiting migration, explicit operator hold, blocked from starting by another issue, existing PR requires continuation, and GitHub evidence temporarily unavailable. These are diagnostics in `searchEvidence`, not new GitHub labels.
 
 Recovery candidates remain within the user's requested search and priority scope. Eligible continuations receive bounded preference without allowing one repeatedly failing issue to monopolize every run. Code-review issues are routed to the existing PR follow-up journey when explicitly requested, not rediscovered as untouched implementation work.
 
@@ -228,7 +270,11 @@ A missing local workflow record on device B says nothing about device A's execut
 
 For version-2 claims, another deployment uses complete authenticated GitHub issue/comment reads to check the declared deadline, scope, provenance, conflicting copies, other owners, and holds. If all leases have expired and no other status blocks admission, it rereads before removing only `status: in-progress`, then verifies the result. An observed successor prevents reclamation and retains its advisory label. Expiry does not rewrite the old owner's comment as `released`, claim that its process stopped, or discard its workspace. Existing PR/branch references and retry history remain authoritative inputs for the next assessment. `status: code-review`, `status: recovery-needed`, `status: needs-attention`, and explicit comment holds are never age-cleared.
 
-Persisted version-1 comments retain their non-expiring contract. An old activity timestamp cannot retroactively become a lease agreement. They require a conclusive owner-reported terminal handoff, verified local cleanup, or an authorized operator resolution after disabling the prior writer. Mixed deployments therefore require either upgrading all active writers to the lease contract or explicitly draining their old attempts. A missing foreign database or Temporal record is never a prerequisite for, or evidence of, lease expiry.
+Persisted version-1 comments never agreed to a deadline, and an old activity timestamp cannot retroactively become a lease agreement. They are therefore ended by one explicit operator act rather than by an invented expiry or by remaining blockers forever.
+
+`MOONMIND_ISSUE_CLAIM_LEGACY_CUTOVER_AT` records the operator's declaration that every version-1 writer is upgraded or stopped. Until it is set, a version-1 attempt still reserves its issue and is reported as `legacy_reservation_awaiting_migration` — a named, actionable diagnostic, not a silent empty backlog. Once set, a version-1 attempt whose comment GitHub timestamps *before* that instant no longer holds write authority; anything announced at or after it is untouched. The order matters: stop or upgrade the old writers first, because they do not understand that a superseded reservation no longer permits publication.
+
+`tools/recover_legacy_issue_claims.py` performs the one-time backlog migration as a reviewed batch rather than dozens of manual edits. It takes an inventory first (owner, protocol version, last known activity, linked PR or branch, explicit holds, proposed action) and only writes with `--apply`. It never deletes a comment, never removes a label, never rewrites a successor's or an untrusted author's comment, and never touches an issue that still has a live reservation or an explicit hold. Retiring a comment stamps the lease it never carried — renewed one lease-duration before the cutover, expired at the cutover — and appends a recovery disposition. Every other field is preserved: the attempt, its lineage, its retry history, its PR and branch references, and its unchanged claim that writers were never confirmed stopped. An attempt with preserved work is retired with `preserve_for_continuation` so the next attempt continues or reconciles it. Mixed deployments therefore drain through an explicit cutover; a missing foreign database or Temporal record is never a prerequisite for, or evidence of, expiry.
 
 Reconciliation runs through existing MoonMind/Temporal facilities with bounded work and operational defaults. It adds no permanently running coordination container. It can repair incomplete confirmed handoffs, classify inconsistencies, and expose orphaned attempts without access to another deployment's services.
 
@@ -313,7 +359,13 @@ Tests exercise three isolated deployments with no shared database, Temporal serv
 | Version-1 owner disappears or device sleeps | No retroactive lease; require terminal evidence or authorized operator resolution |
 | Renewal stops while an agent is active | The public AgentRun entrypoint cancels through the existing runtime owner before the last confirmed deadline; reconnection cannot revive the expired attempt |
 | All three announce simultaneously | Possible duplicate starts are represented honestly, and observed contenders quiesce without clearing each other's status |
-| Old attempt resumes after an observed successor | It makes no new shared mutation and does not replay obsolete cleanup |
+| Old attempt resumes after an observed successor | It makes no new shared mutation and does not replay obsolete cleanup, and it can still retire its own reservation |
+| Reservation announced, then local capacity rejects the launch | The reservation is not renewed and lapses on its announcement deadline; the deployment backs off instead of claiming the next issue |
+| Withdrawal attempted while a contender is present | The withdrawal succeeds; other lifecycle updates still require uncontested ownership |
+| Label or terminal-comment bookkeeping fails during finalization | Ownership still ends; the bookkeeping stays pending and retryable |
+| Advisory status label with no attempt evidence at all | The issue is reassessed and the stale label reconciled, without summoning an operator |
+| Version-1 backlog is migrated | Old comments remain as history but stop acting as permanent reservations |
+| Completion dependencies remain open | Independently useful implementation can still start; the completion gate still holds closure |
 | Injected delayed mutation after an ownership check | Test exposes the unfenced race rather than claiming the label model prevents it |
 | GitHub accepts a comment/label/PR request but response is lost | Retry reconciles observed results and does not blindly repeat effects |
 | Interrupted terminal label transition | Mixed labels block admission, and conclusive handoff evidence permits reconciliation |

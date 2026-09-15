@@ -50,10 +50,12 @@ async def test_foreign_claim_requires_only_github_and_expired_owner_cannot_resum
         state["comments"][0]["body"] = body
     original_body = state["comments"][0]["body"]
     base = leases.utc_now()
+    # An announced-but-not-started reservation carries the five-minute
+    # preparing deadline, so "live" is minutes old and "expired" is past it.
     monkeypatch.setattr(
         leases,
         "utc_now",
-        lambda: base + timedelta(minutes=31 if fault != "live" else 10),
+        lambda: base + timedelta(minutes=31 if fault != "live" else 2),
     )
     if fault == "read_failure":
         state["failed_read_path"] = "/repos/example/repo/issues/3970/comments"
@@ -116,6 +118,8 @@ async def test_foreign_claim_requires_only_github_and_expired_owner_cannot_resum
             )
             monkeypatch.setattr(tools, "IssueClaimStore", lambda: store_c)
             monkeypatch.setattr(leases, "utc_now", lambda: base + timedelta(minutes=62))
+            # The successor announced at +31 and never renewed; its own
+            # preparing deadline has passed by now.
             state["actor"] = {"id": 789, "login": "third-consumer"}
             third = await tools.load_github_issue_preset_brief(
                 {"repository": "example/repo", "issueSearch": ""},
@@ -155,7 +159,8 @@ async def test_renewal_is_coalesced_and_lost_ack_is_confirmed(journey, monkeypat
         await leases.renew_owned_claim(store=store, service=service, owner=owner)
     ).comment_body == before.comment_body
     base = leases.utc_now()
-    monkeypatch.setattr(leases, "utc_now", lambda: base + timedelta(minutes=6))
+    # Past the preparing renew interval but inside its five-minute deadline.
+    monkeypatch.setattr(leases, "utc_now", lambda: base + timedelta(minutes=2))
     state["lose_update_ack"] = True
     renewed = await leases.renew_owned_claim(store=store, service=service, owner=owner)
     assert not state["lose_update_ack"]
@@ -180,7 +185,7 @@ async def test_resume_confirms_durable_pending_renewal_after_old_deadline(
     )
     original = await store.get(owner)
     base = leases.utc_now()
-    monkeypatch.setattr(leases, "utc_now", lambda: base + timedelta(minutes=6))
+    monkeypatch.setattr(leases, "utc_now", lambda: base + timedelta(minutes=2))
     update = service.update_issue_comment
 
     async def lose_readback(**kwargs):
@@ -193,7 +198,7 @@ async def test_resume_confirms_durable_pending_renewal_after_old_deadline(
         await leases.renew_owned_claim(store=store, service=service, owner=owner)
     assert (await store.get(owner)).pending_comment_body
     state.pop("failed_read_path")
-    monkeypatch.setattr(leases, "utc_now", lambda: base + timedelta(minutes=31))
+    monkeypatch.setattr(leases, "utc_now", lambda: base + timedelta(minutes=6))
     assert leases.expired(parse_attempt_comment(original.comment_body).handoff)
     result = await tools.load_github_issue_preset_brief(
         inputs, {"execution_owner": owner}, github_service_factory=lambda: service

@@ -49,11 +49,13 @@ FIXTURE = Path(__file__).parent / "fixtures/github_issue_claim_label_only.json"
 async def journey(tmp_path, monkeypatch):
     fixture = json.loads(FIXTURE.read_text())
     issue = copy.deepcopy(fixture["issueAtSelection"])
+    # Settled elsewhere by an operator: ineligible for lifecycle reasons, not
+    # because of an advisory in-progress label (those are now reassessed).
     occupied = {
         **copy.deepcopy(issue),
         "number": 4280,
         "html_url": f"https://github.com/{REPO}/issues/4280",
-        "labels": [{"name": "status: in-progress"}],
+        "labels": [{"name": "status: needs-attention"}],
     }
     state = {"comments": [], "writes": [], "read_error": False, "create_error": False}
 
@@ -261,16 +263,56 @@ async def test_search_reports_unresolved_attempt_instead_of_empty_backlog(journe
     assert result.status == "COMPLETED", result.outputs
     assert result.completion_disposition == "idle"
     evidence = result.outputs["searchEvidence"]
-    assert evidence["rejectionCounts"] == {"lifecycle_ineligible": 1, "active_attempt_conflict": 1}
+    # A version-1 comment carries no lease, so it keeps reserving the issue
+    # until the operator declares the migration cutover -- and it says so.
+    assert evidence["rejectionCounts"] == {
+        "lifecycle_ineligible": 1,
+        "legacy_reservation_awaiting_migration": 1,
+    }
     rejected = evidence["rejectedCandidates"][-1]
     assert rejected["issueNumber"] == 4271
     assert rejected["claimEvidence"]["attempts"][0]["workflowId"] == handoff.workflow_id
     assert rejected["claimEvidence"]["attempts"][0]["commentId"] == "123"
-    assert "unresolved attempt" in result.outputs["summary"]
+    assert (
+        rejected["claimEvidence"]["attempts"][0]["reservationStatus"]
+        == "legacy_reservation_awaiting_migration"
+    )
+    assert "reserved by another attempt" in result.outputs["summary"]
+    assert "migration cutover" in result.outputs["summary"]
     assert "#4271" in result.outputs["summary"]
     assert "selectedIssueAuthor" not in evidence
     assert state["receipt"] is None
     assert state["writes"] == []
+
+
+@pytest.mark.asyncio
+async def test_declared_cutover_retires_the_stranded_legacy_reservation(journey, monkeypatch):
+    """The operator cutover unblocks the version-1 backlog without deleting it."""
+    from moonmind.config.settings import settings
+
+    state, issue, invoke, _, _ = journey
+    handoff = AttemptHandoff.from_dict({
+        "formatVersion": 1, "attemptId": "att-stranded-selection",
+        "deploymentId": "inst-other-deployment", "repository": REPO,
+        "issueNumber": 4271, "workflowId": "default/mm:previous-scheduled-run",
+        "activity": "preparing", "writersStopped": False,
+        "outcome": "in_progress", "nextAction": "continue_implementation",
+    })
+    state["comments"].append({
+        "id": 123, "body": render_attempt_comment(handoff), "user": issue["user"],
+        "created_at": "2026-09-13T00:00:00Z",
+    })
+    monkeypatch.setattr(
+        settings.github, "issue_claim_legacy_cutover_at", "2026-09-14T00:00:00Z"
+    )
+    result = await invoke(tools.GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME,
+                          {"repository": REPO, "issueSearch": ""})
+    assert result.status == "COMPLETED", result.outputs
+    assert result.completion_disposition != "idle"
+    assert result.outputs["issue"]["number"] == 4271
+    # The stranded comment survives as history; a fresh attempt is announced.
+    assert state["comments"][0]["body"] == render_attempt_comment(handoff)
+    assert len(state["comments"]) == 2
 
 
 @pytest.mark.asyncio
