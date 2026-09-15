@@ -14,7 +14,12 @@ from moonmind.workflows.temporal.github_issue_attempts import (
     render_attempt_comment,
 )
 from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
-from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
+from tests.unit.workflows.temporal.test_issue_claim_journey import journey as journey  # noqa: F401
+
+# Reference the imported pytest fixture so static analysis sees it as used.
+# The test functions request `journey` by name; this keeps the import alive.
+_JOURNEY_FIXTURE = journey
+
 from tests.unit.workflows.temporal.test_issue_reservation_policy import (
     CUTOVER,
     ISSUE,

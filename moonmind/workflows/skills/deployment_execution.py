@@ -279,10 +279,30 @@ class FileDesiredStateStore:
             if self.json_file_path
             else env_path.with_suffix(env_path.suffix + ".json")
         )
+        # The singular Omnigent release owns `OMNIGENT_*` env refs and the
+        # `omnigentRelease` sidecar document independently of MoonMind image
+        # authority. A plain rewrite would delete them on every MoonMind
+        # update and lose the revision chain, so preserve them here; the
+        # release migration remains the sole writer of those keys.
+        try:
+            existing_env, existing_json = _read_desired_state_files(
+                env_path, json_path
+            )
+        except OSError:
+            existing_env, existing_json = {}, {}
+        preserved_env = {
+            k: v
+            for k, v in existing_env.items()
+            if k.startswith("OMNIGENT_") and str(v or "").strip()
+        }
+        if isinstance(existing_json, dict) and "omnigentRelease" in existing_json:
+            if "omnigentRelease" not in record:
+                record["omnigentRelease"] = existing_json["omnigentRelease"]
         desired_image = _desired_deployed_image(record)
         requested_image = _desired_requested_image(record)
         run_id = str(record.get("sourceRunId") or "").strip()
         env_payload = {
+            **preserved_env,
             self.image_env_var: desired_image,
             f"{self.image_env_var}_REQUESTED": requested_image,
             "MOONMIND_DEPLOYMENT_RUN_ID": run_id,
