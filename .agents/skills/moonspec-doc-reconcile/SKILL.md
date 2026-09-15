@@ -135,9 +135,9 @@ Also return a short markdown summary suitable for inclusion in a pull request bo
 - Run only after `FULLY_IMPLEMENTED` verification; escalate-only mode is the one exception and never edits.
 - No canonical source document means an immediate `no_update_required`.
 - Only `definite`, evidence-backed discoveries that show the document is impossible, unclear, or inconsistent justify edits.
-- Divergence alone is never doc drift; deliberate divergence escalates for an owner decision instead of editing.
+- Divergence alone is never doc drift; deliberate divergence escalates for an owner decision instead of editing, unless this run's inputs already carry explicit authority for that specific desired-state change.
 - Supplementary instructions narrow scope; they never widen the update gate.
 - Smallest correct edit; desired-state framing preserved; no imperative content in canonical docs.
 - Misaligned updates become escalations, never silent edits or silent drops.
-- The structured outcome is mandatory in every run, including no-ops.
-- Use authority-scope ownership, not original-source-document convenience, to choose what canonical doc to update; without a documentation-architecture standard, the source document is the owner.
+- The structured outcome is mandatory in every run, including no-ops. Keep `updated`, `no_update_required`, and `escalated` truthful and distinct: an ordinary no-op is `no_update_required`, never a failure and never `escalated`; verification, escalation, and publication outcomes stay separate.
+- All guidance here is model-neutral: decisions rest on document purpose, source authority, and authorized capabilities.
