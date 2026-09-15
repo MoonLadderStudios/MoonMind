@@ -67,6 +67,9 @@ from moonmind.workflows.temporal.workflows.run import (
 def test_omnigent_request_propagates_only_admitted_execution_plan_ref() -> None:
     workflow = MoonMindRunWorkflow()
     plan_ref = "omnigent-execution-plan:sha256:" + "4" * 64
+    lease = {"owner": "default/claim-owner", "attemptId": "attempt-1", "repository": "example/repo", "issueNumber": 3970, "commentId": "123"}
+    workflow._record_trusted_issue_context({"trustedSource": "moonmind.github.get_issue", "issueClaimLease": lease})
+    workflow._record_trusted_issue_context({"summary": "intermediate classification"})
     info = SimpleNamespace(
         namespace="default",
         workflow_id="mm:execution-plan-authority",
@@ -93,6 +96,8 @@ def test_omnigent_request_propagates_only_admitted_execution_plan_ref() -> None:
         )
 
     assert request.parameters["executionPlanRef"] == plan_ref
+    restored = AgentExecutionRequest.model_validate_json(request.model_dump_json(by_alias=True))
+    assert restored.parameters["issueClaimLease"] == lease
 
 
 def test_omnigent_request_rejects_step_plan_substitution() -> None:

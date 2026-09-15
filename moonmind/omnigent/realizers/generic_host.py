@@ -1319,7 +1319,7 @@ class GenericOmnigentHostRealizer:
                     "agent_kind", "agent_id", "correlation_id", "idempotency_key",
                     "step_execution", "omnigent_execution_plan",
                 },
-            ) | {"workspaceSpec": {"workspaceLocator": request.workspace_spec["workspaceLocator"]}})
+            ) | {"workspaceSpec": dict(request.workspace_spec)})
 
         async def heartbeat_loop() -> None:
             while True:

@@ -11,6 +11,26 @@ restore. An `external_state_ref` proves session continuity only and cannot satis
 workspace restore preflight. Recovery uses the versioned, digested snapshot admitted
 with the run rather than rewriting it after registry or credential changes.
 
+Generic workspace capture retains the authored repository and source branch in
+the compact runtime recovery request. A successful save may carry an auxiliary
+`repository-worktree-state/v1` observation outside the versioned checkpoint:
+the repository, source branch, exact head, clean worktree (including untracked
+files), and archive digest. Failure to capture this observation does not overwrite
+successful preservation. The issue recovery owner combines it with completed
+fenced runtime cleanup and fresh remote ancestry evidence before releasing a
+no-work claim; the observation alone grants no release or publication authority.
+
+New GitHub issue attempts carry a version-2 comment lease through the trusted
+brief and canonical AgentRun request. The AgentRun workflow confirms ownership
+before launch and renews the same GitHub comment every five minutes, with a
+30-minute deadline. Loss of the last confirmed lease cancels execution through
+the runtime's existing preservation and cleanup owner. Foreign consumers need
+only GitHub labels and comments to assess expiry; no foreign runtime or database
+access is required. Expiry grants no workspace-deletion or completion authority.
+See [GitHub Issue Status State Machine](../Workflows/GitHubIssueStatusStateMachineDesign.md)
+for the cooperative timing contract, prior-work handling, and non-expiring
+version-1 history compatibility.
+
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  

@@ -17,7 +17,8 @@ Contract summary:
   authority and is never used as attempt identity. There are no competing
   internal aliases: this is the single canonical attempt deployment field.
 * One versioned, bounded comment representation with a readable summary and
-  machine-readable metadata. Format version 1 only.
+  machine-readable metadata. New leased claims use version 2; persisted
+  version-1 comments retain their non-expiring contract.
 * A copied machine marker is not authentication. Callers supply trusted
   poster provenance from the authenticated GitHub boundary; validation
   rejects spoofed, unsupported, inconsistent, and missing-predecessor
@@ -51,9 +52,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-#: Canonical format version for every attempt handoff comment.
+#: Historical non-expiring format, retained for persisted attempt handoffs.
 ATTEMPT_HANDOFF_FORMAT_VERSION = 1
-SUPPORTED_HANDOFF_VERSIONS = frozenset({1})
+SUPPORTED_HANDOFF_VERSIONS = frozenset({1, 2})
 
 #: Canonical per-attempt activities (design section 4.1). The hyphenated
 #: ``awaiting-review`` spelling is canonical in machine metadata; the
@@ -227,9 +228,9 @@ def new_attempt_id(
     return f"att-{uuid.uuid4().hex[:4]}{suffix}-{uuid.uuid4().hex[:4]}"
 
 
-def stable_attempt_marker(attempt_id: str) -> str:
+def stable_attempt_marker(attempt_id: str, format_version: int = 1) -> str:
     """Return the stable marker embedded in every comment for *attempt_id*."""
-    return f"{HANDOFF_MARKER_PREFIX} v{ATTEMPT_HANDOFF_FORMAT_VERSION} attempt={_string(attempt_id)} -->"
+    return f"{HANDOFF_MARKER_PREFIX} v{format_version} attempt={_string(attempt_id)} -->"
 
 
 def activity_for_lifecycle_mode(mode: str) -> str:
@@ -297,10 +298,12 @@ class AttemptHandoff:
     retry_policy_version: int = RETRY_POLICY_VERSION
     reset_authorization: str = ""
     internal_retry_count: int = 0
+    lease_renewed_at: str = ""
+    lease_expires_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "formatVersion": ATTEMPT_HANDOFF_FORMAT_VERSION,
+            "formatVersion": 2 if self.lease_expires_at else ATTEMPT_HANDOFF_FORMAT_VERSION,
             "attemptId": self.attempt_id,
             "deploymentId": self.deployment_id,
             "repository": self.repository,
@@ -331,6 +334,8 @@ class AttemptHandoff:
             "retryPolicyVersion": self.retry_policy_version,
             "resetAuthorization": self.reset_authorization,
             "internalRetryCount": self.internal_retry_count,
+            **({"leaseRenewedAt": self.lease_renewed_at, "leaseExpiresAt": self.lease_expires_at}
+               if self.lease_expires_at else {}),
         }
 
     @staticmethod
@@ -380,6 +385,8 @@ class AttemptHandoff:
             retry_policy_version=_int(payload.get("retryPolicyVersion"), RETRY_POLICY_VERSION),
             reset_authorization=_truncate_text(payload.get("resetAuthorization"), 200),
             internal_retry_count=_int(payload.get("internalRetryCount")),
+            lease_renewed_at=_string(payload.get("leaseRenewedAt")),
+            lease_expires_at=_string(payload.get("leaseExpiresAt")),
         )
 
 
@@ -543,14 +550,16 @@ def render_attempt_comment(handoff: AttemptHandoff) -> str:
     lines.append(f"Retry: {handoff.retry_remaining}/{handoff.retry_allowance} remaining.")
     lines.append("")
     metadata = json.dumps(handoff.to_dict(), sort_keys=True, separators=(",", ":"))
-    lines.append(stable_attempt_marker(handoff.attempt_id))
+    if handoff.lease_expires_at:
+        lines.append(f"Claim lease expires: {handoff.lease_expires_at}. Renew before expiry; an expired attempt must stop shared writes and cannot renew.")
+    lines.append(stable_attempt_marker(handoff.attempt_id, 2 if handoff.lease_expires_at else 1))
     lines.append(f"{HANDOFF_CODE_FENCE}\n{metadata}\n```")
     body = "\n".join(lines)
     body = redact_comment_body(body)
     if len(body) > MAX_COMMENT_CHARS:
         # Boundedness is structural: keep the marker plus metadata intact
         # and truncate the human section, never the machine record.
-        tail = f"\n{stable_attempt_marker(handoff.attempt_id)}\n{HANDOFF_CODE_FENCE}\n{metadata}\n```"
+        tail = f"\n{stable_attempt_marker(handoff.attempt_id, 2 if handoff.lease_expires_at else 1)}\n{HANDOFF_CODE_FENCE}\n{metadata}\n```"
         tail = redact_comment_body(tail)
         head_budget = max(0, MAX_COMMENT_CHARS - len(tail) - 24)
         body = redact_comment_body(summary[:head_budget] + "\n[truncated]\n") + tail
@@ -678,6 +687,13 @@ def parse_attempt_comment(
             summary="Marker attempt id and metadata attempt id disagree; rejected rather than inferred.",
         )
     handoff = AttemptHandoff.from_dict(payload)
+    if version == 2 or handoff.lease_expires_at or handoff.lease_renewed_at:
+        from moonmind.workflows.temporal.github_issue_claim_lease import valid_lease
+        if version != 2 or not valid_lease(handoff):
+            return ParsedAttempt(status="invalid_metadata", attempt_id=attempt_id,
+                format_version=version, comment_id=_string(comment_id),
+                author_login=_string(author_login), reason_code="invalid_lease",
+                summary="Version 2 requires a valid bounded claim lease; version 1 cannot acquire expiry semantics.")
     if not handoff.activity:
         return ParsedAttempt(
             status="invalid_metadata",
@@ -862,12 +878,11 @@ def find_attempt_comments(
     attempt_id: str,
 ) -> list[Mapping[str, Any]]:
     """Return observed comments carrying the stable marker for *attempt_id*."""
-    marker = stable_attempt_marker(_string(attempt_id))
     matches: list[Mapping[str, Any]] = []
     for comment in comments:
         if not isinstance(comment, Mapping):
             continue
-        if marker in _string(comment.get("body")):
+        if parse_attempt_comment(comment.get("body")).attempt_id == _string(attempt_id):
             matches.append(comment)
     return matches
 
