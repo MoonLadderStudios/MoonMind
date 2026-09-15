@@ -22,9 +22,11 @@ from moonmind.workflows.skills.deployment_execution import (
     TemporalDeploymentEvidenceWriter,
     _command_plan_targeting_stack_services,
     _compose_up_args_for_services,
+    _docker_desktop_host_path,
     _ensure_command_succeeded,
     _ensure_runner_survives_update,
     _is_host_absolute_path,
+    _is_wsl_distro_path,
     _remap_host_compose_path,
     _remove_services_from_command_args,
     _service_is_excluded,
@@ -2093,7 +2095,11 @@ async def test_run_compose_json_failure_bounds_stderr_in_tool_failure(
         (r"D:\code\MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
         ("C:/Projects/Moon Mind", "/run/desktop/mnt/host/c/Projects/Moon Mind"),
         ("D:/", "/run/desktop/mnt/host/d"),
+        ("/mnt/d/code/MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
+        ("/mnt/c/Users/test", "/run/desktop/mnt/host/c/Users/test"),
+        ("/mnt/d", "/run/desktop/mnt/host/d"),
         ("/srv/moonmind", "/srv/moonmind"),
+        ("/mnt/data", "/mnt/data"),
     ],
 )
 def test_checkout_bind_mapping_preserves_mount_options_and_other_sources(
@@ -2125,3 +2131,116 @@ def test_checkout_bind_mapping_preserves_mount_options_and_other_sources(
     assert volumes[1:] == [other, neighbor, named]
     assert runner._host_bind_source_for_local_path(str(tmp_path)) == expected
     assert checkout["bind"]["create_host_path"] is True
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (r"D:\code\MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
+        ("C:/repo", "/run/desktop/mnt/host/c/repo"),
+        ("/mnt/d/code/MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
+        ("/mnt/d", "/run/desktop/mnt/host/d"),
+        ("/mnt/d/", "/run/desktop/mnt/host/d"),
+        ("/mnt/c/Users/test", "/run/desktop/mnt/host/c/Users/test"),
+        ("/srv/moonmind", None),
+        ("/mnt/data", None),
+        ("/mnt/d2/code", None),
+        ("relative/path", None),
+    ],
+)
+def test_desktop_host_path_translates_windows_and_wsl_distro_paths(path, expected):
+    """WSL /mnt/<drive> paths are not daemon-visible; they need the same
+    Desktop host rewrite as Windows drive paths. Longer /mnt/<name> mounts
+    are genuine Linux paths and must pass through.
+
+    Regression: a WSL checkout at /mnt/d/... launched updater containers
+    with empty /workspace/deployment_state volumes, causing three silent
+    FileNotFoundError deliveries and the generic exhaustion error.
+    """
+    assert _docker_desktop_host_path(path) == expected
+
+
+@pytest.mark.parametrize(
+    ("project_dir", "expected"),
+    [
+        (r"D:\code\MoonMind", True),
+        ("C:/repo", True),
+        ("/mnt/d/code/MoonMind", True),
+        ("/mnt/c", True),
+        ("/srv/moonmind", False),
+        ("/mnt/data", False),
+        ("/home/user/repo", False),
+    ],
+)
+def test_desktop_rewrite_triggers_for_windows_and_wsl_project_dirs(
+    tmp_path, project_dir, expected
+):
+    runner = HostDockerComposeRunner(
+        project_dir=project_dir, local_project_dir=str(tmp_path)
+    )
+    assert runner._requires_desktop_host_rewrite() is expected
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/mnt/d/code/MoonMind", True),
+        ("/mnt/c", True),
+        ("/mnt/d/", True),
+        (r"D:\code\MoonMind", False),
+        ("/srv/moonmind", False),
+        ("/mnt/data", False),
+        ("/mnt/d2/code", False),
+        ("relative/path", False),
+    ],
+)
+def test_wsl_distro_path_matches_only_single_letter_mnt_mounts(path, expected):
+    assert _is_wsl_distro_path(path) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("project_dir", "probe_result", "expected"),
+    [
+        # Windows drive paths are unambiguous Desktop signals: always rewrite.
+        (r"D:\code\MoonMind", False, True),
+        (r"D:\code\MoonMind", None, True),
+        # WSL shapes rewrite on Desktop-confirmed or unknown daemons, and keep
+        # the POSIX namespace on a confirmed native Linux daemon.
+        ("/mnt/d/code/MoonMind", True, True),
+        ("/mnt/d/code/MoonMind", None, True),
+        ("/mnt/d/code/MoonMind", False, False),
+        # Native Linux paths never rewrite regardless of the daemon.
+        ("/srv/moonmind", False, False),
+        ("/srv/moonmind", True, False),
+    ],
+)
+async def test_desktop_rewrite_decision_uses_daemon_signal_for_wsl(
+    tmp_path, monkeypatch, project_dir, probe_result, expected
+):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.deployment_execution._probe_docker_desktop_daemon",
+        AsyncMock(return_value=probe_result),
+    )
+    runner = HostDockerComposeRunner(
+        project_dir=project_dir, local_project_dir=str(tmp_path)
+    )
+    assert await runner._use_desktop_host_rewrite() is expected
+
+
+@pytest.mark.asyncio
+async def test_desktop_rewrite_requires_a_local_checkout_for_daemon_input(
+    tmp_path, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    probe = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.deployment_execution._probe_docker_desktop_daemon",
+        probe,
+    )
+    runner = HostDockerComposeRunner(project_dir="/mnt/d/code/MoonMind")
+    assert await runner._use_desktop_host_rewrite() is False
+    probe.assert_not_awaited()
