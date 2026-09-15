@@ -28,7 +28,17 @@ If the caller disappears, resume the printed submission with `--resume <submissi
 
 ## Options
 
-Optional arguments are `--compose-project <name>`, `--image-repository <repository>`, and `--dry-run` (show the intended release operation without fetching or deploying). The deployment-owned `docker-compose.override.yaml` (or `.yml`) accompanies the image's base configuration. Individual service restarts, live source overlays and source-only rebuilds are development operations and are outside this release contract.
+Optional arguments are `--compose-project <name>`, `--image-repository <repository>`, and `--dry-run` (show the intended release operation without fetching or deploying). The deployment-owned `docker-compose.override.yaml` (or `.yml`) accompanies the image's base configuration.
+
+`--local-build` is an explicit development-only escape hatch for exercising an
+unpublished working tree (for example a feature branch awaiting its published
+image). It recreates the stack on the repo's live-source development overlay,
+writes no release submission, and claims no digest; it is never an immutable
+release and must not be used for promotion or qualification. It preserves the
+deployment-owned `.env`, requires published bindings to be unchanged
+afterwards, and verifies each `--operator-url` health check. Roll back with a
+plain `docker compose up -d`. Individual service restarts and source-only
+image rebuilds remain outside this contract.
 
 Use `--operator-url <existing-origin>` (repeatable) to declare the installed dashboard/API addresses for verification, especially for wildcard bindings without an authentication base URL. The declaration belongs to the immutable release submission and does not modify `.env`, authentication, or published bindings. Use addresses resolvable from the Docker backend, such as a full VPN hostname. Resume retains the original addresses. A configured `MOONMIND_PUBLIC_BASE_URL` remains a required verification target as well.
 
