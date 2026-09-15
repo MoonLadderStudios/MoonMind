@@ -9078,7 +9078,6 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setBranchInputSyncToken((token) => token + 1);
   }, []);
   const readBranchDraft = (): string => branchDraftRef.current || "";
-  const isBranchTouched = branchTouched || branchTouchedRef.current;
   const [branchSearchRequested, setBranchSearchRequested] = useState(false);
   const [branchSearchQuery, setBranchSearchQuery] = useState("");
   const branchOptionsQuery = useQuery({
@@ -9182,18 +9181,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     branchMetadataQuery.data?.defaultBranch,
     branchOptionsQuery.data?.defaultBranch,
   ]);
-  // Render-time snapshot for status evidence only; submission reads the live
-  // draft ref inside `handleSubmit` (see `submissionBranch`) so a Start pressed
-  // within the settle debounce never reuses the prior settled value. An
-  // authored-then-cleared field stays empty; only an untouched field falls back
-  // to the default branch on create so opening the form never requires enumeration.
+  // Settled branch text drives only optional exact-name evidence below.
+  // Submission reads the live draft ref inside `handleSubmit` (see
+  // `submissionBranch`) so a Start pressed within the settle debounce never
+  // reuses a prior value; an authored-then-cleared field stays empty.
   const settledBranchText = branchSettled.trim();
-  const draftBranchText = (branchDraftRef.current || "").trim();
-  const effectiveBranch =
-    draftBranchText ||
-    (!isBranchTouched && pageMode.mode === "create" && submittedRepository
-      ? defaultBranch
-      : "");
   // Exact-name evidence is independent of suggestion membership and never
   // runs alongside suggestion search: one settled value schedules at most one
   // non-blocking lookup after edits pause. The query key carries the full
