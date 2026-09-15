@@ -249,56 +249,64 @@ async def successful_release_image(root, version):
             # Malformed unrelated jobs cannot revoke a valid release receipt.
             continue
         directory = path.parent
-        receipt_file = directory / "deployment-result.json"
-        request_file = directory / "request.json"
-        if not receipt_file.exists() or not request_file.exists():
+        try:
+            receipt_file = directory / "deployment-result.json"
+            request_file = directory / "request.json"
+            if not receipt_file.exists() or not request_file.exists():
+                continue
+            receipt = json.loads(receipt_file.read_text())
+            request = json.loads(request_file.read_text())
+            if receipt.get("owner") != request["authored"]["owner"]:
+                raise ValueError("Successful release receipt owner differs")
+            if receipt.get("result", {}).get("status") != "COMPLETED":
+                continue
+            digest = request["image"].partition("@")[2] or request["image"]
+            outputs = receipt["result"].get("outputs", {})
+            if not digest.startswith("sha256:") or outputs.get("resolvedDigest") != digest:
+                raise ValueError("Successful release receipt image differs")
+            image_ids = set((await docker("image", "ls", "-q", "--no-trunc")).split())
+            if request["imageId"] not in image_ids:
+                await docker("pull", request["image"])
+            image = json.loads(await docker("image", "inspect", request["imageId"]))[0]
+            if image["Id"] != request["imageId"]:
+                raise ValueError("Successful release image identity differs")
+            manifest = json.loads(
+                await docker(
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--entrypoint",
+                    "python",
+                    request["imageId"],
+                    "-c",
+                    "import json; from moonmind.release_identity import installed_release; "
+                    "print(json.dumps(installed_release()))",
+                )
+            )
+            if (
+                not manifest
+                or manifest.get("digest") != routing["candidate"]
+                or (
+                    manifest.get("sourceRevision")
+                    != request["authored"]["inputs"].get("sourceRevision")
+                )
+            ):
+                raise ValueError(
+                    "Successful release manifest differs from its source authority"
+                )
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            # Invalid evidence grants no image authority. Its failure must not
+            # suppress valid current or retained cohorts from another job.
+            # In particular, receipts authored before sourceRevision existed
+            # cannot prove source identity and are skipped, not fatal.
             continue
-        receipt = json.loads(receipt_file.read_text())
-        request = json.loads(request_file.read_text())
-        if receipt.get("owner") != request["authored"]["owner"]:
-            raise ValueError("Successful release receipt owner differs")
-        if receipt.get("result", {}).get("status") != "COMPLETED":
-            continue
-        digest = request["image"].partition("@")[2] or request["image"]
-        outputs = receipt["result"].get("outputs", {})
-        if not digest.startswith("sha256:") or outputs.get("resolvedDigest") != digest:
-            raise ValueError("Successful release receipt image differs")
-        image_ids = set((await docker("image", "ls", "-q", "--no-trunc")).split())
-        if request["imageId"] not in image_ids:
-            await docker("pull", request["image"])
-        image = json.loads(await docker("image", "inspect", request["imageId"]))[0]
-        if image["Id"] != request["imageId"]:
-            raise ValueError("Successful release image identity differs")
-        manifest = json.loads(
-            await docker(
-                "run",
-                "--rm",
-                "--network",
-                "none",
-                "--entrypoint",
-                "python",
-                request["imageId"],
-                "-c",
-                "import json; from moonmind.release_identity import installed_release; "
-                "print(json.dumps(installed_release()))",
-            )
-        )
-        if (
-            not manifest
-            or manifest.get("digest") != routing["candidate"]
-            or (
-                manifest.get("sourceRevision")
-                != request["authored"]["inputs"]["sourceRevision"]
-            )
-        ):
-            raise ValueError(
-                "Successful release manifest differs from its source authority"
-            )
-        return {
-            "image": request["imageId"],
-            "sourceReceipt": directory.name,
-            "sourceRevision": manifest["sourceRevision"],
-        }
+        else:
+            return {
+                "image": request["imageId"],
+                "sourceReceipt": directory.name,
+                "sourceRevision": manifest["sourceRevision"],
+            }
     # An initial Compose installation may never have produced its own release
     # receipt. Its availability owner or first updater records the proven image.
     deployment, _, expected_digest = version.partition(".sha256:")
