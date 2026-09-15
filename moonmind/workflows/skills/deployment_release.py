@@ -433,8 +433,70 @@ async def execute_detached(executor, inputs, context):
                     else 1
                 )
                 if deliveries >= 3:
+                    from moonmind.utils.logging import redact_sensitive_text
+
+                    diagnosis = []
+                    try:
+                        inner_attempts = directory / "attempts.json"
+                        diagnosis.append(
+                            "attempts="
+                            + (
+                                str(
+                                    json.loads(inner_attempts.read_text()).get(
+                                        "count"
+                                    )
+                                )
+                                if inner_attempts.exists()
+                                else "none (updater never entered its retry loop)"
+                            )
+                        )
+                    except (OSError, ValueError):
+                        diagnosis.append("attempts=unreadable")
+                    try:
+                        last_error_file = directory / "last-error.json"
+                        if last_error_file.exists():
+                            last_error = json.loads(last_error_file.read_text())
+                            diagnosis.append(
+                                "last-error="
+                                + redact_sensitive_text(
+                                    str(last_error.get("error") or last_error)[:500]
+                                )
+                            )
+                    except (OSError, ValueError):
+                        diagnosis.append("last-error=unreadable")
+                    try:
+                        exit_code = existing.get("State", {}).get("ExitCode")
+                        diagnosis.append(f"updater-exit={exit_code}")
+                    except (AttributeError, TypeError):
+                        pass
+                    try:
+                        tail = await docker("logs", "--tail", "30", name)
+                        diagnosis.append(
+                            "updater-logs="
+                            + redact_sensitive_text(tail[-2000:] or "(empty)")
+                        )
+                    except RuntimeError as exc:
+                        diagnosis.append(
+                            "updater-logs=unavailable:"
+                            + redact_sensitive_text(str(exc)[:200])
+                        )
+                    resume_hint = f"release job {key} (owner {name})"
+                    if owner.startswith("host-update:"):
+                        submission = owner.removeprefix("host-update:")
+                        resume_hint += (
+                            f"; resume with ./tools/update-moonmind.sh --resume {submission}"
+                            f" after fixing the updater mount/inputs"
+                        )
+                    else:
+                        resume_hint += (
+                            "; retained job requires resumption via release.reconcile"
+                            " or a new audited release"
+                        )
                     raise RuntimeError(
                         "Release updater exhausted three deliveries without terminal evidence"
+                        f" ({resume_hint}; deliveries={deliveries}; "
+                        + "; ".join(diagnosis)
+                        + f"; inspect docker logs {name} and {directory / 'request.json'})"
                     )
                 write_record(attempts_file, {"count": deliveries + 1})
                 await docker("start", name)

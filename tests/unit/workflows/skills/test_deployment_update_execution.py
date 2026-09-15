@@ -22,6 +22,7 @@ from moonmind.workflows.skills.deployment_execution import (
     TemporalDeploymentEvidenceWriter,
     _command_plan_targeting_stack_services,
     _compose_up_args_for_services,
+    _docker_desktop_host_path,
     _ensure_command_succeeded,
     _ensure_runner_survives_update,
     _is_host_absolute_path,
@@ -2093,7 +2094,11 @@ async def test_run_compose_json_failure_bounds_stderr_in_tool_failure(
         (r"D:\code\MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
         ("C:/Projects/Moon Mind", "/run/desktop/mnt/host/c/Projects/Moon Mind"),
         ("D:/", "/run/desktop/mnt/host/d"),
+        ("/mnt/d/code/MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
+        ("/mnt/c/Users/test", "/run/desktop/mnt/host/c/Users/test"),
+        ("/mnt/d", "/run/desktop/mnt/host/d"),
         ("/srv/moonmind", "/srv/moonmind"),
+        ("/mnt/data", "/mnt/data"),
     ],
 )
 def test_checkout_bind_mapping_preserves_mount_options_and_other_sources(
@@ -2125,3 +2130,51 @@ def test_checkout_bind_mapping_preserves_mount_options_and_other_sources(
     assert volumes[1:] == [other, neighbor, named]
     assert runner._host_bind_source_for_local_path(str(tmp_path)) == expected
     assert checkout["bind"]["create_host_path"] is True
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (r"D:\code\MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
+        ("C:/repo", "/run/desktop/mnt/host/c/repo"),
+        ("/mnt/d/code/MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
+        ("/mnt/d", "/run/desktop/mnt/host/d"),
+        ("/mnt/d/", "/run/desktop/mnt/host/d"),
+        ("/mnt/c/Users/test", "/run/desktop/mnt/host/c/Users/test"),
+        ("/srv/moonmind", None),
+        ("/mnt/data", None),
+        ("/mnt/d2/code", None),
+        ("relative/path", None),
+    ],
+)
+def test_desktop_host_path_translates_windows_and_wsl_distro_paths(path, expected):
+    """WSL /mnt/<drive> paths are not daemon-visible; they need the same
+    Desktop host rewrite as Windows drive paths. Longer /mnt/<name> mounts
+    are genuine Linux paths and must pass through.
+
+    Regression: a WSL checkout at /mnt/d/... launched updater containers
+    with empty /workspace/deployment_state volumes, causing three silent
+    FileNotFoundError deliveries and the generic exhaustion error.
+    """
+    assert _docker_desktop_host_path(path) == expected
+
+
+@pytest.mark.parametrize(
+    ("project_dir", "expected"),
+    [
+        (r"D:\code\MoonMind", True),
+        ("C:/repo", True),
+        ("/mnt/d/code/MoonMind", True),
+        ("/mnt/c", True),
+        ("/srv/moonmind", False),
+        ("/mnt/data", False),
+        ("/home/user/repo", False),
+    ],
+)
+def test_desktop_rewrite_triggers_for_windows_and_wsl_project_dirs(
+    tmp_path, project_dir, expected
+):
+    runner = HostDockerComposeRunner(
+        project_dir=project_dir, local_project_dir=str(tmp_path)
+    )
+    assert runner._requires_desktop_host_rewrite() is expected
