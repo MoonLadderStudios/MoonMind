@@ -156,13 +156,16 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   `MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-<suite>_default` so
   fixture tests attach to their row's isolated Compose network instead of
   the retired single-job `moonmind-reliability-qualification_default`.
-- Per-test (`--timeout 600`), job (`timeout-minutes: 30`), and cleanup
-  (`always()` compose `down -v`, wrapped in `timeout 100s`) bounds are
-  preserved on every row. Reliability collection steps are additionally
-  wrapped in `timeout 100s`/`timeout 60s` so one slow diagnostic command
-  cannot stall the row; each command records its own failure to
-  `collection-status.txt` without stopping the remaining bounded collection
-  or cleanup, and the original test failure is never replaced.
+- Per-test (`--timeout 600` on fast rows, `--timeout 180` on reliability
+  rows), test-step (reliability pytest wrapped in `timeout 480s` for an
+  8-minute ceiling with an explicit budget-exceeded annotation), job
+  (`timeout-minutes: 12`), and cleanup (`always()` compose `down -v`,
+  wrapped in `timeout 100s`) bounds are preserved on every row. Reliability
+  collection steps are additionally wrapped in `timeout 100s`/`timeout 60s`
+  so one slow diagnostic command cannot stall the row; each command
+  records its own failure to `collection-status.txt` without stopping the
+  remaining bounded collection or cleanup, and the original test failure
+  is never replaced.
 - Each row streams combined stdout/stderr through
   `2>&1 | tee artifacts/pytest-backend-<suite>.log` with
   `PYTHONUNBUFFERED=1` and `set -euo pipefail` (plus `PIPESTATUS`
@@ -204,12 +207,20 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   backend selection skips the matrix intentionally without instantiating
   tests or hiding selector errors.
 
-Reliability sharding is deterministic: files matching
-`tests/integration/reliability/test_*.py` are sorted lexicographically and
-assigned round-robin (`index % 4`). The CI workflow implements this with
-`ls ... | sort | awk 'NR % 4 == ...'`; `tools/verify_test_shard_ownership.py`
-implements the same rule in `reliability_shard_for_path()` so local
-ownership checks and CI execute each file in the same shard.
+Reliability sharding is deterministic and duration-balanced
+(MoonLadderStudios/MoonMind#4367): files matching
+`tests/integration/reliability/test_*.py` are assigned with a greedy
+longest-processing-time partition over the timing hints in
+`tools/ci/reliability_shard_timings.json`. The CI workflow implements this
+with `python3 tools/ci/partition_reliability_shards.py --shard <N>`;
+`tools/verify_test_shard_ownership.py` enforces the same partition through
+the shared `tools/ci/reliability_shard_partition.py` module, so local
+ownership checks and CI execute each file in the same shard. Timing hints
+are an optimization hint only: new, renamed, or stale entries fall back to
+the default weight and every file is still selected exactly once. Refresh
+the hints from recent per-shard `pytest-backend-<suite>-durations.json`
+snapshots; never add exact test-count, timing-file freshness, test-filename,
+or preferred-wording gates.
 
 Diagnostic limitation: a canceled sibling may exit before writing its
 junit report or Compose logs. Cancellation uploads are best-effort
@@ -230,11 +241,11 @@ success-path text log/JUnit upload, `-q` reliability verbosity):
 1. Fix the selected universe: run with the same selector outputs (same
    `unit_fast`/`api_component`/`temporal_boundary`/`reliability_journey`
    selection, same reliability file set from
-   `ls tests/integration/reliability/test_*.py | sort`).
+   `python3 tools/ci/partition_reliability_shards.py --shard <N>`).
 2. Fix the revision/configuration: compare runs on the same commit (or
    adjacent commits with no test/workflow changes), same workflow file,
-   same `--timeout 600` / `timeout-minutes: 30` bounds, same runner class
-   (`ubuntu-latest`).
+   same per-row `--timeout` / `timeout 480s` / `timeout-minutes: 12`
+   bounds, same runner class (`ubuntu-latest`).
 3. Repeat each side at least twice to separate ordinary timing noise from a
    real shift; do not add a performance gate on the result.
 4. Separate cold and warm setup: record dependency-install/Compose-pull
@@ -413,18 +424,19 @@ MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability \
   -m reliability_journey -q --durations=25
 ```
 
-Run one deterministic reliability shard locally (mirrors the CI matrix
-`ls | sort | awk 'NR % 4 == ...'` selection; shard 0 runs files 1, 5, 9, ...):
+Run one duration-balanced reliability shard locally (mirrors the CI
+matrix partition; list a shard's files first, then run them):
 
 ```bash
-mapfile -t shard_files < <(ls tests/integration/reliability/test_*.py | sort | awk 'NR % 4 == 1')
+python3 tools/ci/partition_reliability_shards.py --shard 0
+mapfile -t shard_files < <(python3 tools/ci/partition_reliability_shards.py --shard 0)
 MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest "${shard_files[@]}" \
   -m reliability_journey -q --durations=25
 ```
 
-Shard 2 uses `NR % 4 == 2`, shard 3 uses `NR % 4 == 3`, and shard 4 uses
-`NR % 4 == 0`. `tools/verify_test_shard_ownership.py` assigns each file to
-the same shard via `reliability_shard_for_path()`.
+Shard indexes `0`–`3` map to `reliability-shard-1`–`reliability-shard-4`.
+`tools/verify_test_shard_ownership.py` assigns each file to the same shard
+via `reliability_shard_for_path()`.
 
 Run the checkpoint archive cold-resume replay directly:
 
@@ -445,7 +457,8 @@ The archive replay deliberately destroys the source workspace before using
 durable artifact evidence to restore a distinct destination and retries the
 restore idempotently. It exercises production capture/restore engines and the
 artifact boundary, but does not substitute for the Temporal-to-managed-AgentRun
-journey. The required CI reliability job has a 30-minute budget.
+journey. The required CI reliability shards each carry an 8-minute test-step
+budget inside a 12-minute job ceiling.
 
 Verify that every eligible provider-free node has exactly one owner:
 

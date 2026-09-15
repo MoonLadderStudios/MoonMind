@@ -13,40 +13,38 @@ from pathlib import Path
 
 import pytest
 
+from tools.ci.reliability_shard_partition import (
+    SHARD_COUNT as RELIABILITY_SHARD_COUNT,
+)
+from tools.ci.reliability_shard_partition import (
+    SHARD_NAMES as RELIABILITY_SHARD_NAMES,
+)
+from tools.ci.reliability_shard_partition import (
+    partition as _lpt_partition,
+)
+from tools.ci.reliability_shard_partition import (
+    shard_for_path as _partition_shard_for_path,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROVIDER_MARKERS = {"provider_verification", "requires_credentials"}
 
-# Deterministic reliability sharding (MoonLadderStudios/MoonMind#4377): the
-# backend matrix runs four isolated reliability shards. Files under
-# tests/integration/reliability/test_*.py are sorted lexicographically and
-# assigned round-robin (index % 4). This matches the CI workflow's
-# `ls ... | sort | awk 'NR % 4 == ...'` selection so local ownership and CI
-# execute the same file in the same shard.
-RELIABILITY_SHARD_COUNT = 4
-RELIABILITY_SHARD_NAMES = tuple(
-    f"reliability-shard-{index + 1}" for index in range(RELIABILITY_SHARD_COUNT)
-)
+
+_PARTITION_CACHE: dict[str, str] | None = None
+
+
+def reliability_partition() -> dict[str, str]:
+    """Map every reliability test file to its deterministic shard (LPT)."""
+    global _PARTITION_CACHE
+    if _PARTITION_CACHE is not None:
+        return dict(_PARTITION_CACHE)
+    _PARTITION_CACHE = _lpt_partition()
+    return dict(_PARTITION_CACHE)
 
 
 def reliability_shard_for_path(path: str) -> str:
     """Return the deterministic reliability shard owning a test path."""
-    import hashlib
-
-    filename = path.rsplit("/", 1)[-1]
-    try:
-        candidates = sorted(
-            p.name
-            for p in (REPO_ROOT / "tests" / "integration" / "reliability").glob(
-                "test_*.py"
-            )
-        )
-        if filename in candidates:
-            return RELIABILITY_SHARD_NAMES[candidates.index(filename) % RELIABILITY_SHARD_COUNT]
-    except OSError:
-        # Reliability directory unreadable; fall through to hash-based sharding.
-        pass
-    digest = int(hashlib.md5(path.encode("utf-8")).hexdigest(), 16)
-    return RELIABILITY_SHARD_NAMES[digest % RELIABILITY_SHARD_COUNT]
+    return _partition_shard_for_path(path, reliability_partition())
 
 
 @dataclass(frozen=True)
