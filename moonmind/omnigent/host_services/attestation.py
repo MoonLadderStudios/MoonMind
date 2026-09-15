@@ -375,10 +375,10 @@ class DockerOmnigentHostAttestor:
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
         configured_image = str(container.get("Config", {}).get("Image") or "")
-        # SHA/patch drift: rebuilt images change digests while keeping
-        # major.minor. Exact equality is required when possible, but a
+        # SHA/patch/minor drift: rebuilt images change digests while keeping
+        # major. Exact equality is required when possible, but a
         # same-repository image is acceptable drift -- downstream version gates
-        # (omnigent major.minor, vendor major.minor) still enforce release
+        # (omnigent major, vendor major.minor) still enforce release
         # compatibility. Different repositories are never compatible drift.
         if configured_image != host_class.imageRef:
             try:
@@ -412,7 +412,7 @@ class DockerOmnigentHostAttestor:
         image_rows = json.loads(image_json)
         image = image_rows[0] if isinstance(image_rows, list) and image_rows else {}
         # Probe the executable omnigent version before judging build identity:
-        # rebuilt images change SHA/patch while keeping major.minor, and
+        # rebuilt images change SHA/patch/minor while keeping major, and
         # independently built hosts share a release series. Exact build match
         # remains required when versions differ; same-series drift with no
         # operator pin is acceptable (bootstrap judges the same way).
@@ -447,7 +447,7 @@ class DockerOmnigentHostAttestor:
             _assert_exact_omnigent_build(image, host_class.omnigentBuildDigest)
         except HarnessPlatformError:
             # Same-series rebuilds may carry a different build digest while
-            # reporting a compatible major.minor (proven by the live probe
+            # reporting a compatible major (proven by the live probe
             # above). Accept that only when the launched image actually
             # drifted from the selected Host Class image within the same
             # repository: an unchanged image with a different build label is
@@ -502,7 +502,7 @@ class DockerOmnigentHostAttestor:
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
         # omnigent_version was probed above (before the tolerant build check)
-        # so build drift can be judged against the same major.minor series.
+        # so build drift can be judged against the same major series.
         runtime_versions: dict[str, str] = {}
         selected_entry = next(
             item

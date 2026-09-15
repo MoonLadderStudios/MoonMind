@@ -1,4 +1,4 @@
-"""Major.minor interoperability keeps exact deployment and plan evidence."""
+"""Major interoperability keeps exact deployment and plan evidence."""
 
 from types import SimpleNamespace
 
@@ -28,9 +28,10 @@ from tests.unit.omnigent.test_harness_platform import (  # noqa: F401 -- fixture
         ("0.12.0", "0.12.37", True),
         ("1.2.99", "1.2.0", True),
         ("0.12", "omnigent 0.12.1", True),
-        ("0.12.0", "0.13.0", False),
+        ("0.12.0", "0.13.0", True),
         ("1.12.0", "2.12.0", False),
-        ("0.12.0", "0.120.0", False),
+        ("0.12.0", "0.120.0", True),
+        ("0.12.0", "1.12.0", False),
         ("0.12.0", "", False),
         ("0.12.0", "0.12.1garbage", False),
         ("", "", False),
@@ -47,7 +48,8 @@ def test_release_series(expected, observed, compatible):
     [
         ("0.12.0", "0.12.9", None),
         ("0.12.9", "0.12.0", None),
-        ("0.12.0", "0.13.0", "omnigent_server_host_version_mismatch"),
+        ("0.12.0", "0.13.0", None),
+        ("0.12.0", "1.0.0", "omnigent_server_host_version_mismatch"),
     ],
 )
 async def test_independently_built_hosts_share_a_release_series(
@@ -76,9 +78,12 @@ async def test_independently_built_hosts_share_a_release_series(
     assert result.build_digest == "sha256:" + "b" * 64
 
 
-@pytest.mark.parametrize("version,compatible", [("0.12.9", True), ("0.13.0", False)])
+@pytest.mark.parametrize(
+    "version,compatible",
+    [("0.12.9", True), ("0.13.0", True), ("1.0.0", False)],
+)
 @pytest.mark.asyncio
-async def test_admitted_plan_survives_patch_update_without_replacing_host(
+async def test_admitted_plan_survives_minor_update_without_replacing_host(
     tmp_path, monkeypatch, version, compatible
 ):
     monkeypatch.delenv("OMNIGENT_BUILD_DIGEST", raising=False)
@@ -316,7 +321,7 @@ async def test_bootstrap_selects_each_images_actual_provenance(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "replacement_version,compatible", [("1.0.99", True), ("1.1.0", False)]
+    "replacement_version,compatible", [("1.0.99", True), ("1.1.0", True), ("2.0.0", False)]
 )
 async def test_host_override_never_masks_server_replacement(
     tmp_path, monkeypatch, replacement_version, compatible
@@ -513,12 +518,12 @@ def test_compatible_deployed_fallback_prefers_qualified_same_repo():
         )
         is None
     )
-    # Same-repository candidate on another minor is rejected.
+    # Same-repository candidate on another major is rejected.
     assert (
         compatible_deployed_fallback(
             requested,
             deployed_refs=[current],
-            expected_omnigent_version="0.14.0",
+            expected_omnigent_version="1.0.0",
             provenance=provenance,
         )
         is None

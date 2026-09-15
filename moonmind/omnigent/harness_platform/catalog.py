@@ -231,7 +231,7 @@ def assert_catalog_refresh_attests(
     """Prove a fresh observation still matches immutable profile authority.
 
     Agent Profile versions remain bound to their original catalog snapshot.
-    A later synchronization can attest a compatible major.minor core release
+    A later synchronization can attest a compatible major core release
     with unchanged declared harness behavior. Plugin identity stays exact;
     the original snapshot is retained rather than rewritten.
     """

@@ -3184,10 +3184,10 @@ async def test_bound_host_retry_rejects_mismatched_attestation() -> None:
 
 @pytest.mark.asyncio
 async def test_bound_host_retry_allows_same_repo_sha_drift() -> None:
-    """Same-repository SHA/patch drift survives attested retries.
+    """Same-repository SHA/patch/minor drift survives attested retries.
 
-    Rebuilt host images change digests while keeping major.minor. Retries must
-    not fail on SHA alone; major.minor compatibility is enforced downstream.
+    Rebuilt host images change digests while keeping major. Retries must
+    not fail on SHA alone; major compatibility is enforced downstream.
     """
 
     harness = await _generic_publication_harness(_PUSHED_PUBLICATION)

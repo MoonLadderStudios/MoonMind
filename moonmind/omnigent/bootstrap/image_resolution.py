@@ -296,7 +296,7 @@ async def _evaluate_opencode_host(
 ) -> _OpenCodeHostVerdict:
     """Judge one host image against the running server's build identity.
 
-    Compatibility requires the same executable major.minor release series
+    Compatibility requires the same executable major release series
     and the release bootstrap probe. Digests retain provenance. Every
     candidate passes through the same ladder, so the admitted host is always
     the one that proved compatibility with the server actually running.
@@ -480,7 +480,7 @@ async def resolve_omnigent_images(
 
     # Server and host build digests retain independent provenance. An explicit
     # operator build pin still requires that exact host label; default server
-    # compatibility is decided by major.minor and the bootstrap contract.
+    # compatibility is decided by major and the bootstrap contract.
     if not server_image_digest and server_ref:
         server_image_digest = _extract_digest(server_ref)
     configured_build_digest = str(source.get("OMNIGENT_BUILD_DIGEST") or "").strip()

@@ -78,7 +78,7 @@ class DockerOmnigentHostLauncher:
     ) -> str:
         """Return the image to launch: exact when present, else qualified local.
 
-        Rebuilt host images change SHA/patch while keeping major.minor. When
+        Rebuilt host images change SHA/patch/minor while keeping major. When
         the plan-pinned digest is absent locally, reuse a qualified
         same-repository digest (digest-pinned, deployment-observed or
         operator-pinned, same admitted series) if present instead of forcing a

@@ -1,8 +1,8 @@
-"""Qualified host-image drift recovery (major.minor, not SHA).
+"""Qualified host-image drift recovery (major, not SHA).
 
 Plans pin an exact digest-pinned host image as immutable launch authority.
 Rebuilt images change patch tags and SHA digests while keeping the same
-major.minor release series (and often the same exact versions). Requiring the
+major release series (and often the same exact versions). Requiring the
 exact SHA to be present locally fails every app update even when a locally
 available image from the same repository is functionally identical.
 
@@ -15,7 +15,7 @@ stale 7GB digest or failing. A fallback is returned only when it is qualified:
 - deployment authority: observed in bootstrap resolved-state provenance (the
   trusted boundary probed its Omnigent binary) or an explicit operator pin;
 - series-compatible with the admitted plan when the caller supplies the
-  expected Omnigent version (same major.minor; patch and SHA may evolve).
+  expected Omnigent version (same major; minor, patch, and SHA may evolve).
 
 Same-repository is an additional bound, never the whole qualification:
 repository equality alone does not prove compatibility. Downstream gates
