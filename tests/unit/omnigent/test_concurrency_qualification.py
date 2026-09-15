@@ -223,7 +223,10 @@ def test_sibling_escaped_regressions_are_bound_to_owners() -> None:
         for owner in CONCURRENCY_SCENARIO_CATALOG
         for ref in owner.escaped_regressions
     }
-    for issue in ("3879", "3880", "3881", "3882", "3883", "3884"):
+    # MoonLadderStudios/MoonMind#3881 replayed the retired automatic
+    # machine-capacity reservations and was removed with that subsystem
+    # (Plan A); the remaining siblings still require owners.
+    for issue in ("3879", "3880", "3882", "3883", "3884"):
         assert f"MoonLadderStudios/MoonMind#{issue}" in covered
 
 
@@ -973,23 +976,24 @@ def test_an_absent_exact_image_environment_records_unavailable_rows(
 def test_a_hermetic_layer_without_a_database_records_unavailable_rows(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The layer's real database constraints are an environment, not a test.
+    """The hermetic layer runs without a cluster after Plan A retirement.
 
-    Without a cluster the final-slot race never ran, so recording the fixture
-    error as ``failed`` would report a concurrency defect that was never
-    observed. The row names the missing dependency instead.
+    The automatic machine-capacity two-transaction race owner was retired
+    with that subsystem, so no hermetic owner requires PostgreSQL. Without
+    a cluster the layer still enters; the row names the missing observation
+    only when owning tests fail to publish evidence.
     """
 
     monkeypatch.delenv("MOONMIND_TEST_POSTGRES_URL", raising=False)
     monkeypatch.setattr(runner.shutil, "which", lambda _name: None)
     monkeypatch.setattr(runner.Path, "glob", lambda _self, _pattern: iter(()))
+    monkeypatch.setattr(runner, "_run_owning_tests", lambda _l, _lv, _d: 0)
 
     rows = runner.build_rows(
         _runner_args(tmp_path), ConcurrencyQualificationLayer.hermetic, (2, 4)
     )
 
-    assert [row.status for row in rows] == [ConcurrencyRowStatus.unavailable] * 2
-    assert "PostgreSQL" in rows[0].diagnostics[0]
+    assert [row.status for row in rows] == [ConcurrencyRowStatus.partial] * 2
 
 
 def test_a_configured_database_url_admits_the_hermetic_layer(
@@ -1014,7 +1018,7 @@ def test_an_exact_docker_layer_without_a_database_records_unavailable_rows(
     """The exact-image layer's owners need a cluster, so its layer does too.
 
     A runner carrying Docker and the digest-pinned images but no PostgreSQL
-    has not observed anything about concurrency: four of this layer's owners
+    has not observed anything about concurrency: three of this layer's owners
     fail closed in their fixture. Recording that as ``failed`` would publish a
     concurrency defect nobody saw.
     """
@@ -1068,12 +1072,14 @@ def test_every_layer_precondition_covers_the_environment_its_owners_require() ->
             f"precondition covers it: {covered}"
         )
 
-    # The catalog this program ships with: both required layers race real
-    # PostgreSQL transactions, and the live route does not.
+    # The catalog this program ships with: the exact-image layer decides its
+    # invariant against real PostgreSQL, the hermetic layer runs without a
+    # cluster after the automatic machine-capacity retirement (Plan A), and
+    # the live route does not.
     assert layer_requires_postgres(
         ConcurrencyQualificationLayer.exact_docker, root=repo_root
     )
-    assert layer_requires_postgres(
+    assert not layer_requires_postgres(
         ConcurrencyQualificationLayer.hermetic, root=repo_root
     )
     assert not layer_requires_postgres(

@@ -27,12 +27,8 @@ class DockerOmnigentHostLauncher:
         runtime_scripts: OmnigentRuntimeScriptService,
         server_url: str | None = None,
         host_api_token: str | None = None,
-        cpu_pool: Any | None = None,
-        machine_budget_provider: Any | None = None,
     ) -> None:
         self._backend = backend
-        self._cpu_pool = cpu_pool
-        self._machine_budget_provider = machine_budget_provider
         self._scripts = runtime_scripts
         self._host_api_token = str(host_api_token or "")
         self._server_url = str(
@@ -92,12 +88,13 @@ class DockerOmnigentHostLauncher:
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
         container_name = spec.correlationName
-        shared_cpu = launch_policy.limits["cpuMillis"] == 0
-        cpu_args = ["--cpus", str(launch_policy.limits["cpuMillis"] / 1000)]
-        if shared_cpu:
-            if self._cpu_pool is None or self._machine_budget_provider is None:
-                raise RuntimeError("shared CPU requires the deployment resource owner")
-            cpu_args = await self._cpu_pool.launch_args()
+        cpu_millis = int(launch_policy.limits["cpuMillis"])
+        if cpu_millis < 1:
+            raise HarnessPlatformError(
+                "launch policy requires a positive explicit CPU limit",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        cpu_args = ["--cpus", str(cpu_millis / 1000)]
         state_volume = str(spec.stateAttachment["sourceRef"])
         control_volume = (
             str(spec.controlAttachment["sourceRef"])
@@ -357,18 +354,9 @@ class DockerOmnigentHostLauncher:
                 spec.serverUrl,
             ]
         )
-        pool_lease = None
         try:
-            if shared_cpu:
-                pool_lease = await self._cpu_pool.prepare(
-                    await self._machine_budget_provider()
-                )
             _code, container_id, _err = await self._backend.run(command)
-            if pool_lease is not None:
-                await self._cpu_pool.verify(pool_lease)
             await self._backend.run(["docker", "start", container_name])
-            if pool_lease is not None:
-                await self._cpu_pool.finish_launch(pool_lease, container_name)
         except BaseException:
             await self._backend.run(["docker", "rm", "-f", container_name], check=False)
             await self._backend.run(
@@ -379,11 +367,6 @@ class DockerOmnigentHostLauncher:
                     ["docker", "volume", "rm", control_volume], check=False
                 )
             raise
-        finally:
-            if pool_lease is not None:
-                await self._backend.run(
-                    ["docker", "rm", "-f", pool_lease.holder], check=False
-                )
         return {
             "containerId": container_id.strip(),
             "containerName": container_name,

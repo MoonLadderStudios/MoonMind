@@ -2,10 +2,11 @@
 
 Source issue: MoonLadderStudios/MoonMind#3878 (invariant 7, AC7, AC11).
 
-Provider Profile capacity says nothing about how many Docker hosts the machine
-can carry. These tests pin the second and third governed limits: an aggregate
+Provider Profile capacity says nothing about how many on-demand Docker
+hosts may exist at once. These tests pin the two governed limits: an aggregate
 ceiling on concurrently allocated hosts, and a separately bounded cold-launch
-rate.
+rate. There is no automatic machine-resource accounting; fixed per-container
+limits are enforced directly by Docker.
 """
 
 from __future__ import annotations
@@ -78,7 +79,7 @@ def test_cold_launch_burst_refuses_a_launch_storm_below_the_ceiling() -> None:
     assert decision.retry_after_seconds == 30
 
 
-def test_full_machine_reports_capacity_not_cold_launch_rate() -> None:
+def test_full_host_count_reports_capacity_not_cold_launch_rate() -> None:
     """Naming the wrong layer sends the operator after the wrong limit."""
 
     decision = _decision(
@@ -132,9 +133,6 @@ def test_payload_projection_is_compact_and_serializable() -> None:
         "coldLaunchBurst": 2,
         "coldLaunchWindowSeconds": 30,
         "retryAfterSeconds": 0,
-        # MoonLadderStudios/MoonMind#3881: a request larger than the configured
-        # ceiling is rejected rather than queued, so the workflow needs to be
-        # able to tell "wait" from "this can never fit".
         "unsatisfiable": False,
     }
 
@@ -462,10 +460,9 @@ async def test_a_caller_without_a_binding_cannot_claim_a_reservation(
 ) -> None:
     """A caller assertion is not evidence of a reservation.
 
-    MoonLadderStudios/MoonMind#3881: the shortcut must be derived from the
-    exact persisted owner. A payload that cannot name its binding has no
-    reservation to reuse, so its own ``alreadyAllocated`` flag must not let it
-    bypass either the host count or the machine accounting.
+    The shortcut must be derived from the exact persisted owner. A payload
+    that cannot name its binding has no lease to reuse, so its own
+    ``alreadyAllocated`` flag must not let it bypass the host count.
     """
 
     from moonmind.workflows.temporal.activities import (

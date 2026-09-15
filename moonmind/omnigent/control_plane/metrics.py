@@ -343,13 +343,6 @@ MIGRATION_ROLLBACK_ACTIVATION = "omnigent_migration_rollback_activation"
 # only labels are the fixed resource and health vocabularies above, so plan,
 # lease, host, job and credential identities can never reach a metric backend.
 
-MACHINE_CAPACITY_UTILIZATION = "omnigent_machine_capacity_utilization_percent"
-MACHINE_CAPACITY_CEILING = "omnigent_machine_capacity_ceiling"
-MACHINE_CAPACITY_LIMITING_RESOURCE = "omnigent_machine_capacity_limiting_resource"
-MACHINE_CAPACITY_OLDEST_WAITER_AGE = (
-    "omnigent_machine_capacity_oldest_waiter_age_seconds"
-)
-MACHINE_CAPACITY_RECONCILIATION = "omnigent_machine_capacity_reconciliation"
 
 
 # --- Omnigent concurrency qualification (#3884) -------------------------------
@@ -448,25 +441,6 @@ METRICS: dict[str, MetricDefinition] = {
             ("harness_class", "denial_reason"),
         ),
         _def(MIGRATION_ROLLBACK_ACTIVATION, COUNTER, ("rollback_control",)),
-        # Machine capacity accounting (#3881)
-        _def(
-            MACHINE_CAPACITY_UTILIZATION,
-            OBSERVATION,
-            ("machine_resource",),
-            "percent",
-        ),
-        _def(MACHINE_CAPACITY_CEILING, OBSERVATION, ("machine_resource",)),
-        _def(
-            MACHINE_CAPACITY_LIMITING_RESOURCE,
-            COUNTER,
-            ("limiting_resource",),
-        ),
-        _def(MACHINE_CAPACITY_OLDEST_WAITER_AGE, OBSERVATION, (), "seconds"),
-        _def(
-            MACHINE_CAPACITY_RECONCILIATION,
-            COUNTER,
-            ("reconciliation_health",),
-        ),
         # Omnigent concurrency qualification (#3884)
         _def(CONCURRENCY_REGISTRATION_ATTEMPTS, COUNTER, ("lookup_mode",)),
         _def(
@@ -701,65 +675,6 @@ def record_safely(recorder: Callable[..., None], /, **labels: object) -> None:
         logger.warning("Omnigent metric recording failed", exc_info=True)
 
 
-def record_machine_capacity(
-    *,
-    utilization_percent: Mapping[str, object] | None = None,
-    ceilings: Mapping[str, object] | None = None,
-    limiting_resource: object = None,
-    oldest_waiter_age_seconds: object = None,
-    reconciliation_health: object = None,
-) -> None:
-    """Record one machine-capacity admission observation (#3881).
-
-    Every argument is optional so one call site can report exactly what it
-    established. Nothing here carries a plan, lease, host, job or credential
-    identity: only the fixed resource and health vocabularies reach the
-    exporter.
-    """
-
-    resource_keys = {
-        "cpu": "cpu",
-        "cpuMillis": "cpu",
-        "memory": "memory",
-        "memoryMiB": "memory",
-        "processes": "processes",
-        "temporaryStorage": "temporary_storage",
-        "temporaryStorageMiB": "temporary_storage",
-    }
-    for key, value in (utilization_percent or {}).items():
-        resource = resource_keys.get(str(key))
-        if resource is None:
-            continue
-        observe(
-            MACHINE_CAPACITY_UTILIZATION,
-            max(0.0, float(value)),
-            machine_resource=resource,
-        )
-    for key, value in (ceilings or {}).items():
-        resource = resource_keys.get(str(key))
-        if resource is None:
-            continue
-        observe(
-            MACHINE_CAPACITY_CEILING,
-            max(0.0, float(value)),
-            machine_resource=resource,
-        )
-    increment(
-        MACHINE_CAPACITY_LIMITING_RESOURCE,
-        limiting_resource=(limiting_resource if limiting_resource else "none"),
-    )
-    if oldest_waiter_age_seconds is not None:
-        observe(
-            MACHINE_CAPACITY_OLDEST_WAITER_AGE,
-            max(0.0, float(oldest_waiter_age_seconds)),
-        )
-    if reconciliation_health is not None:
-        increment(
-            MACHINE_CAPACITY_RECONCILIATION,
-            reconciliation_health=reconciliation_health,
-        )
-
-
 def record_migration_launch_readiness(
     *, harness_id: object, ready: bool | None
 ) -> None:
@@ -956,11 +871,6 @@ __all__ = [
     "MIGRATION_CLEANUP_OUTCOME",
     "MIGRATION_FALLBACK_DENIED",
     "MIGRATION_ROLLBACK_ACTIVATION",
-    "MACHINE_CAPACITY_UTILIZATION",
-    "MACHINE_CAPACITY_CEILING",
-    "MACHINE_CAPACITY_LIMITING_RESOURCE",
-    "MACHINE_CAPACITY_OLDEST_WAITER_AGE",
-    "MACHINE_CAPACITY_RECONCILIATION",
     "CONCURRENCY_REGISTRATION_ATTEMPTS",
     "CONCURRENCY_REGISTRATION_LATENCY",
     "CONCURRENCY_STREAM_ADMISSION_WAIT",
@@ -968,7 +878,6 @@ __all__ = [
     "record_concurrency_registration",
     "record_concurrency_stream_admission_wait",
     "record_concurrency_operation_error",
-    "record_machine_capacity",
     "harness_class_for",
     "record_safely",
     "record_runtime_target_selection",
