@@ -24,6 +24,8 @@ from moonmind.omnigent.harness_platform.support import (
     SupportKeyPayload,
     compute_deployment_qualification_key,
     compute_support_combination_key,
+    deployment_excluded_fields_for,
+    is_none_materializer_identity,
 )
 
 DEPLOYMENT_EVIDENCE_VERSION = "moonmind.omnigent-deployment-execution-evidence/v1"
@@ -278,12 +280,25 @@ def assert_deployment_evidence_matches_plan(
     # combination, not on per-run policy snapshots which may vary across workflow
     # compilations. The policy digests are intentionally excluded for deployment
     # qualification, which proves the deployment can run the combination, not a
-    # single historical policy snapshot.
+    # single historical policy snapshot. For the credentialless none@1
+    # fast-path, volatile build digests are likewise excluded (same projection
+    # as compute_deployment_qualification_key); auth-bearing identities stay
+    # exact. materializerRefs itself is never excluded.
+    excluded = deployment_excluded_fields_for(support_identity)
+    if not (
+        is_none_materializer_identity(support_identity)
+        and is_none_materializer_identity(evidence.support_identity)
+    ):
+        # Auth-bearing comparison stays exact: only per-run model/capabilities
+        # are excluded. deployment_excluded_fields_for already returns base
+        # for auth; this keeps the narrowing from leaking across classes.
+        excluded = DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS
+
     def _qualified_identity(identity: SupportKeyPayload) -> dict[str, Any]:
         return {
             key: value
             for key, value in identity.model_dump(mode="json", by_alias=True).items()
-            if key not in DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS
+            if key not in excluded
         }
 
     expected = {
@@ -326,15 +341,18 @@ def _support_identity_drift(
 
     Candidate values have not passed schema validation, the secret scan, or
     HMAC verification. Diagnostics therefore expose bounded field names only.
+    For none@1 plans, volatile build fields are ignored here exactly as in
+    admission so diagnostics don't report churn that wouldn't block.
     """
 
     requested = plan_payload.supportIdentity.model_dump(mode="json", by_alias=True)
     attested = candidate.get("supportIdentity")
     if not isinstance(attested, Mapping):
         return ["supportIdentity"]
+    excluded = deployment_excluded_fields_for(plan_payload.supportIdentity)
     drift: list[str] = []
     for field in sorted(SupportKeyPayload.model_fields):
-        if field in DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS:
+        if field in excluded:
             continue
         if requested.get(field) != attested.get(field):
             drift.append(f"{field} differs")

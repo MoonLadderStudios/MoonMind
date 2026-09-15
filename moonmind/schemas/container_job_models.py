@@ -210,7 +210,13 @@ class CacheMount(ContractModel):
 
 
 class ResourceLimits(ContractModel):
-    cpu_millis: int = Field(0, alias="cpuMillis", ge=0, le=128000)
+    # Historical documents may carry cpuMillis=0 (shared pool) or a
+    # minimumMemoryMiB range (adaptive negotiation). Both remain decodable so
+    # persisted jobs and Temporal histories replay, but new requests must use
+    # explicit positive limits (see require_explicit_resources). Resource
+    # limits are ceilings enforced directly by Docker, never reservations
+    # subtracted from a machine-derived pool.
+    cpu_millis: int = Field(2000, alias="cpuMillis", ge=0, le=128000)
     memory_mib: int = Field(alias="memoryMiB", ge=16, le=1048576)
     minimum_memory_mib: int | None = Field(
         None, alias="minimumMemoryMiB", ge=16, le=1048576
@@ -243,6 +249,34 @@ class ResourceLimits(ContractModel):
             return None
         parse_size_bytes(value)
         return value
+
+
+def is_historical_shared_or_adaptive(resources: "ResourceLimits") -> bool:
+    """Return True when ``resources`` uses a retired historical interpretation.
+
+    Zero CPU once selected the shared pool; a ``minimumMemoryMiB`` range once
+    requested adaptive negotiation. Both remain decodable, never executable.
+    """
+
+    return resources.cpu_millis == 0 or resources.minimum_memory_mib is not None
+
+
+def require_explicit_resources(resources: "ResourceLimits") -> "ResourceLimits":
+    """Reject retired resource interpretations for new container-job requests.
+
+    A new zero-valued CPU request must never mean unlimited CPU, silently
+    select a fallback, or reach a removed pool implementation, and a memory
+    range must never trigger adaptive negotiation. Historical documents stay
+    readable; only new execution is gated here.
+    """
+
+    if resources.cpu_millis < 1:
+        raise ValueError("cpuMillis must be a positive explicit limit for new jobs")
+    if resources.minimum_memory_mib is not None:
+        raise ValueError(
+            "minimumMemoryMiB was retired; new jobs must set one fixed memoryMiB limit"
+        )
+    return resources
 
 
 class OutputDeclaration(ContractModel):

@@ -27,12 +27,8 @@ class DockerOmnigentHostLauncher:
         runtime_scripts: OmnigentRuntimeScriptService,
         server_url: str | None = None,
         host_api_token: str | None = None,
-        cpu_pool: Any | None = None,
-        machine_budget_provider: Any | None = None,
     ) -> None:
         self._backend = backend
-        self._cpu_pool = cpu_pool
-        self._machine_budget_provider = machine_budget_provider
         self._scripts = runtime_scripts
         self._host_api_token = str(host_api_token or "")
         self._server_url = str(
@@ -77,6 +73,67 @@ class DockerOmnigentHostLauncher:
             "accessMode": "read-only",
         }
 
+    async def _resolve_launch_image(
+        self, requested_ref: str, host_class: HostClass | None = None
+    ) -> str:
+        """Return the image to launch: exact when present, else qualified local.
+
+        Rebuilt host images change SHA/patch while keeping major.minor. When
+        the plan-pinned digest is absent locally, reuse a qualified
+        same-repository digest (digest-pinned, deployment-observed or
+        operator-pinned, same admitted series) if present instead of forcing a
+        7GB exact pull or failing. Qualification happens before any bearer or
+        credential reaches the fallback image; attestation re-verifies the
+        series with live probes before any session starts.
+        """
+
+        requested = str(requested_ref or "").strip()
+        if not requested:
+            return requested
+        try:
+            code, _, _ = await self._backend.run(
+                ["docker", "image", "inspect", requested, "--format", "{{.Id}}"],
+                check=False,
+            )
+        except Exception:
+            code = 1
+        if code == 0:
+            return requested
+        if "@sha256:" not in requested:
+            return requested
+        try:
+            from moonmind.omnigent.host_image_drift import (
+                compatible_deployed_fallback,
+            )
+
+            fallback = compatible_deployed_fallback(
+                requested,
+                expected_omnigent_version=host_class.omnigentVersion
+                if host_class is not None
+                else "",
+            )
+        except Exception:
+            fallback = None
+        if fallback is not None:
+            try:
+                fallback_code, _, _ = await self._backend.run(
+                    ["docker", "image", "inspect", fallback, "--format", "{{.Id}}"],
+                    check=False,
+                )
+            except Exception:
+                fallback_code = 1
+            if fallback_code == 0:
+                import logging
+
+                logging.getLogger(__name__).info(
+                    "host launch drift: reusing compatible local image "
+                    "for same repository (requested=%s fallback=%s)",
+                    requested[:80],
+                    fallback[:80],
+                )
+                return fallback
+        return requested
+
     async def launch(
         self,
         *,
@@ -92,12 +149,13 @@ class DockerOmnigentHostLauncher:
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
         container_name = spec.correlationName
-        shared_cpu = launch_policy.limits["cpuMillis"] == 0
-        cpu_args = ["--cpus", str(launch_policy.limits["cpuMillis"] / 1000)]
-        if shared_cpu:
-            if self._cpu_pool is None or self._machine_budget_provider is None:
-                raise RuntimeError("shared CPU requires the deployment resource owner")
-            cpu_args = await self._cpu_pool.launch_args()
+        cpu_millis = int(launch_policy.limits["cpuMillis"])
+        if cpu_millis < 1:
+            raise HarnessPlatformError(
+                "launch policy requires a positive explicit CPU limit",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        cpu_args = ["--cpus", str(cpu_millis / 1000)]
         state_volume = str(spec.stateAttachment["sourceRef"])
         control_volume = (
             str(spec.controlAttachment["sourceRef"])
@@ -142,6 +200,12 @@ class DockerOmnigentHostLauncher:
                 "runtime capabilities require a lease-owned capability mount",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
+        # Resolve SHA drift once so every container creation below uses the
+        # same effective image. Exact digest when present; otherwise the
+        # deployment's current same-repository digest when present locally.
+        launch_image = await self._resolve_launch_image(
+            host_class.imageRef, host_class
+        )
         await self._backend.run(
             [
                 "docker",
@@ -187,7 +251,7 @@ class DockerOmnigentHostLauncher:
                             f"type=volume,src={control_volume},dst=/control",
                             "--entrypoint",
                             "/bin/sh",
-                            host_class.imageRef,
+                            launch_image,
                             "-ceu",
                             "umask 077; cat > /control/api-token; chown 1000:1000 /control/api-token; chmod 0400 /control/api-token",
                         ],
@@ -210,7 +274,7 @@ class DockerOmnigentHostLauncher:
                             f"type=volume,src={control_volume},dst=/control",
                             "--entrypoint",
                             "/bin/sh",
-                            host_class.imageRef,
+                            launch_image,
                             "-ceu",
                             f"umask 077; cat > /control/{filename}; chown 1000:1000 /control/{filename}; chmod 0400 /control/{filename}",
                         ],
@@ -230,7 +294,7 @@ class DockerOmnigentHostLauncher:
                     f"type=volume,src={state_volume},dst=/state",
                     "--entrypoint",
                     "/bin/sh",
-                    host_class.imageRef,
+                    launch_image,
                     "-ceu",
                     "chown 1000:1000 /state; chmod 0700 /state",
                 ]
@@ -350,25 +414,16 @@ class DockerOmnigentHostLauncher:
             [
                 "--entrypoint",
                 "/bin/sh",
-                host_class.imageRef,
+                launch_image,
                 "-ceu",
                 script,
                 "--",
                 spec.serverUrl,
             ]
         )
-        pool_lease = None
         try:
-            if shared_cpu:
-                pool_lease = await self._cpu_pool.prepare(
-                    await self._machine_budget_provider()
-                )
             _code, container_id, _err = await self._backend.run(command)
-            if pool_lease is not None:
-                await self._cpu_pool.verify(pool_lease)
             await self._backend.run(["docker", "start", container_name])
-            if pool_lease is not None:
-                await self._cpu_pool.finish_launch(pool_lease, container_name)
         except BaseException:
             await self._backend.run(["docker", "rm", "-f", container_name], check=False)
             await self._backend.run(
@@ -379,11 +434,6 @@ class DockerOmnigentHostLauncher:
                     ["docker", "volume", "rm", control_volume], check=False
                 )
             raise
-        finally:
-            if pool_lease is not None:
-                await self._backend.run(
-                    ["docker", "rm", "-f", pool_lease.holder], check=False
-                )
         return {
             "containerId": container_id.strip(),
             "containerName": container_name,
@@ -392,6 +442,7 @@ class DockerOmnigentHostLauncher:
             "hostCleanupRef": f"host-cleanup:{container_name}",
             "stateCleanupRef": f"state-cleanup:{state_volume}",
             "controlVolumeRef": control_volume or None,
+            "launchImageRef": launch_image,
         }
 
 

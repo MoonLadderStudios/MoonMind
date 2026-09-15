@@ -483,9 +483,10 @@ class GenericOmnigentHostRealizer:
                 provider_profile_refs=tuple(
                     sorted({item.provider_profile_ref for item in acquired})
                 ),
-                # MoonLadderStudios/MoonMind#3881: the machine reservation this
-                # allocation takes is resolved from the trusted Launch Policy,
-                # in the same transaction that counts the hosts.
+                # The trusted Launch Policy's explicit limits travel with the
+                # allocation for audit, in the same transaction that counts
+                # the hosts. They are ceilings enforced by Docker, never pool
+                # selections.
                 resource_limits=launch_policy.limits,
                 ttl_seconds=int(launch_policy.limits["timeoutSeconds"]) + 900,
             )
@@ -513,10 +514,6 @@ class GenericOmnigentHostRealizer:
                     binding, updates={"cleanupAuthorityRefs": cleanup}
                 )
 
-            # The reservation was taken in the allocating transaction; a
-            # read-only precheck is advisory, so re-verify the exact fence
-            # before anything mutates Docker (#3881 remaining implementation 3).
-            await self._assert_machine_reservation_holds(host_lease.leaseRef)
             host_context = await self._host_runtime.realize(
                 request=request,
                 plan=plan,
@@ -546,13 +543,6 @@ class GenericOmnigentHostRealizer:
                         host_context.get("materializedInputPaths") or {}
                     ),
                 },
-            )
-            # The container now exists, so the reservation stops being
-            # clock-reclaimable: a live consumer keeps its accounting even if
-            # the workflow that asked for it dies (#3881 remaining
-            # implementation 6).
-            await self._confirm_machine_reservation(
-                host_lease.leaseRef, str(host_context["containerName"])
             )
             attestations = {
                 key: str(value)
@@ -762,14 +752,49 @@ class GenericOmnigentHostRealizer:
                 (host_context or {}).get("omnigentHostId") or ""
             ),
         }
-        if not isinstance(evidence, dict) or any(
-            str(evidence.get(key) or "") != str(value or "")
-            for key, value in expected.items()
-        ):
+        if not isinstance(evidence, dict):
             raise HarnessPlatformError(
                 "attested host retry identity conflicts with the execution plan",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
+        mismatches = [
+            key
+            for key, value in expected.items()
+            if str(evidence.get(key) or "") != str(value or "")
+        ]
+        if mismatches:
+            # SHA/patch drift: rebuilt images change digests and build labels
+            # while keeping major.minor. Excuse same-repository image drift so
+            # in-flight retries survive app updates, and excuse build drift
+            # only alongside such image drift (a lone build mismatch against
+            # the expected image is corruption, not a rebuild). Different
+            # repositories, architectures, harnesses, or host IDs still fail.
+            # Major.minor release compatibility is enforced by deployment
+            # identity and attestation version gates, not by digests here.
+            try:
+                from moonmind.omnigent.host_image_drift import (
+                    is_compatible_image_drift,
+                )
+
+                image_drifted = "imageRef" in mismatches and bool(
+                    is_compatible_image_drift(
+                        expected["imageRef"], evidence.get("imageRef")
+                    )
+                )
+            except Exception:
+                image_drifted = False
+            excusable = {"imageRef", "omnigentBuildDigest"}
+            build_only_mismatch = mismatches == ["omnigentBuildDigest"]
+            if not (
+                set(mismatches) <= excusable
+                and ("imageRef" not in mismatches or image_drifted)
+                and ("omnigentBuildDigest" not in mismatches or image_drifted)
+                and not build_only_mismatch
+            ):
+                raise HarnessPlatformError(
+                    "attested host retry identity conflicts with the execution plan",
+                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                )
 
     @staticmethod
     def _persisted_host_context(
@@ -1164,20 +1189,6 @@ class GenericOmnigentHostRealizer:
                         prior_host_evidence,
                     ),
                 )
-            # Capacity accounting observes cleanup's evidence; it never performs
-            # teardown and never asserts completion on cleanup's behalf. A
-            # cleanup that could not read the daemon releases nothing, so a
-            # failed teardown cannot manufacture free capacity (#3881 AC7).
-            #
-            # It runs before the lease becomes terminal on purpose: a lease that
-            # is already ``cleaned`` skips this whole block on the next attempt,
-            # so releasing after it would strand the capacity of any release
-            # that failed transiently — reconciliation only ever moves the
-            # absent consumer to ``storage_retained``, and that state is not
-            # revisited.
-            await self._release_machine_reservation(
-                host_lease.leaseRef, cleanup_evidence.get("host")
-            )
             host_lease = await self._host_leases.mark_cleaned(
                 host_lease.leaseRef, expected_generation=host_lease.generation
             )
@@ -1440,96 +1451,13 @@ class GenericOmnigentHostRealizer:
     async def _inspect_terminal(self, request):
         return await self._workspace_publisher.inspect_request_terminal(request)
 
-    def _machine_reservation_ref(self, host_lease_ref: str) -> tuple[Any, str] | None:
-        """Return (ledger, reservation id) for one host lease, when accounted."""
-
-        ledger = getattr(self._host_capacity_admission, "machine_capacity", None)
-        backend_ref = getattr(self._host_capacity_admission, "backend_ref", None)
-        if ledger is None or not backend_ref:
-            return None
-        from moonmind.capacity import machine_reservation_id
-
-        return ledger, machine_reservation_id(
-            backend_ref=str(backend_ref),
-            owner_kind="omnigent_host_lease",
-            owner_ref=host_lease_ref,
-            generation=1,
-        )
-
-    async def _assert_machine_reservation_holds(self, host_lease_ref: str) -> None:
-        """Refuse to mutate Docker unless the exact reservation still holds."""
-
-        resolved = self._machine_reservation_ref(host_lease_ref)
-        if resolved is None:
-            return
-        ledger, reservation_id = resolved
-        if await ledger.verify(reservation_id=reservation_id, generation=1):
-            return
-        raise HarnessPlatformError(
-            "machine capacity reservation no longer holds; "
-            "missing_condition=machine_resources.",
-            code=HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE,
-        )
-
-    async def _confirm_machine_reservation(
-        self, host_lease_ref: str, container_ref: str
-    ) -> None:
-        resolved = self._machine_reservation_ref(host_lease_ref)
-        if resolved is None:
-            return
-        from moonmind.capacity import MachineCapacityConflict
-
-        ledger, reservation_id = resolved
-        try:
-            await ledger.confirm(
-                reservation_id=reservation_id,
-                generation=1,
-                container_ref=container_ref,
-            )
-        except MachineCapacityConflict as exc:
-            # The ledger re-accounted the live container before refusing, so it
-            # can never read as free capacity. This launch is still fenced: the
-            # capacity it held was reclaimed and may already belong to another
-            # launch, so cleanup tears this host down instead of letting
-            # accounted usage exceed the machine ceiling.
-            raise HarnessPlatformError(
-                "machine capacity reservation no longer holds; "
-                "missing_condition=machine_resources.",
-                code=HarnessPlatformFailure.OMNIGENT_HOST_CAPACITY_UNAVAILABLE,
-            ) from exc
-
-    async def _release_machine_reservation(
-        self, host_lease_ref: str, host_evidence: Any
-    ) -> None:
-        resolved = self._machine_reservation_ref(host_lease_ref)
-        if resolved is None:
-            return
-        ledger, reservation_id = resolved
-        from moonmind.capacity import ReleaseEvidence
-
-        evidence = host_evidence if isinstance(host_evidence, dict) else {}
-        # Cleanup reports what it observed. Absent positive evidence the
-        # accounting is retained and the janitor reconciles it against the
-        # backend, rather than the clock releasing it here.
-        await ledger.release(
-            reservation_id=reservation_id,
-            generation=1,
-            evidence=ReleaseEvidence(
-                daemon_observed=bool(evidence.get("daemonObserved")),
-                consumer_removed=bool(evidence.get("containerRemoved")),
-                consumer_stopped=bool(evidence.get("containerStopped")),
-                # Storage stays accounted while a retained volume consumes it.
-                storage_retained=not bool(evidence.get("stateVolumeRemoved")),
-            ),
-        )
-
     async def _assert_host_capacity_admits(self) -> None:
-        """Refuse a new host allocation the machine cannot safely carry.
+        """Refuse a new host allocation when the host count is full.
 
-        The workflow reserves this capacity provisionally before the Activity
-        starts, so reaching a refusal here means the aggregate ledger changed
-        in between. Failing closed with a typed, waitable code preserves the
-        run's queued position instead of launching an unsafe container; it
+        The workflow checks host capacity before the Activity starts, so
+        reaching a refusal here means the lease ledger changed in between.
+        Failing closed with a typed, waitable code preserves the run's queued
+        position instead of launching beyond the configured host count; it
         never waits, because a wait here would occupy the execution Activity.
         """
 

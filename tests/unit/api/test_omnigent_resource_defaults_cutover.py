@@ -1,4 +1,4 @@
-"""New defaults advance bootstrap authority without rewriting admitted work."""
+"""Bootstrap migrates retired shared-CPU defaults to fixed successors."""
 
 from copy import deepcopy
 
@@ -17,66 +17,87 @@ async def _image(image_ref):
     return f"images/{kind}@sha256:" + ("1" if kind == "host" else "2") * 64
 
 
-def _docker_authority(monkeypatch, *, info=b"2\tcgroupfs\t[]", image=None):
-    state = {
-        "info": info,
-        "image": image if image is not None else b"sha256:" + b"a" * 64,
-        "commands": [],
-    }
-    monkeypatch.setenv("HOSTNAME", "trusted-api")
+def _no_daemon(monkeypatch):
+    """Fail the test if bootstrap probes Docker for resource defaults."""
 
     async def command(argv, **kwargs):
-        state["commands"].append(argv)
-        assert kwargs["timeout_seconds"] == 5
-        if argv[1] == "info":
-            value = state["info"]
-        else:
-            assert argv[1:] == ("inspect", "--format", "{{.Image}}", "trusted-api")
-            value = state["image"]
-        if isinstance(value, Exception):
-            raise value
-        if isinstance(value, tuple):
-            return value
-        return 0, value, b""
+        raise AssertionError(f"bootstrap must not probe Docker: {argv!r}")
 
     monkeypatch.setattr(policies, "run_runtime_command", command)
-    return state
+
+
+def _previous_release_bootstrap(monkeypatch, *, cpu_millis=0):
+    """Simulate the previous release's stock defaults as admitted authority.
+
+    The old release admitted shared-CPU stock as valid. New code marks such
+    documents invalid for execution, so the simulation forces the old verdict
+    to reproduce the exact rows an upgrade meets in a populated deployment.
+    """
+
+    current_bootstrap = policies.bootstrap_document
+    current_validate = policies.validate_policy
+
+    def old_bootstrap(**kwargs):
+        data = current_bootstrap(**kwargs).model_dump(by_alias=True)
+        data["resources"]["cpuMillis"] = cpu_millis
+        return PolicyDocument.model_validate(data)
+
+    def old_validate(document, **kwargs):
+        validation, compatibility = current_validate(document, **kwargs)
+        if document.resources.cpu_millis == cpu_millis:
+            validation = {**validation, "valid": True, "diagnostics": []}
+            compatibility = {"compatible": True, "diagnosticCodes": []}
+        return validation, compatibility
+
+    monkeypatch.setattr(policies, "bootstrap_document", old_bootstrap)
+    monkeypatch.setattr(policies, "validate_policy", old_validate)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "operator_owned,custom_memory", [(False, False), (True, False), (False, True)]
 )
-async def test_startup_versions_default_cpu_limits_and_preserves_pinned_limits(
+async def test_startup_migrates_shared_cpu_defaults_to_fixed_successors(
     tmp_path,
     monkeypatch,
     operator_owned,
     custom_memory,
 ):
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
-    _docker_authority(monkeypatch)
-    current_bootstrap = policies.bootstrap_document
-
-    def old_bootstrap(**kwargs):
-        data = current_bootstrap(**kwargs).model_dump(by_alias=True)
-        data["resources"]["cpuMillis"] = 2000
-        if custom_memory:
-            data["resources"]["memoryMiB"] = 3072
-        return PolicyDocument.model_validate(data)
-
+    _no_daemon(monkeypatch)
     async with policy_db(tmp_path) as sessions, sessions() as session:
         with monkeypatch.context() as previous_release:
-            previous_release.setattr(policies, "bootstrap_document", old_bootstrap)
+            _previous_release_bootstrap(previous_release)
+            if custom_memory:
+                current_bootstrap = policies.bootstrap_document
+
+                def old_bootstrap_custom(**kwargs):
+                    data = current_bootstrap(**kwargs).model_dump(by_alias=True)
+                    data["resources"]["cpuMillis"] = 0
+                    data["resources"]["memoryMiB"] = 3072
+                    return PolicyDocument.model_validate(data)
+
+                previous_release.setattr(
+                    policies, "bootstrap_document", old_bootstrap_custom
+                )
             await policies.seed_bootstrap_policies(session, image_resolver=_image)
         service = policies.OmnigentPolicyService(session)
         policy_id = "omnigent-on-demand"
         old = await service.resolve_runtime_snapshot(f"{policy_id}@1")
-        old_document = deepcopy(old["boundaries"])
+        assert old["boundaries"]["resources"]["cpuMillis"] == 0
         expected_version = 1 if custom_memory else 2
         if operator_owned:
             custom = await service.new_version(
                 policy_id=policy_id,
-                document=PolicyDocument.model_validate(old_document),
+                document=PolicyDocument.model_validate(
+                    {
+                        **deepcopy(old["boundaries"]),
+                        "resources": {
+                            **old["boundaries"]["resources"],
+                            "cpuMillis": 3000,
+                        },
+                    }
+                ),
                 actor="operator",
                 expected_parent_ref=f"{policy_id}@1",
             )
@@ -88,56 +109,58 @@ async def test_startup_versions_default_cpu_limits_and_preserves_pinned_limits(
                 make_default=True,
             )
 
-        # This is the startup owner, including persistent versioning and default
-        # selection, with unchanged images (no image update to trigger a cutover).
+        # Startup migrates only bootstrap-owned shared-CPU stock to the fixed
+        # successor, preserving all unrelated fields and leaving active
+        # bindings and historical versions untouched.
         await policies.seed_bootstrap_policies(session, image_resolver=_image)
         latest = await service.resolve_default_runtime_snapshot(policy_id)
         assert latest["policyRef"] == f"{policy_id}@{expected_version}"
-        assert latest["boundaries"]["resources"]["cpuMillis"] == (
-            2000 if operator_owned or custom_memory else 0
-        )
-        assert latest["boundaries"]["host"] == old_document["host"]
-        assert await service.resolve_runtime_snapshot(f"{policy_id}@1") == old
-        # Adapters consume the recorded limits, even after defaults change.
-        recorded = launch_policy_from_effective_launch(
-            {
-                "launchPolicyRef": f"{policy_id}@1",
-                "hostMode": "on-demand",
-                "limits": {
-                    k: v
-                    for k, v in old_document["resources"].items()
-                    if k != "concurrency"
-                },
-                "capture": old_document["capture"],
-                "cleanup": {"mode": "remove"},
+        if custom_memory:
+            # Customized shared-CPU stock is never guessed to be unmodified
+            # stock: it stays exactly as admitted.
+            assert latest["boundaries"]["resources"]["cpuMillis"] == 0
+            assert latest["boundaries"]["resources"]["memoryMiB"] == 3072
+        elif operator_owned:
+            assert latest["boundaries"]["resources"]["cpuMillis"] == 3000
+        else:
+            assert latest["boundaries"]["resources"] == {
+                **old["boundaries"]["resources"],
+                "cpuMillis": 2000,
             }
-        )
-        assert recorded.limits["cpuMillis"] == 2000
-        # Repeated startup cannot create another version for an unchanged default.
+            assert latest["boundaries"]["host"] == old["boundaries"]["host"]
+        # Historical versions are never rewritten.
+        assert await service.resolve_runtime_snapshot(f"{policy_id}@1") == old
+        # The historical document stays decodable, but new execution never
+        # interprets it as shared-pool authority.
+        historical_document = PolicyDocument.model_validate(old["boundaries"])
+        assert historical_document.resources.cpu_millis == 0
+        with pytest.raises(Exception, match="(?i)positive|shared|limit"):
+            launch_policy_from_effective_launch(
+                {
+                    "launchPolicyRef": f"{policy_id}@1",
+                    "hostMode": "on-demand",
+                    "limits": {
+                        k: v
+                        for k, v in old["boundaries"]["resources"].items()
+                        if k != "concurrency"
+                    },
+                    "capture": old["boundaries"]["capture"],
+                    "cleanup": {"mode": "remove"},
+                }
+            )
+        # Repeated startup creates no duplicate successor versions or bindings.
         await policies.seed_bootstrap_policies(session, image_resolver=_image)
         assert len(await service.versions(policy_id)) == expected_version
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "observation",
-    [
-        b"1\tcgroupfs\t[]",
-        b'2\tsystemd\t["name=rootless"]',
-        b"2\tunknown\t[]",
-        (1, b"", b"daemon unavailable"),
-        OSError("Docker is temporarily unavailable"),
-        TimeoutError("Docker info timed out"),
-    ],
-)
-async def test_startup_retains_fixed_defaults_until_shared_authority_is_observed(
-    tmp_path, monkeypatch, observation
+async def test_startup_seeds_fixed_defaults_without_any_docker_probe(
+    tmp_path, monkeypatch
 ):
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
-    daemon = _docker_authority(monkeypatch, info=observation)
+    _no_daemon(monkeypatch)
+    assert not hasattr(policies, "bootstrap_shared_cpu_supported")
     async with policy_db(tmp_path) as sessions, sessions() as session:
-        # The real startup owner persists a usable fresh installation even when
-        # the optional CPU-pool authority cannot currently be established.
         await policies.seed_bootstrap_policies(session, image_resolver=_image)
         assert await policies.bootstrap_policies_ready(session)
         service = policies.OmnigentPolicyService(session)
@@ -154,46 +177,59 @@ async def test_startup_retains_fixed_defaults_until_shared_authority_is_observed
             assert snapshot["policyRef"] == f"{policy_id}@1"
             assert snapshot["boundaries"]["resources"]["cpuMillis"] == 2000
 
-        # Repeating startup cannot publish an unusable stock cutover either.
+        # Repeating startup publishes nothing further and probes nothing.
         await policies.seed_bootstrap_policies(session, image_resolver=_image)
-        assert len(daemon["commands"]) == 2
-        assert all(command[1] == "info" for command in daemon["commands"])
         for policy_id, snapshot in snapshots.items():
             assert await service.resolve_default_runtime_snapshot(policy_id) == snapshot
-
-        # No operator setting or process-global cache suppresses a later retry.
-        daemon["info"] = b"2\tsystemd\t[]"
-        await policies.seed_bootstrap_policies(session, image_resolver=_image)
-        for policy_id, snapshot in snapshots.items():
-            current = await service.resolve_default_runtime_snapshot(policy_id)
-            on_demand = snapshot["boundaries"]["host"]["mode"] == "on_demand_docker"
-            assert current["boundaries"]["resources"]["cpuMillis"] == (
-                0 if on_demand else 2000
-            )
-            assert current["policyRef"] == f"{policy_id}@{2 if on_demand else 1}"
-            assert await service.resolve_runtime_snapshot(f"{policy_id}@1") == snapshot
+            assert len(await service.versions(policy_id)) == 1
 
 
 @pytest.mark.asyncio
-async def test_startup_requires_immutable_helper_authority_for_shared_defaults(
+async def test_customized_zero_policy_is_left_for_operator_disposition(
     tmp_path, monkeypatch
 ):
+    """A customized zero-valued policy is never guessed to be stock."""
+
     monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
-    daemon = _docker_authority(monkeypatch, image=b"worker:latest")
+    _no_daemon(monkeypatch)
     async with policy_db(tmp_path) as sessions, sessions() as session:
         await policies.seed_bootstrap_policies(session, image_resolver=_image)
         service = policies.OmnigentPolicyService(session)
-        fixed = await service.resolve_default_runtime_snapshot("omnigent-on-demand")
-        assert fixed["boundaries"]["resources"]["cpuMillis"] == 2000
-        daemon["image"] = b"sha256:" + b"b" * 64
-        await policies.seed_bootstrap_policies(session, image_resolver=_image)
-        shared = await service.resolve_default_runtime_snapshot("omnigent-on-demand")
-        assert shared["boundaries"]["resources"]["cpuMillis"] == 0
-        # A later transient observation cannot rewrite already-admitted authority.
-        daemon["info"] = OSError("daemon connection lost")
+        policy_id = "omnigent-on-demand"
+        current = await service.resolve_default_runtime_snapshot(policy_id)
+        customized = PolicyDocument.model_validate(
+            {
+                **deepcopy(current["boundaries"]),
+                "resources": {
+                    **current["boundaries"]["resources"],
+                    "cpuMillis": 0,
+                    "memoryMiB": 3072,
+                },
+            }
+        )
+        validation, compatibility = policies.validate_policy(customized)
+        assert validation["valid"] is False
+        assert "OMNIGENT_CPU_LIMIT_REQUIRED" in compatibility["diagnosticCodes"]
+        candidate = await service.new_version(
+            policy_id=policy_id,
+            document=customized,
+            actor="operator",
+            expected_parent_ref=current["policyRef"],
+        )
+        # An invalid policy cannot become executable authority.
+        with pytest.raises(Exception):
+            await service.transition(
+                policy_id=policy_id,
+                version=candidate.version,
+                state=PolicyState.ACTIVE,
+                actor="operator",
+                make_default=True,
+            )
+        # Startup migrates nothing: the stored document is untouched and no
+        # successor is guessed from it.
         await policies.seed_bootstrap_policies(session, image_resolver=_image)
         assert (
-            await service.resolve_default_runtime_snapshot("omnigent-on-demand")
-            == shared
-        )
-        assert await service.resolve_runtime_snapshot("omnigent-on-demand@1") == fixed
+            await service.resolve_default_runtime_snapshot(policy_id)
+        ) == current
+        candidate_row = await service.get_version(policy_id, candidate.version)
+        assert candidate_row.state == "draft"
