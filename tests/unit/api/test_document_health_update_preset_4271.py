@@ -186,9 +186,9 @@ def test_document_update_preserves_desired_state_and_role():
 def test_document_author_discovers_conventions_without_mandatory_detour():
     text = _skill_text("document-author")
     assert "actual conventions" in text
-    assert "only the relevant document-class references" in text
-    assert "must not itself block" in text
-    assert "not replaced with a plan solely because it is substantial" in text
+    assert "only the document-class references relevant to this output" in text
+    assert "otherwise well-scoped document" in text
+    assert "do not replace it with a plan solely because it is substantial" in text
 
 
 def test_reconcile_gate_stays_truthful():
@@ -196,6 +196,51 @@ def test_reconcile_gate_stays_truthful():
     assert "already carry explicit authority" in text or "explicit authority" in text
     assert "ordinary no-op is `no_update_required`" in text
     assert "verification, escalation, and publication outcomes stay separate" in text
+
+
+def test_remediate_move_repairs_inbound_links_in_fixture_repo(tmp_path):
+    """A9: fixture-repository move + link-repair execution boundary.
+
+    Mirrors the remediate skill rule ('update inbound and relative links
+    before removal is complete'): move a document inside a fixture docs
+    tree, repair inbound Markdown/relative links, then link-check the tree.
+    """
+    skill = _skill_text("document-health-remediate")
+    assert "update inbound and relative links before removal" in skill.lower()
+    assert "repair references" in skill.lower()
+
+    docs = tmp_path / "fixture_docs"
+    (docs / "guides").mkdir(parents=True)
+    source = docs / "source.md"
+    consumer = docs / "consumer.md"
+    source.write_text(
+        "# Source\n\nUnique content block 4271.\n", encoding="utf-8"
+    )
+    consumer.write_text(
+        "# Consumer\n\nSee [Source](./source.md) and path docs/source.md.\n",
+        encoding="utf-8",
+    )
+
+    # Apply the move, then repair inbound references before removal completes.
+    target = docs / "guides" / "source.md"
+    shutil.move(str(source), str(target))
+    repaired = consumer.read_text(encoding="utf-8").replace(
+        "./source.md", "./guides/source.md"
+    )
+    consumer.write_text(repaired, encoding="utf-8")
+
+    # Unique content preserved at the new path.
+    assert "Unique content block 4271" in target.read_text(encoding="utf-8")
+    # Link-check boundary: no stale inbound reference remains.
+    consumer_text = consumer.read_text(encoding="utf-8")
+    assert "./source.md" not in consumer_text.replace("./guides/source.md", "")
+    assert "./guides/source.md" in consumer_text
+    # Every relative Markdown link target resolves on disk.
+    import re
+
+    for match in re.finditer(r"\]\((\./[^)]+)\)", consumer_text):
+        link_target = (consumer.parent / match.group(1)).resolve()
+        assert link_target.is_file(), match.group(1)
 
 
 def test_orchestrate_preset_preserves_discovery_and_child_policy():
