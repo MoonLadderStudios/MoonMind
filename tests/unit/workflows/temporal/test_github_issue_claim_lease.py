@@ -156,20 +156,27 @@ async def test_renewal_is_coalesced_and_lost_ack_is_confirmed(journey, monkeypat
         github_service_factory=lambda: service,
     )
     before = await store.get(owner)
-    assert (
-        await leases.renew_owned_claim(store=store, service=service, owner=owner)
-    ).comment_body == before.comment_body
+    before_handoff = parse_attempt_comment(before.comment_body).handoff
+    assert before_handoff.activity == "preparing"
+    # Execution renewal promotes the announcement to the running lease so a
+    # multi-minute run is not canceled before its first renewal.
+    promoted = await leases.renew_owned_claim(
+        store=store, service=service, owner=owner
+    )
+    promoted_handoff = parse_attempt_comment(promoted.comment_body).handoff
+    assert promoted_handoff.activity == "active"
+    assert leases.parse_time(
+        promoted_handoff.lease_expires_at
+    ) - leases.parse_time(promoted_handoff.lease_renewed_at) == timedelta(minutes=30)
     base = leases.utc_now()
-    # Past the preparing renew interval but inside its five-minute deadline.
-    monkeypatch.setattr(leases, "utc_now", lambda: base + timedelta(minutes=2))
+    # Past the running renew interval but inside its thirty-minute deadline.
+    monkeypatch.setattr(leases, "utc_now", lambda: base + timedelta(minutes=6))
     state["lose_update_ack"] = True
     renewed = await leases.renew_owned_claim(store=store, service=service, owner=owner)
     assert not state["lose_update_ack"]
     assert leases.parse_time(
         parse_attempt_comment(renewed.comment_body).handoff.lease_expires_at
-    ) > leases.parse_time(
-        parse_attempt_comment(before.comment_body).handoff.lease_expires_at
-    )
+    ) > leases.parse_time(promoted_handoff.lease_expires_at)
     assert len(state["comments"]) == 1 and renewed.pending_comment_body is None
 
 
