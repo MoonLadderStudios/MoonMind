@@ -83,8 +83,7 @@ def recovery_note(handoff, *, cutover: datetime) -> str:
         if text
     ]
     lines = [
-        "Reservation retired by the operator-declared version-1 migration cutover "
-        f"({cutover.isoformat()}).",
+        f"Reservation retired by the operator-declared version-1 migration cutover ({cutover.isoformat()}).",
         "",
         "This records only that the attempt no longer holds current write "
         "authority for this issue. It makes no claim that its writers stopped, "

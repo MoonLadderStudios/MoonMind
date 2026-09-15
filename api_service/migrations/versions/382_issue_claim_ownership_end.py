@@ -9,8 +9,8 @@ while the predecessor's cleanup retries.
 import sqlalchemy as sa
 from alembic import op
 
-revision = "380_issue_claim_ownership_end"
-down_revision = "379_durable_issue_claims"
+revision = "382_issue_claim_ownership_end"
+down_revision = "381_manifest_drain_audit_4191"
 branch_labels = None
 depends_on = None
 

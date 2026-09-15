@@ -39,7 +39,7 @@ async def test_ownership_end_frees_the_issue_while_bookkeeping_is_retained():
         "api_service.migrations.versions.379_durable_issue_claims"
     )
     ownership = importlib.import_module(
-        "api_service.migrations.versions.380_issue_claim_ownership_end"
+        "api_service.migrations.versions.382_issue_claim_ownership_end"
     )
     bindings = sa.Table(
         "omnigent_runtime_bindings",

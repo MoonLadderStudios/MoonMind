@@ -113,9 +113,18 @@ def legacy_cutover_at():
     """
     from moonmind.config.settings import settings
 
-    return parse_time(
-        getattr(settings.github, "issue_claim_legacy_cutover_at", None) or ""
-    )
+    raw = getattr(settings.github, "issue_claim_legacy_cutover_at", None) or ""
+    if isinstance(raw, str):
+        raw = raw.strip()
+    if not raw:
+        return None
+    parsed = parse_time(raw)
+    if parsed is None:
+        raise ValueError(
+            "issue_claim_legacy_cutover_invalid: MOONMIND_ISSUE_CLAIM_LEGACY_CUTOVER_AT "
+            "must be an ISO-8601 timestamp with an explicit UTC offset"
+        )
+    return parsed
 
 
 def _announced_at(comment):
@@ -376,17 +385,31 @@ async def renew_owned_claim(*, store, service, owner):
             or handoff.operator_hold
         ):
             raise ValueError("claim_lease_lost")
+        # Execution renewal proves the run started work: a claim still in the
+        # short-lived announcement phase is promoted to the running lease so a
+        # multi-minute run is not canceled before its first renewal. This path
+        # only serves execution renewal (renew_execution_claim); selection-time
+        # announcements keep the five-minute deadline until dispatch.
+        promoting = handoff.activity == "preparing"
+        if promoting:
+            handoff = replace(handoff, activity="active")
         now = utc_now()
         if (
-            not row.pending_comment_body
+            not promoting
+            and not row.pending_comment_body
             and now - parse_time(handoff.lease_renewed_at)
             < renew_interval_for(handoff.activity)
         ):
             return ClaimReceipt.from_row(row)
-        renewed = row.pending_comment_body or render_attempt_comment(
-            with_lease(handoff, now=now)
-        )
-        if row.pending_comment_body:
+        if promoting:
+            # An unconfirmed pre-promotion write never left GitHub confirmed;
+            # replace it with the promoted running lease.
+            renewed = render_attempt_comment(with_lease(handoff, now=now))
+        else:
+            renewed = row.pending_comment_body or render_attempt_comment(
+                with_lease(handoff, now=now)
+            )
+        if row.pending_comment_body and not promoting:
             pending = parse_attempt_comment(renewed).handoff
             if (
                 pending is None
