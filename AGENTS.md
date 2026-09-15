@@ -6,7 +6,7 @@ Before implementation, check `docs/` for relevant documents and read any that ap
 
 ## Engineering Principles
 
-1. **Test-Driven Development.** Before changing behavior, write or update a test expressing the intended outcome and observe it fail for the expected reason. Make the smallest correct implementation, then refactor with tests green. Reproduce bugs before fixing them. Test requested behavior, not incidental implementation details or merely mocked success.
+1. **Test-Driven Development.** Before changing executable behavior, write or update a test expressing the intended outcome and observe it fail for the expected reason. Make the smallest correct implementation, then refactor with tests green. Reproduce bugs before fixing them. Test requested behavior, not incidental implementation details or merely mocked success.
 2. **Simple abstractions, no overlapping systems.** Give each responsibility one owner. Extend or replace an existing system rather than adding a competing implementation. Prefer small, explicit interfaces without forcing unrelated capabilities into one framework. Hidden options and legacy paths still count as complexity. Repeated failures are a reason to simplify the mechanism, not add another exception. Remove obsolete code, settings, tests, and documentation with the replacement, protecting retained data and active work during any necessary transition.
 3. **Preserve intent across system boundaries.** Carry the requested outcome and constraints through planning, delegation, retries, recovery, and updates. Internal representations and temporary state must not redefine the task or invalidate verified progress. Adapt the mechanism to preserve the request, not the request to preserve the mechanism. Resolve genuine uncertainty rather than guessing.
 4. **Loose coupling.** Depend on required interfaces and behavior, not equal SHAs, image digests, or patch versions. A changed version alone does not establish incompatibility. Do not replace exact matching with blanket major/minor equality or another compatibility fingerprint. Preserve artifact integrity and legitimate source-control concurrency checks.
@@ -33,7 +33,9 @@ These are technology choices, not universal principles or claims that migrations
 
 ## Testing
 
-Keep the red-green-refactor loop small. An existing failing test can supply the red phase. Behavior-preserving refactors start with passing behavior coverage. Documentation-only edits do not need artificial failures. Missing dependencies are not a reproduced regression.
+**Do not unit test documentation.** Documentation-only changes need review, not unit tests. Do not add tests for documentation wording, headings, structure, counts, or required phrases, even when labeled contract or compliance checks. Test executable behavior instead.
+
+Keep the red-green-refactor loop small. An existing failing test can supply the red phase. Behavior-preserving refactors start with passing behavior coverage. Missing dependencies are not a reproduced regression.
 
 | Context | Entry point |
 | --- | --- |
@@ -46,7 +48,7 @@ Managed agents use the container-job service, not Docker sockets, nested Docker,
 
 Before completing a change, run the affected suites and verify behavior across the boundaries it changes. Use real integration or browser journeys where those boundaries matter. Exercise relevant restart, retry, upgrade, and failure cases. A helper, styling fixture, image build, or acceptance-report validator does not prove a complete user journey. External-provider and hardware checks are separate from credential-free tests.
 
-Report commands, observed red/green results, and anything unexecuted. Do not weaken assertions to make a failing implementation pass. Runner details and CI selection live in [Pre-Commit Workflow](docs/Development/PreCommitWorkflow.md). Do not add approval machinery or tests that merely enforce the wording of these instructions.
+Report commands, observed red/green results, and anything unexecuted. Do not weaken assertions to make a failing implementation pass. Runner details and CI selection live in [Pre-Commit Workflow](docs/Development/PreCommitWorkflow.md). Do not add approval machinery.
 
 ## Working Safeguards and Delivery
 
