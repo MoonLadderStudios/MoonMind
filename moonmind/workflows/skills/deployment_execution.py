@@ -430,21 +430,94 @@ def _is_host_absolute_path(path: Path | str) -> bool:
     return False
 
 
-def _docker_desktop_host_path(path: str) -> str | None:
-    """Translate a Windows drive path into Docker Desktop's daemon namespace.
+def _is_wsl_distro_path(path: str) -> bool:
+    """Return True for WSL user-distro ``/mnt/<drive>`` paths.
 
-    The Linux deployment worker talks directly to the Desktop daemon. WSL's
-    user-distro ``/mnt/<drive>`` paths are not the daemon's host-file mounts.
+    Only single-letter drives qualify; longer ``/mnt/<name>`` mounts (for
+    example ``/mnt/data``) are genuine Linux mounts and keep their POSIX
+    namespace.
+    """
+
+    return (
+        re.match(r"^/mnt/[A-Za-z](?:/.*)?$", path.strip().replace("\\", "/"))
+        is not None
+    )
+
+
+_desktop_daemon_probe_cache: dict[str, bool | None] = {}
+
+
+async def _probe_docker_desktop_daemon() -> bool | None:
+    """Report whether the reachable daemon is Docker Desktop.
+
+    Returns True for Docker Desktop, False for another daemon, and None when
+    the platform cannot be established. Results are cached per ``DOCKER_HOST``
+    so every Compose invocation does not re-probe. ``None`` callers keep the
+    Desktop rewrite: the daemon is unreachable either way, and rewritten binds
+    disable automatic host-directory creation so a misclassified source fails
+    loudly instead of mounting an empty directory.
+    """
+
+    key = os.environ.get("DOCKER_HOST", "")
+    if key in _desktop_daemon_probe_cache:
+        return _desktop_daemon_probe_cache[key]
+    result: bool | None = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "docker",
+            "info",
+            "--format",
+            "{{.OperatingSystem}}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError:
+        result = None
+    else:
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+        except TimeoutError:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            result = None
+        except OSError:
+            result = None
+        else:
+            if process.returncode == 0:
+                result = (
+                    stdout.decode("utf-8", errors="replace").strip()
+                    == "Docker Desktop"
+                )
+    _desktop_daemon_probe_cache[key] = result
+    return result
+
+
+def _docker_desktop_host_path(path: str) -> str | None:
+    """Translate Windows and WSL paths into Docker Desktop's daemon namespace.
+
+    The Linux deployment worker talks directly to the Desktop daemon. Both
+    Windows drive paths (``C:\\repo``) and WSL user-distro ``/mnt/<drive>``
+    paths are not the daemon's host-file mounts; they resolve to
+    ``/run/desktop/mnt/host/<drive>/...``. Longer ``/mnt/<name>`` mounts
+    (for example ``/mnt/data``) are genuine Linux mounts and pass through.
     """
 
     normalized = path.strip()
-    if len(normalized) < 3 or normalized[1] != ":" or not normalized[0].isalpha():
-        return None
-    tail = normalized[2:].replace("\\", "/").lstrip("/")
-    drive = normalized[0].lower()
-    if tail:
-        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
-    return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
+    if len(normalized) >= 2 and normalized[1] == ":" and normalized[0].isalpha():
+        tail = normalized[2:].replace("\\", "/").lstrip("/")
+        drive = normalized[0].lower()
+        if tail:
+            return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
+        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
+    unified = normalized.replace("\\", "/")
+    if _is_wsl_distro_path(normalized):
+        drive = unified.split("/")[2].lower()
+        tail = "/".join(part for part in unified.split("/")[3:] if part)
+        if tail:
+            return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
+        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
+    return None
 
 
 def _remap_host_compose_path(
@@ -775,9 +848,36 @@ class HostDockerComposeRunner:
             *parts[2:],
         ]
 
-    def _uses_windows_host_project_dir(self) -> bool:
+    def _requires_desktop_host_rewrite(self) -> bool:
+        """Return True when the host project dir is not daemon-visible.
+
+        Docker Desktop on Windows serves host files from
+        ``/run/desktop/mnt/host/<drive>/...``. Both Windows drive-letter
+        paths (``C:\\repo``) and WSL distro mounts (``/mnt/<drive>/...``)
+        must be rewritten to that namespace before the daemon can mount
+        them. Native Linux host paths pass through unchanged.
+        """
         text = str(self.project_dir).strip()
-        return len(text) >= 2 and text[1] == ":" and text[0].isalpha()
+        if len(text) >= 2 and text[1] == ":" and text[0].isalpha():
+            return True
+        return _is_wsl_distro_path(text)
+
+    async def _use_desktop_host_rewrite(self) -> bool:
+        """Decide whether daemon-bound Compose input needs the host rewrite.
+
+        Windows drive-letter paths are unambiguous Desktop signals. A bare
+        ``/mnt/<drive>`` shape may instead be a native Linux mount, so it is
+        rewritten only when the reachable daemon confirms Docker Desktop (or
+        when the platform cannot be established, where rewritten binds still
+        fail loudly instead of mounting empty directories). A confirmed
+        non-Desktop daemon keeps the POSIX namespace untouched.
+        """
+        if not (self._requires_desktop_host_rewrite() and self.local_project_dir):
+            return False
+        if _is_wsl_distro_path(str(self.project_dir)):
+            if await _probe_docker_desktop_daemon() is False:
+                return False
+        return True
 
     def _host_bind_source_for_local_path(self, local_source: str) -> str:
         local_dir = str(self._local_dir()).replace("\\", "/").rstrip("/")
@@ -834,7 +934,7 @@ class HostDockerComposeRunner:
         rewritten["services"] = rewritten_services
         return rewritten
 
-    async def _write_windows_host_resolved_compose_file(
+    async def _write_desktop_host_resolved_compose_file(
         self, env: Mapping[str, str]
     ) -> Path:
         resolved = [
@@ -1005,8 +1105,8 @@ class HostDockerComposeRunner:
         if requested_image:
             env["MOONMIND_IMAGE"] = requested_image
         temp_compose_file: Path | None = None
-        if self._uses_windows_host_project_dir() and self.local_project_dir:
-            temp_compose_file = await self._write_windows_host_resolved_compose_file(env)
+        if await self._use_desktop_host_rewrite():
+            temp_compose_file = await self._write_desktop_host_resolved_compose_file(env)
             resolved = self._compose_command(
                 command,
                 project_dir=self._local_dir(),

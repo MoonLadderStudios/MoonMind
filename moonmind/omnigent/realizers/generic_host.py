@@ -752,14 +752,49 @@ class GenericOmnigentHostRealizer:
                 (host_context or {}).get("omnigentHostId") or ""
             ),
         }
-        if not isinstance(evidence, dict) or any(
-            str(evidence.get(key) or "") != str(value or "")
-            for key, value in expected.items()
-        ):
+        if not isinstance(evidence, dict):
             raise HarnessPlatformError(
                 "attested host retry identity conflicts with the execution plan",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
+        mismatches = [
+            key
+            for key, value in expected.items()
+            if str(evidence.get(key) or "") != str(value or "")
+        ]
+        if mismatches:
+            # SHA/patch drift: rebuilt images change digests and build labels
+            # while keeping major.minor. Excuse same-repository image drift so
+            # in-flight retries survive app updates, and excuse build drift
+            # only alongside such image drift (a lone build mismatch against
+            # the expected image is corruption, not a rebuild). Different
+            # repositories, architectures, harnesses, or host IDs still fail.
+            # Major.minor release compatibility is enforced by deployment
+            # identity and attestation version gates, not by digests here.
+            try:
+                from moonmind.omnigent.host_image_drift import (
+                    is_compatible_image_drift,
+                )
+
+                image_drifted = "imageRef" in mismatches and bool(
+                    is_compatible_image_drift(
+                        expected["imageRef"], evidence.get("imageRef")
+                    )
+                )
+            except Exception:
+                image_drifted = False
+            excusable = {"imageRef", "omnigentBuildDigest"}
+            build_only_mismatch = mismatches == ["omnigentBuildDigest"]
+            if not (
+                set(mismatches) <= excusable
+                and ("imageRef" not in mismatches or image_drifted)
+                and ("omnigentBuildDigest" not in mismatches or image_drifted)
+                and not build_only_mismatch
+            ):
+                raise HarnessPlatformError(
+                    "attested host retry identity conflicts with the execution plan",
+                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                )
 
     @staticmethod
     def _persisted_host_context(

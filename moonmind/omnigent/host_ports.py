@@ -159,6 +159,7 @@ class OmnigentGithubCredentialPort(Protocol):
         writer_image_ref: str,
         runtime_uid: int,
         runtime_gid: int,
+        expected_omnigent_version: str = "",
     ) -> dict[str, Any] | None: ...
 
     async def cleanup(self, attachment: dict[str, Any]) -> None: ...

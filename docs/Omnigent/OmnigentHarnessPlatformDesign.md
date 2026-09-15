@@ -421,10 +421,19 @@ The attestation carries no credentials or unbounded environment data.
 
 The exact host passes only when:
 
-- `hostClassRef`, image digest, architecture, and Omnigent build match the plan.
-- the canonical harness id matches.
+- `hostClassRef`, architecture, and the canonical harness id match the plan.
+- the image digest matches the plan, or the launched image is qualified
+  same-repository drift: digest-pinned, deployment-observed or
+  operator-pinned, present locally, and series-compatible with the admitted
+  Omnigent version (same major.minor; patch and SHA may evolve). A foreign
+  repository never qualifies.
+- the Omnigent build matches the plan, or drifted alongside qualified image
+  drift with a live-probed compatible series. An unchanged image with a
+  different build label fails.
 - the harness implementation package, version, entry point, and digest match the trusted catalog record.
-- every required vendor runtime or CLI satisfies the pinned or policy-allowed version and digest rule.
+- every required vendor runtime or CLI satisfies the same-major.minor series
+  rule (patch may evolve); an exact digest pin is enforced only when the
+  versions match exactly.
 - every required exact-host capability is positively reported.
 - the attestation is fresh and belongs to the current host-lease fencing generation.
 
@@ -1262,7 +1271,7 @@ After the runtime binding exists:
 
 ### 17.3 Exact-host mismatch
 
-If the exact host reports another harness implementation, plugin digest, vendor runtime, image, architecture, capability set, model catalog, network posture, or Skill delivery than the plan permits, realization fails before runner or session creation.
+If the exact host reports another harness implementation, plugin digest, vendor runtime series, image repository, architecture, capability set, model catalog, network posture, or Skill delivery than the plan permits, realization fails before runner or session creation. Qualified same-repository image/build drift and same-series vendor patch drift (per §8.2) are permitted and recorded with both expected and effective identity; anything else is a mismatch.
 
 The realizer cleans up only resources it owns, records the mismatch as bounded evidence, and retains the same plan for diagnosis. It does not amend the plan to match the host.
 

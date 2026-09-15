@@ -131,7 +131,7 @@ Qualified but busy provider, host, or worker capacity produces durable waiting, 
 
 ### INV-103 History and follow-up execution preserve recorded authority
 
-Retries within an existing execution reconcile its recorded plan and binding. Fresh execution, restore, or an explicitly reviewed runtime change follows the existing re-admission owner. Historical detail displays recorded identity rather than today's default. Saved schedules and inherited/child work preserve their admitted scope and declared pin/default-following policy. Unknown historical intent requires review rather than guessed migration. Workspace restoration does not restore credentials, leases, approvals, or permission to repeat external effects.
+Retries within an existing execution reconcile its recorded plan and binding. Fresh execution, restore, or an explicitly reviewed runtime change follows the existing re-admission owner. Historical detail displays recorded identity rather than today's default. Saved schedules and inherited/child work preserve their admitted scope and follow the current default; schedules do not pin a separate runtime target. Unknown historical intent requires review rather than guessed migration. Workspace restoration does not restore credentials, leases, approvals, or permission to repeat external effects.
 
 ## INV-104 Presentation preserves execution and recovery authority
 

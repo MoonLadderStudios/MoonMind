@@ -63,7 +63,8 @@ class GitHubIssueClaim(Base):
     __tablename__ = "github_issue_claims"
     __table_args__ = (Index(
         "uq_github_issue_active_claim", "repository", "issue_number", unique=True,
-        postgresql_where=text("released = false"), sqlite_where=text("released = 0"),
+        postgresql_where=text("released = false and ownership_ended = false"),
+        sqlite_where=text("released = 0 and ownership_ended = 0"),
     ),)
     owner: Mapped[str] = mapped_column(Text, primary_key=True)
     repository: Mapped[str] = mapped_column(Text, nullable=False)
@@ -77,6 +78,11 @@ class GitHubIssueClaim(Base):
     announcement_started: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     released: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # "Cleanup remains unfinished" and "this attempt still owns the issue" are
+    # separate facts. ``released`` stays the completed-bookkeeping receipt;
+    # ``ownership_ended`` retires the reservation so a successor can proceed.
+    ownership_ended: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ownership_ended_reason: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

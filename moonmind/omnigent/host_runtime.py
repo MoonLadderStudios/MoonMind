@@ -178,6 +178,7 @@ class GenericOmnigentHostRuntime:
             writer_image_ref=host_class.imageRef,
             runtime_uid=int(host_class.runtime.get("uid", 1000)),
             runtime_gid=int(host_class.runtime.get("gid", 1000)),
+            expected_omnigent_version=str(host_class.omnigentVersion or ""),
         )
         if github_credentials != anticipated_github:
             raise HarnessPlatformError(
