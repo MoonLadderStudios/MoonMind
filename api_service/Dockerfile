@@ -266,7 +266,6 @@ COPY .agents /app/.agents/
 COPY services /app/services/
 COPY docs /app/docs/
 COPY tools/verify_deployed_ui_assets.py /app/tools/verify_deployed_ui_assets.py
-COPY tools/recover_legacy_issue_claims.py /app/tools/recover_legacy_issue_claims.py
 COPY init_db /app/init_db/
 COPY docker-compose.yaml /app/release/docker-compose.yaml
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from moonmind.workflows.skills.deployment_execution import FileDesiredStateStore
@@ -71,8 +69,7 @@ def test_record_rejects_malformed_documents():
     assert OmnigentRelease.from_record("nope") is None
 
 
-def test_read_requires_env_and_sidecar_agreement(tmp_path):
-    store = _store(tmp_path)
+def test_read_requires_env_and_sidecar_agreement():
     release = _release()
     env_entries = release.to_env()
     record = {OMNIGENT_RELEASE_RECORD_KEY: release.to_record()}
@@ -126,6 +123,34 @@ def test_decide_advance_without_record_or_live():
     action, target = decide_release_transition({}, None, _refs())
     assert action == "advance"
     assert target["server"] == OLD_SERVER
+
+
+def test_decide_advance_without_record_even_when_live_matches():
+    """First migration must create the record even when already aligned."""
+    action, target = decide_release_transition(_refs(), None, _refs())
+    assert action == "advance"
+    assert target["server"] == OLD_SERVER
+
+
+def test_decide_advance_when_candidate_adds_host_family():
+    """A newly available optional host ref requires a new revision."""
+    release = _release()
+    # Existing record omits `pi` (was unavailable); candidate supplies it.
+    recorded_live = {k: v for k, v in _refs().items() if k != "pi"}
+    release_missing_pi = OmnigentRelease(
+        revision=1,
+        server_image_ref=OLD_SERVER,
+        host_image_refs={
+            "codex": OLD_HOST,
+            "opencode": OLD_HOST,
+            "shared": OLD_HOST,
+            "pi": "",
+        },
+        updated_at="2026-09-15T19:00:00+00:00",
+        updated_by="test",
+    )
+    action, _ = decide_release_transition(recorded_live, release_missing_pi, _refs())
+    assert action == "advance"
 
 
 def test_build_migrated_policy_document_carries_operator_fields():
@@ -217,7 +242,7 @@ def _drivers(calls, *, candidates=None, live=None):
 
 
 @pytest.mark.asyncio
-async def test_migrate_noop_touches_nothing(tmp_path, monkeypatch):
+async def test_migrate_noop_reruns_post_steps(tmp_path, monkeypatch):
     from moonmind.omnigent import settings
 
     _enable_omnigent(monkeypatch)
@@ -235,7 +260,18 @@ async def test_migrate_noop_touches_nothing(tmp_path, monkeypatch):
         drivers=_drivers(calls, candidates=_refs(), live=_refs()),
     )
     assert receipt["status"] == "aligned"
-    assert calls == ["resolve", "live"]
+    # Aligned refs still rerun convergent post-record steps (without restart)
+    # so an interrupted advance that already aligned the server completes its
+    # catalog/policy/schedule work instead of reporting stale alignment.
+    assert calls == [
+        "resolve",
+        "live",
+        "await-resolution",
+        "catalog",
+        "policies",
+        "schedules",
+        "verify-live",
+    ]
 
 
 @pytest.mark.asyncio
@@ -292,7 +328,15 @@ async def test_migrate_advances_0_13_to_0_14_and_converges_after(tmp_path, monke
         drivers=_drivers(again, candidates=new_refs, live=new_refs),
     )
     assert second["status"] == "aligned"
-    assert again == ["resolve", "live"]
+    assert again == [
+        "resolve",
+        "live",
+        "await-resolution",
+        "catalog",
+        "policies",
+        "schedules",
+        "verify-live",
+    ]
 
 
 @pytest.mark.asyncio
@@ -460,6 +504,35 @@ def test_sidecar_disagreement_forces_convergence(tmp_path):
     assert target["server"] == OLD_SERVER
 
 
+def test_store_persist_preserves_omnigent_release(tmp_path):
+    """Persist must not drop the independently owned Omnigent release."""
+    import asyncio
+
+    async def go():
+        store = _store(tmp_path)
+        release = _release()
+        await store.merge(
+            env_updates=release.to_env(),
+            json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
+        )
+        await store.persist(
+            {
+                "stack": "moonmind",
+                "imageRepository": "ghcr.io/moonladderstudios/moonmind",
+                "requestedReference": "latest",
+                "resolvedDigest": "sha256:" + "f" * 64,
+                "reason": "test",
+                "sourceRunId": "run-1",
+            }
+        )
+        return store.read()
+
+    env_entries, record = asyncio.run(go())
+    assert env_entries["OMNIGENT_IMAGE_REF"] == OLD_SERVER
+    assert OMNIGENT_RELEASE_RECORD_KEY in record
+    assert read_omnigent_release(env_entries, record) is not None
+
+
 @pytest.mark.asyncio
 async def test_cohort_migrate_wires_store_runner_and_image(tmp_path, monkeypatch):
     """The release controller passes its store, runner, and image through."""
@@ -479,7 +552,7 @@ async def test_cohort_migrate_wires_store_runner_and_image(tmp_path, monkeypatch
         seen["moonmind_image"] = moonmind_image
         seen["actor"] = actor
         seen["has_drivers"] = drivers is not None
-        env_entries, _record = store.read()
+        store.read()
         seen["store_path"] = str(getattr(store, "env_file_path", ""))
         assert runner is cohort.runner
         return {"status": "aligned", "revision": 0}

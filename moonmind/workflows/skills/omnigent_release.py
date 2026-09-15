@@ -192,6 +192,30 @@ def _refs_agree(first: Mapping[str, str], second: Mapping[str, str]) -> bool:
     return all(left[k] == right[k] for k in set(left) & set(right) if k != "server")
 
 
+def _candidate_supplies_new_refs(
+    recorded: Mapping[str, str], candidate: Mapping[str, str]
+) -> bool:
+    """Return whether the candidate carries refs the record does not.
+
+    Optional host families may be absent from an older record because they
+    were unresolvable at the time. When later configuration or registry
+    recovery supplies that host ref, the migration must persist it even
+    though the symmetric intersection still agrees.
+    """
+    for kind, value in candidate.items():
+        if kind == "server":
+            continue
+        wanted = str(value or "").strip()
+        if not wanted:
+            continue
+        if str(recorded.get(kind) or "").strip() != wanted:
+            # Missing or different: either a newly available authority or a
+            # moved digest. Both require a new revision.
+            if kind not in recorded or not str(recorded.get(kind) or "").strip():
+                return True
+    return False
+
+
 def decide_release_transition(
     live_refs: Mapping[str, str],
     record: OmnigentRelease | None,
@@ -213,14 +237,22 @@ def decide_release_transition(
     if record is not None:
         recorded = {k: v for k, v in record.refs().items() if v}
         if live and _refs_agree(live, recorded) and _refs_agree(recorded, candidate):
+            # A candidate-only host ref (newly available authority absent from
+            # the record) still requires a revision even though the symmetric
+            # intersection agrees.
+            if _candidate_supplies_new_refs(recorded, candidate):
+                return "advance", candidate
             return "noop", recorded
         if not _refs_agree(live, recorded):
             return "converge", recorded
-        if not _refs_agree(recorded, candidate):
+        if not _refs_agree(recorded, candidate) or _candidate_supplies_new_refs(
+            recorded, candidate
+        ):
             return "advance", candidate
         return "noop", recorded
-    if live and _refs_agree(live, candidate):
-        return "noop", dict(candidate)
+    # First migration must establish the singular record even when live already
+    # matches the candidate; otherwise Compose stays tag-driven and the
+    # release-controller authority is never established.
     return "advance", dict(candidate)
 
 
@@ -282,10 +314,20 @@ async def _default_resolve_candidates(
     from api_service.services.omnigent_policies import configured_bootstrap_image_refs
 
     state = await resolve_omnigent_images(dict(env))
-    _server_input, legacy_host_input = configured_bootstrap_image_refs(dict(env))
+    server_input, legacy_host_input = configured_bootstrap_image_refs(dict(env))
+    # The release candidate must describe the upstream tag, not the currently
+    # running server. resolve_omnigent_images deliberately reports the live
+    # digest for mutable tags (so compatibility describes what Compose serves),
+    # which would make the candidate equal live after every tag move and
+    # prevent `advance`. Resolve the configured server input through the
+    # acquisition boundary instead, falling back to the live-observed ref only
+    # when the registry is temporarily unavailable.
+    upstream_server_ref = await resolve_bootstrap_image_ref(server_input)
     legacy_host_ref = await resolve_bootstrap_image_ref(legacy_host_input)
     return {
-        "server": str(state.server_image_ref or "").strip(),
+        "server": str(
+            upstream_server_ref or state.server_image_ref or ""
+        ).strip(),
         "codex": str(legacy_host_ref or "").strip(),
         "opencode": str(state.opencode_host_image_ref or "").strip(),
         "shared": str(state.shared_host_image_ref or "").strip(),
@@ -521,12 +563,20 @@ async def _default_refresh_schedules() -> int:
         RecurringWorkflowsService,
     )
 
-    async with get_async_session_context() as session:
-        refreshed = await RecurringWorkflowsService(
-            session
-        ).refresh_managed_bootstrap_schedules(limit=500)
-        await session.commit()
-        return refreshed
+    try:
+        async with get_async_session_context() as session:
+            refreshed = await RecurringWorkflowsService(
+                session
+            ).refresh_managed_bootstrap_schedules(limit=500, raise_on_failure=True)
+            await session.commit()
+            return refreshed
+    except OmnigentReleaseError:
+        raise
+    except Exception as exc:
+        raise OmnigentReleaseError(
+            "refresh-schedules",
+            f"managed bootstrap schedule refresh failed: {exc}",
+        ) from exc
 
 
 async def _default_verify_live_container(server_ref: str) -> str | None:
@@ -566,7 +616,7 @@ def production_drivers(
     operator-invoked authority from ``update-moonmind.sh``.
     """
 
-    async def restart_server(target: dict[str, str]) -> None:
+    async def _up_services(services: tuple[str, ...], phase: str) -> None:
         result = await runner.up(
             stack=stack,
             command=(
@@ -576,16 +626,41 @@ def production_drivers(
                 "--wait",
                 "--wait-timeout",
                 "300",
-                "omnigent",
+                *services,
             ),
             requested_image=moonmind_image,
         )
-        if int(result.get("returncode", 1)) != 0:
+        # HostDockerComposeRunner reports process status as `exitCode`
+        # (see deployment_execution._run_compose_command); accept every
+        # historical key so a successful `compose up` is never misread as a
+        # failure.
+        raw_code = result.get(
+            "exitCode", result.get("exit_code", result.get("returncode", 1))
+        )
+        try:
+            code = int(raw_code)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            code = 1
+        if code != 0:
             raise OmnigentReleaseError(
-                "restart-server",
+                phase,
                 str((result.get("stderr") or result.get("stdout") or "")[:500])
-                or "compose up omnigent failed",
+                or f"compose up {' '.join(services)} failed",
             )
+
+    async def restart_server(target: dict[str, str]) -> None:
+        # The release record is already persisted to `.env.deploy` when this
+        # runs. `omnigent` carries the new image, but `api` and
+        # `temporal-worker-agent-runtime` were reconciled before the migration
+        # and still carry the previous `OMNIGENT_*_REF` process values. Host
+        # Class resolution prefers those stale values over the new shared
+        # state and rejects them, so recreate every ref-consuming service
+        # after persisting the record.
+        await _up_services(("omnigent",), "restart-server")
+        await _up_services(
+            ("api", "temporal-worker-agent-runtime"),
+            "restart-consumers",
+        )
 
     async def cut_policy_versions(target: dict[str, str]) -> dict[str, list[str]]:
         return await _default_cut_policy_versions(target, actor=actor)
@@ -627,6 +702,55 @@ async def migrate_omnigent_release(
     if not build_omnigent_gate().enabled or not generic_host_enabled():
         return {"status": "skipped", "reason": "omnigent runtime not enabled"}
 
+    # Hold the release-wide deployment lock through the migration so a second
+    # queued release cannot rewrite the desired-state files while this
+    # migration restarts Omnigent and cuts policies. The revision CAS below
+    # still rejects any interleaving that slips through the gap between the
+    # deployment update's lock release and this acquisition.
+    import os
+
+    lock_lease = None
+    lock_dir = str(os.environ.get("MOONMIND_DEPLOYMENT_LOCK_DIR") or "").strip()
+    if lock_dir:
+        try:
+            from moonmind.workflows.skills.deployment_execution import (
+                FileDeploymentUpdateLockManager,
+            )
+
+            lock_lease = await FileDeploymentUpdateLockManager(
+                lock_dir=lock_dir
+            ).acquire("moonmind")
+        except Exception as exc:
+            raise OmnigentReleaseError(
+                "conflict",
+                f"could not acquire deployment lock for migration: {exc}",
+            ) from exc
+    try:
+        return await _migrate_omnigent_release_inner(
+            store=store,
+            runner=runner,
+            owner=owner,
+            moonmind_image=moonmind_image,
+            drivers=drivers,
+            actor=actor,
+        )
+    finally:
+        if lock_lease is not None:
+            try:
+                await lock_lease.release()
+            except Exception:
+                pass
+
+
+async def _migrate_omnigent_release_inner(
+    *,
+    store: Any,
+    runner: Any,
+    owner: str = "system:deployment",
+    moonmind_image: str = "",
+    drivers: OmnigentReleaseDrivers | None = None,
+    actor: str = "release",
+) -> dict[str, Any]:
     run = drivers or _default_drivers()
     if run.restart_server is None or run.cut_policy_versions is None:
         raise OmnigentReleaseError(
@@ -646,10 +770,45 @@ async def migrate_omnigent_release(
     action, target = decide_release_transition(live, record, candidates)
 
     if action == "noop":
+        # A previous advance may have written the record and aligned the
+        # server but failed before catalog, policy, schedule, or verification
+        # finished. Rerun those convergent post-record steps before treating
+        # matching refs as terminal; otherwise the receipt completes with
+        # stale policies or schedules.
+        assert record is not None
+        try:
+            resolved = await run.await_resolution(target)
+            catalog = await run.sync_catalog()
+            policy_outcome = await run.cut_policy_versions(target)
+            refreshed = await run.refresh_schedules()
+            live_digest = await run.verify_live_container(
+                str(target.get("server") or "")
+            )
+        except OmnigentReleaseError:
+            raise
+        except Exception as exc:
+            raise OmnigentReleaseError(
+                "converge-post-steps",
+                f"aligned refs still need post-record work: {exc}",
+            ) from exc
+        if live_digest and live_digest != str(target.get("server") or ""):
+            raise OmnigentReleaseError(
+                "verify",
+                "running server does not carry the recorded digest",
+            )
+        if not live_digest:
+            raise OmnigentReleaseError(
+                "verify", "could not observe the running server image"
+            )
         return {
             "status": "aligned",
-            "revision": record.revision if record else 0,
+            "revision": record.revision,
             "serverImageRef": target.get("server"),
+            "policiesCut": policy_outcome["cut"],
+            "policiesSkipped": policy_outcome["skipped"],
+            "schedulesRefreshed": refreshed,
+            "catalogRef": catalog.get("catalogRef"),
+            "resolvedRefs": resolved,
         }
 
     if action == "advance":
@@ -665,6 +824,21 @@ async def migrate_omnigent_release(
             updated_by=owner,
             previous=record.to_record() if record else None,
         )
+        # Revision compare-and-set: the file lock is released between the
+        # deployment update and this migration, so a second release could have
+        # advanced the record in between. Re-read and reject the write when
+        # the revision moved instead of silently losing that revision.
+        fresh_env, fresh_doc = store.read()
+        fresh_record = read_omnigent_release(fresh_env, fresh_doc)
+        fresh_revision = fresh_record.revision if fresh_record else 0
+        expected_revision = record.revision if record else 0
+        if fresh_revision != expected_revision:
+            raise OmnigentReleaseError(
+                "conflict",
+                f"release record advanced concurrently "
+                f"(expected r{expected_revision}, found r{fresh_revision}); "
+                f"retained fleet owns recovery",
+            )
         await store.merge(
             env_updates=new_release.to_env(),
             json_updates={OMNIGENT_RELEASE_RECORD_KEY: new_release.to_record()},
