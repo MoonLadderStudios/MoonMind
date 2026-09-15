@@ -37,6 +37,12 @@ def test_each_backend_shard_has_one_owner() -> None:
 def test_reliability_shards_are_deterministic_and_cover_all_files() -> None:
     from pathlib import Path
 
+    from tools.ci.reliability_shard_partition import (
+        SHARD_NAMES,
+        files_for_shard,
+        partition,
+    )
+
     repo_root = Path(__file__).resolve().parents[3]
     files = sorted(
         p.name
@@ -50,12 +56,26 @@ def test_reliability_shards_are_deterministic_and_cover_all_files() -> None:
         for name in files
     }
     assert shards == set(RELIABILITY_SHARD_NAMES)
-    # Round-robin stability: the first four sorted files own distinct shards.
-    first_four = {
-        reliability_shard_for_path(f"tests/integration/reliability/{name}")
-        for name in files[:4]
-    }
-    assert len(first_four) == 4
+    # Single-authority exact-once assignment: the verifier agrees with the
+    # partition module on every file, and every file is owned exactly once.
+    assignment = partition()
+    assert sorted(sum((sorted(m) for m in assignment.values()), [])) == files
+    assert set(assignment) == set(SHARD_NAMES)
+    for index in range(len(SHARD_NAMES)):
+        for name in files_for_shard(index):
+            assert (
+                reliability_shard_for_path(f"tests/integration/reliability/{name}")
+                == SHARD_NAMES[index]
+            )
+    # Determinism: repeated resolution is stable.
+    for name in files:
+        path = f"tests/integration/reliability/{name}"
+        assert reliability_shard_for_path(path) == reliability_shard_for_path(path)
+    # New files absent from the weights file are still selected (default
+    # weight), never skipped.
+    assert reliability_shard_for_path(
+        "tests/integration/reliability/test_brand_new_unweighted_case.py"
+    ) in set(RELIABILITY_SHARD_NAMES)
 
 
 def test_verifier_reports_missing_duplicate_and_marker_conflicts() -> None:
