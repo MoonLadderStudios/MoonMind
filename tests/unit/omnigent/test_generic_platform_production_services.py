@@ -44,6 +44,10 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass, get_launch_policy
+from moonmind.omnigent.bootstrap import store
+from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
+from moonmind.omnigent.host_image_drift import compatible_deployed_fallback
+from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from moonmind.omnigent.harness_platform.planning_service import (
     OmnigentExecutionPlanningService,
     OmnigentPlannedHostResolver,
@@ -57,6 +61,7 @@ from moonmind.omnigent.harness_platform.stores import (
 )
 from moonmind.omnigent.host_leases import InMemoryOmnigentHostLeaseRepository
 from moonmind.omnigent.host_services.attestation import (
+    DockerOmnigentHostAttestor,
     _assert_exact_omnigent_build,
     _attest_workspace_mount,
     _read_exact_host_model_options,
@@ -69,6 +74,9 @@ from moonmind.omnigent.host_services.github_credentials import (
 )
 from moonmind.omnigent.host_ports import HostLaunchSpec, expected_omnigent_host_id
 from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
+from moonmind.omnigent.host_services.runtime_scripts import (
+    OmnigentRuntimeScriptService,
+)
 from moonmind.omnigent.host_services.mounted_tools import (
     OmnigentMountedToolService,
     deployment_mounted_tool_names,
@@ -1895,6 +1903,522 @@ async def test_writer_ref_converts_pull_timeout_to_materialization_failure() -> 
 
 
 @pytest.mark.asyncio
+async def test_writer_ref_reuses_qualified_local_instead_of_pulling(
+    monkeypatch,
+) -> None:
+    """Patch/SHA drift reuses a qualified same-repo image without a 7GB pull."""
+
+    requested = "ghcr.io/example/opencode@sha256:" + "a" * 64
+    fallback = "ghcr.io/example/opencode@sha256:" + "b" * 64
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_image_drift._candidate_deployed_refs",
+        lambda: [fallback],
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_image_drift._provenance_map",
+        lambda: {
+            fallback: {"version": "0.13.1", "buildDigest": "sha256:" + "d" * 64}
+        },
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_image_drift._operator_pins", lambda: []
+    )
+
+    class DriftBackend(_DockerBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pulls: list[list[str]] = []
+
+        async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                inspected = command[3] if len(command) > 3 else ""
+                if inspected == fallback:
+                    return 0, b"sha256:fallback\n", b""
+                return 1, b"", b"No such image"
+            if command[:2] == ["docker", "pull"]:
+                self.pulls.append(command)
+                return 0, b"Pulled\n", b""
+            return await super().run(
+                argv, input_bytes=input_bytes, timeout_seconds=timeout_seconds
+            )
+
+    backend = DriftBackend()
+    materializer = DockerOpencodeAuthJsonMaterializer(backend)
+    resolved = await materializer._resolve_writer_ref(
+        requested, expected_omnigent_version="0.13.0"
+    )
+    assert resolved == fallback
+    assert backend.pulls == []
+
+
+@pytest.mark.asyncio
+async def test_writer_ref_rejects_unqualified_same_repo_fallback(
+    monkeypatch,
+) -> None:
+    """Same-repo drift without observed provenance still pulls exact."""
+
+    requested = "ghcr.io/example/opencode@sha256:" + "a" * 64
+    fallback = "ghcr.io/example/opencode@sha256:" + "b" * 64
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_image_drift._candidate_deployed_refs",
+        lambda: [fallback],
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_image_drift._provenance_map", lambda: {}
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_image_drift._operator_pins", lambda: []
+    )
+
+    class MissingBackend(_DockerBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pulls: list[list[str]] = []
+            self.pulled = False
+
+        async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                inspected = command[3] if len(command) > 3 else ""
+                if inspected == fallback:
+                    return 0, b"sha256:fallback\n", b""
+                if inspected == requested and self.pulled:
+                    return 0, b"sha256:requested\n", b""
+                return 1, b"", b"No such image"
+            if command[:2] == ["docker", "pull"]:
+                self.pulls.append(command)
+                self.pulled = True
+                return 0, b"Pulled\n", b""
+            return await super().run(
+                argv, input_bytes=input_bytes, timeout_seconds=timeout_seconds
+            )
+
+    backend = MissingBackend()
+    materializer = DockerOpencodeAuthJsonMaterializer(backend)
+    # Unqualified fallback is skipped; exact pull recovery still applies.
+    resolved = await materializer._resolve_writer_ref(
+        requested, expected_omnigent_version="0.13.0"
+    )
+    assert resolved == requested
+    assert backend.pulls == [["docker", "pull", requested]]
+
+
+@pytest.mark.asyncio
+async def test_sha_drift_replay_advances_digest_through_full_handoff(
+    tmp_path, monkeypatch
+) -> None:
+    """Minimized replay of an escaped stale-digest dispatch failure.
+
+    Advances the deployed digest in real resolved state, then runs the
+    production handoff against the stale plan digest with no helper stubbed:
+    deployed-fallback selection, full credential materialization, launch image
+    resolution, exact-host attestation, and attested retry validation. Only
+    Docker presence and the resolved-state path are faked.
+    """
+
+    repo = "ghcr.io/moonladderstudios/omnigent-host-moonmind"
+    stale = repo + "@sha256:" + "a" * 64
+    current = repo + "@sha256:" + "b" * 64
+    stale_build = "sha256:" + "1" * 64
+    current_build = "sha256:" + "2" * 64
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", str(tmp_path / "resolved.json")
+    )
+    for key in (
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "OMNIGENT_SHARED_HOST_IMAGE_REF",
+        "OMNIGENT_PI_HOST_IMAGE_REF",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    store.save_resolved_state(
+        ResolvedOmnigentDeploymentState.model_validate(
+            {
+                "serverImageRef": "ghcr.io/omnigent-ai/omnigent-server@sha256:"
+                + "c" * 64,
+                "sharedHostImageRef": current,
+                "omnigentBuildDigest": "sha256:" + "c" * 64,
+                "architecture": "linux/amd64",
+                "details": {
+                    "hostImageProvenance": {
+                        current: {
+                            "buildDigest": current_build,
+                            "version": "0.13.1",
+                        }
+                    }
+                },
+            }
+        )
+    )
+
+    class ReplayMaterializerBackend(_DockerBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.pulls: list[list[str]] = []
+
+        async def run(self, argv, *, input_bytes=None, timeout_seconds=60.0):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                if command[3] == current:
+                    return 0, b"sha256:present\n", b""
+                return 1, b"", b"No such image"
+            if command[:2] == ["docker", "pull"]:
+                self.pulls.append(command)
+                return 1, b"", b"pull access denied"
+            return await super().run(
+                argv, input_bytes=input_bytes, timeout_seconds=timeout_seconds
+            )
+
+    # 1. Deployed-fallback selection through real resolved state.
+    assert (
+        compatible_deployed_fallback(
+            stale, expected_omnigent_version="0.13.0"
+        )
+        == current
+    )
+
+    # 2. Full credential materialization against the stale plan digest.
+    backend = ReplayMaterializerBackend()
+    lease = CredentialLease(
+        profile_id="opencode-primary",
+        runtime_id="opencode",
+        lease_id="lease-replay",
+        owner_id="owner-replay",
+        purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+    )
+    acquired = AcquiredProviderLease(
+        slot="primary-model",
+        provider_profile_ref="opencode-primary",
+        capacity_scope_ref="provider-profile:opencode-primary",
+        provider_lease_ref="provider-profile-lease:lease-replay",
+        credential_generation=7,
+        lease=lease,
+    )
+    secrets = ScopedSecretBundle(
+        provider_profile_ref="opencode-primary",
+        credential_generation=7,
+        values={"opencode_api_key": "replay-key"},
+    )
+    handle = await DockerOpencodeAuthJsonMaterializer(backend).materialize(
+        CredentialMaterializationContext(
+            request=_request(),
+            acquired=acquired,
+            secrets=secrets,
+            writer_image_ref=stale,
+            artifact_gateway=_Artifacts(),
+            provider_route_ref="opencode-go",
+            expected_omnigent_version="0.13.0",
+        )
+    )
+    assert handle.materializerRef == "opencode-auth-json@1"
+    assert backend.pulls == []
+    writer_argvs = [argv for argv, _ in backend.calls if argv[:2] == ["docker", "run"]]
+    assert writer_argvs and all(current in argv for argv in writer_argvs)
+
+    # 3. Launch image resolution reuses the same qualified digest.
+    class ReplayLaunchBackend:
+        async def run(
+            self,
+            argv,
+            *,
+            input_bytes=None,
+            timeout_seconds=600.0,
+            failure_code=None,
+            check=True,
+            output_limit_bytes=None,
+        ):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                if command[3] == current:
+                    return 0, "sha256:present", ""
+                return 1, "", "No such image"
+            raise AssertionError(command)
+
+    host_class = HostClass.model_validate(
+        {
+            "hostClassId": "omnigent-pi",
+            "version": 1,
+            "imageRef": stale,
+            "omnigentVersion": "0.13.0",
+            "omnigentBuildDigest": stale_build,
+            "architectures": ["linux/amd64"],
+            "declaredHarnessImplementations": [
+                {
+                    "harnessId": "pi-native",
+                    "implementationRef": "omnigent-harness-implementation:sha256:"
+                    + "3" * 64,
+                    "runtimeDependencies": [
+                        {"name": "opencode", "version": "1.18.11"}
+                    ],
+                }
+            ],
+            "integrationModes": ["native-server"],
+            "materializerRefs": ["omnigent-provider-config@1", "none@1"],
+            "features": {
+                "git": True,
+                "tmux": True,
+                "bubblewrap": True,
+                "workspaceBind": True,
+                "readOnlyRoot": True,
+                "restrictedEgress": True,
+                "mountedSkills": True,
+                "mountedTools": True,
+            },
+            "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+        }
+    )
+    launcher = DockerOmnigentHostLauncher(
+        backend=ReplayLaunchBackend(),
+        runtime_scripts=OmnigentRuntimeScriptService(),
+        server_url="http://omnigent:8000",
+    )
+    assert await launcher._resolve_launch_image(stale, host_class) == current
+
+    # 4. Exact-host attestation on the fallback image (omnigent 0.13.1 and
+    # opencode 1.18.12 prove patch drift within the admitted series).
+    container = "mm-host-replay"
+    profile = OMNIGENT_EGRESS_PROFILE
+    applied_rule = "sha256:" + "9" * 64
+    egress_labels = {
+        "moonmind.owner": "generic-omnigent-host",
+        "moonmind.egress.profile": profile.ref,
+        "moonmind.egress.profile_digest": profile.digest,
+        "moonmind.egress.applied_rule_digest": applied_rule,
+    }
+    egress_attestation = {
+        "attestationRef": "artifact:egress-attestation",
+        "profileRef": profile.ref,
+        "profileDigest": profile.digest,
+        "enforcerImplementation": "test",
+        "backendRef": "test",
+        "networkRef": profile.network_ref,
+        "gatewayRef": profile.gateway_ref,
+        "appliedRuleDigest": applied_rule,
+        "configDigest": "sha256:" + "8" * 64,
+        "gatewayImageDigest": "sha256:" + "7" * 64,
+        "healthResult": "healthy",
+        "validatedAt": "2026-09-15T00:00:00+00:00",
+        "validationResult": "passed",
+        "deniedConnectionCount": 0,
+    }
+
+    class ReplayAttestBackend:
+        async def inspect_container(self, container_name: str):
+            assert container_name == container
+            return {
+                "Id": "cid-replay",
+                "Config": {"Image": current, "Labels": dict(egress_labels)},
+                "Mounts": [
+                    {
+                        "Name": "ws-vol",
+                        "Destination": "/workspaces/run",
+                        "RW": False,
+                    },
+                    {"Name": "skill-vol", "Destination": "/skills", "RW": False},
+                ],
+            }
+
+        async def run(
+            self,
+            argv,
+            *,
+            input_bytes=None,
+            timeout_seconds=60.0,
+            failure_code=None,
+            check=True,
+            output_limit_bytes=None,
+        ):
+            command = list(argv)
+            if command[1:3] == ["image", "inspect"]:
+                ref = command[-1]
+                if "--format" in command:
+                    assert ref in (current, "sha256:" + "f" * 64)
+                    return 0, '"amd64"', ""
+                assert ref == current
+                return (
+                    0,
+                    json.dumps(
+                        [
+                            {
+                                "RepoDigests": [current],
+                                "Config": {
+                                    "Labels": {
+                                        "moonmind.omnigent.build_digest": (
+                                            current_build
+                                        )
+                                    }
+                                },
+                                "Os": "linux",
+                                "Architecture": "amd64",
+                            }
+                        ]
+                    ),
+                    "",
+                )
+            if command[1] == "inspect":
+                return (
+                    0,
+                    json.dumps(
+                        {
+                            "labels": dict(egress_labels),
+                            "networks": {
+                                profile.network_ref: {
+                                    "NetworkID": "net-1",
+                                    "EndpointID": "ep-1",
+                                    "IPAddress": "10.0.0.5",
+                                }
+                            },
+                            "imageRef": current,
+                            "image": "sha256:" + "f" * 64,
+                        }
+                    ),
+                    "",
+                )
+            assert command[:2] == ["docker", "exec"]
+            rest = command[3:]
+            if rest == ["/opt/venv/bin/omnigent", "--version"]:
+                return 0, "omnigent 0.13.1 (built 2026-09-14T00:00:00Z)\n", ""
+            if rest == ["opencode", "--version"]:
+                return 0, "1.18.12\n", ""
+            return 0, "", ""
+
+    class ReplayArtifacts:
+        def __init__(self) -> None:
+            self.payloads: list[dict[str, object]] = []
+
+        async def write_json(self, **kwargs):
+            self.payloads.append(kwargs["payload"])
+            return f"artifact:{kwargs['name']}"
+
+    class ReplayClient:
+        async def get_host_model_options(self, host_id: str, harness_id: str):
+            assert harness_id == "pi-native"
+            return {"models": [{"qualifiedId": "pi/test-model"}]}
+
+    attestor = DockerOmnigentHostAttestor(
+        backend=ReplayAttestBackend(),
+        client=ReplayClient(),
+        artifacts=ReplayArtifacts(),
+    )
+    attest_plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            harnessId="pi-native",
+            harnessImplementationRef="omnigent-harness-implementation:sha256:"
+            + "3" * 64,
+            modelConfig=SimpleNamespace(
+                qualifiedId="pi/test-model", routeRef="anthropic"
+            ),
+        )
+    )
+    spec = HostLaunchSpec.model_validate(
+        {
+            "executionPlanRef": "omnigent-execution-plan:sha256:" + "0" * 64,
+            "stepExecutionId": "step-replay-1",
+            "runtimeBindingId": "binding-replay",
+            "hostLeaseRef": "lease-replay",
+            "hostLeaseGeneration": 1,
+            "hostClassRef": "omnigent-pi@1",
+            "imageRef": stale,
+            "serverEndpointRef": "default",
+            "serverUrl": "http://omnigent:8000",
+            "networkRef": profile.network_ref,
+            "limits": {
+                "cpuMillis": 2000,
+                "memoryMiB": 4096,
+                "processes": 256,
+                "timeoutSeconds": 5400,
+                "temporaryStorageMiB": 256,
+            },
+            "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+            "correlationName": container,
+            "workspaceAttachment": {
+                "kind": "volume",
+                "sourceRef": "ws-vol",
+                "targetPath": "/workspaces/run",
+                "accessMode": "read-only",
+            },
+            "skillAttachment": {
+                "kind": "volume",
+                "sourceRef": "skill-vol",
+                "targetPath": "/skills",
+                "accessMode": "read-only",
+                "deliveryRef": "skill-delivery:sha256:" + "1" * 64,
+            },
+            "toolAttachments": [],
+            "stateAttachment": {
+                "kind": "volume",
+                "sourceRef": "state-vol",
+                "targetPath": "/home/app/.omnigent",
+                "accessMode": "read-write",
+            },
+            "labels": dict(egress_labels),
+        }
+    )
+    attestations = await attestor.attest(
+        request=_request(),
+        plan=attest_plan,
+        spec=spec,
+        host_class=host_class,
+        launch_result={"containerName": container, "launchImageRef": current},
+        registration={
+            "omnigentHostId": "host-replay",
+            "host": {"owner": "owner-replay"},
+            "harnessReady": True,
+        },
+        credential_handles=[],
+        egress_attestation=egress_attestation,
+    )
+    evidence = next(
+        payload
+        for payload in attestor._artifacts.payloads
+        if isinstance(payload, dict)
+        and payload.get("schemaVersion")
+        == "moonmind.omnigent-exact-host-attestation.v1"
+    )
+    assert evidence["imageRef"] == current
+    assert evidence["expectedImageRef"] == stale
+    assert evidence["omnigentBuildDigest"] == current_build
+    assert evidence["expectedOmnigentBuildDigest"] == stale_build
+
+    # 5. Attested retry validation consumes the drifted evidence.
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+
+    class ReplayRetryArtifacts:
+        async def read_bytes(self, _ref: str) -> bytes:
+            return _canonical_json_bytes(
+                {
+                    "imageRef": evidence["imageRef"],
+                    "architecture": "linux/amd64",
+                    "omnigentBuildDigest": evidence["omnigentBuildDigest"],
+                    "harnessId": "pi-native",
+                    "harnessImplementationRef": (
+                        "omnigent-harness-implementation:sha256:" + "3" * 64
+                    ),
+                    "omnigentHostId": evidence["omnigentHostId"],
+                }
+            )
+
+    harness.realizer._artifacts = ReplayRetryArtifacts()
+    await harness.realizer._validate_bound_host_identity(
+        plan=SimpleNamespace(
+            payload=SimpleNamespace(
+                hostImageRef=stale,
+                hostArchitecture="linux/amd64",
+                omnigentHostBuildDigest=stale_build,
+                harnessId="pi-native",
+                harnessImplementationRef=(
+                    "omnigent-harness-implementation:sha256:" + "3" * 64
+                ),
+            )
+        ),
+        host_context={
+            "omnigentHostId": evidence["omnigentHostId"],
+            "hostHarnessAttestationRef": attestations["hostHarnessAttestationRef"],
+        },
+    )
+
+
+@pytest.mark.asyncio
 async def test_opencode_materialize_recovers_missing_writer_via_pull() -> None:
     """Full materialize (production boundary) recovers a historic digest."""
 
@@ -2633,9 +3157,82 @@ async def test_bound_host_retry_rejects_mismatched_attestation() -> None:
         async def read_bytes(self, _ref: str) -> bytes:
             return _canonical_json_bytes(
                 {
+                    # Different repository is never compatible drift: patch
+                    # and SHA may evolve within the same image family, but a
+                    # foreign image family must still fail closed.
+                    "imageRef": "ghcr.io/example/other@sha256:" + "9" * 64,
+                    "architecture": plan.payload.hostArchitecture,
+                    "omnigentBuildDigest": plan.payload.omnigentHostBuildDigest,
+                    "harnessId": plan.payload.harnessId,
+                    "harnessImplementationRef": (
+                        plan.payload.harnessImplementationRef
+                    ),
+                    "omnigentHostId": "host-1",
+                }
+            )
+
+    harness.realizer._artifacts = Artifacts()
+    with pytest.raises(HarnessPlatformError, match="retry identity conflicts"):
+        await harness.realizer._validate_bound_host_identity(
+            plan=plan,
+            host_context={
+                "omnigentHostId": "host-1",
+                "hostHarnessAttestationRef": "artifact:host-attestation",
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_bound_host_retry_allows_same_repo_sha_drift() -> None:
+    """Same-repository SHA/patch drift survives attested retries.
+
+    Rebuilt host images change digests while keeping major.minor. Retries must
+    not fail on SHA alone; major.minor compatibility is enforced downstream.
+    """
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _exact_plan("opencode-go/model")
+
+    class Artifacts:
+        async def read_bytes(self, _ref: str) -> bytes:
+            return _canonical_json_bytes(
+                {
                     "imageRef": "ghcr.io/example/opencode@sha256:" + "9" * 64,
                     "architecture": plan.payload.hostArchitecture,
                     "omnigentBuildDigest": plan.payload.omnigentHostBuildDigest,
+                    "harnessId": plan.payload.harnessId,
+                    "harnessImplementationRef": (
+                        plan.payload.harnessImplementationRef
+                    ),
+                    "omnigentHostId": "host-1",
+                }
+            )
+
+    harness.realizer._artifacts = Artifacts()
+    # Same repo, different SHA: must not raise.
+    await harness.realizer._validate_bound_host_identity(
+        plan=plan,
+        host_context={
+            "omnigentHostId": "host-1",
+            "hostHarnessAttestationRef": "artifact:host-attestation",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_bound_host_retry_rejects_build_only_mismatch() -> None:
+    """A lone build mismatch against the expected image is not drift."""
+
+    harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
+    plan = _exact_plan("opencode-go/model")
+
+    class Artifacts:
+        async def read_bytes(self, _ref: str) -> bytes:
+            return _canonical_json_bytes(
+                {
+                    "imageRef": plan.payload.hostImageRef,
+                    "architecture": plan.payload.hostArchitecture,
+                    "omnigentBuildDigest": "sha256:" + "9" * 64,
                     "harnessId": plan.payload.harnessId,
                     "harnessImplementationRef": (
                         plan.payload.harnessImplementationRef

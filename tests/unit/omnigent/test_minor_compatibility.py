@@ -7,7 +7,16 @@ import pytest
 from moonmind.omnigent import deployment_identity
 from moonmind.omnigent.bootstrap import image_resolution, store
 from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
-from moonmind.omnigent.compatibility import versions_compatible
+from moonmind.omnigent.compatibility import (
+    image_repository,
+    is_same_image_repository,
+    vendor_versions_compatible,
+    versions_compatible,
+)
+from moonmind.omnigent.host_image_drift import (
+    compatible_deployed_fallback,
+    is_compatible_image_drift,
+)
 from tests.unit.omnigent.test_harness_platform import (  # noqa: F401 -- fixture for serialized admitted plans
     _test_owned_host_classes,
 )
@@ -411,3 +420,150 @@ async def test_host_override_never_masks_server_replacement(
     else:
         with pytest.raises(deployment_identity.OmnigentDeploymentIdentityConflict):
             await deployment_identity.assert_plan_matches_deployed_runtime(plan.payload)
+
+
+@pytest.mark.parametrize(
+    ("ref", "expected_repo"),
+    [
+        (
+            "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "a" * 64,
+            "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+        ),
+        (
+            "ghcr.io/moonladderstudios/omnigent-host-moonmind:1.18.11",
+            "ghcr.io/moonladderstudios/omnigent-host-moonmind",
+        ),
+        ("", ""),
+        (None, ""),
+    ],
+)
+def test_image_repository_extraction(ref, expected_repo):
+    assert image_repository(ref) == expected_repo
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "same"),
+    [
+        (
+            "ghcr.io/org/img@sha256:" + "a" * 64,
+            "ghcr.io/org/img@sha256:" + "b" * 64,
+            True,
+        ),
+        (
+            "ghcr.io/org/img:1.18.11",
+            "ghcr.io/org/img@sha256:" + "c" * 64,
+            True,
+        ),
+        (
+            "ghcr.io/org/img@sha256:" + "a" * 64,
+            "ghcr.io/org/other@sha256:" + "a" * 64,
+            False,
+        ),
+        ("", "ghcr.io/org/img@sha256:" + "a" * 64, False),
+        ("", "", False),
+    ],
+)
+def test_same_image_repository(first, second, same):
+    assert is_same_image_repository(first, second) is same
+    assert is_compatible_image_drift(first, second) is same
+
+
+@pytest.mark.parametrize(
+    ("pinned", "observed", "compatible"),
+    [
+        ("1.18.11", "1.18.11", True),
+        ("1.18.11", "1.18.12", True),
+        ("1.18.11", "opencode version 1.18.12", True),
+        ("1.18.11", "1.19.0", False),
+        ("1.18.11", "2.18.11", False),
+        ("1.18.11", "", False),
+        ("", "1.18.11", False),
+        ("0.104.0", "0.104.5", True),
+        ("0.104.0", "0.105.0", False),
+    ],
+)
+def test_vendor_patch_drift_is_compatible(pinned, observed, compatible):
+    assert vendor_versions_compatible(pinned, observed) is compatible
+
+
+def test_compatible_deployed_fallback_prefers_qualified_same_repo():
+    requested = "ghcr.io/example/opencode@sha256:" + "a" * 64
+    current = "ghcr.io/example/opencode@sha256:" + "b" * 64
+    foreign = "ghcr.io/example/other@sha256:" + "c" * 64
+    provenance = {
+        current: {"version": "0.13.1", "buildDigest": "sha256:" + "d" * 64},
+        foreign: {"version": "0.13.1", "buildDigest": "sha256:" + "d" * 64},
+    }
+    assert (
+        compatible_deployed_fallback(
+            requested,
+            deployed_refs=[foreign, current],
+            expected_omnigent_version="0.13.0",
+            provenance=provenance,
+        )
+        == current
+    )
+    # Foreign repository is never compatible drift.
+    assert (
+        compatible_deployed_fallback(
+            requested,
+            deployed_refs=[foreign],
+            expected_omnigent_version="0.13.0",
+            provenance=provenance,
+        )
+        is None
+    )
+    # Same-repository candidate on another minor is rejected.
+    assert (
+        compatible_deployed_fallback(
+            requested,
+            deployed_refs=[current],
+            expected_omnigent_version="0.14.0",
+            provenance=provenance,
+        )
+        is None
+    )
+    # The requested ref itself is never a fallback.
+    assert (
+        compatible_deployed_fallback(
+            requested,
+            deployed_refs=[requested],
+            expected_omnigent_version="0.13.0",
+            provenance=provenance,
+        )
+        is None
+    )
+    # Unobserved candidates without an operator pin are unqualified.
+    assert (
+        compatible_deployed_fallback(
+            requested,
+            deployed_refs=[current],
+            expected_omnigent_version="0.13.0",
+            provenance={},
+        )
+        is None
+    )
+    # Mutable tags never participate in drift recovery.
+    assert compatible_deployed_fallback("ghcr.io/example/opencode:latest") is None
+
+
+def test_compatible_deployed_fallback_honors_operator_pin(
+    tmp_path,
+    monkeypatch,
+):
+    requested = "ghcr.io/example/opencode@sha256:" + "a" * 64
+    pinned = "ghcr.io/example/opencode@sha256:" + "e" * 64
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", str(tmp_path / "missing.json")
+    )
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", pinned)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", "")
+    monkeypatch.setenv("OMNIGENT_PI_HOST_IMAGE_REF", "")
+    assert (
+        compatible_deployed_fallback(
+            requested,
+            expected_omnigent_version="0.13.0",
+            provenance={},
+        )
+        == pinned
+    )
