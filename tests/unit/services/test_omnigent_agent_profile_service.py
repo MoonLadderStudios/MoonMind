@@ -8,6 +8,7 @@ from api_service.services.omnigent_agent_profile_service import (
     _bounded_metadata,
     projection_identity,
     projection_readiness,
+    readiness_actionable_detail,
 )
 
 
@@ -73,6 +74,31 @@ def test_projection_readiness_explains_missing_unavailable_and_incompatible():
     assert missing["freshness"] == "missing"
     assert unavailable["reason"] == "stable upstream identity is unavailable"
     assert incompatible["reason"] == "stable upstream identity is incompatible"
+
+
+def test_readiness_actionable_detail_preserves_reason_and_steers():
+    readiness = {
+        "ready": False,
+        "freshness": "stale",
+        "reason": "stable upstream identity is unavailable",
+        "lastSuccessfulSyncAt": "2026-09-14T22:58:28+00:00",
+        "lastAttemptAt": "2026-09-14T23:04:39+00:00",
+    }
+
+    detail = readiness_actionable_detail(
+        readiness,
+        profile_id="omnigent-opencode-default",
+        version=275,
+        endpoint_ref="default",
+        upstream_id="cf65137fc096a61a6434956c92093549",
+        upstream_version="179",
+    )
+
+    assert detail.startswith("stable upstream identity is unavailable")
+    assert "omnigent-opencode-default@275" in detail
+    assert "default/cf65137fc096a61a6434956c92093549/179" in detail
+    assert "POST /api/omnigent/harness-catalog/synchronize" in detail
+    assert "latest active profile version" in detail
 
 
 def test_projection_readiness_enforces_requested_contract():
