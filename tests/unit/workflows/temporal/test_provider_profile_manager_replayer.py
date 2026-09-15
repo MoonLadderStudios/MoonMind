@@ -298,7 +298,13 @@ async def test_the_lease_transition_contract_replays_from_its_own_history() -> N
                 },
             )
             await asyncio.wait_for(activities.verified.wait(), timeout=15)
-            assignment = await requester.query(_SlotRequester.assigned)
+            # Activity observation does not order a separate workflow's signal
+            # delivery. Wait for the recipient's authoritative assignment.
+            async with asyncio.timeout(15):
+                while (
+                    assignment := await requester.query(_SlotRequester.assigned)
+                ) is None:
+                    await asyncio.sleep(0.01)
             assert assignment["profile_id"] == "test-default"
 
             # The production recovery shape: a slot wait times out and the run
