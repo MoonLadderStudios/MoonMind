@@ -25,6 +25,18 @@
 # when OMNIGENT_SHARED_HOST_IMAGE_REF is unset; legacy mutable
 # OMNIGENT_HOST_IMAGE / OMNIGENT_HOST_IMAGE_TAG construction is not honored
 # for static hosts.
+#
+# Effective launch contract (MoonLadderStudios/MoonMind#3936): only a
+# digest-pinned OMNIGENT_SHARED_HOST_IMAGE_REF (or, when it is unset, a
+# digest-pinned OMNIGENT_HOST_IMAGE_REF bounded alias) is supported launch
+# authority. The OMNIGENT_SHARED_HOST_IMAGE / OMNIGENT_SHARED_HOST_IMAGE_TAG
+# fallback below is a development/bootstrap input only:
+# `moonmind.omnigent.bootstrap.image_resolution` must resolve it to a digest
+# and persist it as OMNIGENT_SHARED_HOST_IMAGE_REF before admission.
+# `moonmind.omnigent.harness_platform.static_hosts.resolve_effective_static_host_image`
+# classifies the effective image for every operator configuration (shared
+# digest, missing ref, mutable tag, legacy-only digest, conflicting settings)
+# and fails closed on anything but a digest pin.
 x-omnigent-static-host:
   image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
   user: "1000:1000"

@@ -57,6 +57,27 @@ GENERIC_STATIC_HEALTHCHECK = (
 
 SHARED_HOST_IMAGE_ENV = "OMNIGENT_SHARED_HOST_IMAGE_REF"
 LEGACY_HOST_IMAGE_ENV = "OMNIGENT_HOST_IMAGE_REF"
+SHARED_HOST_IMAGE_NAME_ENV = "OMNIGENT_SHARED_HOST_IMAGE"
+SHARED_HOST_IMAGE_TAG_ENV = "OMNIGENT_SHARED_HOST_IMAGE_TAG"
+
+# Explicit disposition of the static Claude Compose profile
+# (MoonLadderStudios/MoonMind#3936).
+#
+# ``retained``: the optional static Claude path stays available for existing
+# deployments, but the primary Claude destination is the on-demand generic
+# host. This disposition changes no admitted host mode: exact pack /
+# materializer selection is still enforced by
+# :func:`validate_static_combination`, and removal authority stays with the
+# code-owned retirement row
+# ``omnigent.legacy.claude_static_host_startup`` in
+# ``moonmind.omnigent.legacy_retirement`` (still ``ACTIVE_PRODUCT_PATH`` while
+# retained). Removal happens only through that row's retirement policy at the
+# ``STARTUP_AND_COMPOSE`` stage, after the generic Claude static row passes
+# the exact-image and lifecycle gates recorded in
+# ``services/omnigent/scripts/STATIC_HOST_STARTUP_INVENTORY.md``.
+STATIC_CLAUDE_DISPOSITION = "retained"
+STATIC_CLAUDE_RETIREMENT_PATH_ID = "omnigent.legacy.claude_static_host_startup"
+STATIC_CLAUDE_PRIMARY_PATH = "on-demand generic Claude host"
 
 _DIGEST_PINNED_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 
@@ -260,6 +281,185 @@ def resolve_static_host_image_ref(
     )
 
 
+def static_claude_disposition() -> dict[str, str]:
+    """Return the explicit qualify-or-retire disposition for static Claude.
+
+    This is the recorded answer to issue #3936 item 1: the static Claude
+    Compose profile (``omnigent-host-claude``) is ``retained`` — an optional
+    path for existing deployments — while the on-demand generic Claude host
+    is the primary destination. Static and on-demand modes are never
+    substituted inside an admitted plan; the exact pack/materializer match
+    enforced by :func:`validate_static_combination` fails closed instead.
+    """
+
+    return {
+        "disposition": STATIC_CLAUDE_DISPOSITION,
+        "retirement_path_id": STATIC_CLAUDE_RETIREMENT_PATH_ID,
+        "retirement_class": "active_product_path",
+        "new_admission_source": "docker-compose.yaml:omnigent-host-claude",
+        "primary_path": STATIC_CLAUDE_PRIMARY_PATH,
+        "removal_authority": (
+            "moonmind.omnigent.legacy_retirement:RETIREMENT_INVENTORY"
+        ),
+        "removal_conditions": (
+            "generic Claude static row passes exact-image and lifecycle "
+            "gates; removal at STARTUP_AND_COMPOSE stage under #3835"
+        ),
+    }
+
+
+def _expand_compose_default(value: str, environment: Mapping[str, str]) -> str:
+    """Expand ``${VAR:-default}`` / ``${VAR}`` / ``$VAR`` Compose expressions.
+
+    This models the effective operator-visible value Compose computes for a
+    static service field from the operator environment: an unset or empty
+    ``VAR`` selects ``default`` for the ``:-`` form. Nested defaults (as in
+    the shared-image anchor expression) expand inside out via balanced-brace
+    scanning.
+    """
+
+    name_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+    result: list[str] = []
+    i, n = 0, len(value)
+    while i < n:
+        if (
+            value[i] == "$"
+            and i + 1 < n
+            and (value[i + 1] == "{" or name_re.match(value[i + 1]) is not None)
+        ):
+            if value[i + 1] == "{":
+                depth, j = 1, i + 2
+                while j < n and depth:
+                    if value[j] == "}":
+                        depth -= 1
+                    elif value[j] == "{":
+                        depth += 1
+                    j += 1
+                if depth:
+                    result.append(value[i])
+                    i += 1
+                    continue
+                inner = value[i + 2 : j - 1]
+                name, sep, default = inner.partition(":-")
+                name = name.strip()
+                if name_re.fullmatch(name) is None:
+                    result.append(value[i:j])
+                else:
+                    raw = str(environment.get(name) or "")
+                    if (not raw) and sep:
+                        result.append(
+                            _expand_compose_default(default, environment)
+                        )
+                    else:
+                        result.append(raw)
+                i = j
+            else:
+                match = re.match(r"\$([A-Za-z_][A-Za-z0-9_]*)", value[i:])
+                assert match is not None
+                result.append(str(environment.get(match.group(1)) or ""))
+                i += match.end()
+        else:
+            result.append(value[i])
+            i += 1
+    return "".join(result)
+
+
+def render_static_service_env(
+    raw_service_env: Mapping[str, str],
+    operator_env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Render a static service's effective environment from raw Compose values.
+
+    ``raw_service_env`` is the service's ``environment`` mapping as parsed
+    from ``docker-compose.yaml`` (interpolation expressions included);
+    ``operator_env`` is the operator shell environment. The result is the
+    effective value set a container would receive — the input that
+    :func:`validate_static_combination` must judge, not the raw expression.
+    """
+
+    source: Mapping[str, str] = {} if operator_env is None else operator_env
+    return {
+        str(key): _expand_compose_default(str(value), source)
+        for key, value in raw_service_env.items()
+    }
+
+
+def classify_effective_static_host_image(
+    environment: Mapping[str, str] | None = None,
+) -> tuple[str | None, bool, str]:
+    """Classify the effective static launch image for an operator environment.
+
+    Models the Compose anchor precedence
+    ``${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-<default>}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-<default>}}``
+    together with the bounded legacy alias: an explicitly set digest-pinned
+    ``OMNIGENT_SHARED_HOST_IMAGE_REF`` wins; otherwise a digest-pinned
+    ``OMNIGENT_HOST_IMAGE_REF`` is honored as the bounded alias; anything
+    else falls back to ``OMNIGENT_SHARED_HOST_IMAGE`` /
+    ``OMNIGENT_SHARED_HOST_IMAGE_TAG`` construction, which is a development /
+    bootstrap input only — ``moonmind.omnigent.bootstrap.image_resolution``
+    must resolve it to a digest and persist it as
+    ``OMNIGENT_SHARED_HOST_IMAGE_REF`` before admission.
+
+    Returns ``(image_ref, supported, reason)`` where ``supported`` is true
+    only for digest-pinned refs. A mutable tag or an unset configuration is
+    never supported launch authority.
+    """
+
+    source: Mapping[str, str] = os.environ if environment is None else environment
+    shared = str(source.get(SHARED_HOST_IMAGE_ENV) or "").strip()
+    if shared:
+        if _DIGEST_PINNED_RE.fullmatch(shared):
+            return shared, True, f"{SHARED_HOST_IMAGE_ENV} digest pin"
+        return None, False, (
+            f"{SHARED_HOST_IMAGE_ENV} must be a digest-pinned image ref"
+        )
+    legacy = str(source.get(LEGACY_HOST_IMAGE_ENV) or "").strip()
+    if legacy:
+        if _DIGEST_PINNED_RE.fullmatch(legacy):
+            return legacy, True, (
+                f"{LEGACY_HOST_IMAGE_ENV} bounded-alias digest pin"
+            )
+        return None, False, (
+            f"{LEGACY_HOST_IMAGE_ENV} must be a digest-pinned image ref"
+        )
+    name = str(source.get(SHARED_HOST_IMAGE_NAME_ENV) or "").strip()
+    tag = str(source.get(SHARED_HOST_IMAGE_TAG_ENV) or "").strip()
+    if name or tag:
+        return (
+            f"{name or 'ghcr.io/moonladderstudios/omnigent-host-moonmind'}:"
+            f"{tag or '1.18.11'}",
+            False,
+            "mutable image:tag construction is a development/bootstrap input "
+            "only; resolve it to a digest-pinned "
+            f"{SHARED_HOST_IMAGE_ENV} before admission",
+        )
+    return None, False, (
+        f"{SHARED_HOST_IMAGE_ENV} (or bounded alias {LEGACY_HOST_IMAGE_ENV}) "
+        "must be set to a digest-pinned image ref"
+    )
+
+
+def resolve_effective_static_host_image(
+    environment: Mapping[str, str] | None = None,
+) -> str:
+    """Resolve the effective static launch image or fail closed.
+
+    Digest-pinned ``OMNIGENT_SHARED_HOST_IMAGE_REF`` (or the bounded legacy
+    ``OMNIGENT_HOST_IMAGE_REF`` alias when the shared ref is unset) is the
+    only supported launch authority. A mutable ``IMAGE`` / ``TAG``
+    construction or an unset configuration raises
+    :class:`HarnessPlatformError` instead of launching an unqualified image.
+    """
+
+    image_ref, supported, reason = classify_effective_static_host_image(environment)
+    if supported and image_ref is not None:
+        return image_ref
+    raise HarnessPlatformError(
+        reason,
+        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+    )
+
+
 def static_host_authority_notes() -> dict[str, str]:
     """Name the durable owners for static-row authority handoffs.
 
@@ -294,6 +494,12 @@ def static_host_authority_notes() -> dict[str, str]:
 
 
 __all__ = [
+    "SHARED_HOST_IMAGE_ENV",
+    "SHARED_HOST_IMAGE_NAME_ENV",
+    "SHARED_HOST_IMAGE_TAG_ENV",
+    "STATIC_CLAUDE_DISPOSITION",
+    "STATIC_CLAUDE_PRIMARY_PATH",
+    "STATIC_CLAUDE_RETIREMENT_PATH_ID",
     "STATIC_CLAUDE_MATERIALIZER_REF",
     "STATIC_CLAUDE_PACK_REF",
     "STATIC_CLAUDE_PROFILE",
@@ -308,7 +514,11 @@ __all__ = [
     "FORBIDDEN_STATIC_CONTROL_KEYS",
     "GENERIC_STATIC_ENTRYPOINT",
     "GENERIC_STATIC_HEALTHCHECK",
+    "classify_effective_static_host_image",
+    "resolve_effective_static_host_image",
+    "render_static_service_env",
     "resolve_static_host_image_ref",
+    "static_claude_disposition",
     "static_host_authority_notes",
     "static_host_row",
     "validate_static_combination",
