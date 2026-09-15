@@ -678,7 +678,7 @@ def test_backend_matrix_reports_are_uniquely_named() -> None:
     assert "ls tests/integration/reliability/test_*.py | sort" in reliability_run
     assert "NR % 4" in reliability_run
     upload = steps["Upload reliability shard diagnostics"]
-    assert upload["with"]["name"] == "pytest-${{ matrix.suite }}-diagnostics"
+    assert upload["with"]["name"] == "pytest-${{ matrix.suite }}-diagnostics-attempt-${{ github.run_attempt }}"
     assert upload["with"]["path"] == "/tmp/pytest-${{ matrix.suite }}"
 
 
@@ -691,7 +691,7 @@ def test_backend_matrix_records_attempted_cancellation_diagnostics() -> None:
     assert "attempted-cancellation" in record["run"]
     upload = steps["Upload backend-matrix cancellation diagnostics"]
     assert "failure()" in upload["if"] and "cancelled()" in upload["if"]
-    assert upload["with"]["name"] == "backend-matrix-${{ matrix.suite }}-cancellation"
+    assert upload["with"]["name"] == "backend-matrix-${{ matrix.suite }}-cancellation-attempt-${{ github.run_attempt }}"
     collect = steps["Collect reliability shard diagnostics"]
     assert "failure()" in collect["if"] and "cancelled()" in collect["if"]
 
