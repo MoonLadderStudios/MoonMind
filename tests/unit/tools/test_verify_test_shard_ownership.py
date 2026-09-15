@@ -58,6 +58,40 @@ def test_reliability_shards_are_deterministic_and_cover_all_files() -> None:
     assert len(first_four) == 4
 
 
+def test_reliability_shard_file_counts_are_balanced() -> None:
+    """MoonLadderStudios/MoonMind#4365 R1: file-level balance measurement.
+
+    Real collection 2026-09-15 over tests/integration/reliability
+    (container-job:2ef0af441b3342abbd67d58e19e572a1, 57 files, 616 nodes):
+    shard-1 15 files / 99 nodes, shard-2 14 / 102, shard-3 14 / 301,
+    shard-4 14 / 114. File counts stay within one; node counts do not
+    (test_escaped_failure_journeys.py contributes 206 nodes to shard-3),
+    so wall-time rebalancing awaits per-shard durations.json from CI runs.
+    """
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    files = sorted(
+        p.name
+        for p in (repo_root / "tests" / "integration" / "reliability").glob(
+            "test_*.py"
+        )
+    )
+    assert len(files) >= 4
+    counts: dict[str, int] = {name: 0 for name in RELIABILITY_SHARD_NAMES}
+    for name in files:
+        counts[reliability_shard_for_path(f"tests/integration/reliability/{name}")] += 1
+    # File counts stay within one of each other (measured 15/14/14/14 on
+    # 2026-09-15); no exact total is pinned so new files keep selection.
+    assert max(counts.values()) - min(counts.values()) <= 1
+    assert min(counts.values()) >= 1
+    # The 206-node escaped-failure corpus stays on its deterministic shard;
+    # parameterized expansions never split across shards.
+    assert reliability_shard_for_path(
+        "tests/integration/reliability/test_escaped_failure_journeys.py"
+    ) in set(RELIABILITY_SHARD_NAMES)
+
+
 def test_verifier_reports_missing_duplicate_and_marker_conflicts() -> None:
     errors = verify(
         [
@@ -75,3 +109,32 @@ def test_verifier_reports_missing_duplicate_and_marker_conflicts() -> None:
     assert any("unit_fast conflicts" in error for error in errors)
     assert any("multiple CI owners" in error for error in errors)
     assert any("integration_ci conflicts" in error for error in errors)
+
+
+def test_parameterized_and_new_reliability_cases_keep_exactly_one_owner() -> None:
+    """Shard ownership derives from the file path only, so parameterized
+    expansions of one file stay on that file's shard and newly added files
+    still land on exactly one shard (round-robin when listed, hash fallback
+    otherwise). No case is silently moved or skipped to meet a budget."""
+    first = CollectedNode(
+        nodeid="tests/integration/reliability/test_a.py::test_x[param-1]",
+        path="tests/integration/reliability/test_a.py",
+        markers=frozenset({"reliability_journey"}),
+    )
+    second = CollectedNode(
+        nodeid="tests/integration/reliability/test_a.py::test_x[param-2]",
+        path="tests/integration/reliability/test_a.py",
+        markers=frozenset({"reliability_journey"}),
+    )
+    assert owners(first) == owners(second) == {
+        reliability_shard_for_path("tests/integration/reliability/test_a.py")
+    }
+    assert verify([first, second]) == []
+
+    fresh = _node(
+        "tests/integration/reliability/test_brand_new_4377.py",
+        "reliability_journey",
+    )
+    assert len(owners(fresh)) == 1
+    assert next(iter(owners(fresh))) in set(RELIABILITY_SHARD_NAMES)
+    assert verify([fresh]) == []

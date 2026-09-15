@@ -156,9 +156,13 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   `MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-<suite>_default` so
   fixture tests attach to their row's isolated Compose network instead of
   the retired single-job `moonmind-reliability-qualification_default`.
-- Per-test (`--timeout 600`), job (`timeout-minutes: 30`), and cleanup
-  (`always()` compose `down -v`, wrapped in `timeout 100s`) bounds are
-  preserved on every row. Reliability collection steps are additionally
+- Per-test (`--timeout 600` on fast rows, `--timeout 300` on reliability
+  shards), step (`timeout 480s` around each reliability pytest invocation:
+  the 8-minute hard step ceiling from MoonLadderStudios/MoonMind#4369), job
+  (`timeout-minutes: 12`: the 12-minute hard job ceiling from
+  MoonLadderStudios/MoonMind#4369 covering setup, test step, bounded
+  diagnostics and cleanup per shard), and cleanup (`always()` compose `down -v`,
+  wrapped in `timeout 100s`) bounds are preserved on every row. Reliability collection steps are additionally
   wrapped in `timeout 100s`/`timeout 60s` so one slow diagnostic command
   cannot stall the row; each command records its own failure to
   `collection-status.txt` without stopping the remaining bounded collection
@@ -181,8 +185,9 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   files (JUnit XML, text log, slowest report, duration-hints snapshot) with
   `retention-days: 7` and `if-no-files-found: warn`, on success, failure,
   and (best-effort) normal cancellation via `always()` plus the native
-  selection guard. Reliability Compose logs and scoped manifests upload
-  separately with the same retention. No hidden environment files, tokens,
+  selection guard. Reliability Compose logs and scoped manifests upload the
+  same way on every selected run (MoonLadderStudios/MoonMind#4371) with the
+  same retention. No hidden environment files, tokens,
   unrestricted workspaces, or whole source trees are staged.
 - Each row appends a per-job `$GITHUB_STEP_SUMMARY` (via the same hook)
   with suite/shard identity, tested revision, run/attempt, JUnit counts
@@ -211,6 +216,54 @@ assigned round-robin (`index % 4`). The CI workflow implements this with
 implements the same rule in `reliability_shard_for_path()` so local
 ownership checks and CI execute each file in the same shard.
 
+#### Shard balance measurement (MoonLadderStudios/MoonMind#4365 R1/R8)
+
+Real collection run 2026-09-15 on the current candidate
+(`moonmind container python-tests -- tests/integration/reliability
+--collect-only -q -m reliability_journey`,
+container-job:2ef0af441b3342abbd67d58e19e572a1,
+logsRef art_01M2JHZAA88KPG3YK0PPAKCBWK): 57 files expand to 616
+parameterized nodes (matching the epic's observed 616-test baseline).
+
+| Shard | Files | Nodes |
+| --- | ---: | ---: |
+| reliability-shard-1 | 15 | 99 |
+| reliability-shard-2 | 14 | 102 |
+| reliability-shard-3 | 14 | 301 |
+| reliability-shard-4 | 14 | 114 |
+
+File counts are balanced within one (pinned by
+`test_reliability_shard_file_counts_are_balanced`). Node counts are not:
+`test_escaped_failure_journeys.py` contributes 206 nodes to shard-3 and
+`test_omnigent_model_catalog_refresh.py` contributes 58 nodes to shard-1.
+Parameterized expansions stay on their file's shard by construction, so
+exact-once ownership holds despite the imbalance. No file reassignment is
+made on node counts alone: node count is not wall-time, and the heavy
+replay corpus may be fast per test. Wall-time rebalancing, if needed, uses
+the per-shard `pytest-backend-<suite>-durations.json` snapshots and slowest
+reports from CI runs under the enforced 8-minute step / 12-minute job
+ceilings; that timing evidence is still missing and remains the documented
+next step for R1/R10.
+
+### Reliability Docker Fixture Layers (MoonLadderStudios/MoonMind#4376)
+
+No additional GHA cache is added for reliability shards. Measured-gap
+analysis: `tests/integration/reliability/compose.yaml` declares only
+registry images (`minio`, `postgres`, `temporalio/auto-setup`) with no
+`build` section, and its sole volume mount is the read-only Temporal
+dynamic config (`:ro`). There are therefore no local Dockerfile layers to
+cache — `docker compose up` natively reuses the pulled registry layers,
+and each shard runs them under its own Compose project
+(`moonmind-reliability-<suite>`) with per-shard networks/volumes, so no
+mutable release state is shared. This is pinned by
+`test_reliability_fixtures_reuse_registry_layers_without_shared_state`.
+By contrast, `integration-ci` and `omnigent-exact-artifact` do build local
+images (`api_service/Dockerfile` `test-runtime` / exact artifact) and
+already carry GHA layer caches (`cache-from`/`cache-to` with dedicated
+scopes); that is where layer caching demonstrably applies. If reliability
+`compose.yaml` later gains a `build` section, revisit caching there —
+until then an extra cache subsystem would be redundant machinery.
+
 Diagnostic limitation: a canceled sibling may exit before writing its
 junit report or Compose logs. Cancellation uploads are best-effort
 (`||` fallbacks, `if-no-files-found: warn/error` per artifact) and the
@@ -233,8 +286,9 @@ success-path text log/JUnit upload, `-q` reliability verbosity):
    `ls tests/integration/reliability/test_*.py | sort`).
 2. Fix the revision/configuration: compare runs on the same commit (or
    adjacent commits with no test/workflow changes), same workflow file,
-   same `--timeout 600` / `timeout-minutes: 30` bounds, same runner class
-   (`ubuntu-latest`).
+    same fast-row (`--timeout 600`) and reliability-shard (`--timeout 300`
+    with a `timeout 480s` step cap) bounds, same `timeout-minutes: 12`
+    hard job ceiling, same runner class (`ubuntu-latest`).
 3. Repeat each side at least twice to separate ordinary timing noise from a
    real shift; do not add a performance gate on the result.
 4. Separate cold and warm setup: record dependency-install/Compose-pull
@@ -445,7 +499,11 @@ The archive replay deliberately destroys the source workspace before using
 durable artifact evidence to restore a distinct destination and retries the
 restore idempotently. It exercises production capture/restore engines and the
 artifact boundary, but does not substitute for the Temporal-to-managed-AgentRun
-journey. The required CI reliability job has a 30-minute budget.
+journey. Each reliability pytest invocation is capped by an 8-minute step
+timeout with a 300-second per-test bound inside a 12-minute hard job
+ceiling; per-shard Compose pull/setup variance must fit the remaining
+job budget after the step cap, bounded diagnostics (`timeout 100s` /
+`timeout 60s`) and bounded cleanup (`timeout 100s`).
 
 Verify that every eligible provider-free node has exactly one owner:
 
