@@ -20,9 +20,11 @@ from datetime import UTC, datetime, timedelta
 # deployment that dies between selection and dispatch stops blocking the issue
 # within minutes instead of a full execution lease.
 LEASE_DURATION = timedelta(minutes=30)
-PREPARING_LEASE_DURATION = timedelta(minutes=5)
 RENEW_INTERVAL = timedelta(minutes=5)
-PREPARING_RENEW_INTERVAL = timedelta(minutes=1)
+# Announcement covers only selection-to-dispatch, so it gets a fraction of the
+# running lease and its renew interval. One knob keeps the two phases
+# consistent: shortening the running lease shortens the announcement too.
+PREPARING_LEASE_DIVISOR = 6
 # A marked but unreadable comment cannot prove ownership. Bound its veto by
 # GitHub's own timestamps instead of letting it veto the issue forever.
 UNREADABLE_RESERVATION_GRACE = LEASE_DURATION
@@ -67,14 +69,16 @@ def parse_time(value):
 
 def lease_duration_for(activity):
     """Announcement gets minutes; admitted execution gets the renewable lease."""
-    return PREPARING_LEASE_DURATION if activity == "preparing" else LEASE_DURATION
+    if activity == "preparing":
+        return LEASE_DURATION / PREPARING_LEASE_DIVISOR
+    return LEASE_DURATION
 
 
 def renew_interval_for(activity):
     """Renew often enough that the shorter announcement lease stays coverable."""
-    return (
-        PREPARING_RENEW_INTERVAL if activity == "preparing" else RENEW_INTERVAL
-    )
+    if activity == "preparing":
+        return RENEW_INTERVAL / PREPARING_LEASE_DIVISOR
+    return RENEW_INTERVAL
 
 
 def valid_lease(handoff):

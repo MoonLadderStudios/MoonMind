@@ -86,6 +86,10 @@ async def test_public_agent_run_renews_and_stops_at_confirmed_deadline(
     assert lease_workflow.RENEW_SECONDS == 300
     assert lease_workflow.STOP_MARGIN_SECONDS == 60
     # Shorten wall-clock deadlines only; retain real SQL, HTTP, and durable timers.
+    # The announcement phase is a fixed fraction of the running lease, so scale
+    # it to 1:1 here: this journey owns the running lease, and a sub-second
+    # announcement deadline could never clear the launch stop margin.
+    monkeypatch.setattr(leases, "PREPARING_LEASE_DIVISOR", 1)
     monkeypatch.setattr(
         leases,
         "LEASE_DURATION",
