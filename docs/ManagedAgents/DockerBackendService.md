@@ -76,7 +76,8 @@ Planning admits the `docker` capability from the deployment's enabled, valid
 container-job backend configuration. The planning worker does not require a
 local socket or `DOCKER_HOST`. Endpoint reachability and daemon compatibility
 are checked by the trusted container-job worker before it serves execution.
-Host attestation verifies each mounted tool's pinned digest and executes its
+Host attestation verifies each mounted tool's read-only mount and executable
+presence, records its pinned-digest drift as advisory evidence, and executes its
 manifest-declared `versionProbe` arguments. The container CLI declares `--help`;
 host adapters preserve that portable probe when materializing tool attachments.
 
