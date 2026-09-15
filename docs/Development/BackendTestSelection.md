@@ -157,11 +157,45 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   fixture tests attach to their row's isolated Compose network instead of
   the retired single-job `moonmind-reliability-qualification_default`.
 - Per-test (`--timeout 600`), job (`timeout-minutes: 30`), and cleanup
-  (`always()` compose `down -v`) bounds are preserved on every row.
-- Each row writes a uniquely named junit report
-  (`artifacts/pytest-backend-<suite>.xml`) and uploads attempted
-  cancellation diagnostics (`backend-matrix-<suite>-cancellation`, plus
-  per-shard Compose logs on `failure()` or `cancelled()`).
+  (`always()` compose `down -v`, wrapped in `timeout 100s`) bounds are
+  preserved on every row. Reliability collection steps are additionally
+  wrapped in `timeout 100s`/`timeout 60s` so one slow diagnostic command
+  cannot stall the row; each command records its own failure to
+  `collection-status.txt` without stopping the remaining bounded collection
+  or cleanup, and the original test failure is never replaced.
+- Each row streams combined stdout/stderr through
+  `2>&1 | tee artifacts/pytest-backend-<suite>.log` with
+  `PYTHONUNBUFFERED=1` and `set -euo pipefail` (plus `PIPESTATUS`
+  capture), so live Actions logs stay complete while a local text log is
+  retained without buffering the whole output in memory. Each row keeps its
+  JUnit report plus derived `artifacts/pytest-backend-<suite>-slowest.txt`
+  and `artifacts/pytest-backend-<suite>-durations.json` (written by the
+  small `tools/ci/write_backend_matrix_summary.py` hook from standard
+  pytest/JUnit output). Reliability rows run
+  `-vv --tb=short --durations=25` so the active node ID is visible before a
+  stall; other lanes keep lower-noise console verbosity with duration
+  output. A missing final JUnit file is reported as unavailable/interrupted
+  in the per-job `$GITHUB_STEP_SUMMARY`, never as zero tests or a pass.
+- Each row uploads a stable suite/shard/run-attempt artifact
+  (`pytest-<suite>-attempt-<attempt>`) containing only the known diagnostic
+  files (JUnit XML, text log, slowest report, duration-hints snapshot) with
+  `retention-days: 7` and `if-no-files-found: warn`, on success, failure,
+  and (best-effort) normal cancellation via `always()` plus the native
+  selection guard. Reliability Compose logs and scoped manifests upload
+  separately with the same retention. No hidden environment files, tokens,
+  unrestricted workspaces, or whole source trees are staged.
+- Each row appends a per-job `$GITHUB_STEP_SUMMARY` (via the same hook)
+  with suite/shard identity, tested revision, run/attempt, JUnit counts
+  (never progress-% parsing), outcome (`passed`, `failed`, `canceled`,
+  `intentionally unselected`, or `unavailable`), measured test-step wall
+  time plus JUnit suite time, top slowest cases, and evidence paths. The
+  hook always exits 0 so a parsing problem never hides an unsuccessful job
+  or alters selection.
+- Duration hints for #4366 maintenance are the per-shard
+  `pytest-backend-<suite>-durations.json` snapshots, uploaded as separate
+  artifacts. The committed partition input stays immutable during a matrix
+  run: rows never overwrite a shared baseline, and a partial failed-shard
+  result never replaces a complete baseline.
 - Scope: unrelated `unit-slow`, `integration-ci`, exact-artifact,
   frontend, generated-contract, and `migration-gate` jobs remain
   independently enforced. `ci-required` consumes only the `backend-matrix`
@@ -182,7 +216,39 @@ junit report or Compose logs. Cancellation uploads are best-effort
 (`||` fallbacks, `if-no-files-found: warn/error` per artifact) and the
 original failure remains visible in the failed entry plus the
 `ci-required` aggregate — `ci-required` can never turn green because other
-entries were canceled or skipped.
+entries were canceled or skipped. Runner disappearance and a hard job kill
+may prevent final uploads entirely; live Actions output (streamed via
+`tee`) remains the primary record in that case rather than a guaranteed
+final artifact.
+
+### Reproducible Before/After Comparison (MoonLadderStudios/MoonMind#4370)
+
+No automatic scheduled monitoring workflow is added. To compare a change
+against the pre-evidence baseline (failure-only diagnostics, no
+success-path text log/JUnit upload, `-q` reliability verbosity):
+
+1. Fix the selected universe: run with the same selector outputs (same
+   `unit_fast`/`api_component`/`temporal_boundary`/`reliability_journey`
+   selection, same reliability file set from
+   `ls tests/integration/reliability/test_*.py | sort`).
+2. Fix the revision/configuration: compare runs on the same commit (or
+   adjacent commits with no test/workflow changes), same workflow file,
+   same `--timeout 600` / `timeout-minutes: 30` bounds, same runner class
+   (`ubuntu-latest`).
+3. Repeat each side at least twice to separate ordinary timing noise from a
+   real shift; do not add a performance gate on the result.
+4. Separate cold and warm setup: record dependency-install/Compose-pull
+   time apart from pytest execution (cold = cache miss / fresh Compose
+   pull, warm = cache hit). Record queue time separately from execution
+   time using the run's `created_at`/`started_at` timestamps.
+5. Compare longest shard versus summed runner time: the critical path is
+   the slowest `backend-matrix` row (JUnit suite time plus its step summary
+   wall time); the cost is the sum over rows. The #4366 duration-hints
+   snapshots (`pytest-backend-<suite>-durations.json`) and the per-row
+   slowest reports supply both without rerunning the suite.
+6. A subsequent successful-but-slow run is diagnosed from its retained
+   `pytest-backend-<suite>.log`, JUnit XML, slowest report, and step
+   summary alone.
 
 ### Hermetic Integration CI Selection
 
