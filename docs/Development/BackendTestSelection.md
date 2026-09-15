@@ -113,6 +113,143 @@ The selector enables `reliability_journey=true` for changes to:
 
 This is a separate resource boundary from ordinary unit and Compose integration coverage. It runs a small deterministic journey corpus through real production orchestration layers while replacing external providers and networks with scripted local counterparts.
 
+### Backend Matrix Ownership And Failure Propagation (MoonLadderStudios/MoonMind#4377)
+
+The eligible primary backend executions — `unit-fast`, `api-component`,
+`temporal-boundary`, and four deterministic reliability shards
+(`reliability-shard-1` through `reliability-shard-4`) — share one native
+GitHub Actions matrix job named `backend-matrix` in
+`.github/workflows/pytest-unit-tests.yml`. This shared matrix boundary is
+what allows a failure in a Temporal/API/unit entry to cancel running or
+queued reliability siblings through native `strategy.fail-fast` behavior.
+No custom API cancellation loop, privileged Actions write token, external
+cancellation bot, or polling workflow is used.
+
+Decision evidence: run #14404 showed `temporal-boundary` failing near the
+three-minute mark while the then-independent reliability job continued to
+minute 21 — roughly 18 minutes of executor time spent after the first
+definitive required-backend failure (excluding queued time and
+user-canceled obsolete runs). That waste justified consolidation; the
+matrix keeps successful-run critical-path time flat by isolating setup
+and mutable resources per row (see below) rather than adding a serialized
+environment-build prerequisite.
+
+Matrix rows are derived from the existing `tools/select_test_suites.py`
+outputs with a small explicit mapping: `unit_fast` selects the `unit-fast`
+row, `api_component` selects `api-component`, `temporal_boundary` selects
+`temporal-boundary`, and `reliability_journey` selects all four reliability
+shards. There is no second change-impact classifier, universal runner
+framework, or shell snippet derived from untrusted issue/branch text —
+only fixed trusted pytest commands with ordinary quoted parameters.
+
+- `strategy.fail-fast` is `${{ github.event_name != 'schedule' }}`: enabled
+  for pull-request and merge-group validation (plus push/manual runs that
+  share the same validation path) so a failed Temporal/API/unit entry
+  cancels pending/running reliability siblings; disabled (`false`) for
+  scheduled diagnostics so nightly runs keep collecting sibling outcomes.
+- Fast rows preserve existing xdist behavior (`-n auto`, `--dist load` for
+  the API shard and `--dist loadfile` for unit-fast/temporal) and never
+  build images or start Compose services. Reliability rows run serial
+  pytest (no `-n`) inside their own isolated Compose
+  PostgreSQL/Temporal/MinIO under per-shard Docker project names
+  (`moonmind-reliability-reliability-shard-N`). The setup step exports
+  `MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-<suite>_default` so
+  fixture tests attach to their row's isolated Compose network instead of
+  the retired single-job `moonmind-reliability-qualification_default`.
+- Per-test (`--timeout 600`), job (`timeout-minutes: 30`), and cleanup
+  (`always()` compose `down -v`, wrapped in `timeout 100s`) bounds are
+  preserved on every row. Reliability collection steps are additionally
+  wrapped in `timeout 100s`/`timeout 60s` so one slow diagnostic command
+  cannot stall the row; each command records its own failure to
+  `collection-status.txt` without stopping the remaining bounded collection
+  or cleanup, and the original test failure is never replaced.
+- Each row streams combined stdout/stderr through
+  `2>&1 | tee artifacts/pytest-backend-<suite>.log` with
+  `PYTHONUNBUFFERED=1` and `set -euo pipefail` (plus `PIPESTATUS`
+  capture), so live Actions logs stay complete while a local text log is
+  retained without buffering the whole output in memory. Each row keeps its
+  JUnit report plus derived `artifacts/pytest-backend-<suite>-slowest.txt`
+  and `artifacts/pytest-backend-<suite>-durations.json` (written by the
+  small `tools/ci/write_backend_matrix_summary.py` hook from standard
+  pytest/JUnit output). Reliability rows run
+  `-vv --tb=short --durations=25` so the active node ID is visible before a
+  stall; other lanes keep lower-noise console verbosity with duration
+  output. A missing final JUnit file is reported as unavailable/interrupted
+  in the per-job `$GITHUB_STEP_SUMMARY`, never as zero tests or a pass.
+- Each row uploads a stable suite/shard/run-attempt artifact
+  (`pytest-<suite>-attempt-<attempt>`) containing only the known diagnostic
+  files (JUnit XML, text log, slowest report, duration-hints snapshot) with
+  `retention-days: 7` and `if-no-files-found: warn`, on success, failure,
+  and (best-effort) normal cancellation via `always()` plus the native
+  selection guard. Reliability Compose logs and scoped manifests upload
+  separately with the same retention. No hidden environment files, tokens,
+  unrestricted workspaces, or whole source trees are staged.
+- Each row appends a per-job `$GITHUB_STEP_SUMMARY` (via the same hook)
+  with suite/shard identity, tested revision, run/attempt, JUnit counts
+  (never progress-% parsing), outcome (`passed`, `failed`, `canceled`,
+  `intentionally unselected`, or `unavailable`), measured test-step wall
+  time plus JUnit suite time, top slowest cases, and evidence paths. The
+  hook always exits 0 so a parsing problem never hides an unsuccessful job
+  or alters selection.
+- Duration hints for #4366 maintenance are the per-shard
+  `pytest-backend-<suite>-durations.json` snapshots, uploaded as separate
+  artifacts. The committed partition input stays immutable during a matrix
+  run: rows never overwrite a shared baseline, and a partial failed-shard
+  result never replaces a complete baseline.
+- Scope: unrelated `unit-slow`, `integration-ci`, exact-artifact,
+  frontend, generated-contract, and `migration-gate` jobs remain
+  independently enforced. `ci-required` consumes only the `backend-matrix`
+  aggregate `result` (never last-writer matrix outputs); a failed,
+  timed-out, or canceled selected row fails the aggregate, and an empty
+  backend selection skips the matrix intentionally without instantiating
+  tests or hiding selector errors.
+
+Reliability sharding is deterministic: files matching
+`tests/integration/reliability/test_*.py` are sorted lexicographically and
+assigned round-robin (`index % 4`). The CI workflow implements this with
+`ls ... | sort | awk 'NR % 4 == ...'`; `tools/verify_test_shard_ownership.py`
+implements the same rule in `reliability_shard_for_path()` so local
+ownership checks and CI execute each file in the same shard.
+
+Diagnostic limitation: a canceled sibling may exit before writing its
+junit report or Compose logs. Cancellation uploads are best-effort
+(`||` fallbacks, `if-no-files-found: warn/error` per artifact) and the
+original failure remains visible in the failed entry plus the
+`ci-required` aggregate — `ci-required` can never turn green because other
+entries were canceled or skipped. Runner disappearance and a hard job kill
+may prevent final uploads entirely; live Actions output (streamed via
+`tee`) remains the primary record in that case rather than a guaranteed
+final artifact.
+
+### Reproducible Before/After Comparison (MoonLadderStudios/MoonMind#4370)
+
+No automatic scheduled monitoring workflow is added. To compare a change
+against the pre-evidence baseline (failure-only diagnostics, no
+success-path text log/JUnit upload, `-q` reliability verbosity):
+
+1. Fix the selected universe: run with the same selector outputs (same
+   `unit_fast`/`api_component`/`temporal_boundary`/`reliability_journey`
+   selection, same reliability file set from
+   `ls tests/integration/reliability/test_*.py | sort`).
+2. Fix the revision/configuration: compare runs on the same commit (or
+   adjacent commits with no test/workflow changes), same workflow file,
+   same `--timeout 600` / `timeout-minutes: 30` bounds, same runner class
+   (`ubuntu-latest`).
+3. Repeat each side at least twice to separate ordinary timing noise from a
+   real shift; do not add a performance gate on the result.
+4. Separate cold and warm setup: record dependency-install/Compose-pull
+   time apart from pytest execution (cold = cache miss / fresh Compose
+   pull, warm = cache hit). Record queue time separately from execution
+   time using the run's `created_at`/`started_at` timestamps.
+5. Compare longest shard versus summed runner time: the critical path is
+   the slowest `backend-matrix` row (JUnit suite time plus its step summary
+   wall time); the cost is the sum over rows. The #4366 duration-hints
+   snapshots (`pytest-backend-<suite>-durations.json`) and the per-row
+   slowest reports supply both without rerunning the suite.
+6. A subsequent successful-but-slow run is diagnosed from its retained
+   `pytest-backend-<suite>.log`, JUnit XML, slowest report, and step
+   summary alone.
+
 ### Hermetic Integration CI Selection
 
 The selector enables `integration_ci=true` for changes under or matching:
@@ -168,8 +305,12 @@ The selector enables `full_backend=true` and selects all backend suites when any
 The full backend path selects the same exclusive shards used by targeted runs:
 
 ```bash
-unit-fast + unit-slow + api-component + temporal-boundary + reliability-journey + integration-ci
+unit-fast + unit-slow + api-component + temporal-boundary + reliability-journey (4 shards) + integration-ci
 ```
+
+In CI the `reliability-journey` selection fans out to all four
+`backend-matrix` reliability shards; locally the single corpus command
+above covers the same files.
 
 The `unit-fast` command is invariant: full runs do not switch it to the broad
 unit wrapper. Ownership precedence is `slow > temporal_boundary > component >
@@ -183,12 +324,12 @@ Conditional GitHub Actions jobs are not suitable as individual branch-protection
 - `select-test-suites` computes backend suite outputs from a shallow, submodule-free checkout.
 - `preflight-policy` runs the static repository policy checks in parallel with test selection.
 - `moonspec-projection` verifies the vendored MoonSpec projection.
-- `unit-fast`, `unit-slow`, `api-component`, `temporal-boundary`, `integration-ci`, `reliability-journey-checkpoint-resume`, `omnigent-exact-artifact`, and `omnigent-deterministic-conformance` run only when selected.
+- `backend-matrix` (unit-fast, api-component, temporal-boundary, four reliability shards), `unit-slow`, `integration-ci`, `omnigent-exact-artifact`, and `omnigent-deterministic-conformance` run only when selected.
 - `test-frontend` and `check-generated-contracts` always run as result aggregators for the selected frontend and generated-contract jobs.
 - `verify-test-shard-ownership` always runs because exclusive shard ownership is a static repository invariant.
 - `ci-required` always runs and fails if any always-required or selected backend job, the `test-frontend` aggregator, the `check-generated-contracts` aggregator, or the shard-ownership verifier did not complete successfully.
 
-`ci-required` is a pure result aggregator: it performs no repository operations (no checkout, no submodules, no Python/Node setup, no repository command) and has a short timeout. It evaluates every dependency and emits one annotation per failed, cancelled, timed-out, or unexpectedly skipped selected job before exiting, rather than stopping at the first failure. This keeps repository, submodule, and policy work off the serial tail of required CI.
+`ci-required` is a pure result aggregator: it performs no repository operations (no checkout, no submodules, no Python/Node setup, no repository command) and has a short timeout. It evaluates every dependency and emits one annotation per failed, cancelled, timed-out, or unexpectedly skipped selected job before exiting, rather than stopping at the first failure. For the consolidated backend suites it consumes only the `backend-matrix` aggregate result (selected when any of `unit_fast`, `api_component`, `temporal_boundary`, or `reliability_journey` is true, otherwise expecting `skipped`); per-row completion is never inferred from last-writer matrix outputs. This keeps repository, submodule, and policy work off the serial tail of required CI.
 
 `preflight-policy` owns the static repository guardrails — docs terminology, workflow terminology, removed-capability semantics, status-token domains, the status-token audit, the GitHub workflow display-name guard, and AgentSession deployment validation. These checks start immediately alongside `select-test-suites` and are no longer duplicated in `unit-fast` or `ci-required`. In CI, deployment validation consumes the exact event-derived changed-file list (`--changed-files-file`) computed by `tools/ci/compute_changed_files.sh`; local development still uses `--base-ref`.
 
@@ -265,12 +406,25 @@ Run hermetic integration CI:
 ./tools/test_integration.sh
 ```
 
-Run the hermetic reliability journeys:
+Run the hermetic reliability journeys (all shards):
 
 ```bash
 MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability \
   -m reliability_journey -q --durations=25
 ```
+
+Run one deterministic reliability shard locally (mirrors the CI matrix
+`ls | sort | awk 'NR % 4 == ...'` selection; shard 0 runs files 1, 5, 9, ...):
+
+```bash
+mapfile -t shard_files < <(ls tests/integration/reliability/test_*.py | sort | awk 'NR % 4 == 1')
+MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest "${shard_files[@]}" \
+  -m reliability_journey -q --durations=25
+```
+
+Shard 2 uses `NR % 4 == 2`, shard 3 uses `NR % 4 == 3`, and shard 4 uses
+`NR % 4 == 0`. `tools/verify_test_shard_ownership.py` assigns each file to
+the same shard via `reliability_shard_for_path()`.
 
 Run the checkpoint archive cold-resume replay directly:
 

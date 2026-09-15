@@ -724,17 +724,35 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
     assert '"test-frontend"' in workflow
     assert '"check-generated-contracts"' in workflow
     # Every selected backend gate is aggregated through require_selected.
+    # The four primary backend suites share one native matrix aggregate
+    # (MoonLadderStudios/MoonMind#4377); per-row completion is never inferred
+    # from last-writer matrix outputs.
     for gate in (
-        "unit-fast",
+        "backend-matrix",
         "unit-slow",
-        "api-component",
-        "temporal-boundary",
         "integration-ci",
-        "reliability-journey-checkpoint-resume",
         "omnigent-exact-artifact",
         "omnigent-deterministic-conformance",
     ):
         assert f'require_selected "{gate}"' in workflow, gate
+    for removed in (
+        "reliability-journey-checkpoint-resume",
+    ):
+        assert f'require_selected "{removed}"' not in workflow, removed
+    # The consolidated fast/boundary suites are enforced through the matrix
+    # aggregate, not as individual selected gates.
+    for consolidated in (
+        "unit-fast",
+        "api-component",
+        "temporal-boundary",
+    ):
+        assert f'require_selected "{consolidated}"' not in workflow, consolidated
+    # The matrix aggregate derives selection from all four selector outputs.
+    assert 'needs.select-test-suites.outputs.unit_fast' in workflow
+    assert 'needs.select-test-suites.outputs.api_component' in workflow
+    assert 'needs.select-test-suites.outputs.temporal_boundary' in workflow
+    assert 'needs.select-test-suites.outputs.reliability_journey' in workflow
+    assert 'needs.backend-matrix.result' in workflow
     # Wiring: each require_selected call must be reachable, not commented
     # out. A commented call still contains the string but never executes.
     reachable = [
@@ -743,12 +761,9 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
         if 'require_selected "' in line and not line.lstrip().startswith("#")
     ]
     for gate in (
-        "unit-fast",
+        "backend-matrix",
         "unit-slow",
-        "api-component",
-        "temporal-boundary",
         "integration-ci",
-        "reliability-journey-checkpoint-resume",
         "omnigent-exact-artifact",
         "omnigent-deterministic-conformance",
     ):
@@ -760,7 +775,7 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
     tail = workflow.split('if [[ "$failures" -gt 0 ]]; then')[-1]
     assert "exit 1" in tail.split("All required backend checks passed.")[0]
     # No `failures=0` reset may appear after the first require_selected call.
-    first_call = workflow.index('require_selected "unit-fast"')
+    first_call = workflow.index('require_selected "backend-matrix"')
     assert "failures=0" not in workflow[first_call:]
     # Execute the gate semantics: selected gates pass only on success.
     assert _run_aggregator([("unit-fast", "true", "success")]) == 0
