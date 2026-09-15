@@ -16,6 +16,38 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROVIDER_MARKERS = {"provider_verification", "requires_credentials"}
 
+# Deterministic reliability sharding (MoonLadderStudios/MoonMind#4377): the
+# backend matrix runs four isolated reliability shards. Files under
+# tests/integration/reliability/test_*.py are sorted lexicographically and
+# assigned round-robin (index % 4). This matches the CI workflow's
+# `ls ... | sort | awk 'NR % 4 == ...'` selection so local ownership and CI
+# execute the same file in the same shard.
+RELIABILITY_SHARD_COUNT = 4
+RELIABILITY_SHARD_NAMES = tuple(
+    f"reliability-shard-{index + 1}" for index in range(RELIABILITY_SHARD_COUNT)
+)
+
+
+def reliability_shard_for_path(path: str) -> str:
+    """Return the deterministic reliability shard owning a test path."""
+    import hashlib
+
+    filename = path.rsplit("/", 1)[-1]
+    try:
+        candidates = sorted(
+            p.name
+            for p in (REPO_ROOT / "tests" / "integration" / "reliability").glob(
+                "test_*.py"
+            )
+        )
+        if filename in candidates:
+            return RELIABILITY_SHARD_NAMES[candidates.index(filename) % RELIABILITY_SHARD_COUNT]
+    except OSError:
+        # Reliability directory unreadable; fall through to hash-based sharding.
+        pass
+    digest = int(hashlib.md5(path.encode("utf-8")).hexdigest(), 16)
+    return RELIABILITY_SHARD_NAMES[digest % RELIABILITY_SHARD_COUNT]
+
 
 @dataclass(frozen=True)
 class CollectedNode:
@@ -96,7 +128,7 @@ def owners(node: CollectedNode) -> set[str]:
         )
         and "reliability_journey" in markers
     ):
-        result.add("reliability-journey-checkpoint-resume")
+        result.add(reliability_shard_for_path(node.path))
     if "integration_ci" in markers:
         result.add("integration-ci")
     return result
