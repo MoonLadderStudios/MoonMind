@@ -431,20 +431,31 @@ def _is_host_absolute_path(path: Path | str) -> bool:
 
 
 def _docker_desktop_host_path(path: str) -> str | None:
-    """Translate a Windows drive path into Docker Desktop's daemon namespace.
+    """Translate Windows and WSL paths into Docker Desktop's daemon namespace.
 
-    The Linux deployment worker talks directly to the Desktop daemon. WSL's
-    user-distro ``/mnt/<drive>`` paths are not the daemon's host-file mounts.
+    The Linux deployment worker talks directly to the Desktop daemon. Both
+    Windows drive paths (``C:\\repo``) and WSL user-distro ``/mnt/<drive>``
+    paths are not the daemon's host-file mounts; they resolve to
+    ``/run/desktop/mnt/host/<drive>/...``. Longer ``/mnt/<name>`` mounts
+    (for example ``/mnt/data``) are genuine Linux mounts and pass through.
     """
 
     normalized = path.strip()
-    if len(normalized) < 3 or normalized[1] != ":" or not normalized[0].isalpha():
-        return None
-    tail = normalized[2:].replace("\\", "/").lstrip("/")
-    drive = normalized[0].lower()
-    if tail:
-        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
-    return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
+    if len(normalized) >= 2 and normalized[1] == ":" and normalized[0].isalpha():
+        tail = normalized[2:].replace("\\", "/").lstrip("/")
+        drive = normalized[0].lower()
+        if tail:
+            return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
+        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
+    unified = normalized.replace("\\", "/")
+    match = re.match(r"^/mnt/([A-Za-z])(?:/(.*))?$", unified)
+    if match:
+        drive = match.group(1).lower()
+        tail = (match.group(2) or "").lstrip("/")
+        if tail:
+            return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
+        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
+    return None
 
 
 def _remap_host_compose_path(
@@ -775,9 +786,21 @@ class HostDockerComposeRunner:
             *parts[2:],
         ]
 
-    def _uses_windows_host_project_dir(self) -> bool:
+    def _requires_desktop_host_rewrite(self) -> bool:
+        """Return True when the host project dir is not daemon-visible.
+
+        Docker Desktop on Windows serves host files from
+        ``/run/desktop/mnt/host/<drive>/...``. Both Windows drive-letter
+        paths (``C:\\repo``) and WSL distro mounts (``/mnt/<drive>/...``)
+        must be rewritten to that namespace before the daemon can mount
+        them. Native Linux host paths pass through unchanged.
+        """
         text = str(self.project_dir).strip()
-        return len(text) >= 2 and text[1] == ":" and text[0].isalpha()
+        if len(text) >= 2 and text[1] == ":" and text[0].isalpha():
+            return True
+        if re.match(r"^/mnt/[A-Za-z](?:/.*)?$", text.replace("\\", "/")):
+            return True
+        return False
 
     def _host_bind_source_for_local_path(self, local_source: str) -> str:
         local_dir = str(self._local_dir()).replace("\\", "/").rstrip("/")
@@ -1005,7 +1028,7 @@ class HostDockerComposeRunner:
         if requested_image:
             env["MOONMIND_IMAGE"] = requested_image
         temp_compose_file: Path | None = None
-        if self._uses_windows_host_project_dir() and self.local_project_dir:
+        if self._requires_desktop_host_rewrite() and self.local_project_dir:
             temp_compose_file = await self._write_windows_host_resolved_compose_file(env)
             resolved = self._compose_command(
                 command,
