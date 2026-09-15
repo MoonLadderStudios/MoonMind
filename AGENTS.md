@@ -107,7 +107,7 @@ When writing code that interacts with skills:
 
 ## UI and Visual Changes
 
-- All dashboard styling lives in one stylesheet: `frontend/src/styles/dashboard.css`. Shared design tokens (`--mm-*`) are defined at the top in `:root` (light theme) and `.dark` (dark theme); prefer tokens over hardcoded values.
+- All dashboard styling lives in one stylesheet: `frontend/src/styles/dashboard.css`. Shared design tokens (`--mm-*`) are defined at the top in `:root` (light theme) and `.dark` (dark theme); prefer tokens overhardcoded values.
 - Brand-critical rules are pinned by `frontend/src/styles/dashboardBrand.test.ts`; update its assertions in the same change as the style change.
 - Global element rules (for example the `button` rules) cascade into components, so a control's visible style may not be fully described by its own class rule. Check the full cascade, and remember `<a>`-based and `<button>`-based controls pick up different globals.
 - The masthead/nav renders its desktop layout at `min-width: 1181px`; below that it collapses to the mobile hamburger nav. Verify desktop visuals at a viewport at least that wide.
@@ -193,7 +193,7 @@ For behavior-preserving refactors, first establish passing tests for the behavio
 - **Frontend Test Prereqs**: Frontend unit tests require local Node/npm and repo JS dependencies from `package-lock.json`. `./tools/test_unit.sh` should prepare these automatically when dashboard tests are enabled. If `node_modules` is missing or stale relative to `package-lock.json`, the script runs `npm ci --no-fund --no-audit` before executing `npm run ui:test`.
 - **Targeted Test Runs**: Positional args to `./tools/test_unit.sh` filter Python tests only. They do not target a Vitest file. For focused frontend iteration, use `npm run ui:test -- <path>` after local JS deps are prepared, or use `./tools/test_unit.sh --ui-args <path>` to route Vitest targets through the test runner. Before preparing a PR, rerun the selector-equivalent targeted suite for the changed area; escalate to the full suite only for fail-open, broad, risky, or ambiguous changes.
 - **No Docker Assumption in Agent Jobs**: Do not assume the Docker socket is available inside MoonMind-managed agent workspaces. Containerized verification crosses the `container.*` service boundary; only the trusted worker talks to the system Docker endpoint.
-- **Hermetic Integration Tests**: Run the `integration_ci` suite only when the change affects an integration boundary listed in the taxonomy above or the selector/fail-open policy requires it. Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1`. Under the hood: `docker compose --project-name moonmind-test -f docker-compose.test.yaml run --rm pytest tests/integration -m 'integration_ci' -q --tb=short`.
+- **Hermetic Integration Tests**: Run the `integration_ci` suite only when the change affects an integration boundary listed in the taxonomy above or the selector/fail-open policy requires it. Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1`. Under the hood: `docker compose --project-name moonmind-test -f docker-compose.test.yaml run --rm pytest bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short"`.
 - **Compose Test Isolation**: Every Compose-backed test command must use an explicit test-only project name of `moonmind-test` or `moonmind-test-*`. Never run test setup or `down --remove-orphans` under the deployment project name (`moonmind`). Keep automatic test teardown enabled; isolate the project instead of skipping cleanup.
 - **Provider Verification**: Run live external-provider tests that require real credentials. Use `./tools/test_jules_provider.sh` (Bash) or `tools/test-provider.ps1`. These scripts fail fast if `JULES_API_KEY` is not set.
 - **GPU Qualification**: Run the real NVIDIA container journey on a deployment-owned GPU host with `./tools/test_gpu_qualification.sh`. It fails fast when `MOONMIND_GPU_QUALIFICATION_IMAGE` is unset, the Docker daemon exposes no NVIDIA runtime, or no immutable MoonMind revision is available, and it skips with an explicit reason when a bounded device probe finds no usable device. Records are published to a durable root outside the ephemeral run workspace (`MOONMIND_GPU_QUALIFICATION_RECORD_DIR`, default `var/gpu_qualification`). Never make the qualification image, command, or GPU count a MoonMind product setting.
@@ -238,7 +238,7 @@ When asked to check on a workflow, follow this procedure in order. If the root c
    docker exec moonmind-temporal-1 temporal workflow show \
      --namespace default --workflow-id "<workflow-id>" | tail -30
    ```
-   A healthy agent poll loop looks like: `ActivityTaskScheduled → Started → Completed → TimerStarted → TimerFired` repeating on ~10s intervals. If the last event is an `ActivityTaskScheduled` with no `Started` for minutes, the worker may be down or the task queue starved.
+   A healthy agent poll loop looks like: `ActivityTaskScheduled → Started → Completed → TimerStarted → Fired` repeating on ~10s intervals. If the last event is an `ActivityTaskScheduled` with no `Started` for minutes, the worker may be down or the task queue starved.
 
 4. **List workflows** when the ID is unknown or to find related runs:
    ```
