@@ -512,9 +512,18 @@ class Step:
             payload["source"] = self.source.to_payload()
         return payload
 
-@dataclass(frozen=True, slots=True)
+@dataclass
 class ToolFailure(Exception):
-    """Normalized failure envelope for skill execution."""
+    """Normalized failure envelope for skill execution.
+
+    NOTE: intentionally NOT frozen/slots. A frozen slots dataclass generates a
+    Python-level ``__setattr__`` whose zero-arg ``super()`` cell points at the
+    pre-recreation class, so any interpreter attribute assignment on a raised
+    instance (notably ``exc.__traceback__ = ...`` during ``with``/``async
+    with`` unwinding) explodes with ``super(type, obj): obj must be an
+    instance or subtype of type`` and masks the real failure. Plain dataclass
+    keeps field equality while BaseException handles interpreter machinery.
+    """
 
     error_code: str
     message: str
@@ -525,6 +534,10 @@ class ToolFailure(Exception):
     def __post_init__(self) -> None:
         _ensure_non_empty(self.error_code, field_name="error_code")
         _ensure_non_empty(self.message, field_name="message")
+        # BaseException stringifies from args; without this, tracebacks show a
+        # bare class name and hide the actionable message (e.g. failed phase,
+        # exit code, and command output carried in details).
+        object.__setattr__(self, "args", (self.message,))
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
