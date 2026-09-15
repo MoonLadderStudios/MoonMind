@@ -296,6 +296,45 @@ class FileDesiredStateStore:
         )
         return f"file:{env_path}"
 
+    async def merge(
+        self,
+        *,
+        env_updates: Mapping[str, Any] | None = None,
+        json_updates: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Merge keys into the desired-state files, preserving other entries.
+
+        Unlike :meth:`persist`, which rewrites the MoonMind image authority
+        from scratch, merge keeps every existing entry (including entries this
+        release did not author) and only adds or replaces the supplied keys.
+        Unparseable env lines are preserved verbatim so a merge never drops
+        operator content it cannot understand.
+        """
+        env_path = Path(self.env_file_path).expanduser()
+        json_path = (
+            Path(self.json_file_path).expanduser()
+            if self.json_file_path
+            else env_path.with_suffix(env_path.suffix + ".json")
+        )
+        await asyncio.to_thread(
+            _merge_desired_state_files,
+            env_path,
+            json_path,
+            dict(env_updates or {}),
+            dict(json_updates or {}),
+        )
+        return f"file:{env_path}"
+
+    def read(self) -> tuple[Mapping[str, str], Mapping[str, Any]]:
+        """Return the current desired-state env entries and JSON record."""
+        env_path = Path(self.env_file_path).expanduser()
+        json_path = (
+            Path(self.json_file_path).expanduser()
+            if self.json_file_path
+            else env_path.with_suffix(env_path.suffix + ".json")
+        )
+        return _read_desired_state_files(env_path, json_path)
+
 
 @dataclass(frozen=True, slots=True)
 class TemporalDeploymentEvidenceWriter:
@@ -3088,6 +3127,121 @@ def _write_desired_state_files(
     json_text = json.dumps(record, sort_keys=True, default=str, indent=2) + "\n"
     _atomic_write_bytes(
         json_path,
+        json_text.encode("utf-8"),
+        normalize_permissions=True,
+    )
+
+
+_ENV_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=\"(.*)\"$")
+
+
+def _unescape_desired_state_env_value(text: str) -> str:
+    """Invert :func:`_compose_env_value` for values this store wrote."""
+    out: list[str] = []
+    escaped = False
+    for char in text:
+        if escaped:
+            out.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        else:
+            out.append(char)
+    if escaped:
+        out.append("\\")
+    return "".join(out)
+
+
+def _parse_desired_state_env(
+    text: str,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """Split desired-state env text into entries and preserved lines.
+
+    Returns ``(entries, preserved)`` where entries are ``(key, value)``
+    pairs in file order (last duplicate wins) and preserved holds every
+    line this store did not author (comments, blanks, unparseable lines),
+    kept verbatim so merges never drop operator content.
+    """
+    entries: list[tuple[str, str]] = []
+    seen: dict[str, int] = {}
+    preserved: list[str] = []
+    for line in text.splitlines():
+        match = _ENV_LINE_RE.fullmatch(line.strip())
+        if match is None:
+            preserved.append(line)
+            continue
+        key = match.group(1)
+        value = _unescape_desired_state_env_value(match.group(2))
+        if key in seen:
+            entries[seen[key]] = (key, value)
+        else:
+            seen[key] = len(entries)
+            entries.append((key, value))
+    return entries, preserved
+
+
+def _read_desired_state_files(
+    env_path: Path,
+    json_path: Path,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Read desired-state files tolerantly; missing files read as empty."""
+    try:
+        env_text = env_path.expanduser().read_text(encoding="utf-8")
+    except OSError:
+        env_text = ""
+    entries, _preserved = _parse_desired_state_env(env_text)
+    try:
+        record_text = json_path.expanduser().read_text(encoding="utf-8")
+    except OSError:
+        return dict(entries), {}
+    try:
+        record = json.loads(record_text)
+    except ValueError:
+        return dict(entries), {}
+    if not isinstance(record, dict):
+        return dict(entries), {}
+    return dict(entries), record
+
+
+def _merge_desired_state_files(
+    env_path: Path,
+    json_path: Path,
+    env_updates: Mapping[str, Any],
+    json_updates: Mapping[str, Any],
+) -> None:
+    """Merge updates into desired-state files, preserving other entries."""
+    try:
+        env_text = env_path.expanduser().read_text(encoding="utf-8")
+    except OSError:
+        env_text = ""
+    entries, preserved = _parse_desired_state_env(env_text)
+    merged = dict(entries)
+    for key, value in env_updates.items():
+        text = _env_value(value)
+        if text:
+            merged[str(key)] = text
+        else:
+            merged.pop(str(key), None)
+    ordered = [(key, merged[key]) for key, _ in entries if key in merged]
+    ordered.extend(
+        (str(key), merged[str(key)])
+        for key in env_updates
+        if _env_value(env_updates[key]) and str(key) not in dict(entries)
+    )
+    lines = [f'{key}="{_compose_env_value(value)}"\n' for key, value in ordered]
+    lines.extend(
+        line + "\n" for line in preserved if line.strip()
+    )
+    _atomic_write_bytes(
+        env_path.expanduser(),
+        "".join(lines).encode("utf-8"),
+        normalize_permissions=True,
+    )
+    _existing_env, record = _read_desired_state_files(env_path, json_path)
+    record = {**record, **{str(k): v for k, v in json_updates.items()}}
+    json_text = json.dumps(record, sort_keys=True, default=str, indent=2) + "\n"
+    _atomic_write_bytes(
+        json_path.expanduser(),
         json_text.encode("utf-8"),
         normalize_permissions=True,
     )
