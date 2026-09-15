@@ -682,6 +682,72 @@ def reset_operator_image_configuration() -> None:
     _operator_image_baseline = None
 
 
+# Static Compose profiles are opt-in (never part of the default idle-service
+# count). When an operator requests them, the resolved shared host image is
+# launch authority for the static rows, so it must be digest-pinned before
+# admission. Mutable ``OMNIGENT_SHARED_HOST_IMAGE`` /
+# ``OMNIGENT_SHARED_HOST_IMAGE_TAG`` construction is a development/bootstrap
+# input only: this module resolves it to a digest and persists it as
+# ``OMNIGENT_SHARED_HOST_IMAGE_REF``; the gate below fails closed when that
+# resolution produced no digest (unset, pull failure, or invalid pin).
+STATIC_HOST_COMPOSE_PROFILES: tuple[str, ...] = (
+    "omnigent-host-codex",
+    "omnigent-host-claude",
+)
+
+
+def static_host_profiles_requested(
+    *, env: Mapping[str, str] | None = None
+) -> tuple[str, ...]:
+    """Return the static host Compose profiles the operator requested.
+
+    ``COMPOSE_PROFILES`` (comma- or space-separated, as Compose accepts)
+    is the only signal: static services stay out of the default
+    idle-service count and are admitted only when explicitly selected.
+    """
+
+    source = os.environ if env is None else env
+    raw = str(source.get("COMPOSE_PROFILES") or "")
+    selected = {
+        part.strip() for part in raw.replace(",", " ").split() if part.strip()
+    }
+    return tuple(
+        profile for profile in STATIC_HOST_COMPOSE_PROFILES if profile in selected
+    )
+
+
+def require_static_host_image_authority(
+    *,
+    env: Mapping[str, str] | None = None,
+    shared_ref: str | None,
+) -> str:
+    """Fail closed unless a digest-pinned static launch image is resolved.
+
+    This is the bootstrap persistence boundary for the static rows
+    (MoonLadderStudios/MoonMind#3936 R3): ``shared_ref`` is the resolved
+    ``OMNIGENT_SHARED_HOST_IMAGE_REF`` about to be persisted/exported.
+    The bounded legacy ``OMNIGENT_HOST_IMAGE_REF`` alias is honored only
+    when the shared ref is unset, mirroring
+    ``moonmind.omnigent.harness_platform.static_hosts.resolve_effective_static_host_image``.
+    Anything else (unset, mutable tag, invalid pin) raises instead of
+    admitting a static launch on an unqualified image.
+    """
+
+    source = os.environ if env is None else env
+    cleaned = str(shared_ref or "").strip()
+    if cleaned and _is_digest_pinned(cleaned):
+        return cleaned
+    legacy = str(source.get("OMNIGENT_HOST_IMAGE_REF") or "").strip()
+    if not cleaned and legacy and _is_digest_pinned(legacy):
+        return legacy
+    raise RuntimeError(
+        "static host launch is not admitted: OMNIGENT_SHARED_HOST_IMAGE_REF "
+        "must resolve to a digest-pinned image ref before static Compose "
+        "profiles launch (mutable IMAGE/TAG construction is a "
+        "development/bootstrap input only)"
+    )
+
+
 async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
     """Resolve, persist, and export the deployment's immutable image identities.
 
@@ -701,6 +767,19 @@ async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
     from moonmind.omnigent.bootstrap.store import save_resolved_state
 
     state = await resolve_omnigent_images(operator_image_configuration())
+    requested_static_profiles = static_host_profiles_requested(
+        env=operator_image_configuration()
+    )
+    if requested_static_profiles:
+        # The operator admitted static rows into this deployment: the
+        # resolved shared image is their launch authority, so it must be
+        # digest-pinned before anything persists or exports it. Mutable or
+        # missing resolution fails this reconciliation pass instead of
+        # launching an unqualified static image.
+        require_static_host_image_authority(
+            env=operator_image_configuration(),
+            shared_ref=state.shared_host_image_ref,
+        )
     save_resolved_state(state)
     exported = {
         "OMNIGENT_IMAGE_REF": state.server_image_ref,
