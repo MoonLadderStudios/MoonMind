@@ -645,6 +645,7 @@ def test_backend_matrix_keeps_setup_isolated_per_row() -> None:
     start = steps["Start isolated reliability dependencies"]["run"]
     assert "moonmind-reliability-${{ matrix.suite }}" in start
     assert "tests/integration/reliability/compose.yaml up -d --wait" in start
+    assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" in start
     assert steps["Start isolated reliability dependencies"].get("if", "").startswith(
         "startsWith(matrix.suite, 'reliability-')"
     )

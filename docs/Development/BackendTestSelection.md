@@ -152,7 +152,10 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   build images or start Compose services. Reliability rows run serial
   pytest (no `-n`) inside their own isolated Compose
   PostgreSQL/Temporal/MinIO under per-shard Docker project names
-  (`moonmind-reliability-reliability-shard-N`).
+  (`moonmind-reliability-reliability-shard-N`). The setup step exports
+  `MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-<suite>_default` so
+  fixture tests attach to their row's isolated Compose network instead of
+  the retired single-job `moonmind-reliability-qualification_default`.
 - Per-test (`--timeout 600`), job (`timeout-minutes: 30`), and cleanup
   (`always()` compose `down -v`) bounds are preserved on every row.
 - Each row writes a uniquely named junit report
