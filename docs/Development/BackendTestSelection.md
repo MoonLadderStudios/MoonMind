@@ -216,6 +216,35 @@ assigned round-robin (`index % 4`). The CI workflow implements this with
 implements the same rule in `reliability_shard_for_path()` so local
 ownership checks and CI execute each file in the same shard.
 
+#### Shard balance measurement (MoonLadderStudios/MoonMind#4365 R1/R8)
+
+Real collection run 2026-09-15 on the current candidate
+(`moonmind container python-tests -- tests/integration/reliability
+--collect-only -q -m reliability_journey`,
+container-job:2ef0af441b3342abbd67d58e19e572a1,
+logsRef art_01M2JHZAA88KPG3YK0PPAKCBWK): 57 files expand to 616
+parameterized nodes (matching the epic's observed 616-test baseline).
+
+| Shard | Files | Nodes |
+| --- | ---: | ---: |
+| reliability-shard-1 | 15 | 99 |
+| reliability-shard-2 | 14 | 102 |
+| reliability-shard-3 | 14 | 301 |
+| reliability-shard-4 | 14 | 114 |
+
+File counts are balanced within one (pinned by
+`test_reliability_shard_file_counts_are_balanced`). Node counts are not:
+`test_escaped_failure_journeys.py` contributes 206 nodes to shard-3 and
+`test_omnigent_model_catalog_refresh.py` contributes 58 nodes to shard-1.
+Parameterized expansions stay on their file's shard by construction, so
+exact-once ownership holds despite the imbalance. No file reassignment is
+made on node counts alone: node count is not wall-time, and the heavy
+replay corpus may be fast per test. Wall-time rebalancing, if needed, uses
+the per-shard `pytest-backend-<suite>-durations.json` snapshots and slowest
+reports from CI runs under the enforced 8-minute step / 12-minute job
+ceilings; that timing evidence is still missing and remains the documented
+next step for R1/R10.
+
 ### Reliability Docker Fixture Layers (MoonLadderStudios/MoonMind#4376)
 
 No additional GHA cache is added for reliability shards. Measured-gap
