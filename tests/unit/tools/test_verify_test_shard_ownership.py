@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from tools.verify_test_shard_ownership import CollectedNode, owners, verify
+from tools.verify_test_shard_ownership import (
+    RELIABILITY_SHARD_NAMES,
+    CollectedNode,
+    owners,
+    reliability_shard_for_path,
+    verify,
+)
 
 
 def _node(path: str, *markers: str) -> CollectedNode:
@@ -19,6 +25,37 @@ def test_each_backend_shard_has_one_owner() -> None:
 
     assert verify(nodes) == []
     assert owners(nodes[3]) == {"unit-slow"}
+    # Each reliability file owns exactly one deterministic shard.
+    reliability_owner = owners(nodes[4])
+    assert len(reliability_owner) == 1
+    assert next(iter(reliability_owner)) in set(RELIABILITY_SHARD_NAMES)
+    assert next(iter(reliability_owner)) == reliability_shard_for_path(
+        "tests/integration/reliability/test_a.py"
+    )
+
+
+def test_reliability_shards_are_deterministic_and_cover_all_files() -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    files = sorted(
+        p.name
+        for p in (repo_root / "tests" / "integration" / "reliability").glob(
+            "test_*.py"
+        )
+    )
+    assert len(files) > 4
+    shards = {
+        reliability_shard_for_path(f"tests/integration/reliability/{name}")
+        for name in files
+    }
+    assert shards == set(RELIABILITY_SHARD_NAMES)
+    # Round-robin stability: the first four sorted files own distinct shards.
+    first_four = {
+        reliability_shard_for_path(f"tests/integration/reliability/{name}")
+        for name in files[:4]
+    }
+    assert len(first_four) == 4
 
 
 def test_verifier_reports_missing_duplicate_and_marker_conflicts() -> None:
