@@ -9182,14 +9182,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     branchMetadataQuery.data?.defaultBranch,
     branchOptionsQuery.data?.defaultBranch,
   ]);
-  // Submission reads the synchronous draft ref; the settled copy drives only
-  // optional status evidence. An untouched field falls back to the default
-  // branch on create so opening the form never requires enumeration.
+  // Render-time snapshot for status evidence only; submission reads the live
+  // draft ref inside `handleSubmit` (see `submissionBranch`) so a Start pressed
+  // within the settle debounce never reuses the prior settled value. An
+  // authored-then-cleared field stays empty; only an untouched field falls back
+  // to the default branch on create so opening the form never requires enumeration.
   const settledBranchText = branchSettled.trim();
   const draftBranchText = (branchDraftRef.current || "").trim();
   const effectiveBranch =
     draftBranchText ||
-    settledBranchText ||
     (!isBranchTouched && pageMode.mode === "create" && submittedRepository
       ? defaultBranch
       : "");
@@ -10887,6 +10888,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       releaseSubmitArrowExit();
     };
     const normalizedRepository = repository.trim();
+    // Read the live branch draft inside submission. The render-time
+    // `effectiveBranch` is stale when Start is pressed within the settle
+    // debounce: only the child's local state and `branchDraftRef` have updated,
+    // so the closure would reuse the prior/default branch. An
+    // authored-then-cleared field must submit empty, never the prior settled value.
+    const liveDraftBranchText = (branchDraftRef.current || "").trim();
+    const liveBranchTouched = branchTouched || branchTouchedRef.current;
+    const submissionBranch =
+      liveDraftBranchText ||
+      (!liveBranchTouched && pageMode.mode === "create" && normalizedRepository
+        ? defaultBranch
+        : "");
     if (normalizedRepository && !isValidRepositoryInput(normalizedRepository)) {
       setSubmitMessage(
         "Repository must be owner/repo, https://<host>/<path>, or git@<host>:<path> (token-free).",
@@ -10894,11 +10907,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       clearSubmitBusy();
       return;
     }
-    if (normalizedRepository && !effectiveBranch) {
+    if (normalizedRepository && !submissionBranch) {
       setSubmitMessage(
         branchMetadataQuery.isLoading
           ? "Wait for the repository default branch to load, or enter a branch before starting this workflow."
-          : isBranchTouched
+          : liveBranchTouched
             ? "Choose a branch before starting this repository-backed workflow."
             : branchSearchRequested && branchOptionsQuery.isError
               ? "The repository default branch could not be loaded. Enter a branch before starting this workflow."
@@ -11201,7 +11214,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             mode: effectivePublishMode,
           }
         : { mode: effectivePublishMode };
-    if (effectivePublishMode === "branch" && !effectiveBranch) {
+    if (effectivePublishMode === "branch" && !submissionBranch) {
       setSubmitMessage(
         "Choose a branch before saving or rerunning this publish-mode workflow.",
       );
@@ -12150,13 +12163,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       priority: effectivePriority,
       maxAttempts: effectiveMaxAttempts,
       payload: {
-        ...(normalizedRepository && effectiveBranch
+        ...(normalizedRepository && submissionBranch
           ? {
               repository: {
                 provider: "git",
                 connectionRef: "repository-connection:git-default",
                 repository: { name: normalizedRepository },
-                branch: { name: effectiveBranch },
+                branch: { name: submissionBranch },
               },
             }
           : {}),
@@ -12490,8 +12503,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       }
       // Record explicit accepted submissions as honest user-scoped recency.
       // Intermediate keystrokes are never recorded.
-      if (normalizedRepository && effectiveBranch) {
-        writeRecentBranch(normalizedRepository, effectiveBranch);
+      if (normalizedRepository && submissionBranch) {
+        writeRecentBranch(normalizedRepository, submissionBranch);
       }
       navigateTo(redirectPath);
       didNavigateAfterCreate = true;

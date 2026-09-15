@@ -388,6 +388,89 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
     // A full-name paste needs exact resolution only, never suggestions.
     expect(branchRequestUrls.length).toBe(0);
   });
+
+  it("submits the live branch draft when Start is pressed within the settle debounce", async () => {
+    // P1: typing then immediately submitting must use the live draft ref, not
+    // the render-time settled value. Clearing then submitting must not reuse
+    // the prior settled branch.
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ workflowId: "mm:live-branch" }),
+        } as Response);
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: ["moonspec-orchestrate"] } }),
+        } as Response);
+      }
+      if (url.startsWith("/api/github/branches/resolve")) {
+        resolveRequestUrls.push(url);
+        const parsed = new URL(url, "http://localhost");
+        const branch = String(parsed.searchParams.get("branch") || "");
+        return Promise.resolve({
+          ok: true,
+          json: async () => resolvePayload(branch),
+        } as Response);
+      }
+      if (url.startsWith("/api/github/branches/metadata")) {
+        metadataRequestUrls.push(url);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ defaultBranch: "main", error: null }),
+        } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        branchRequestUrls.push(url);
+        return Promise.resolve({
+          ok: true,
+          json: async () => branchListPayload(),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      if (url.startsWith("/api/presets")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [] }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const branchInput = (await screen.findByLabelText("Branch", {
+      selector: "input",
+    })) as HTMLInputElement;
+    const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
+    fireEvent.change(instructions, { target: { value: "Verify live branch submission." } });
+    // Type a new branch and submit immediately, before the 600ms settled
+    // commit fires. The request must carry the typed value.
+    fireEvent.change(branchInput, { target: { value: "feature/live-draft-branch" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(
+      () => {
+        const call = fetchSpy.mock.calls.find(
+          ([url, init]) =>
+            String(url) === "/api/executions" && (init as RequestInit)?.method === "POST",
+        );
+        expect(call).toBeTruthy();
+      },
+      { timeout: 5000 },
+    );
+    const createCall = fetchSpy.mock.calls.find(
+      ([url, init]) =>
+        String(url) === "/api/executions" && (init as RequestInit)?.method === "POST",
+    );
+    const request = JSON.parse(String((createCall?.[1] as RequestInit)?.body));
+    expect(request.payload.repository.branch.name).toBe("feature/live-draft-branch");
+  });
 });
 
 describe("branch picker helpers", () => {
