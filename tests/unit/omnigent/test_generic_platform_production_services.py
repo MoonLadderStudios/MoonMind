@@ -1908,21 +1908,21 @@ async def test_writer_ref_reuses_qualified_local_instead_of_pulling(
 ) -> None:
     """Patch/SHA drift reuses a qualified same-repo image without a 7GB pull."""
 
-    import moonmind.omnigent.host_image_drift as drift
-
     requested = "ghcr.io/example/opencode@sha256:" + "a" * 64
     fallback = "ghcr.io/example/opencode@sha256:" + "b" * 64
     monkeypatch.setattr(
-        drift, "_candidate_deployed_refs", lambda: [fallback]
+        "moonmind.omnigent.host_image_drift._candidate_deployed_refs",
+        lambda: [fallback],
     )
     monkeypatch.setattr(
-        drift,
-        "_provenance_map",
+        "moonmind.omnigent.host_image_drift._provenance_map",
         lambda: {
             fallback: {"version": "0.13.1", "buildDigest": "sha256:" + "d" * 64}
         },
     )
-    monkeypatch.setattr(drift, "_operator_pins", lambda: [])
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_image_drift._operator_pins", lambda: []
+    )
 
     class DriftBackend(_DockerBackend):
         def __init__(self) -> None:
@@ -1958,13 +1958,18 @@ async def test_writer_ref_rejects_unqualified_same_repo_fallback(
 ) -> None:
     """Same-repo drift without observed provenance still pulls exact."""
 
-    import moonmind.omnigent.host_image_drift as drift
-
     requested = "ghcr.io/example/opencode@sha256:" + "a" * 64
     fallback = "ghcr.io/example/opencode@sha256:" + "b" * 64
-    monkeypatch.setattr(drift, "_candidate_deployed_refs", lambda: [fallback])
-    monkeypatch.setattr(drift, "_provenance_map", lambda: {})
-    monkeypatch.setattr(drift, "_operator_pins", lambda: [])
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_image_drift._candidate_deployed_refs",
+        lambda: [fallback],
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_image_drift._provenance_map", lambda: {}
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.host_image_drift._operator_pins", lambda: []
+    )
 
     class MissingBackend(_DockerBackend):
         def __init__(self) -> None:
