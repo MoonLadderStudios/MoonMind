@@ -1517,7 +1517,6 @@ def _run_cancel_owned(args: argparse.Namespace, artifacts_dir: Path) -> int:
             continue
         status = str(item.get("status") or "").strip().lower()
         workflow_id = _text(item.get("workflowId"))
-        target_ref = _text(item.get("targetRef")) or "(unknown)"
         if not workflow_id or status not in {"queued", "running", "unknown", "waiting"}:
             per_target.append(dict(item))
             continue

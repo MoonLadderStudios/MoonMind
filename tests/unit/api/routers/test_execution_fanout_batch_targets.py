@@ -38,8 +38,15 @@ def batch_client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
     app = FastAPI()
     app.include_router(router)
     service = AsyncMock()
-    app.dependency_overrides[_get_service] = lambda: service
-    app.dependency_overrides[get_temporal_client] = lambda: AsyncMock()
+
+    def _override_batch_service():  # noqa: ANN202 - FastAPI dependency override
+        return service
+
+    def _override_batch_temporal_client():  # noqa: ANN202 - FastAPI dependency override
+        return AsyncMock()
+
+    app.dependency_overrides[_get_service] = _override_batch_service
+    app.dependency_overrides[get_temporal_client] = _override_batch_temporal_client
     user = _override_user_dependencies(app, is_superuser=False)
     # Fan-out tests authenticate via the execution-scoped bearer; the
     # session fallback must not deny the request before that boundary.
