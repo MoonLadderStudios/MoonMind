@@ -617,7 +617,7 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     assert "needs.select-test-suites.outputs.api_component" in job_if
     assert "needs.select-test-suites.outputs.temporal_boundary" in job_if
     assert "needs.select-test-suites.outputs.reliability_journey" in job_if
-    assert job["timeout-minutes"] == 30
+    assert job["timeout-minutes"] == 12
     strategy = job["strategy"]
     # Native matrix fail-fast for PR/merge-group validation, disabled for
     # scheduled diagnostics.
@@ -764,12 +764,13 @@ def test_reliability_shards_enforce_short_step_and_test_deadlines() -> None:
     serial-era 600s) and caps the whole pytest invocation at 8 minutes via
     ``timeout 480s``. The 124 exit from ``timeout`` flows through
     ``PIPESTATUS`` so the evidence hook reports an interrupted run instead
-    of masking it, and the 30-minute job timeout stays the outer backstop
-    while per-shard setup variance is measured.
+    of masking it, and the 12-minute job timeout enforces the hard job
+    ceiling from MoonLadderStudios/MoonMind#4369 (setup, 8-minute test
+    step, bounded diagnostics and cleanup per shard).
     """
     workflow = _load_workflow()
     job = workflow["jobs"]["backend-matrix"]
-    assert job["timeout-minutes"] == 30
+    assert job["timeout-minutes"] == 12
     steps = {step["name"]: step for step in job["steps"]}
     command = steps["Run hermetic reliability shard"]["run"]
     assert "timeout 480s python -m pytest" in command

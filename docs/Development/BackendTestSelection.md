@@ -159,8 +159,9 @@ only fixed trusted pytest commands with ordinary quoted parameters.
 - Per-test (`--timeout 600` on fast rows, `--timeout 300` on reliability
   shards), step (`timeout 480s` around each reliability pytest invocation:
   the 8-minute hard step ceiling from MoonLadderStudios/MoonMind#4369), job
-  (`timeout-minutes: 30` as the outer backstop while per-shard setup
-  variance is measured), and cleanup (`always()` compose `down -v`,
+  (`timeout-minutes: 12`: the 12-minute hard job ceiling from
+  MoonLadderStudios/MoonMind#4369 covering setup, test step, bounded
+  diagnostics and cleanup per shard), and cleanup (`always()` compose `down -v`,
   wrapped in `timeout 100s`) bounds are preserved on every row. Reliability collection steps are additionally
   wrapped in `timeout 100s`/`timeout 60s` so one slow diagnostic command
   cannot stall the row; each command records its own failure to
@@ -215,6 +216,25 @@ assigned round-robin (`index % 4`). The CI workflow implements this with
 implements the same rule in `reliability_shard_for_path()` so local
 ownership checks and CI execute each file in the same shard.
 
+### Reliability Docker Fixture Layers (MoonLadderStudios/MoonMind#4376)
+
+No additional GHA cache is added for reliability shards. Measured-gap
+analysis: `tests/integration/reliability/compose.yaml` declares only
+registry images (`minio`, `postgres`, `temporalio/auto-setup`) with no
+`build` section, and its sole volume mount is the read-only Temporal
+dynamic config (`:ro`). There are therefore no local Dockerfile layers to
+cache — `docker compose up` natively reuses the pulled registry layers,
+and each shard runs them under its own Compose project
+(`moonmind-reliability-<suite>`) with per-shard networks/volumes, so no
+mutable release state is shared. This is pinned by
+`test_reliability_fixtures_reuse_registry_layers_without_shared_state`.
+By contrast, `integration-ci` and `omnigent-exact-artifact` do build local
+images (`api_service/Dockerfile` `test-runtime` / exact artifact) and
+already carry GHA layer caches (`cache-from`/`cache-to` with dedicated
+scopes); that is where layer caching demonstrably applies. If reliability
+`compose.yaml` later gains a `build` section, revisit caching there —
+until then an extra cache subsystem would be redundant machinery.
+
 Diagnostic limitation: a canceled sibling may exit before writing its
 junit report or Compose logs. Cancellation uploads are best-effort
 (`||` fallbacks, `if-no-files-found: warn/error` per artifact) and the
@@ -237,9 +257,9 @@ success-path text log/JUnit upload, `-q` reliability verbosity):
    `ls tests/integration/reliability/test_*.py | sort`).
 2. Fix the revision/configuration: compare runs on the same commit (or
    adjacent commits with no test/workflow changes), same workflow file,
-   same fast-row (`--timeout 600`) and reliability-shard (`--timeout 300`
-   with a `timeout 480s` step cap) bounds, same `timeout-minutes: 30`
-   outer job backstop, same runner class (`ubuntu-latest`).
+    same fast-row (`--timeout 600`) and reliability-shard (`--timeout 300`
+    with a `timeout 480s` step cap) bounds, same `timeout-minutes: 12`
+    hard job ceiling, same runner class (`ubuntu-latest`).
 3. Repeat each side at least twice to separate ordinary timing noise from a
    real shift; do not add a performance gate on the result.
 4. Separate cold and warm setup: record dependency-install/Compose-pull
@@ -451,8 +471,10 @@ durable artifact evidence to restore a distinct destination and retries the
 restore idempotently. It exercises production capture/restore engines and the
 artifact boundary, but does not substitute for the Temporal-to-managed-AgentRun
 journey. Each reliability pytest invocation is capped by an 8-minute step
-timeout with a 300-second per-test bound; the 30-minute job timeout remains
-the outer backstop.
+timeout with a 300-second per-test bound inside a 12-minute hard job
+ceiling; per-shard Compose pull/setup variance must fit the remaining
+job budget after the step cap, bounded diagnostics (`timeout 100s` /
+`timeout 60s`) and bounded cleanup (`timeout 100s`).
 
 Verify that every eligible provider-free node has exactly one owner:
 
