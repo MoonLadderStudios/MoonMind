@@ -810,18 +810,6 @@ async def compile_and_persist_execution_plan(
         raise ValueError("launch policy execution profile conflicts with Agent Profile")
     if str(effective_launch.get("harness") or "") != harness_id:
         raise ValueError("launch policy harness conflicts with Agent Profile")
-    policy_artifact_ref, policy_artifact_digest = await persist_json_artifact(
-        artifact_service=artifact_service,
-        principal=principal,
-        artifact_class="omnigent.launch_policy_snapshot",
-        payload=policy_snapshot,
-    )
-    effective_launch_ref, effective_launch_digest = await persist_json_artifact(
-        artifact_service=artifact_service,
-        principal=principal,
-        artifact_class="omnigent.effective_launch_snapshot",
-        payload=effective_launch,
-    )
     if isinstance(exact_harness, HarnessRecord):
         harness_record = exact_harness
         implementation = harness_record.implementation
@@ -909,10 +897,47 @@ async def compile_and_persist_execution_plan(
             requested_host_mode=str(effective_launch.get("hostMode") or ""),
             requested_host_class_ref=config["hostClassRef"],
         )
-    if host_class.imageRef != str(effective_launch.get("hostImageRef") or ""):
-        raise ValueError(
-            "effective launch host image conflicts with the selected Host Class"
+    # Rebuilt host images change SHA/patch while keeping the same repository.
+    # The persisted policy snapshot may still pin the previous digest while
+    # Host Class selection reads current deployment evidence. Same-repository
+    # drift is reconciled to the selected Host Class image (launch-time
+    # attestation re-verifies major.minor); a foreign repository still fails
+    # closed instead of substituting another image family.
+    if harness_id != "codex-native" and host_class.imageRef != str(
+        effective_launch.get("hostImageRef") or ""
+    ):
+        from moonmind.omnigent.host_image_drift import (
+            reconcile_effective_launch_to_selected_host,
         )
+
+        reconciled = reconcile_effective_launch_to_selected_host(
+            effective_launch, host_class.imageRef
+        )
+        if reconciled is None:
+            raise ValueError(
+                "effective launch host image conflicts with the selected Host Class"
+            )
+        import logging
+
+        logging.getLogger(__name__).info(
+            "planning host image drift: reconciling same-repo policy "
+            "image to selected Host Class (planned=%s selected=%s)",
+            str(effective_launch.get("hostImageRef") or "")[:80],
+            host_class.imageRef[:80],
+        )
+        effective_launch = reconciled
+    policy_artifact_ref, policy_artifact_digest = await persist_json_artifact(
+        artifact_service=artifact_service,
+        principal=principal,
+        artifact_class="omnigent.launch_policy_snapshot",
+        payload=policy_snapshot,
+    )
+    effective_launch_ref, effective_launch_digest = await persist_json_artifact(
+        artifact_service=artifact_service,
+        principal=principal,
+        artifact_class="omnigent.effective_launch_snapshot",
+        payload=effective_launch,
+    )
     raw_architectures = effective_launch.get("architectures") or []
     host_architecture = str(raw_architectures[0] if raw_architectures else "").strip()
     if host_architecture and "/" not in host_architecture:
