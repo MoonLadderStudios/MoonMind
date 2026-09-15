@@ -3,10 +3,13 @@
 **Document Class:** Canonical declarative  
 **Viewpoint:** Module Architecture View  
 **Status:** Draft  
+**Application Model:** Single-user\
+**Superseded Scope:** Human-user ownership, tenancy scopes, and human-role permissions\
+**Superseded By:** [Single-User Application Design](../SingleUserApplicationDesign.md#5-instance-settings-presets-and-preferences)\
 **Owners:** MoonMind Engineering  
-**Updated:** 2026-09-06  
+**Updated:** 2026-09-14\
 **Audience:** Settings, API, dashboard, runtime, and security contributors and operators  
-**Authority:** Settings catalog, scoped configuration resolution, persistence, audit, and retirement behavior. Workflow Publishing owns publication selection and composition-default semantics.  
+**Authority:** Instance settings catalog, configuration resolution, persistence, audit, and retirement behavior, subject to the single-user scope authority below. Workflow Publishing owns publication selection and composition-default semantics.\
 **Owning Surface:** Settings registry/resolver, scoped override services, and Settings UI  
 **Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md), [Codex via Omnigent Create-to-host contract](../Omnigent/CodexCreateToHostContract.md), [Workflow Publishing](../Workflows/WorkflowPublishing.md)  
 **Related Implementation:** `moonmind/config/settings.py`, `api_service/services/settings_migrations.py`, `api_service/services/settings_backup.py`.
@@ -19,11 +22,47 @@ nested harness `codex-native`, reconciled end-to-end by
 
 > [!NOTE]
 > This document defines the desired-state MoonMind Settings System.
-> It is a declarative contract for how the dashboard exposes, validates, persists, resolves, audits, and safely applies user, workspace, provider, secret, and operational configuration.
+> It is a declarative contract for how the dashboard exposes, validates, persists, resolves, audits, and safely applies instance, provider, secret, and operational configuration.
 >
 > This document is not an implementation checklist. Rollout sequencing, migration tasks, and backlog tickets belong in MoonSpec artifacts, gitignored handoffs, or `docs/tmp/` implementation plans. Publication-default retirement below is target behavior and requires coordinated implementation before new authoring is enabled.
 
 ---
+
+## Single-user scope authority
+
+The [single-user application model](../MoonMindArchitecture.md#single-user-application-model)
+and [Single-User Application Design](../SingleUserApplicationDesign.md#5-instance-settings-presets-and-preferences)
+replace this document's human ownership, tenancy, and human-role requirements.
+There is one instance configuration experience. It needs no `User`, membership,
+role matrix, or user-scoped settings lookup. Project, repository, provider, and
+runtime contexts remain only where they represent actual configuration needs.
+They are not tenants and do not imply a mandatory workspace record.
+
+**Classification of retained examples:** Throughout this document, user/workspace
+inheritance as a human permission model, human scope selectors, account-linked
+schema columns, user-specific APIs, actor-user fields, role tables, and a settings
+RBAC service are **superseded predecessor references**. Their occurrences in
+summaries, descriptor examples, schema/API examples, flows, test expectations,
+and component suggestions do not define single-user desired state. Consumers
+must not implement those examples as new account requirements. Existing endpoint
+and payload shapes are not changed by this design-only classification.
+
+The target uses instance overrides rather than per-person overrides. Reset,
+validation, effective-value explanations, source policy, concurrent-write
+protection, and reload semantics remain. Instance defaults and meaningful
+project/runtime contexts replace human inheritance without a new generic scope
+framework. The dashboard preserves the navigation owned by
+[Settings Configuration Pages](../UI/SettingsPage.md), but exposes instance
+configuration rather than user/workspace membership or personal permissions.
+
+Operator admission and scoped machine authority replace the human permission
+matrix, not policy enforcement. Secret confidentiality, reference-only storage,
+locked values, destructive-operation approval, and redacted audit remain required.
+A source containing multiple people's data is not flattened into instance
+settings: its conversion follows the
+[upgrade eligibility and disposition](../SingleUserApplicationDesign.md#upgrade-eligibility-and-disposition).
+This classification does not authorize bypassing existing enforcement before a
+protected implementation cutover.
 
 ## 1. Summary
 
@@ -416,7 +455,10 @@ It defines:
 
 A scope defines where an override applies.
 
-Supported desired-state scopes:
+The target scope is the instance, with meaningful configuration contexts as
+specified in [Single-user scope authority](#single-user-scope-authority).
+
+Legacy scope vocabulary retained for account-era implementations only:
 
 - `user`
 - `workspace`
@@ -788,7 +830,7 @@ The coordinated implementation removes the active backend descriptor/config fiel
 
 ### 11.1 Settings Overrides Table
 
-Desired-state scoped override storage:
+Predecessor scoped override example. Human-user and tenancy columns are not part of the target schema:
 
 ```sql
 CREATE TABLE settings_overrides (
@@ -810,7 +852,7 @@ CREATE TABLE settings_overrides (
 
 ### 11.2 Settings Audit Table
 
-Desired-state audit storage:
+Predecessor audit example. Historical actor IDs may remain as provenance, not an account dependency:
 
 ```sql
 CREATE TABLE settings_audit_events (
@@ -868,6 +910,11 @@ It does not delete:
 ---
 
 ## 12. API Contract
+
+Human-scope route and query examples below are predecessor wire references,
+not the single-user target API. Their classification is owned by
+[Single-user scope authority](#single-user-scope-authority). Existing clients
+retain the implemented contract until its coordinated replacement.
 
 ### 12.1 Catalog APIs
 
@@ -1191,6 +1238,11 @@ User / Workspace settings may select default provider profiles or provider selec
 
 ## 16. User / Workspace Settings
 
+This section's human scope and inheritance model is a predecessor reference.
+The useful preferences become instance settings or meaningful configuration
+contexts, not separate people or tenancy boundaries. See
+[Single-user scope authority](#single-user-scope-authority).
+
 ### 16.1 User Settings
 
 User settings describe personal preferences and defaults.
@@ -1403,9 +1455,14 @@ If a setting requires restart, the UI must show:
 
 ## 20. Authorization Model
 
+The target checks operator admission and operation-specific policy, with
+separate scoped authority for machine callers. It has no human roles or
+account-owner comparisons. The permission and role examples below are retained
+only to explain account-era code and do not prescribe a replacement RBAC system.
+
 ### 20.1 Permissions
 
-Desired-state permissions include:
+Predecessor permission vocabulary includes:
 
 - `settings.catalog.read`
 - `settings.effective.read`
@@ -1816,7 +1873,6 @@ The Settings System intentionally leaves room for:
 - workspace templates,
 - import/export of non-sensitive settings,
 - policy-as-code for operator locks,
-- stronger RBAC models,
 - settings drift detection,
 - multi-workspace inheritance,
 - external secret managers,

@@ -1,9 +1,11 @@
-"""Temporal owns release routing; startup initializes only an empty deployment."""
+"""Temporal owns release routing; startup converges abandoned routing to the deployed release."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import time
 from datetime import timedelta
 from uuid import uuid4
 
@@ -14,6 +16,8 @@ from temporalio.api.workflowservice.v1 import (
 )
 from temporalio.common import PinnedVersioningOverride, WorkerDeploymentVersion
 from temporalio.service import RPCError, RPCStatusCode
+
+logger = logging.getLogger(__name__)
 
 
 async def routing_snapshot(client, deployment: str):
@@ -355,6 +359,203 @@ async def promote_version(
     }
 
 
+def _parked(current: str, target: str) -> dict[str, str]:
+    """Upstream readiness shape: startup waits, deployment-control recovers."""
+    return {
+        "status": "awaiting_promotion",
+        "currentVersion": current,
+        "candidateVersion": target,
+        "recoveryOwner": "deployment-control",
+    }
+
+
+# The server reports a stopped fleet's last polls as live for a bounded
+# freshness window. Re-verification must outlast it before concluding that a
+# seemingly live route is actually dead. Workers already poll while this
+# waits; only the readiness report is delayed, and only on a version change.
+_ROUTE_DEATH_TIMEOUT_SECONDS = 120
+_ROUTE_DEATH_POLL_SECONDS = 10
+
+
+def _has_live_pollers(observation) -> bool:
+    """Any live poller on any queue means a route remains to preserve.
+
+    A partially degraded route still serves part of its traffic, so only a
+    total absence of live pollers across every registered queue counts as
+    abandoned. A missing or empty observation is abandoned, never live.
+    """
+    if not observation:
+        return False
+    return any(item.get("livePollers") for item in observation.get("queues", []))
+
+
+async def _await_no_live_pollers(client, version: str) -> dict | None:
+    """Re-observe a seemingly live route until it proves live or dead.
+
+    Fresh poller observations may be a restart in flight: the previous fleet
+    stopped seconds ago but the server still reports its last polls as live.
+    A truly live route keeps polling and stays available past the window; a
+    dead one expires. Returns the last observation, or None when the version
+    unregisters mid-watch.
+    """
+    observation = None
+    deadline = time.monotonic() + _ROUTE_DEATH_TIMEOUT_SECONDS
+    while True:
+        try:
+            observation = await version_availability(client, version)
+        except RPCError as exc:
+            if exc.status != RPCStatusCode.NOT_FOUND:
+                raise
+            return None
+        if not _has_live_pollers(observation) or time.monotonic() >= deadline:
+            return observation
+        await asyncio.sleep(_ROUTE_DEATH_POLL_SECONDS)
+
+
+async def steward_abandoned_routing(
+    client, spec, *, current: str, target: str
+) -> dict[str, str]:
+    """Adopt routing only when no live route remains to preserve.
+
+    This covers the case the availability owner explicitly excludes: a
+    restart onto a never-promoted release whose recorded current version has
+    no live pollers on any of its queues, so there is no serving route to
+    preserve and no receipt the deployment-control recovery could restore.
+    The starting fleet finishes the handoff itself with the same
+    canary-gated compare-and-set promotion the updater runs, qualified
+    across every queue the current version served rather than just this
+    process's own queues -- on a full deployment that is the canonical
+    all-fleet set, and on a minimal one it is exactly the deployed subset.
+
+    Whenever the recorded current version still serves any traffic --
+    including a partial outage where only some queues have live pollers --
+    startup preserves that route exactly like the unpromoted-installed-fix
+    replay requires: qualification and promotion stay with the authorized
+    release controller. Registration timestamps never order releases: a lone
+    stale fleet with nothing serving converges routing to the release that
+    is actually deployed, while a live route is never displaced whatever
+    image backs it.
+    """
+    from temporalio.api.enums.v1 import TaskQueueType
+
+    observation = await _await_no_live_pollers(client, current)
+    if _has_live_pollers(observation):
+        logger.info(
+            "Release routing current version %s still serves traffic; "
+            "preserving its route for the authorized release controller",
+            current,
+        )
+        return _parked(current, target)
+    if observation is not None:
+        workflow_queues = tuple(
+            item["queue"]
+            for item in observation["queues"]
+            if item["type"] == TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW
+        )
+        activity_queues = tuple(
+            item["queue"]
+            for item in observation["queues"]
+            if item["type"] == TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY
+        )
+        # The starting fleet must explicitly declare the complete serving
+        # surface it intends to converge. When the recorded current version
+        # served queues outside this process's declared topology (for example
+        # a workflow-worker steward that does not host the deployment's
+        # activity fleets), qualification and promotion stay with the
+        # authorized release controller, exactly like the
+        # unpromoted-installed-fix replay requires. Promoting a subset would
+        # converge routing to a release ordinary workflows cannot use.
+        # Only park when the target release has actually registered the full
+        # surface elsewhere (for example Docker workers serving queues this
+        # process does not declare); when the target has not registered those
+        # queues, fall through so the qualification below fails loudly
+        # instead of parking an unqualifiable release forever.
+        declared = set(spec.task_queues)
+        served = {item["queue"] for item in observation["queues"]}
+        if not served <= declared:
+            try:
+                from temporalio.api.workflowservice.v1 import (
+                    DescribeWorkerDeploymentVersionRequest,
+                )
+
+                service = client.workflow_service
+                target_desc = await service.describe_worker_deployment_version(
+                    DescribeWorkerDeploymentVersionRequest(
+                        namespace=client.namespace, version=target
+                    )
+                )
+                info = target_desc.worker_deployment_version_info
+                _registered = {item.name for item in info.task_queue_infos}
+            except RPCError as _exc:
+                if _exc.status != RPCStatusCode.NOT_FOUND:
+                    raise
+                _registered = set()
+            if served <= _registered:
+                logger.info(
+                    "Release routing current version %s served queues %s beyond "
+                    "this fleet's declared %s; preserving its route for the "
+                    "authorized release controller",
+                    current,
+                    sorted(served - declared),
+                    sorted(declared),
+                )
+                return _parked(current, target)
+    else:
+        workflow_queues = ()
+        activity_queues = tuple(spec.task_queues)
+    logger.warning(
+        "Release routing current version %s has no live pollers; "
+        "stewarding promotion of %s",
+        current,
+        target,
+    )
+    # One deterministic canary per deployed release: concurrent stewards and
+    # conflict-token retries reuse the same run instead of spinning new ones.
+    canary_id = "mm-steward-canary-" + "".join(
+        ch if (ch.isalnum() or ch in "-_.:") else "-"
+        for ch in f"{spec.deployment_id}.{spec.build_id}"
+    )
+    failure = None
+    try:
+        await promote_version(
+            client,
+            deployment=spec.deployment_id,
+            build_id=spec.build_id,
+            expected_current=current,
+            task_queue=spec.task_queues[0],
+            task_queues=activity_queues,
+            workflow_queues=workflow_queues,
+            canary_id=canary_id,
+        )
+    except (RPCError, ValueError) as exc:
+        if isinstance(exc, RPCError) and exc.status != RPCStatusCode.ABORTED:
+            raise
+        # A failed canary and a lost compare-and-set both land here. A failed
+        # canary leaves the observed routing untouched, while a lost race
+        # moves it, so server state tells them apart: never spin canaries.
+        failure = exc
+    else:
+        return {"status": "current", "currentVersion": target}
+    observed = current_version(await routing_snapshot(client, spec.deployment_id))
+    if observed == target:
+        # A failed ordinary-route check must not look like a handoff: the
+        # compare-and-set may have applied while verification failed, so
+        # prove the converged route serves ordinary traffic before reporting
+        # it, and fail loudly when it does not.
+        await verify_ordinary_route(
+            client, version=target, canary_id=f"{canary_id}-verify-{uuid4().hex}"
+        )
+        return {"status": "current", "currentVersion": target}
+    if observed != current:
+        logger.info(
+            "Release routing moved to %s during stewardship; %s awaits promotion",
+            observed,
+            target,
+        )
+        return _parked(observed, target)
+    raise failure
+
+
 async def bootstrap_version_routing(client, spec):
     if not spec.versioning_enabled:
         return {"status": "unversioned"}
@@ -372,12 +573,15 @@ async def bootstrap_version_routing(client, spec):
                 "current_version_changed_time"
             )
             if current and not never_routed:
-                return {
-                    "status": "current" if current == target else "awaiting_promotion",
-                    "currentVersion": current,
-                    "candidateVersion": target,
-                    "recoveryOwner": "deployment-control",
-                }
+                if current == target:
+                    return {
+                        "status": "current",
+                        "currentVersion": current,
+                        "candidateVersion": target,
+                    }
+                return await steward_abandoned_routing(
+                    client, spec, current=current, target=target
+                )
             try:
                 await promote_version(
                     client,

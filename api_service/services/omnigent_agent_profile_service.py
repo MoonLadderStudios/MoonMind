@@ -236,6 +236,41 @@ def projection_readiness(
     }
 
 
+def readiness_actionable_detail(
+    readiness: Mapping[str, Any],
+    *,
+    profile_id: str,
+    version: int | None,
+    endpoint_ref: str,
+    upstream_id: str,
+    upstream_version: str | None,
+) -> str:
+    """Format a 409 reason that steers before it stops.
+
+    The leading ``reason`` string is preserved verbatim for contract
+    compatibility; the suffix names the exact pinned identity, its freshness
+    and sync timestamps, and the executable recovery (catalog synchronize then
+    retry with the latest active version). Only non-sensitive identity and
+    timing fields are included, never credentials or raw provider text.
+    """
+
+    reason = str(readiness.get("reason") or "upstream identity is not ready")
+    freshness = str(readiness.get("freshness") or "unknown")
+    last_success = readiness.get("lastSuccessfulSyncAt")
+    last_attempt = readiness.get("lastAttemptAt")
+    pinned_version = str(version) if version is not None else "active"
+    pinned_upstream = str(upstream_version or "").strip() or "<none>"
+    return (
+        f"{reason} (profile {profile_id}@{pinned_version} pins "
+        f"{endpoint_ref}/{upstream_id}/{pinned_upstream}; "
+        f"freshness={freshness}, "
+        f"lastSuccessfulSyncAt={last_success}, lastAttemptAt={last_attempt}; "
+        "action: POST /api/omnigent/harness-catalog/synchronize then retry "
+        "with the latest active profile version; if you pinned a version "
+        "explicitly, omit version to use the default)"
+    )
+
+
 def _text(row: Mapping[str, Any], *keys: str) -> str:
     for key in keys:
         value = row.get(key)

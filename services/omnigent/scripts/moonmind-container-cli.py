@@ -287,9 +287,9 @@ def _python_tests(targets: list[str], timeout_seconds: int) -> int:
             {"name": "PYTHONPATH", "value": "/workspace"},
         ],
         "resources": {
-            "cpuMillis": 0,
+            # Static product default matching moonmind/container_job_cli.py.
+            "cpuMillis": 2000,
             "memoryMiB": 4096,
-            "minimumMemoryMiB": 2048,
             "pids": 512,
         },
         "timeoutSeconds": timeout_seconds,

@@ -870,11 +870,16 @@ async def test_capacity_wait_preserves_job_and_resolved_grant(monkeypatch, cance
             if len(starts) == 1:
                 # Round-trip the compact production contract consumed by the workflow.
                 return ContainerJobActivityResult.model_validate(
-                    {"capacityWait": "waiting for machine_memory"}
+                    {
+                        "capacityWait": (
+                            "Waiting for a container-job slot. "
+                            "The configured limit is 1."
+                        )
+                    }
                 )
             return ContainerJobActivityResult(
                 running=True,
-                resolvedResources=ResourceLimits(cpuMillis=0, memoryMiB=2857),
+                resolvedResources=ResourceLimits(cpuMillis=2000, memoryMiB=4096),
             )
         if name.endswith("project_status"):
             states.append(request.state)
@@ -897,7 +902,8 @@ async def test_capacity_wait_preserves_job_and_resolved_grant(monkeypatch, cance
     if not cancel:
         assert starts[0]["request"] == starts[1]["request"]
         assert starts[0]["ownershipToken"] == starts[1]["ownershipToken"]
-        assert publications[0].resolved_resources.memory_mib == 2857
+        assert publications[0].resolved_resources.memory_mib == 4096
+        assert publications[0].resolved_resources.cpu_millis == 2000
 
 
 @pytest.mark.asyncio

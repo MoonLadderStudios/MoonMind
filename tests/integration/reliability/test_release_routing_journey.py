@@ -5,13 +5,19 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from temporalio import activity, workflow
-from temporalio.client import Client, Schedule, ScheduleActionStartWorkflow, ScheduleIntervalSpec, ScheduleSpec
+from temporalio.client import (
+    Client,
+    Schedule,
+    ScheduleActionStartWorkflow,
+    ScheduleIntervalSpec,
+    ScheduleSpec,
+)
 from temporalio.common import (
     PinnedVersioningOverride,
     VersioningBehavior,
@@ -78,9 +84,15 @@ async def connect():
 
 
 async def test_schedule_recovers_when_installed_release_replaces_absent_current_worker(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
-    """Replay definition 68d074f1: healthy replacement, unroutable schedule."""
+    """Replay definition 68d074f1: healthy replacement, unroutable schedule.
+
+    The replacement fleet converges routing itself: bootstrap promotes the
+    installed release after its pinned canary verifies, so the scheduled run
+    is routable without waiting for a separate promotion owner.
+    """
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     client = await connect()
@@ -100,7 +112,9 @@ async def test_schedule_recovers_when_installed_release_replaces_absent_current_
 
     def worker_for(build):
         return Worker(
-            client, task_queue=queue, workflows=[ReleaseCanaryWorkflow],
+            client,
+            task_queue=queue,
+            workflows=[ReleaseCanaryWorkflow],
             activities=[inspect_release_activity],
             workflow_runner=UnsandboxedWorkflowRunner(),
             deployment_config=WorkerDeploymentConfig(
@@ -112,8 +126,11 @@ async def test_schedule_recovers_when_installed_release_replaces_absent_current_
 
     def spec(build):
         return SimpleNamespace(
-            versioning_enabled=True, workflows=(ReleaseCanaryWorkflow,),
-            deployment_id=deployment, build_id=build, task_queues=(queue,),
+            versioning_enabled=True,
+            workflows=(ReleaseCanaryWorkflow,),
+            deployment_id=deployment,
+            build_id=build,
+            task_queues=(queue,),
         )
 
     old = install("old")
@@ -121,36 +138,46 @@ async def test_schedule_recovers_when_installed_release_replaces_absent_current_
         await bootstrap_version_routing(client, spec(old))
     current = install("current")
     async with worker_for(current):
-        assert (await bootstrap_version_routing(client, spec(current)))["status"] == "awaiting_promotion"
+        converged = await bootstrap_version_routing(client, spec(current))
+        assert converged["status"] == "current"
+        assert converged["currentVersion"] == f"{deployment}.{current}"
         schedule = await client.create_schedule(
             f"mm-schedule:{definition_id}",
             Schedule(
                 action=ScheduleActionStartWorkflow(
-                    "MoonMind.ReleaseCanary", {"digest": current, "taskQueues": [queue]},
-                    id=f"mm:{definition_id}", task_queue=queue,
+                    "MoonMind.ReleaseCanary",
+                    {"digest": current, "taskQueues": [queue]},
+                    id=f"mm:{definition_id}",
+                    task_queue=queue,
                     execution_timeout=timedelta(seconds=120),
                 ),
-                spec=ScheduleSpec(intervals=[ScheduleIntervalSpec(every=timedelta(days=1))]),
+                spec=ScheduleSpec(
+                    intervals=[ScheduleIntervalSpec(every=timedelta(days=1))]
+                ),
             ),
         )
         adapter = TemporalClientAdapter(client=client)
         try:
-            await adapter.trigger_schedule(definition_id=definition_id)
+            # Pin both manual triggers to one scheduled instant so Temporal
+            # derives the same occurrence ID deterministically. Wall-clock
+            # triggers straddle a second boundary and flake the same-ID
+            # assertion below with IDs like ...42Z vs ...43Z.
+            scheduled_at = datetime.now(timezone.utc)
+            await adapter.trigger_schedule(
+                definition_id=definition_id, scheduled_at=scheduled_at
+            )
             for _ in range(50):
                 actions = (await schedule.describe()).info.recent_actions
                 if actions:
                     break
                 await asyncio.sleep(0.1)
             assert actions
-            blocked = client.get_workflow_handle(actions[-1].action.workflow_id)
-            assert (await blocked.describe()).history_length == 2
-            await promote_version(
-                client, deployment=deployment, build_id=current,
-                expected_current=f"{deployment}.{old}", task_queue=queue,
-                task_queues=(queue,), canary_id=deployment + "-canary",
+            started = client.get_workflow_handle(actions[-1].action.workflow_id)
+            assert await started.result() == {"digest": current, "status": "verified"}
+            first_run_id = (await started.describe()).run_id
+            await adapter.trigger_schedule(
+                definition_id=definition_id, scheduled_at=scheduled_at
             )
-            assert await blocked.result() == {"digest": current, "status": "verified"}
-            await adapter.trigger_schedule(definition_id=definition_id)
             for _ in range(50):
                 actions = (await schedule.describe()).info.recent_actions
                 if len(actions) == 2:
@@ -158,7 +185,12 @@ async def test_schedule_recovers_when_installed_release_replaces_absent_current_
                 await asyncio.sleep(0.1)
             assert len(actions) == 2
             fresh = client.get_workflow_handle(actions[-1].action.workflow_id)
-            assert fresh.id != blocked.id
+            assert fresh.id == started.id
+            for _ in range(100):
+                if (await fresh.describe()).run_id != first_run_id:
+                    break
+                await asyncio.sleep(0.1)
+            assert (await fresh.describe()).run_id != first_run_id
             assert await fresh.result() == {"digest": current, "status": "verified"}
         finally:
             await schedule.delete()
@@ -234,7 +266,9 @@ async def test_candidate_canary_compare_and_set_and_inflight_upgrade(
             activity_queue,
             id=uuid4().hex,
             task_queue=queue,
-            execution_timeout=timedelta(seconds=120),
+            # Startup stewardship may re-verify a seemingly live route past
+            # the poller-freshness window before converging it.
+            execution_timeout=timedelta(seconds=600),
             versioning_override=(
                 PinnedVersioningOverride(WorkerDeploymentVersion(deployment, a))
                 if pinned
@@ -246,18 +280,21 @@ async def test_candidate_canary_compare_and_set_and_inflight_upgrade(
         manifest_b = release_identity.build_release(root)
         (root / release_identity.RELEASE_FILE).write_text(json.dumps(manifest_b))
         b = manifest_b["digest"]
-        async with Worker(
-            client,
-            task_queue=activity_queue,
-            activities=[probe(b), inspect_release_activity],
-            deployment_config=config(b),
-        ), Worker(
-            client,
-            task_queue=queue,
-            workflows=[ReleaseCanaryWorkflow, ReleaseUpgradeProbe],
-            activities=[inspect_release_activity],
-            deployment_config=config(b),
-            workflow_runner=UnsandboxedWorkflowRunner(),
+        async with (
+            Worker(
+                client,
+                task_queue=activity_queue,
+                activities=[probe(b), inspect_release_activity],
+                deployment_config=config(b),
+            ),
+            Worker(
+                client,
+                task_queue=queue,
+                workflows=[ReleaseCanaryWorkflow, ReleaseUpgradeProbe],
+                activities=[inspect_release_activity],
+                deployment_config=config(b),
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
         ):
             candidate = await bootstrap_version_routing(client, spec(b))
             assert candidate["status"] == "awaiting_promotion"
@@ -348,15 +385,18 @@ async def test_unversioned_inflight_workflow_moves_to_qualified_release(
         use_worker_versioning=True,
         default_versioning_behavior=VersioningBehavior.AUTO_UPGRADE,
     )
-    async with Worker(
-        client,
-        task_queue=queue,
-        workflows=[ReleaseUpgradeProbe],
-        workflow_runner=UnsandboxedWorkflowRunner(),
-    ), Worker(
-        client,
-        task_queue=activity_queue,
-        activities=[old_probe],
+    async with (
+        Worker(
+            client,
+            task_queue=queue,
+            workflows=[ReleaseUpgradeProbe],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ),
+        Worker(
+            client,
+            task_queue=activity_queue,
+            activities=[old_probe],
+        ),
     ):
         handle = await client.start_workflow(
             ReleaseUpgradeProbe.run,
@@ -366,18 +406,21 @@ async def test_unversioned_inflight_workflow_moves_to_qualified_release(
             execution_timeout=timedelta(seconds=120),
         )
         await asyncio.wait_for(first_seen.wait(), 30)
-        async with Worker(
-            client,
-            task_queue=queue,
-            workflows=[ReleaseUpgradeProbe, ReleaseCanaryWorkflow],
-            activities=[inspect_release_activity],
-            deployment_config=config,
-            workflow_runner=UnsandboxedWorkflowRunner(),
-        ), Worker(
-            client,
-            task_queue=activity_queue,
-            activities=[candidate_probe, inspect_release_activity],
-            deployment_config=config,
+        async with (
+            Worker(
+                client,
+                task_queue=queue,
+                workflows=[ReleaseUpgradeProbe, ReleaseCanaryWorkflow],
+                activities=[inspect_release_activity],
+                deployment_config=config,
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                client,
+                task_queue=activity_queue,
+                activities=[candidate_probe, inspect_release_activity],
+                deployment_config=config,
+            ),
         ):
             for attempt in range(60):
                 try:
