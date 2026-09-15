@@ -596,6 +596,57 @@ async def test_create_manual_run_repairs_legacy_task_queue_before_trigger(
                 scheduled_at=run.scheduled_for,
             )
 
+async def test_create_manual_run_adopts_observe_evidence_when_trigger_ack_lost(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    """A lost trigger acknowledgement adopts read-only evidence immediately.
+
+    The trigger itself is never resubmitted: one safe observe for the exact
+    recorded identity is enough to move an accepted-but-unacknowledged
+    request to enqueued without waiting for the background sweep.
+    """
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            definition = await service.create_definition(
+                name="Ack lost",
+                description="",
+                enabled=True,
+                schedule_type="cron",
+                cron="0 6 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {"task": {"instructions": "Work"}},
+                },
+                policy={},
+            )
+            service._ensure_schedule_action_current = AsyncMock()
+            mock_temporal_adapter.trigger_schedule.side_effect = ConnectionError(
+                "accepted, response lost"
+            )
+            mock_temporal_adapter.observe_schedule_trigger = AsyncMock(
+                return_value=ScheduleTriggerResult(
+                    workflow_id="started-workflow",
+                    run_id="exact-run",
+                    disposition="started",
+                )
+            )
+
+            run = await service.create_manual_run(definition)
+
+            assert run.outcome == RecurringWorkflowRunOutcome.ENQUEUED
+            assert run.temporal_workflow_id == "started-workflow"
+            assert run.temporal_run_id == "exact-run"
+            assert run.message == "Execution started."
+            mock_temporal_adapter.trigger_schedule.assert_awaited_once()
+            mock_temporal_adapter.observe_schedule_trigger.assert_awaited_once()
+
 async def test_delete_definition_deletes_temporal_schedule_and_db_row(
     tmp_path: Path, mock_temporal_adapter
 ) -> None:

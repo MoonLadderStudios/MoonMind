@@ -417,3 +417,96 @@ async def test_recording_serving_image_requires_coherent_installed_fleets(
         assert not (tmp_path / "retained.json").exists()
     assert not cohort.names
     assert all(call.args[0] == "inspect" for call in docker.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_legacy_receipt_without_source_revision_cannot_block_promotion_scan(
+    tmp_path, monkeypatch
+):
+    """A pre-sourceRevision receipt is skipped, never fatal to the scan.
+
+    Regression: one legacy-format COMPLETED receipt (authored before
+    sourceRevision existed) crashed successful_release_image with
+    KeyError, blocking every promotion including outage recovery.
+    """
+    from unittest.mock import AsyncMock
+
+    deployment = "legacy-install"
+    digest = "sha256:" + "c" * 64
+    version = deployment + "." + digest
+
+    legacy = tmp_path / "legacy-job"
+    legacy.mkdir()
+    release.write_record(
+        legacy / "routing.json",
+        {"deployment": deployment, "candidate": digest, "previous": "other"},
+    )
+    release.write_record(
+        legacy / "request.json",
+        {
+            "authored": {
+                "owner": "legacy-owner",
+                "inputs": {
+                    "stack": "moonmind",
+                    "image": {"repository": "example/moonmind", "reference": "latest"},
+                },
+            },
+            "image": f"example/moonmind@{digest}",
+            "imageId": "sha256:" + "d" * 64,
+        },
+    )
+    release.write_record(
+        legacy / "deployment-result.json",
+        {
+            "owner": "legacy-owner",
+            "result": {"status": "COMPLETED", "outputs": {"resolvedDigest": digest}},
+        },
+    )
+
+    valid = tmp_path / "valid-job"
+    valid.mkdir()
+    release.write_record(
+        valid / "routing.json",
+        {"deployment": deployment, "candidate": digest, "previous": "other"},
+    )
+    release.write_record(
+        valid / "request.json",
+        {
+            "authored": {
+                "owner": "valid-owner",
+                "inputs": {
+                    "stack": "moonmind",
+                    "image": {"repository": "example/moonmind", "reference": "candidate"},
+                    "sourceRevision": "rev",
+                },
+            },
+            "image": f"example/moonmind@{digest}",
+            "imageId": "sha256:" + "e" * 64,
+        },
+    )
+    release.write_record(
+        valid / "deployment-result.json",
+        {
+            "owner": "valid-owner",
+            "result": {"status": "COMPLETED", "outputs": {"resolvedDigest": digest}},
+        },
+    )
+
+    docker = AsyncMock(
+        side_effect=[
+            "sha256:" + "d" * 64,
+            json.dumps([{"Id": "sha256:" + "d" * 64}]),
+            json.dumps({"digest": digest, "sourceRevision": "rev"}),
+            "sha256:" + "e" * 64,
+            json.dumps([{"Id": "sha256:" + "e" * 64}]),
+            json.dumps({"digest": digest, "sourceRevision": "rev"}),
+        ]
+    )
+    monkeypatch.setattr(release, "docker", docker)
+    # "legacy-job" sorts first: it must be skipped, and the valid receipt
+    # for the same version must still be returned.
+    assert await release.successful_release_image(tmp_path, version) == {
+        "image": "sha256:" + "e" * 64,
+        "sourceReceipt": "valid-job",
+        "sourceRevision": "rev",
+    }
