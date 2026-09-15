@@ -447,37 +447,38 @@ class DockerOmnigentHostAttestor:
             _assert_exact_omnigent_build(image, host_class.omnigentBuildDigest)
         except HarnessPlatformError:
             # Same-series rebuilds may carry a different build digest while
-            # reporting a compatible major.minor. Allow it unless the operator
-            # pinned an exact build (OMNIGENT_BUILD_DIGEST), which remains
-            # fail-closed. Different major.minor already failed above.
-            import os
-
-            pinned_build = str(os.environ.get("OMNIGENT_BUILD_DIGEST") or "").strip()
-            labels = image.get("Config", {}).get("Labels", {}) or {}
-            actual_build = str(
-                labels.get("moonmind.omnigent.build_digest") or ""
-            ).strip()
-            if pinned_build and actual_build != pinned_build:
-                raise
-            # Only same-repository drift excuses a build mismatch; a foreign
-            # image family with a compatible version string is still rejected.
+            # reporting a compatible major.minor (proven by the live probe
+            # above). Accept that only when the launched image actually
+            # drifted from the selected Host Class image within the same
+            # repository: an unchanged image with a different build label is
+            # tampering, not a rebuild. Selection-time pin authority stays in
+            # host_class.omnigentBuildDigest and both digests are recorded in
+            # evidence below; worker-environment pins are never consulted here
+            # so a post-admission pin change cannot silently reinterpret the
+            # admitted plan.
             try:
                 from moonmind.omnigent.host_image_drift import (
                     is_compatible_image_drift,
                 )
 
-                same_repo = is_compatible_image_drift(
-                    host_class.imageRef, inspect_ref
+                drifted = inspect_ref != host_class.imageRef and bool(
+                    is_compatible_image_drift(host_class.imageRef, inspect_ref)
                 )
             except Exception:
-                same_repo = False
-            if not same_repo:
+                drifted = False
+            if not drifted:
                 raise
             logging.getLogger(__name__).info(
                 "host build drift: accepting compatible same-repo build "
                 "(expected=%s actual=%s)",
                 str(host_class.omnigentBuildDigest)[:19],
-                actual_build[:19] or "unknown",
+                str(
+                    (image.get("Config", {}).get("Labels", {}) or {}).get(
+                        "moonmind.omnigent.build_digest"
+                    )
+                    or ""
+                )[:19]
+                or "unknown",
             )
         repo_digests = set(image.get("RepoDigests") or [])
         if (
@@ -1022,7 +1023,11 @@ class DockerOmnigentHostAttestor:
                     }
                 ),
                 attachment_identity=launch_result["containerName"],
-                expected_image_ref=host_class.imageRef,
+                # The container was created from the effective image
+                # (drift-resolved above), so egress must prove the running
+                # workload matches what actually launched. Series qualification
+                # of that effective image was proven by the version gates.
+                expected_image_ref=inspect_ref,
             )
         except (RuntimeError, ValueError) as exc:
             raise HarnessPlatformError(
@@ -1098,16 +1103,28 @@ class DockerOmnigentHostAttestor:
                     "Failed to retain exhausted exact-host model catalog evidence"
                 )
             raise failure
+        observed_build_digest = str(
+            (image.get("Config", {}).get("Labels", {}) or {}).get(
+                "moonmind.omnigent.build_digest"
+            )
+            or ""
+        )
         host_evidence = {
             "schemaVersion": "moonmind.omnigent-exact-host-attestation.v1",
             "containerId": str(container.get("Id") or ""),
             "containerName": launch_result["containerName"],
             "omnigentHostId": host_id,
             "hostOwner": registration["host"].get("owner"),
-            "imageRef": host_class.imageRef,
+            # The image and build that actually ran (drift-resolved). When no
+            # drift occurred these equal the selected Host Class values; the
+            # expected (planned) values are retained alongside for audit and
+            # retry revalidation.
+            "imageRef": inspect_ref,
+            "expectedImageRef": host_class.imageRef,
             "architecture": architecture,
             "omnigentVersion": omnigent_version.strip()[:256],
-            "omnigentBuildDigest": host_class.omnigentBuildDigest,
+            "omnigentBuildDigest": observed_build_digest,
+            "expectedOmnigentBuildDigest": host_class.omnigentBuildDigest,
             "harnessId": plan.payload.harnessId,
             "harnessImplementationRef": plan.payload.harnessImplementationRef,
             "runtimeVersions": runtime_versions,

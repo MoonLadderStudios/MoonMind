@@ -89,6 +89,9 @@ class CredentialMaterializationContext:
     model_qualified_id: str = ""
     provider_route_ref: str = ""
     profile_credential_home: ProfileCredentialHome | None = None
+    # Admitted Omnigent series the writer fallback must match (same
+    # major.minor). Empty means provenance-only qualification.
+    expected_omnigent_version: str = ""
 
 
 class DockerCommandBackend(Protocol):
@@ -142,32 +145,36 @@ class _DockerMaterializerBackendMixin:
             )
         return stdout
 
-    async def _resolve_writer_ref(self, ref: str) -> str:
+    async def _resolve_writer_ref(
+        self, ref: str, *, expected_omnigent_version: str = ""
+    ) -> str:
         # Fail closed on digest-pinned writers: the selected Host Class image
         # is immutable launch authority, and a mutable-tag fallback would grant
         # a different image read-write access to persistent OAuth credentials.
-        # A missing digest-pinned image is recovered by reusing the deployment's
-        # current same-repository image when present locally (patch/SHA drift
-        # with the same major.minor), else by pulling that exact digest
-        # (immutable, so no substitution); only a pull failure or a mutable ref
-        # falls through to the previous fail-closed behavior.
+        # A missing digest-pinned image is recovered by reusing a qualified
+        # same-repository image when present locally (digest-pinned,
+        # deployment-observed or operator-pinned, same major.minor series),
+        # else by pulling that exact digest (immutable, so no substitution);
+        # only a pull failure or a mutable ref falls through to the previous
+        # fail-closed behavior.
         code, _, _ = await self._backend.run(
             ["docker", "image", "inspect", ref, "--format", "{{.Id}}"]
         )
         if code == 0:
             return ref
         if "@sha256:" in ref:
-            # Prefer a compatible local image over a 7GB exact pull: rebuilt
-            # images change SHA/patch while keeping major.minor. The fallback
-            # is always the deployment's currently qualified same-repo digest,
-            # never a mutable tag; downstream major.minor gates still enforce
-            # release compatibility.
+            # Prefer a qualified local image over a 7GB exact pull: rebuilt
+            # images change SHA/patch while keeping major.minor. Qualification
+            # happens before any secret reaches the fallback image.
             try:
                 from moonmind.omnigent.host_image_drift import (
                     compatible_deployed_fallback,
                 )
 
-                fallback = compatible_deployed_fallback(ref)
+                fallback = compatible_deployed_fallback(
+                    ref,
+                    expected_omnigent_version=expected_omnigent_version,
+                )
             except Exception:
                 fallback = None
             if fallback is not None:
@@ -425,7 +432,10 @@ class DockerOpencodeAuthJsonMaterializer(_DockerMaterializerBackendMixin):
             "chown 1000:1000 /credential/.moonmind-generation; "
             "chmod 0600 /credential/.moonmind-generation"
         )
-        writer_ref = await self._resolve_writer_ref(context.writer_image_ref)
+        writer_ref = await self._resolve_writer_ref(
+            context.writer_image_ref,
+            expected_omnigent_version=context.expected_omnigent_version,
+        )
         try:
             await self._run(
                 [
@@ -710,7 +720,10 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                     'assert d["providers"]["moonmind"]["kind"]=="key"\'',
                 )
             )
-            writer_ref = await self._resolve_writer_ref(context.writer_image_ref)
+            writer_ref = await self._resolve_writer_ref(
+                context.writer_image_ref,
+                expected_omnigent_version=context.expected_omnigent_version,
+            )
             await self._run(
                 [
                     "docker",
@@ -899,8 +912,10 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
                 f"type=volume,src={volume},dst=/credential",
                 "--entrypoint",
                 "/bin/sh",
-                await self._resolve_writer_ref(context.writer_image_ref),
-                "-ceu",
+                await self._resolve_writer_ref(
+                    context.writer_image_ref,
+                    expected_omnigent_version=context.expected_omnigent_version,
+                ),                "-ceu",
                 stage_script,
                 "--",
                 str(acquired.credential_generation),
@@ -1269,6 +1284,12 @@ class OmnigentCredentialProvisioningService:
                                 model_qualified_id=plan.payload.modelConfig.qualifiedId,
                                 provider_route_ref=plan.payload.modelConfig.routeRef,
                                 profile_credential_home=profile_credential_home,
+                                expected_omnigent_version=str(
+                                    getattr(
+                                        plan.payload, "omnigentVersion", ""
+                                    )
+                                    or ""
+                                ),
                             )
                         )
                     finally:

@@ -486,18 +486,84 @@ def test_vendor_patch_drift_is_compatible(pinned, observed, compatible):
     assert vendor_versions_compatible(pinned, observed) is compatible
 
 
-def test_compatible_deployed_fallback_prefers_same_repo():
+def test_compatible_deployed_fallback_prefers_qualified_same_repo():
     requested = "ghcr.io/example/opencode@sha256:" + "a" * 64
     current = "ghcr.io/example/opencode@sha256:" + "b" * 64
     foreign = "ghcr.io/example/other@sha256:" + "c" * 64
+    provenance = {
+        current: {"version": "0.13.1", "buildDigest": "sha256:" + "d" * 64},
+        foreign: {"version": "0.13.1", "buildDigest": "sha256:" + "d" * 64},
+    }
     assert (
-        compatible_deployed_fallback(requested, deployed_refs=[current, foreign])
+        compatible_deployed_fallback(
+            requested,
+            deployed_refs=[foreign, current],
+            expected_omnigent_version="0.13.0",
+            provenance=provenance,
+        )
         == current
     )
+    # Foreign repository is never compatible drift.
     assert (
-        compatible_deployed_fallback(requested, deployed_refs=[foreign]) is None
+        compatible_deployed_fallback(
+            requested,
+            deployed_refs=[foreign],
+            expected_omnigent_version="0.13.0",
+            provenance=provenance,
+        )
+        is None
     )
+    # Same-repository candidate on another minor is rejected.
     assert (
-        compatible_deployed_fallback(requested, deployed_refs=[requested]) is None
+        compatible_deployed_fallback(
+            requested,
+            deployed_refs=[current],
+            expected_omnigent_version="0.14.0",
+            provenance=provenance,
+        )
+        is None
     )
+    # The requested ref itself is never a fallback.
+    assert (
+        compatible_deployed_fallback(
+            requested,
+            deployed_refs=[requested],
+            expected_omnigent_version="0.13.0",
+            provenance=provenance,
+        )
+        is None
+    )
+    # Unobserved candidates without an operator pin are unqualified.
+    assert (
+        compatible_deployed_fallback(
+            requested,
+            deployed_refs=[current],
+            expected_omnigent_version="0.13.0",
+            provenance={},
+        )
+        is None
+    )
+    # Mutable tags never participate in drift recovery.
     assert compatible_deployed_fallback("ghcr.io/example/opencode:latest") is None
+
+
+def test_compatible_deployed_fallback_honors_operator_pin(
+    tmp_path,
+    monkeypatch,
+):
+    requested = "ghcr.io/example/opencode@sha256:" + "a" * 64
+    pinned = "ghcr.io/example/opencode@sha256:" + "e" * 64
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_RESOLVED_IMAGES_PATH", str(tmp_path / "missing.json")
+    )
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", pinned)
+    monkeypatch.setenv("OMNIGENT_SHARED_HOST_IMAGE_REF", "")
+    monkeypatch.setenv("OMNIGENT_PI_HOST_IMAGE_REF", "")
+    assert (
+        compatible_deployed_fallback(
+            requested,
+            expected_omnigent_version="0.13.0",
+            provenance={},
+        )
+        == pinned
+    )
