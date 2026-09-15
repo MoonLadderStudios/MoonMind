@@ -325,9 +325,11 @@ def python_test_submission(
                 {"name": "PYTHONPATH", "value": "/workspace"},
             ],
             "resources": {
-                "cpuMillis": 0,
+                # Static product default: 2 CPUs and 4 GiB, qualified through
+                # the real test-container path. An explicit fixed limit, not a
+                # pool selection or adaptive range.
+                "cpuMillis": 2000,
                 "memoryMiB": 4096,
-                "minimumMemoryMiB": 2048,
                 "pids": 512,
             },
             "timeoutSeconds": timeout_seconds,

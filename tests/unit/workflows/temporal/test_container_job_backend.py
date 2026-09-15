@@ -1055,9 +1055,11 @@ async def test_capacity_lock_is_mutually_exclusive_across_workers(
 
 
 @pytest.mark.asyncio
-async def test_start_rejects_aggregate_memory_overcommit_before_launch(
+async def test_start_waits_for_a_free_job_slot_when_full(
     tmp_path,
 ) -> None:
+    """A full job count parks the job in the durable wait, never in a pool."""
+
     lock = AsyncMock()
     lock.acquire.return_value = object()
     commands: list[tuple[str, ...]] = []
@@ -1065,13 +1067,9 @@ async def test_start_rejects_aggregate_memory_overcommit_before_launch(
     async def runner(args):
         args = tuple(args)
         commands.append(args)
-        if args[0] == "info":
-            return 0, f"{10 * 1024**3}\t8".encode(), b""
         if args[0] == "ps":
-            return 0, b"existing-container\n", b""
-        if args[0] == "inspect":
-            # name<TAB>memory bytes<TAB>nano cpus<TAB>pids limit
-            return 0, f"/existing-container\t{4 * 1024**3}\t2000000000\t512".encode(), b""
+            # Another job holds the only configured slot.
+            return 0, b"moonmind-container-job-other\trunning\n", b""
         return 0, b"", b""
 
     backend = DockerContainerJobBackend(
@@ -1087,6 +1085,38 @@ async def test_start_rejects_aggregate_memory_overcommit_before_launch(
             "pids": 512,
         },
     )
+    request.wait_for_capacity = True
+
+    result = await backend.start_container(request)
+
+    assert result.capacity_wait == (
+        "Waiting for a container-job slot. The configured limit is 1."
+    )
+    assert not any(command[0] == "start" for command in commands)
+    lock.acquire.assert_awaited_once()
+    lock.release.assert_awaited_once_with(lock.acquire.return_value)
+
+
+@pytest.mark.asyncio
+async def test_start_refuses_a_full_slot_without_wait_when_not_waitable(
+    tmp_path,
+) -> None:
+    lock = AsyncMock()
+    lock.acquire.return_value = object()
+
+    async def runner(args):
+        args = tuple(args)
+        if args[0] == "ps":
+            return 0, b"moonmind-container-job-other\trunning\n", b""
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        capacity_lock=lock,
+    )
+    request = _request(tmp_path)
+    request.wait_for_capacity = False
 
     with pytest.raises(ContainerJobBackendError) as raised:
         await backend.start_container(request)
@@ -1095,17 +1125,53 @@ async def test_start_rejects_aggregate_memory_overcommit_before_launch(
         raised.value.failure_class
         is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
     )
-    # #3881 FINDING-A: the refusal names the resource that actually refused it
-    # and the utilization that established it, never a hardcoded guess.
-    assert "missing_condition=machine_memory" in str(raised.value)
-    assert "utilization_percent=" in str(raised.value)
-    assert not any(command[0] == "start" for command in commands)
-    lock.acquire.assert_awaited_once()
-    lock.release.assert_awaited_once_with(lock.acquire.return_value)
+    assert "container-job slot" in str(raised.value)
 
 
 @pytest.mark.asyncio
-async def test_start_serializes_and_admits_within_active_memory_budget(
+async def test_start_retry_reuses_its_own_running_slot(
+    tmp_path,
+) -> None:
+    """A retry never acquires a second slot for the same job."""
+
+    from moonmind.workflows.temporal.container_job_backend import (
+        DockerContainerJobBackend as _Backend,
+    )
+
+    lock = AsyncMock()
+    lock.acquire.return_value = object()
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[0] == "ps":
+            # The daemon reports this job's own running container plus another
+            # holder that fills the configured count.
+            own = _Backend._name(request)
+            return (
+                0,
+                f"{own}\trunning\nmoonmind-container-job-other\trunning\n".encode(),
+                b"",
+            )
+        return 0, b"", b""
+
+    backend = _Backend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        capacity_lock=lock,
+    )
+    request = _request(tmp_path)
+    request.wait_for_capacity = True
+
+    result = await backend.start_container(request)
+
+    assert result.running is True
+    assert any(command[0] == "start" for command in commands)
+
+
+@pytest.mark.asyncio
+async def test_start_serializes_and_admits_when_a_slot_is_free(
     tmp_path,
 ) -> None:
     lock = AsyncMock()
@@ -1115,12 +1181,9 @@ async def test_start_serializes_and_admits_within_active_memory_budget(
     async def runner(args):
         args = tuple(args)
         commands.append(args)
-        if args[0] == "info":
-            return 0, f"{10 * 1024**3}\t8".encode(), b""
         if args[0] == "ps":
-            return 0, b"existing-container\n", b""
-        if args[0] == "inspect":
-            return 0, f"/existing-container\t{2 * 1024**3}\t1000000000\t256".encode(), b""
+            # A stopped container holds no slot; nothing launching or running.
+            return 0, b"moonmind-container-job-old\texited\n", b""
         return 0, b"", b""
 
     backend = DockerContainerJobBackend(
@@ -1143,6 +1206,33 @@ async def test_start_serializes_and_admits_within_active_memory_budget(
     assert any(command[0] == "start" for command in commands)
     lock.acquire.assert_awaited_once()
     lock.release.assert_awaited_once_with(lock.acquire.return_value)
+
+
+@pytest.mark.asyncio
+async def test_start_fails_closed_when_the_slot_inventory_is_unreadable(
+    tmp_path,
+) -> None:
+    """An unreadable daemon is never an empty backend."""
+
+    lock = AsyncMock()
+    lock.acquire.return_value = object()
+
+    async def runner(args):
+        args = tuple(args)
+        if args[0] == "ps":
+            return 1, b"", b"connection refused"
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        capacity_lock=lock,
+    )
+
+    with pytest.raises(ContainerJobBackendError) as raised:
+        await backend.start_container(_request(tmp_path))
+
+    assert raised.value.failure_class is ContainerJobFailureClass.INFRASTRUCTURE
 
 
 #: Two deployment-declared cache sources. MoonMind ships none of its own, so a
@@ -1696,42 +1786,110 @@ async def test_reconcile_recovers_launch_attestation_for_bridge(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("ceiling,expected_cpu", [(1500, "1.5"), (8000, "4.2")])
-async def test_shared_defaults_keep_operator_cpu_and_memory_ceilings(tmp_path, ceiling, expected_cpu):
-    from types import SimpleNamespace
+def test_automatic_resource_accounting_is_gone_not_disabled(tmp_path) -> None:
+    """New workflows depend on ordinary Docker execution and explicit settings."""
+
+    backend = DockerContainerJobBackend(workspace_root=tmp_path)
+    for gone in (
+        "_machine_capacity",
+        "_cpu_pool",
+        "_machine_budget",
+        "_owned_inventory",
+        "_shared_cpu",
+        "_cpu_limit",
+        "_machine_reservation",
+        "_reserve_machine_capacity",
+        "_record_machine_capacity",
+        "_release_machine_capacity",
+    ):
+        assert not hasattr(backend, gone), gone
+    assert backend._settings.max_active_jobs >= 1
+    assert "Waiting for a container-job slot" in backend._slot_wait_message()
+
+
+@pytest.mark.asyncio
+async def test_create_applies_explicit_cpu_memory_and_pid_limits(tmp_path):
+    """Fixed limits reach Docker verbatim; there is no pool to subtract from."""
 
     (tmp_path / "art_workspace").mkdir()
     commands = []
     record = _recording_runner(commands)
 
     async def runner(args):
-        if args[0] == "info":
-            commands.append(tuple(args))
-            return 0, f"{9934 * 1024**2}\t6".encode(), b""
         return await record(args)
-    pool = SimpleNamespace(
-        launch_args=AsyncMock(
-            return_value=["--cgroup-parent", "/owned-pool", "--cpu-shares", "1024"]
-        )
-    )
+
     backend = DockerContainerJobBackend(
         workspace_root=tmp_path,
         command_runner=runner,
-        cpu_pool=pool,
-        settings=resolve_container_backend_settings(
-            {
-                "MOONMIND_CONTAINER_BACKEND_MAX_CPU_MILLIS": str(ceiling),
-                "MOONMIND_CONTAINER_BACKEND_MAX_MEMORY_MIB": "2048",
-            }
-        ),
     )
     await backend.create_container(
         _request(
             tmp_path,
-            resources={"cpuMillis": 0, "memoryMiB": 4096, "minimumMemoryMiB": 2048},
+            resources={"cpuMillis": 2000, "memoryMiB": 4096, "pids": 512},
         )
     )
     create = next(c for c in commands if c[0] == "create")
-    assert create[create.index("--cpus") + 1] == expected_cpu
-    assert create[create.index("--memory") + 1] == "2048m"
-    assert "/owned-pool" in create
+    assert create[create.index("--cpus") + 1] == "2.0"
+    assert create[create.index("--memory") + 1] == "4096m"
+    assert create[create.index("--pids-limit") + 1] == "512"
+    assert "--cgroup-parent" not in create
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_a_zero_cpu_request_for_new_jobs(tmp_path):
+    """A new zero-valued request never means unlimited CPU or a pool."""
+
+    (tmp_path / "art_workspace").mkdir()
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner([])
+    )
+    with pytest.raises(ContainerJobBackendError) as raised:
+        await backend.create_container(
+            _request(tmp_path, resources={"cpuMillis": 0, "memoryMiB": 4096}),
+        )
+    assert (
+        raised.value.failure_class
+        is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_a_memory_range_for_new_jobs(tmp_path):
+    """Adaptive memory negotiation is retired; new jobs set one fixed limit."""
+
+    (tmp_path / "art_workspace").mkdir()
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner([])
+    )
+    with pytest.raises(ContainerJobBackendError) as raised:
+        await backend.create_container(
+            _request(
+                tmp_path,
+                resources={
+                    "cpuMillis": 2000,
+                    "memoryMiB": 4096,
+                    "minimumMemoryMiB": 2048,
+                },
+            ),
+        )
+    assert (
+        raised.value.failure_class
+        is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+    )
+
+
+@pytest.mark.asyncio
+async def test_historical_resource_requests_remain_decodable():
+    """Persisted zero-valued and memory-range requests still parse."""
+
+    from moonmind.schemas.container_job_models import (
+        ResourceLimits,
+        is_historical_shared_or_adaptive,
+    )
+
+    historical = ResourceLimits.model_validate(
+        {"cpuMillis": 0, "memoryMiB": 4096, "minimumMemoryMiB": 2048}
+    )
+    assert is_historical_shared_or_adaptive(historical) is True
+    explicit = ResourceLimits.model_validate({"cpuMillis": 2000, "memoryMiB": 4096})
+    assert is_historical_shared_or_adaptive(explicit) is False

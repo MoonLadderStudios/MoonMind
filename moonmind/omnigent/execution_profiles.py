@@ -97,10 +97,7 @@ class OmnigentLaunchPolicy(BaseModel):
             "temporaryStorageMiB",
         }
         if set(self.limits) != required_limits or any(
-            not isinstance(v, int)
-            or isinstance(v, bool)
-            or v
-            < (0 if k == "cpuMillis" and self.host_mode == "on_demand_docker" else 1)
+            not isinstance(v, int) or isinstance(v, bool) or v < 1
             for k, v in self.limits.items()
         ):
             raise ValueError(
