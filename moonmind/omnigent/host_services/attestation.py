@@ -548,7 +548,8 @@ class DockerOmnigentHostAttestor:
                 "resolved Skill projection is missing or writable on the exact host",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
-        await self._backend.run(
+        skill_target = str(spec.skillAttachment["targetPath"])
+        code, out, err = await self._backend.run(
             [
                 "docker",
                 "exec",
@@ -557,11 +558,28 @@ class DockerOmnigentHostAttestor:
                 "-ceu",
                 'test -d "$1"; test -r "$1"',
                 "--",
-                str(spec.skillAttachment["targetPath"]),
+                skill_target,
             ],
             failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            check=False,
         )
-        skill_target = str(spec.skillAttachment["targetPath"])
+        if code != 0:
+            detail = (err or out).strip()[:512]
+            if detail:
+                # Docker transport/container failure (missing container,
+                # daemon unavailable, rejected request): preserve the
+                # backend diagnostic instead of misdirecting to Skill repair.
+                raise HarnessPlatformError(
+                    f"Skill projection check failed at Docker boundary for "
+                    f"{skill_target}: {detail}",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                )
+            # Silent nonzero from shell ``test``: name the missing projection
+            # so the operator does not see an empty Docker failure.
+            raise HarnessPlatformError(
+                f"resolved Skill projection is missing or unreadable at {skill_target}",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            )
         code, _out, _err = await _run_exact_host_runner_command(
             backend=self._backend,
             container_name=launch_result["containerName"],
@@ -637,42 +655,124 @@ class DockerOmnigentHostAttestor:
                         "mounted tool has no valid manifest-declared version probe",
                         code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                     )
+                tool_name = str(tool.get("name") or "tool")
                 executable = (
                     str(attachment["targetPath"]).rstrip("/")
                     + "/"
                     + str(tool.get("path") or "").lstrip("/")
                 )
-                digests = ",".join(tool.get("executableDigests") or [])
-                verify_tool_script = "".join(
-                    (
-                        'test -x "$1"; actual=$(sha256sum "$1" | awk \'{print $1}\'); ',
-                        'case ",$2," in *,"$actual",*) :;; *) exit 1;; esac; ',
-                        'executable="$1"; shift 2; "$executable" "$@" >/dev/null',
-                    )
-                )
-                _code, observed, _err = await self._backend.run(
+                expected_digests = {
+                    str(item).strip().lower()
+                    for item in (tool.get("executableDigests") or [])
+                    if str(item).strip()
+                }
+                # Serious and probable: the executable is absent or not
+                # executable, or its version probe fails. Digest drift alone
+                # (rebuild, deployment skew) is advisory only when the probe
+                # also proves the manifest-declared version; arbitrary
+                # mismatched bytes that merely exit 0 remain blocked.
+                code, _out, _err = await self._backend.run(
                     [
                         "docker",
                         "exec",
                         launch_result["containerName"],
                         "/bin/sh",
                         "-ceu",
-                        verify_tool_script,
+                        'test -x "$1"',
                         "--",
                         executable,
-                        digests,
+                    ],
+                    timeout_seconds=10.0,
+                    check=False,
+                )
+                if code != 0:
+                    detail = (_err or _out).strip()[:200]
+                    suffix = f": {detail}" if detail else ""
+                    raise HarnessPlatformError(
+                        f"mounted tool {tool_name} is not executable at "
+                        f"{executable}{suffix}",
+                        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    )
+                actual_digest = ""
+                code, out, _err = await self._backend.run(
+                    [
+                        "docker",
+                        "exec",
+                        launch_result["containerName"],
+                        "/bin/sh",
+                        "-ceu",
+                        'sha256sum "$1"',
+                        "--",
+                        executable,
+                    ],
+                    timeout_seconds=10.0,
+                    check=False,
+                )
+                if code == 0:
+                    actual_digest = (out.strip().split() or [""])[0].lower()[:128]
+                digest_verified = bool(
+                    actual_digest and actual_digest in expected_digests
+                )
+                code, observed, err = await self._backend.run(
+                    [
+                        "docker",
+                        "exec",
+                        launch_result["containerName"],
+                        executable,
                         *probe,
                     ],
                     timeout_seconds=10.0,
-                    failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    check=False,
                 )
+                if code != 0:
+                    detail = (err or observed).strip().replace("\n", " ")[:200]
+                    suffix = f": {detail}" if detail else ""
+                    raise HarnessPlatformError(
+                        f"mounted tool {tool_name} version probe "
+                        f"{' '.join(probe)[:80]} failed "
+                        f"(exit {code}){suffix}",
+                        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    )
+                if expected_digests and not digest_verified:
+                    import logging
+
+                    expected_version = str(tool.get("version") or "").strip()
+                    probe_text = f"{observed}\n{err}".strip()
+                    if expected_version and expected_version != "container-v1":
+                        version_ok = expected_version in probe_text
+                    else:
+                        # The container CLI declares no semantic version in
+                        # --help; require substantive help output, not merely
+                        # exit 0, so a stub executable cannot attest readiness.
+                        lowered = probe_text.lower()
+                        version_ok = bool(probe_text) and (
+                            "usage:" in lowered
+                            or "moonmind" in lowered
+                            or len(probe_text) > 20
+                        )
+                    if not version_ok:
+                        raise HarnessPlatformError(
+                            f"mounted tool {tool_name} digest mismatch and "
+                            f"version evidence does not match manifest "
+                            f"({expected_version or 'unknown version'})",
+                            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                        )
+                    logging.getLogger(__name__).info(
+                        "mounted tool digest drift with matching version "
+                        "(advisory): tool=%r executable=%r actual=%r "
+                        "version=%r",
+                        tool_name,
+                        executable,
+                        actual_digest[:19] or "unknown",
+                        expected_version or "unknown",
+                    )
                 tool_mount_evidence.append(
                     {
                         "name": str(tool.get("name") or ""),
                         "version": str(tool.get("version") or ""),
                         "path": executable,
                         "accessMode": "read-only",
-                        "digestVerified": bool(digests),
+                        "digestVerified": digest_verified,
                         "versionProbe": list(tool["versionProbe"]),
                         "probe": observed.strip()[:128],
                     }
