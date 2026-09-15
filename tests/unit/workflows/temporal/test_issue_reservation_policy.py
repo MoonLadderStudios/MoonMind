@@ -42,7 +42,8 @@ from moonmind.workflows.temporal.issue_claim_store import (
 )
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 
-_JOURNEY_FIXTURE = journey
+_JOURNEY_FIXTURE = journey  # noqa: F841 -- referenced below to keep fixture registration explicit
+assert _JOURNEY_FIXTURE is journey
 
 REPOSITORY = "example/repo"
 ISSUE = 3970
