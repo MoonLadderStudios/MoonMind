@@ -561,7 +561,7 @@ async def test_missing_binding_falls_back_to_slot_lease_ledger(
     )
     if fault in {"released", "absent"}:
         with pytest.raises(ValueError, match="saved_work_requires_recovery"):
-            await call
+            _ = await call
     else:
         with pytest.raises(ValueError, match="runtime_cleanup_pending"):
-            await call
+            _ = await call
