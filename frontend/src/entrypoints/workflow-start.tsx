@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -134,10 +134,17 @@ const LAST_REPOSITORY_OPTION_PREFERENCE_KEY =
   "moonmind.workflow-start.last-repository-option";
 // Text-first branch picker (MoonLadderStudios/MoonMind#4054). Authored text is
 // authoritative user input; autocomplete is optional assistance that must never
-// overwrite it. Suggestions are bounded, debounced, and capped; exact-name
-// validation runs independently of suggestion membership.
+// overwrite it and must never gate typing, pasting, or submission.
+// Interaction contract:
+// - Open/repo change fetches only default-branch metadata (no enumeration).
+// - Focus shows default + MoonMind-recent branches with zero GitHub requests.
+// - Typing filters those local suggestions synchronously inside the isolated
+//   input; the large Create page does not rerender per keystroke.
+// - One settled value schedules at most one exact-name lookup (no suggestion
+//   fetch alongside it). Broader discovery runs only via an explicit action.
 const BRANCH_SUGGESTION_LIMIT = 20;
 const BRANCH_SEARCH_DEBOUNCE_MS = 250;
+const BRANCH_RESOLVE_DEBOUNCE_MS = 600;
 const BRANCH_RECENT_HISTORY_MAX = 10;
 const BRANCH_RECENT_HISTORY_KEY_PREFIX =
   "moonmind.workflow-start.recent-branches.";
@@ -145,6 +152,7 @@ const BRANCH_RECENT_HISTORY_KEY_PREFIX =
 export const BRANCH_TEXT_FIRST_LIMITS = {
   suggestionLimit: BRANCH_SUGGESTION_LIMIT,
   searchDebounceMs: BRANCH_SEARCH_DEBOUNCE_MS,
+  resolveDebounceMs: BRANCH_RESOLVE_DEBOUNCE_MS,
   recentHistoryMax: BRANCH_RECENT_HISTORY_MAX,
 };
 
@@ -208,18 +216,133 @@ export function writeRecentBranch(repository: string, branch: string): void {
   }
 }
 
-function useDebouncedValue(value: string, delayMs: number): string {
-  const [debounced, setDebounced] = useState(value);
+// Isolated branch text entry. This component owns the only per-keystroke
+// state for the primary branch field: typing, paste, replace-selection, and
+// caret behavior all resolve synchronously inside this small tree. The large
+// Create page never rerenders per character. The authoritative draft is
+// written synchronously into `draftRef` so submission always reads the latest
+// text directly; the parent is notified only after edits settle (debounced)
+// for optional exact-name evidence. Expensive suggestion/validation rendering
+// stays outside the urgent editing path (React input guidance).
+export const BranchInputField = memo(function BranchInputField({
+  draftRef,
+  syncToken,
+  datalistId,
+  inputName,
+  ariaLabel,
+  title,
+  placeholder,
+  disabled,
+  baseSuggestions,
+  onSettled,
+  extraOnChange,
+  inputClassName,
+}: {
+  draftRef: { current: string };
+  syncToken: number;
+  datalistId: string;
+  inputName: string;
+  ariaLabel: string;
+  title: string;
+  placeholder: string;
+  disabled: boolean;
+  baseSuggestions: BranchOption[];
+  onSettled: (value: string) => void;
+  extraOnChange?: (value: string) => void;
+  inputClassName?: string;
+}): ReactElement {
+  const [localValue, setLocalValue] = useState(() => draftRef.current || "");
+  const settledTimer = useRef<number | null>(null);
+  const lastSynced = useRef<string>(draftRef.current || "");
+
+  // External commits (draft load, repository change, submit reset) resync
+  // local text without making the parent a per-keystroke subscriber.
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setDebounced(value);
-    }, delayMs);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [value, delayMs]);
-  return debounced;
-}
+    const authoritative = draftRef.current || "";
+    if (authoritative !== lastSynced.current) {
+      lastSynced.current = authoritative;
+      setLocalValue(authoritative);
+    }
+  }, [syncToken]);
+
+  useEffect(
+    () => () => {
+      if (settledTimer.current !== null) {
+        window.clearTimeout(settledTimer.current);
+      }
+    },
+    [],
+  );
+
+  const scheduleSettled = (next: string) => {
+    if (settledTimer.current !== null) {
+      window.clearTimeout(settledTimer.current);
+    }
+    settledTimer.current = window.setTimeout(() => {
+      settledTimer.current = null;
+      if (lastSynced.current !== next) {
+        lastSynced.current = next;
+      }
+      onSettled(next);
+    }, BRANCH_RESOLVE_DEBOUNCE_MS);
+  };
+
+  const visibleSuggestions = useMemo(() => {
+    const needle = localValue.trim().toLowerCase();
+    const seen = new Set<string>();
+    const out: BranchOption[] = [];
+    for (const item of baseSuggestions) {
+      if (!item.value || seen.has(item.value)) {
+        continue;
+      }
+      if (needle && !item.value.toLowerCase().includes(needle)) {
+        continue;
+      }
+      seen.add(item.value);
+      out.push(item);
+      if (out.length >= BRANCH_SUGGESTION_LIMIT) {
+        break;
+      }
+    }
+    return out;
+  }, [baseSuggestions, localValue]);
+
+  return (
+    <>
+      <input
+        name={inputName}
+        aria-label={ariaLabel}
+        title={title}
+        list={datalistId}
+        value={localValue}
+        placeholder={placeholder}
+        disabled={disabled}
+        className={inputClassName}
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(event) => {
+          const next = event.target.value;
+          // Synchronous authoritative draft: submission reads this ref
+          // directly and never waits for debounce, blur, or a delayed copy.
+          draftRef.current = next;
+          setLocalValue(next);
+          extraOnChange?.(next);
+          scheduleSettled(next);
+        }}
+      />
+      <datalist id={datalistId}>
+        {visibleSuggestions.map((item) => (
+          <option
+            key={`${item.source}:${item.value}`}
+            value={item.value}
+          >
+            {item.label}
+          </option>
+        ))}
+      </datalist>
+    </>
+  );
+});
 
 const JIRA_LAST_PROJECT_SESSION_KEY =
   "moonmind.workflow-start.jira.last-project-key";
@@ -6380,7 +6503,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const [repositoryTouched, setRepositoryTouched] = useState(false);
   const [providerProfile, setProviderProfile] = useState("");
   const [agentProfile, setAgentProfile] = useState("");
-  const [branch, setBranch] = useState("");
+  // Branch authoring is isolated from the large Create page: per-keystroke
+  // text lives in `BranchInputField` local state plus this synchronously
+  // updated draft ref. The page subscribes only to the settled value below,
+  // so typing/paste never rerenders the surrounding tree. Submission reads
+  // the ref directly and never waits for debounce, blur, or a delayed copy.
+  const branchDraftRef = useRef("");
+  const [branchSettled, setBranchSettled] = useState("");
+  const [branchInputSyncToken, setBranchInputSyncToken] = useState(0);
   const [branchTouched, setBranchTouched] = useState(false);
   const [publishMode, setPublishMode] = useState(
     normalizePublishModeForSubmit(defaultPublishMode),
@@ -7171,8 +7301,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       setRepositoryTouched(true);
     }
     if (draft.branch) {
-      setBranch(draft.branch);
-      setBranchTouched(false);
+      syncBranchDraft(draft.branch, false);
     }
     if (draft.legacyBranchWarning) {
       setSubmitMessage(draft.legacyBranchWarning);
@@ -7259,8 +7388,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     setRepository(draft.repository || "MoonLadderStudios/MoonMind");
     setRepositoryTouched(true);
     if (draft.branch) {
-      setBranch(draft.branch);
-      setBranchTouched(false);
+      syncBranchDraft(draft.branch, false);
     }
     if (draft.publishMode) {
       setPublishMode(normalizePublishModeForSubmit(draft.publishMode));
@@ -8923,55 +9051,93 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   )
     ? selectedRepositoryForBranchLookup.trim()
     : "";
-  // Authored text stays synchronous and authoritative. Only the remote
-  // suggestion search is debounced; the input, paste handling, and submission
-  // always read the latest authored value.
-  const debouncedBranchSearch = useDebouncedValue(
-    branch.trim(),
-    BRANCH_SEARCH_DEBOUNCE_MS,
-  );
+  // Authored text stays synchronous and authoritative inside
+  // `BranchInputField` + `branchDraftRef`. The parent subscribes only to the
+  // settled value committed after edits pause, and suggestion search never
+  // runs automatically: opening the form fetches only default-branch
+  // metadata, and broader discovery requires an explicit user action.
+  // Touched tracks synchronously in a ref so submit validation sees an
+  // authored-then-cleared field even before the settled commit fires.
+  const branchTouchedRef = useRef(false);
+  const markBranchTouchedLive = useCallback(() => {
+    branchTouchedRef.current = true;
+  }, []);
+  const commitBranchSettled = useCallback((value: string) => {
+    const next = String(value || "");
+    if (next.trim() || branchDraftRef.current.trim()) {
+      branchTouchedRef.current = true;
+    }
+    setBranchSettled((current) => (current === next ? current : next));
+    setBranchTouched((current) => (current || next.trim() ? true : current));
+  }, []);
+  const syncBranchDraft = useCallback((value: string, touched: boolean) => {
+    branchDraftRef.current = String(value || "");
+    branchTouchedRef.current = touched;
+    setBranchSettled(String(value || ""));
+    setBranchTouched(touched);
+    setBranchInputSyncToken((token) => token + 1);
+  }, []);
+  const readBranchDraft = (): string => branchDraftRef.current || "";
+  const isBranchTouched = branchTouched || branchTouchedRef.current;
+  const [branchSearchRequested, setBranchSearchRequested] = useState(false);
+  const [branchSearchQuery, setBranchSearchQuery] = useState("");
   const branchOptionsQuery = useQuery({
     ...configQueryDefaults,
     queryKey: [
       "workflow-start",
       "github-branches",
       branchLookupRepository,
-      debouncedBranchSearch,
+      branchSearchQuery,
     ],
-    enabled: Boolean(branchLookupEndpoint && branchLookupRepository),
+    enabled: Boolean(
+      branchLookupEndpoint && branchLookupRepository && branchSearchRequested,
+    ),
     queryFn: async ({ signal }) =>
       readBranchOptions(branchLookupEndpoint || "", branchLookupRepository, {
-        query: debouncedBranchSearch,
+        query: branchSearchQuery,
         limit: BRANCH_SUGGESTION_LIMIT,
         signal,
       }),
   });
-  // Small metadata-only fallback so default-branch evidence survives an
-  // unrelated suggestion failure without re-enumerating branches.
+  // Default-branch metadata loads once per repository with no branch
+  // enumeration and no dependence on suggestion state or input text. When the
+  // metadata route is unconfigured (legacy configs/tests), fall back to the
+  // suggestion route once per repository: its payload carries defaultBranch
+  // and the metadata reader discards the items.
+  const effectiveBranchMetadataEndpoint =
+    branchMetadataEndpoint || branchLookupEndpoint;
   const branchMetadataQuery = useQuery({
     ...configQueryDefaults,
     queryKey: [
       "workflow-start",
       "github-branch-metadata",
       branchLookupRepository,
+      effectiveBranchMetadataEndpoint,
     ],
     enabled: Boolean(
-      branchMetadataEndpoint &&
-        branchLookupRepository &&
-        branchOptionsQuery.isError,
+      effectiveBranchMetadataEndpoint && branchLookupRepository,
     ),
     retry: false,
     queryFn: async ({ signal }) =>
       readBranchMetadata(
-        branchMetadataEndpoint || "",
+        effectiveBranchMetadataEndpoint || "",
         branchLookupRepository,
         signal,
       ),
   });
   const branchOptions = useMemo(() => {
-    const serverItems = branchOptionsQuery.data?.items || [];
+    // Local-first: default + MoonMind-recent require zero GitHub requests.
+    // Explicit remote results (if the user requested a broader search) are
+    // appended afterwards. Typing filters this base list inside the isolated
+    // input; it never triggers a fetch.
+    const serverItems = branchSearchRequested
+      ? branchOptionsQuery.data?.items || []
+      : [];
     const fallbackDefault = String(
-      branchOptionsQuery.data?.defaultBranch || "",
+      branchMetadataQuery.data?.defaultBranch ||
+        (branchSearchRequested
+          ? branchOptionsQuery.data?.defaultBranch || ""
+          : ""),
     ).trim();
     const recent = readRecentBranches(branchLookupRepository);
     const merged: BranchOption[] = [];
@@ -8999,31 +9165,40 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     // Mounted options stay bounded even after repeated paging or history
     // growth; older branches remain submittable via exact lookup below.
     return merged.slice(0, BRANCH_SUGGESTION_LIMIT);
-  }, [branchOptionsQuery.data, branchLookupRepository]);
+  }, [
+    branchOptionsQuery.data,
+    branchMetadataQuery.data,
+    branchLookupRepository,
+    branchSearchRequested,
+  ]);
   const defaultBranch = useMemo(() => {
     const value = String(
-      branchOptionsQuery.data?.defaultBranch ||
-        branchMetadataQuery.data?.defaultBranch ||
+      branchMetadataQuery.data?.defaultBranch ||
+        branchOptionsQuery.data?.defaultBranch ||
         "",
     ).trim();
     return value;
   }, [
-    branchOptionsQuery.data?.defaultBranch,
     branchMetadataQuery.data?.defaultBranch,
+    branchOptionsQuery.data?.defaultBranch,
   ]);
+  // Submission reads the synchronous draft ref; the settled copy drives only
+  // optional status evidence. An untouched field falls back to the default
+  // branch on create so opening the form never requires enumeration.
+  const settledBranchText = branchSettled.trim();
+  const draftBranchText = (branchDraftRef.current || "").trim();
   const effectiveBranch =
-    branch.trim() ||
-    (!branchTouched && pageMode.mode === "create" && submittedRepository
+    draftBranchText ||
+    settledBranchText ||
+    (!isBranchTouched && pageMode.mode === "create" && submittedRepository
       ? defaultBranch
       : "");
-  // Exact-name evidence is independent of suggestion membership: a branch
-  // outside the first bounded page must stay selectable without a stale
-  // warning. The query key carries the full request identity (repository and
-  // exact name) so late or out-of-order responses can never validate the
-  // wrong draft. The lookup follows the same debounce as suggestion search so
-  // a paste schedules one lookup and typing does not fan out one request per
-  // keystroke.
-  const trimmedBranchForResolve = debouncedBranchSearch;
+  // Exact-name evidence is independent of suggestion membership and never
+  // runs alongside suggestion search: one settled value schedules at most one
+  // non-blocking lookup after edits pause. The query key carries the full
+  // request identity (repository + exact name) so late responses can never
+  // validate a newer draft; the component checks identity before rendering.
+  const trimmedBranchForResolve = settledBranchText;
   const branchResolveQuery = useQuery({
     ...configQueryDefaults,
     staleTime: 60_000,
@@ -9051,6 +9226,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (!trimmedBranchForResolve || !branchResolveEndpoint) {
       return "not-checked";
     }
+    // Obsolete responses must never validate a newer draft: only report the
+    // outcome when the settled evidence still matches the current draft.
+    const currentDraft = (branchDraftRef.current || "").trim();
+    if (currentDraft && trimmedBranchForResolve !== currentDraft) {
+      return "checking";
+    }
     if (
       branchResolveQuery.isLoading ||
       branchResolveQuery.isFetching ||
@@ -9073,6 +9254,14 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     !selectedRepositoryForBranchLookup.trim() ||
     !branchLookupEndpoint ||
     !branchLookupRepository;
+  const requestBranchSearch = useCallback(() => {
+    setBranchSearchQuery((branchDraftRef.current || "").trim());
+    setBranchSearchRequested(true);
+  }, []);
+  const clearBranchSearch = useCallback(() => {
+    setBranchSearchRequested(false);
+    setBranchSearchQuery("");
+  }, []);
   const branchStatusMessage = (() => {
     if (!selectedRepositoryForBranchLookup.trim()) {
       return "Select a repository to load branches.";
@@ -9083,13 +9272,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     if (!branchLookupRepository) {
       return "Branch lookup requires a valid GitHub repository value.";
     }
-    if (branchOptionsQuery.isLoading) {
-      return branch.trim() ? "Loading branches..." : "";
-    }
-    if (branchOptionsQuery.isFetching) {
+    if (branchMetadataQuery.isLoading) {
       return "";
     }
-    if (branchOptionsQuery.isError) {
+    if (
+      branchSearchRequested &&
+      (branchOptionsQuery.isLoading || branchOptionsQuery.isFetching)
+    ) {
+      return "";
+    }
+    if (branchSearchRequested && branchOptionsQuery.isError) {
       // Lookup availability is reported separately from input validity: a
       // failed suggestion fetch never implies the authored branch is wrong.
       if (defaultBranch) {
@@ -9100,41 +9292,49 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (
       branchResolutionOutcome === "absent" &&
-      trimmedBranchForResolve === branch.trim() &&
-      branch.trim()
+      trimmedBranchForResolve === (branchDraftRef.current || "").trim() &&
+      (branchDraftRef.current || "").trim()
     ) {
       return `No branch named "${trimmedBranchForResolve}" was found in this repository. You can still submit it for backend validation.`;
     }
     if (
+      branchSearchRequested &&
       branchOptionsQuery.isSuccess &&
       branchOptionsQuery.data?.hasMore === true &&
-      debouncedBranchSearch
+      branchSearchQuery
     ) {
       // The suggestion list is one bounded page, never a complete crawl:
       // say so instead of implying these are all the matches.
       return `Showing the first ${branchOptions.length} suggestions. Type to narrow the list or paste the exact branch name.`;
     }
-    if (branchOptionsQuery.isSuccess && branchOptions.length === 0) {
+    if (
+      branchSearchRequested &&
+      branchOptionsQuery.isSuccess &&
+      branchOptions.length === 0
+    ) {
       return "No branches returned for this repository. Type a branch name.";
     }
     return "";
   })();
   const branchStatusIsError = Boolean(
-    branchOptionsQuery.isError && !defaultBranch,
+    branchSearchRequested && branchOptionsQuery.isError && !defaultBranch,
   );
   const handleRepositoryChange = (value: string) => {
     setRepository(value);
     setRepositoryTouched(true);
     const selectedOption = repositoryOptionValue(repositoryOptions, value);
     writeLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY, selectedOption);
+    // A new repository invalidates explicit search results and the settled
+    // branch draft; metadata reloads via its repository-scoped query key.
+    setBranchSearchRequested(false);
+    setBranchSearchQuery("");
   };
   const handleGitHubIssueRepositoryChange = (issueRepository: string) => {
     if (repositoryTouched || repository.trim() === issueRepository) {
       return;
     }
     setRepository(issueRepository);
-    setBranch("");
-    setBranchTouched(false);
+    syncBranchDraft("", false);
   };
 
   function stepPresetStatusText(step: StepState): string {
@@ -9877,7 +10077,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           context: {
             repository: repository.trim() || defaultRepository,
             repo: repository.trim() || defaultRepository,
-            branch: branch.trim() || undefined,
+            branch: readBranchDraft().trim() || undefined,
             publishMode: normalizePublishModeForSubmit(publishMode),
             targetRuntime: presetRuntime,
             ...(submitIntent ? { submitIntent } : {}),
@@ -10696,11 +10896,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (normalizedRepository && !effectiveBranch) {
       setSubmitMessage(
-        branchOptionsQuery.isLoading
+        branchMetadataQuery.isLoading
           ? "Wait for the repository default branch to load, or enter a branch before starting this workflow."
-          : branchTouched
+          : isBranchTouched
             ? "Choose a branch before starting this repository-backed workflow."
-            : branchOptionsQuery.isError
+            : branchSearchRequested && branchOptionsQuery.isError
               ? "The repository default branch could not be loaded. Enter a branch before starting this workflow."
               : "No repository default branch is available. Enter a branch before starting this workflow.",
       );
@@ -12369,8 +12569,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         ? "Start a new run from this workflow draft"
         : "Start this workflow";
   const repositoryTooltip = "Select the GitHub repository for this workflow";
-  const branchTooltip = branchOptionsQuery.isLoading
-    ? "Loading branches for the selected repository..."
+  const branchTooltip = branchMetadataQuery.isLoading
+    ? "Loading the repository default branch..."
     : branchControlDisabled
       ? branchStatusMessage ||
         "Choose a valid GitHub repository before selecting a branch"
@@ -12849,15 +13049,23 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             <div className="grid-2">
               <label>
                 Starting branch
-                <input
-                  value={branch}
-                  onChange={(event) => {
-                    setBranchTouched(true);
-                    setBranch(event.target.value);
+                <BranchInputField
+                  draftRef={branchDraftRef}
+                  syncToken={branchInputSyncToken}
+                  datalistId={`${BRANCH_OPTIONS_DATALIST_ID}-repair`}
+                  inputName="branch"
+                  ariaLabel="Starting branch"
+                  title="Select the branch to check out before the workflow starts"
+                  placeholder="Branch"
+                  disabled={branchControlDisabled}
+                  baseSuggestions={branchOptions}
+                  onSettled={commitBranchSettled}
+                  extraOnChange={(next) => {
+                    markBranchTouchedLive();
                     setRemediationDraft((current) => current ? {
                       ...current,
-                      branch: event.target.value,
-                      startingBranch: event.target.value,
+                      branch: next,
+                      startingBranch: next,
                     } : current);
                   }}
                 />
@@ -13180,13 +13388,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                 </option>
               ))}
             </datalist>
-            <datalist id={BRANCH_OPTIONS_DATALIST_ID}>
-              {branchOptions.map((item) => (
-                <option key={`${item.source}:${item.value}`} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </datalist>
+            {/* Branch suggestions render inside the isolated BranchInputField
+                (same BRANCH_OPTIONS_DATALIST_ID) so typing filters locally
+                without rerendering this large section. */}
 
             {steps.map((step, index) => {
               const isPrimaryStep = index === 0;
@@ -15008,24 +15212,43 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               title={branchTooltip}
             >
               <BranchIcon />
-              <input
-                name="branch"
-                aria-label="Branch"
+              <BranchInputField
+                draftRef={branchDraftRef}
+                syncToken={branchInputSyncToken}
+                datalistId={BRANCH_OPTIONS_DATALIST_ID}
+                inputName="branch"
+                ariaLabel="Branch"
                 title={branchTooltip}
-                list={BRANCH_OPTIONS_DATALIST_ID}
-                value={branch}
                 placeholder={
-                  branchOptionsQuery.isLoading
+                  branchMetadataQuery.isLoading
                     ? "Loading branches..."
                     : "Branch"
                 }
                 disabled={branchControlDisabled}
-                onChange={(event) => {
-                  setBranchTouched(true);
-                  setBranch(event.target.value);
-                }}
+                baseSuggestions={branchOptions}
+                onSettled={commitBranchSettled}
+                extraOnChange={markBranchTouchedLive}
               />
             </div>
+            {branchControlDisabled ? null : branchSearchRequested ? (
+              <button
+                type="button"
+                className="small"
+                onClick={clearBranchSearch}
+                title="Hide broader GitHub branch search results; typing always filters local suggestions."
+              >
+                Hide search
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="small"
+                onClick={requestBranchSearch}
+                title="Search other branches on GitHub (one bounded request). Typing, pasting, and submitting never require this."
+              >
+                Search other branches
+              </button>
+            )}
             <div
               className="queue-inline-selector queue-inline-selector--publish"
               title={publishModeTooltip}
