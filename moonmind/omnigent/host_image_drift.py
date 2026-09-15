@@ -25,8 +25,13 @@ probes) re-verify the series before any session starts.
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import os
 import re
+from collections.abc import Mapping
+from typing import Any
 
 from moonmind.omnigent.compatibility import (
     is_same_image_repository,
@@ -217,7 +222,61 @@ def is_compatible_image_drift(
     return is_same_image_repository(planned_ref, observed_ref)
 
 
+def reconcile_effective_launch_to_selected_host(
+    effective_launch: object,
+    selected_host_image_ref: str,
+) -> dict[str, Any] | None:
+    """Reconcile a stale policy image to the currently selected Host Class.
+
+    Fresh planning compiles ``effective_launch`` from the persisted policy
+    snapshot while the Host Class comes from current deployment evidence
+    (env + bootstrap resolved state). After an image rebuild the two digests
+    differ while the repository is identical. Exact-equality planning fails
+    every app update even though launch-time drift recovery (launcher
+    fallback + attestation same-repo gates) already accepts this case.
+
+    Returns a reconciled copy pinning ``selected_host_image_ref`` when the
+    planned image is same-repository drift, ``None`` when the repositories
+    differ (fail closed, different image family). An exact match returns an
+    equal copy without re-hashing. The reconciled copy updates the top-level
+    ``hostImageRef`` and the effective ``boundaries.host.hostImageRef`` so the
+    persisted launch artifact stays internally consistent, then recomputes
+    ``snapshotRef`` with the same canonical JSON as
+    ``_compile_persisted_effective_launch``. ``policyAuthority`` is left as
+    the original policy evidence.
+    """
+
+    if not isinstance(effective_launch, Mapping):
+        return None
+    planned = str(effective_launch.get("hostImageRef") or "").strip()
+    selected = str(selected_host_image_ref or "").strip()
+    if not planned or not selected:
+        return None
+    if planned == selected:
+        return dict(effective_launch)
+    if not is_compatible_image_drift(planned, selected):
+        return None
+    reconciled = copy.deepcopy(dict(effective_launch))
+    reconciled["hostImageRef"] = selected
+    boundaries = reconciled.get("boundaries")
+    if isinstance(boundaries, dict):
+        host = boundaries.get("host")
+        if isinstance(host, dict) and "hostImageRef" in host:
+            host = dict(host)
+            host["hostImageRef"] = selected
+            boundaries = dict(boundaries)
+            boundaries["host"] = host
+            reconciled["boundaries"] = boundaries
+    reconciled.pop("snapshotRef", None)
+    canonical = json.dumps(reconciled, sort_keys=True, separators=(",", ":"))
+    reconciled["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
+        canonical.encode()
+    ).hexdigest()
+    return reconciled
+
+
 __all__ = [
     "compatible_deployed_fallback",
     "is_compatible_image_drift",
+    "reconcile_effective_launch_to_selected_host",
 ]
