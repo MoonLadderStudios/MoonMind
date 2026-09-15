@@ -2,7 +2,7 @@
 
 Thanks for your interest in improving MoonMind. Issues and pull requests are welcome.
 
-AI-assisted contributions are welcome, but contributors are responsible for reviewing, understanding, and testing everything they submit.
+AI-assisted contributions are welcome, but contributors are responsible for reviewing and understanding everything they submit and testing executable changes.
 
 For substantial changes, please open an issue first so we can agree on the approach before implementation begins.
 
@@ -33,7 +33,7 @@ docker compose up -d
 
 Open [http://localhost:7000](http://localhost:7000) to use the dashboard.
 
-Run the relevant automated checks before opening a pull request:
+For executable changes, run the relevant automated checks before opening a pull request:
 
 ```bash
 # Unit tests
@@ -45,7 +45,9 @@ Run the relevant automated checks before opening a pull request:
 
 After the first unit-test run, use `./tools/test_unit_docker.sh --no-build` for faster repeat runs.
 
-Use Test-Driven Development: write or update a behavioral test, observe the expected failure, implement the smallest correct change, then refactor with tests green. Behavior-preserving refactors start with passing coverage. Documentation-only changes do not require artificial failing tests.
+Use Test-Driven Development for executable behavior: write or update a behavioral test, observe the expected failure, implement the smallest correct change, then refactor with tests green. Behavior-preserving refactors start with passing coverage.
+
+**Do not unit test documentation.** Documentation-only changes need review, not unit tests. Do not add tests for documentation wording, headings, structure, counts, or required phrases, even when labeled contract or compliance checks. Test executable behavior instead.
 
 Inside a MoonMind-managed workflow, use `moonmind container python-tests <pytest paths or node ids>` instead of the host Docker wrappers above. Runner and CI details are in [Pre-Commit Workflow](docs/Development/PreCommitWorkflow.md). Tests requiring live third-party provider credentials are not required unless a maintainer asks for them.
 
