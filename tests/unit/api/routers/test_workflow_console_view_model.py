@@ -525,9 +525,14 @@ def test_build_repository_branch_options_uses_github_lookup(monkeypatch) -> None
                 ),
             ],
             None,
-            "main",
+            None,
             False,
         ),
+    )
+    monkeypatch.setattr(
+        dashboard_view_model,
+        "_get_cached_repository_default_branch",
+        lambda token, repository: ("main", None),
     )
 
     payload = dashboard_view_model.build_repository_branch_options("Octo/Repo")
@@ -562,9 +567,14 @@ def test_build_repository_branch_options_reports_has_more(monkeypatch) -> None:
                 ),
             ],
             None,
-            "main",
+            None,
             True,
         ),
+    )
+    monkeypatch.setattr(
+        dashboard_view_model,
+        "_get_cached_repository_default_branch",
+        lambda token, repository: ("main", None),
     )
 
     payload = dashboard_view_model.build_repository_branch_options("Octo/Repo")
@@ -574,16 +584,10 @@ def test_build_repository_branch_options_reports_has_more(monkeypatch) -> None:
 
 
 def test_fetch_github_branch_options_reads_single_bounded_page(monkeypatch) -> None:
-    responses = [
-        {
-            "json": {"default_branch": "main"},
-            "links": {},
-        },
-        {
-            "json": [{"name": "main"}, {"name": "feature/page-one"}],
-            "links": {"next": {"url": "https://api.github.com/page/2"}},
-        },
-    ]
+    branch_payload = {
+        "json": [{"name": "main"}, {"name": "feature/page-one"}],
+        "links": {"next": {"url": "https://api.github.com/page/2"}},
+    }
     calls = []
 
     class FakeResponse:
@@ -615,7 +619,7 @@ def test_fetch_github_branch_options_reads_single_bounded_page(monkeypatch) -> N
             params: dict[str, int] | None = None,
         ) -> FakeResponse:
             calls.append({"url": url, "headers": headers, "params": params})
-            return FakeResponse(responses[len(calls) - 1])
+            return FakeResponse(branch_payload)
 
     monkeypatch.setattr(dashboard_view_model.httpx, "Client", FakeClient)
 
@@ -627,7 +631,8 @@ def test_fetch_github_branch_options_reads_single_bounded_page(monkeypatch) -> N
     )
 
     assert error is None
-    assert default_branch == "main"
+    # Suggestion search never fetches metadata: one bounded branch page only.
+    assert default_branch is None
     # Bounded cold discovery: only one page is read; the advertised next page
     # is reported via has_more instead of being drained automatically.
     assert [option.value for option in options] == [
@@ -636,15 +641,6 @@ def test_fetch_github_branch_options_reads_single_bounded_page(monkeypatch) -> N
     ]
     assert has_more is True
     assert calls == [
-        {
-            "url": "https://api.github.com/repos/Octo/Repo",
-            "headers": {
-                "Accept": "application/vnd.github+json",
-                "Authorization": "Bearer ghp_test_token",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            "params": None,
-        },
         {
             "url": "https://api.github.com/repos/Octo/Repo/branches",
             "headers": {
@@ -688,8 +684,7 @@ def test_fetch_github_branch_options_filters_single_page_locally(
             headers: dict[str, str],
             params: dict[str, int] | None = None,
         ) -> FakeResponse:
-            if url == "https://api.github.com/repos/Octo/Repo":
-                return FakeResponse({"default_branch": "main"})
+            assert url == "https://api.github.com/repos/Octo/Repo/branches"
             return FakeResponse(
                 [{"name": "main"}, {"name": "Feature/Page-One"}],
                 links={},
@@ -705,11 +700,11 @@ def test_fetch_github_branch_options_filters_single_page_locally(
 
     assert error is None
     assert [option.value for option in options] == ["Feature/Page-One"]
-    assert default_branch == "main"
+    assert default_branch is None
     assert has_more is False
 
 
-def test_fetch_github_branch_options_preserves_metadata_on_page_failure(
+def test_fetch_github_branch_options_reports_page_failure_without_metadata(
     monkeypatch,
 ) -> None:
     class FakeResponse:
@@ -740,18 +735,7 @@ def test_fetch_github_branch_options_preserves_metadata_on_page_failure(
             headers: dict[str, str],
             params: dict[str, int] | None = None,
         ) -> FakeResponse:
-            if url == "https://api.github.com/repos/Octo/Repo":
-
-                class MetadataResponse:
-                    links: dict[str, object] = {}
-
-                    def raise_for_status(self) -> None:
-                        return None
-
-                    def json(self) -> object:
-                        return {"default_branch": "develop"}
-
-                return MetadataResponse()  # type: ignore[return-value]
+            assert url == "https://api.github.com/repos/Octo/Repo/branches"
             return FakeResponse([])
 
     monkeypatch.setattr(dashboard_view_model.httpx, "Client", FakeClient)
@@ -764,23 +748,21 @@ def test_fetch_github_branch_options_preserves_metadata_on_page_failure(
 
     assert options == []
     assert error == "GitHub branch lookup is unavailable."
-    assert default_branch == "develop"
+    assert default_branch is None
     assert has_more is False
 
-def test_fetch_github_branch_options_keeps_branches_when_metadata_fails(
+def test_fetch_github_branch_options_fetches_only_branch_page(
     monkeypatch,
 ) -> None:
     calls = []
 
     class FakeResponse:
-        def __init__(self, payload: object, *, fail: bool = False) -> None:
+        def __init__(self, payload: object) -> None:
             self._payload = payload
-            self._fail = fail
             self.links = {}
 
         def raise_for_status(self) -> None:
-            if self._fail:
-                raise dashboard_view_model.httpx.HTTPError("metadata failed")
+            return None
 
         def json(self) -> object:
             return self._payload
@@ -803,8 +785,6 @@ def test_fetch_github_branch_options_keeps_branches_when_metadata_fails(
             params: dict[str, int] | None = None,
         ) -> FakeResponse:
             calls.append({"url": url, "params": params})
-            if url == "https://api.github.com/repos/Octo/Repo":
-                return FakeResponse({}, fail=True)
             return FakeResponse([{"name": "main"}, {"name": "feature/page-one"}])
 
     monkeypatch.setattr(dashboard_view_model.httpx, "Client", FakeClient)
@@ -819,8 +799,8 @@ def test_fetch_github_branch_options_keeps_branches_when_metadata_fails(
     assert error is None
     assert default_branch is None
     assert [option.value for option in options] == ["main", "feature/page-one"]
+    # Suggestion search is metadata-free: exactly one branch-page request.
     assert calls == [
-        {"url": "https://api.github.com/repos/Octo/Repo", "params": None},
         {
             "url": "https://api.github.com/repos/Octo/Repo/branches",
             "params": {"per_page": 20},
@@ -989,18 +969,21 @@ def test_fetch_github_branch_exact_inconclusive_when_repo_unreachable(
     assert inconclusive is True
 
 
-def test_branch_search_cache_scopes_by_query_and_preserves_branch_case() -> None:
-    first = dashboard_view_model._github_branch_search_cache_key(
-        "token", "Octo/Repo", "feat", 20
+def test_branch_page_cache_scopes_by_repo_and_preserves_branch_case() -> None:
+    # The raw page is keyed by repository + limit only: typing another
+    # character must filter the already-loaded page locally instead of
+    # re-downloading the same fixed first page.
+    first = dashboard_view_model._github_branch_page_cache_key(
+        "token", "Octo/Repo", 20
     )
-    assert first != dashboard_view_model._github_branch_search_cache_key(
-        "token", "Octo/Repo", "main", 20
+    assert first == dashboard_view_model._github_branch_page_cache_key(
+        "token", "octo/repo", 20
     )
-    assert first != dashboard_view_model._github_branch_search_cache_key(
-        "token", "Octo/Repo", "feat", 50
+    assert first != dashboard_view_model._github_branch_page_cache_key(
+        "token", "Octo/Repo", 50
     )
-    assert first == dashboard_view_model._github_branch_search_cache_key(
-        "token", "octo/repo", "feat", 20
+    assert first != dashboard_view_model._github_branch_page_cache_key(
+        "token", "Other/Repo", 20
     )
     resolve_upper = dashboard_view_model._github_branch_resolve_cache_key(
         "token", "Octo/Repo", "Feature/Foo"
@@ -1009,6 +992,92 @@ def test_branch_search_cache_scopes_by_query_and_preserves_branch_case() -> None
         "token", "Octo/Repo", "feature/foo"
     )
     assert resolve_upper != resolve_lower
+
+
+def test_branch_page_cache_filters_locally_without_refetch(monkeypatch) -> None:
+    dashboard_view_model._reset_branch_http_state_for_tests()
+    calls: list[str] = []
+
+    class FakeResponse:
+        links: dict[str, object] = {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> object:
+            return [{"name": "main"}, {"name": "feature/one"}]
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, **kwargs: object) -> FakeResponse:
+            calls.append(url)
+            return FakeResponse()
+
+    monkeypatch.setattr(dashboard_view_model.httpx, "Client", FakeClient)
+    try:
+        first, _, _, _ = dashboard_view_model._get_cached_github_branch_options(
+            "tok", "Octo/Repo", "feat", 20
+        )
+        second, _, _, _ = dashboard_view_model._get_cached_github_branch_options(
+            "tok", "Octo/Repo", "feature/o", 20
+        )
+        assert [o.value for o in first] == ["feature/one"]
+        assert [o.value for o in second] == ["feature/one"]
+        # One underlying page download serves both queries.
+        assert calls == ["https://api.github.com/repos/Octo/Repo/branches"] * 1
+    finally:
+        dashboard_view_model._reset_branch_http_state_for_tests()
+
+
+def test_resolve_never_fetches_metadata(monkeypatch) -> None:
+    dashboard_view_model._reset_branch_http_state_for_tests()
+    calls: list[str] = []
+
+    class FakeResponse:
+        status_code = 200
+        links: dict[str, object] = {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> object:
+            return {"name": "main"}
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, **kwargs: object) -> FakeResponse:
+            calls.append(url)
+            return FakeResponse()
+
+    monkeypatch.setattr(dashboard_view_model.httpx, "Client", FakeClient)
+    monkeypatch.setattr(settings.github, "github_token", "ghp_test_token")
+    monkeypatch.setattr(settings.github, "github_enabled", True)
+    try:
+        payload = dashboard_view_model.resolve_repository_branch(
+            "Octo/Repo", "main"
+        )
+        assert payload["found"] is True
+        # Exactly one exact-branch request; no metadata dependency.
+        assert calls == ["https://api.github.com/repos/Octo/Repo/branches/main"]
+        assert payload["defaultBranch"] is None
+    finally:
+        dashboard_view_model._reset_branch_http_state_for_tests()
 
 
 def test_branch_cache_evicts_oldest_entries() -> None:
@@ -1094,46 +1163,43 @@ async def test_async_branch_lookup_keeps_event_loop_responsive(
         def __init__(self, **kwargs: object) -> None:
             self.kwargs = kwargs
 
-        async def __aenter__(self) -> "FakeAsyncClient":
-            return self
-
-        async def __aexit__(self, *args: object) -> None:
-            return None
-
         async def get(
             self,
             url: str,
             *,
-            headers: dict[str, str],
+            headers: dict[str, str] | None = None,
             params: dict[str, int] | None = None,
         ) -> FakeResponse:
             await asyncio.sleep(0.05)
-            if url.endswith("/branches"):
-                return FakeBranchResponse()
-            return FakeResponse()
+            assert url.endswith("/branches")
+            return FakeBranchResponse()
 
     def forbidden_sync_client(**kwargs: object) -> object:
         raise AssertionError("async path must not use the blocking client")
 
+    dashboard_view_model._reset_branch_http_state_for_tests()
     monkeypatch.setattr(
         dashboard_view_model.httpx, "AsyncClient", FakeAsyncClient
     )
     monkeypatch.setattr(
         dashboard_view_model.httpx, "Client", forbidden_sync_client
     )
-
-    ticker_task = asyncio.create_task(ticker())
-    options, error, default_branch, _has_more = (
-        await dashboard_view_model._fetch_github_branch_options_async(
-            "ghp_test_token", "Octo/Repo"
+    try:
+        ticker_task = asyncio.create_task(ticker())
+        options, error, default_branch, _has_more = (
+            await dashboard_view_model._fetch_github_branch_options_async(
+                "ghp_test_token", "Octo/Repo"
+            )
         )
-    )
-    _ = await ticker_task
+        _ = await ticker_task
 
-    assert [option.value for option in options] == ["main"]
-    assert error is None
-    assert default_branch == "main"
-    assert len(ticks) == 5
+        assert [option.value for option in options] == ["main"]
+        assert error is None
+        # Suggestion search is metadata-free even on the async path.
+        assert default_branch is None
+        assert len(ticks) == 5
+    finally:
+        dashboard_view_model._reset_branch_http_state_for_tests()
 
 def test_build_repository_branch_options_sanitizes_errors(monkeypatch) -> None:
     monkeypatch.setattr(settings.github, "github_token", "ghp_secret_token")
@@ -1144,9 +1210,14 @@ def test_build_repository_branch_options_sanitizes_errors(monkeypatch) -> None:
         lambda token, repository, query="", limit=20: (
             [],
             "GitHub failed with ghp_secret_token",
-            "main",
+            None,
             False,
         ),
+    )
+    monkeypatch.setattr(
+        dashboard_view_model,
+        "_get_cached_repository_default_branch",
+        lambda token, repository: ("main", None),
     )
 
     payload = dashboard_view_model.build_repository_branch_options("Octo/Repo")
