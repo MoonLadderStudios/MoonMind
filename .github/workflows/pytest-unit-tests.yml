@@ -298,6 +298,7 @@ jobs:
           echo "MOONMIND_TEST_POSTGRES_URL=postgresql+asyncpg://postgres:reliability-test-only@$(dependency_ip postgres):5432/postgres" >> "$GITHUB_ENV"
           echo "MOONMIND_TEST_TEMPORAL_ADDRESS=$(dependency_ip temporal):7233" >> "$GITHUB_ENV"
           echo "MOONMIND_TEST_MINIO_ENDPOINT=http://$(dependency_ip minio):9000" >> "$GITHUB_ENV"
+          echo "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" >> "$GITHUB_ENV"
       - name: Run selected unit suite
         if: matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
         env:
