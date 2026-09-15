@@ -8,14 +8,16 @@ metadata:
 
 # Jira Issue Creator
 
-Create a Jira task, story, bug, or subtask from the user's request. Prefer an available Jira MCP connector or first-party integration. If no connector is available, use the Jira REST API only when the user or environment provides the Jira base URL and credentials.
+Create a Jira task, story, bug, or subtask from the user's request. Work through MoonMind's trusted Jira tool surface with scoped capabilities. Draft, proposal, and dry-run requests are strictly non-mutating: they compose and validate fields only and perform zero issue, comment, or status writes.
+
+Creation requires the request's existing explicit write intent. When creation is authorized, complete it without adding a second routine confirmation step. Align description, inputs, defaults, examples, output status, and actual dispatch so the advertised behavior is true.
 
 ## Inputs
 
 - Required: Jira project key or enough context to identify one.
 - Required: issue type (`Task`, `Story`, `Bug`, or `Sub-task`). Use `jira.list_create_issue_types` to resolve the name to an `issueTypeId`. Default to `Task` only when the user does not specify.
 - Required: summary/title.
-- Required for creation: authenticated Jira access through a connector, API token, OAuth session, or documented local secret.
+- Required for creation: the request's existing explicit write intent plus authenticated Jira access through MoonMind's trusted Jira tool surface. Missing configuration or denied managed access is a blocker; do not fall back to raw credentials, scraped secrets, or a less-constrained direct HTTP path.
 - Optional for breakdown-driven creation: `storyBreakdownPath`, `stories`, or `storyOutput` from `moonspec-breakdown`.
 - Optional for ordered Jira story exports: dependency mode `none` or `linear_blocker_chain`.
 - Optional: description, acceptance criteria, priority, labels, assignee, reporter, parent issue key, sprint, component, due date, linked issues, attachments.
@@ -43,8 +45,8 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 - Fail fast if a requested field cannot be set through the available Jira schema.
 - Never print credentials, authorization headers, cookies, or full environment dumps.
 
-4. Create the issue.
-- Use the available Jira connector's `jira.create_issue` or `jira.create_subtask` operations when present.
+4. Create the issue (only when the request carries explicit write intent; draft/proposal/dry-run stops before this step with a validated payload).
+- Use the trusted Jira tool surface (`jira.create_issue` / `jira.create_subtask` or the exposed MCP equivalent) when present.
 - In MoonMind workflow plans, `jira-issue-creator` is an agent skill, not a deterministic executable tool. Use the available Jira connector/API to inspect projects, issue types, and create fields, then create the requested issues.
 - When the task references a story breakdown directory, look for `stories.json` inside that directory unless an exact `storyBreakdownPath` is provided.
 - Preserve story order and stable story IDs from MoonSpec breakdown when creating Jira issues.
@@ -53,7 +55,6 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 - Create dependency links only through MoonMind's trusted Jira tool surface, such as `jira.create_issue_link` when available. Do not call Jira directly from the shell and do not rely on issue descriptions or prompt text as the dependency mechanism.
 - Return created/reused issue keys plus created/reused/failed dependency-link results. If issue creation succeeds but a dependency link fails, report partial success and do not claim the dependency chain is complete.
 - Before creating any issue from `stories.json`, verify every story has source traceability. Canonical declarative breakdowns require an original source document path through `story.sourceReference.path`, `source.referencePath`, or `source.path`. Trusted Jira, inline, and `imperative-input` breakdowns without a document path must preserve source title/key and `coverageIds`; do not block solely because those sources lack a canonical path.
-- Otherwise call Jira REST `POST /rest/api/3/issue` for Jira Cloud or the deployment's documented equivalent.
 - Send only the fields needed for the requested issue.
 - Treat retries carefully: before retrying after an uncertain network failure, use `jira.search_issues` to search by a stable summary/project/reporter marker to avoid duplicate tickets.
 
@@ -85,8 +86,7 @@ When invoked after `moonspec-breakdown` or when the request references story bre
 
 ## External Dependencies
 
-- Jira connector, MCP tool, or REST API access.
-- Jira credentials with permission to create issues in the target project.
+- MoonMind's trusted Jira tool surface with permission to create issues in the target project.
 - Network access to the Jira site.
 - Project metadata access for issue types and required/custom fields.
 

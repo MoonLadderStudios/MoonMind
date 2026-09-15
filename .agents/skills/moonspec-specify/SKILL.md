@@ -171,7 +171,13 @@ Fill the template with concrete details derived from the feature description:
    - Scope status: in scope or out of scope with rationale.
    - Mapped functional requirement ID after functional requirements are generated.
 10. Ensure every in-scope `DESIGN-REQ-*` maps to at least one functional requirement.
-11. Define measurable, technology-agnostic success criteria.
+11. Define measurable success criteria with an objective verification method.
+    Preserve the request's own acceptance language: a technical API, protocol,
+    migration, or infrastructure requirement keeps its explicit interface names,
+    numerical thresholds, platform constraints, and negative requirements
+    unchanged in meaning. Do not rewrite a technical requirement as a business metric
+    and do not invent performance, retention, or concurrency numbers to fill the template.
+    Qualitative criteria are valid when they have an objective verification method.
 12. Include key entities only if the feature involves data.
 13. Apply the intent guard:
    - For `runtime` intent, the spec must describe observable system behavior and validation outcomes, not merely edits to documentation.
@@ -180,8 +186,10 @@ Fill the template with concrete details derived from the feature description:
 Guidelines:
 
 - Focus on what users need and why.
-- Avoid how to implement it: no tech stack, APIs, code structure, frameworks, or databases.
-- Write for business stakeholders, not developers.
+- Avoid prescribing implementation beyond what the original request requires:
+  keep the request's explicit tech stack, APIs, code structure, frameworks, or
+  databases when they are acceptance. Do not add new ones.
+- Write for the request's intended readers, not only business stakeholders.
 - Remove optional sections when irrelevant instead of writing `N/A`.
 - Do not embed checklists in the spec.
 - Keep source requirement mappings traceable without introducing implementation details.
@@ -199,9 +207,11 @@ After writing the initial spec, create `SPECIFY_FEATURE_DIRECTORY/checklists/req
 
 ## Content Quality
 
-- [ ] No implementation details (languages, frameworks, APIs)
-- [ ] Focused on user value and business needs
-- [ ] Written for non-technical stakeholders
+- [ ] No implementation details beyond what the original request explicitly requires
+- [ ] Focused on user value and requested behavior
+- [ ] Written for its intended readers (business stakeholders for product
+  requests; engineers and operators for API, protocol, migration, or
+  infrastructure contracts)
 - [ ] All mandatory sections completed
 
 ## Requirement Completeness
@@ -210,8 +220,10 @@ After writing the initial spec, create `SPECIFY_FEATURE_DIRECTORY/checklists/req
 - [ ] Exactly one user story is defined
 - [ ] Requirements are testable and unambiguous
 - [ ] Runtime intent describes system behavior rather than docs-only changes, unless docs-only was explicitly requested
-- [ ] Success criteria are measurable
-- [ ] Success criteria are technology-agnostic (no implementation details)
+- [ ] Success criteria are measurable with an objective verification method
+- [ ] Explicit technical thresholds, interface names, platform constraints, and
+  negative requirements from the original request survive unchanged in meaning
+  (no invented numbers; no business-metric rewrite of a technical contract)
 - [ ] All acceptance scenarios are defined
 - [ ] Independent Test describes how the story can be validated end-to-end
 - [ ] Acceptance scenarios are concrete enough to derive unit and integration tests
@@ -226,7 +238,7 @@ After writing the initial spec, create `SPECIFY_FEATURE_DIRECTORY/checklists/req
 - [ ] All functional requirements have clear acceptance criteria
 - [ ] The single user story covers the primary flow
 - [ ] Feature meets measurable outcomes defined in Success Criteria
-- [ ] No implementation details leak into specification
+- [ ] No implementation details beyond what the original request explicitly requires
 
 ## Notes
 
