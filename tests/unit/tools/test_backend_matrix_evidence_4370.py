@@ -11,7 +11,6 @@ from tools.ci.write_backend_matrix_summary import (
     build_evidence,
     classify_outcome,
     parse_junit,
-    render_summary,
     write_durations_snapshot,
     write_slowest_report,
 )

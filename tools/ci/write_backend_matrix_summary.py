@@ -256,7 +256,7 @@ def render_summary(
     lines += [
         "",
         "> Runner disappearance or a hard job kill may prevent final uploads. "
-        "Live Actions output (streamed via `tee`) remains the primary record in that case.",
+        + "Live Actions output (streamed via `tee`) remains the primary record in that case.",
     ]
     if error:
         lines += ["", f"> Evidence hook note: `{error}` (test outcome unchanged)."]
