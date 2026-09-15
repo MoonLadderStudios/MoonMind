@@ -26,6 +26,7 @@ from moonmind.workflows.skills.deployment_execution import (
     _ensure_command_succeeded,
     _ensure_runner_survives_update,
     _is_host_absolute_path,
+    _is_wsl_distro_path,
     _remap_host_compose_path,
     _remove_services_from_command_args,
     _service_is_excluded,
@@ -2178,3 +2179,68 @@ def test_desktop_rewrite_triggers_for_windows_and_wsl_project_dirs(
         project_dir=project_dir, local_project_dir=str(tmp_path)
     )
     assert runner._requires_desktop_host_rewrite() is expected
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/mnt/d/code/MoonMind", True),
+        ("/mnt/c", True),
+        ("/mnt/d/", True),
+        (r"D:\code\MoonMind", False),
+        ("/srv/moonmind", False),
+        ("/mnt/data", False),
+        ("/mnt/d2/code", False),
+        ("relative/path", False),
+    ],
+)
+def test_wsl_distro_path_matches_only_single_letter_mnt_mounts(path, expected):
+    assert _is_wsl_distro_path(path) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("project_dir", "probe_result", "expected"),
+    [
+        # Windows drive paths are unambiguous Desktop signals: always rewrite.
+        (r"D:\code\MoonMind", False, True),
+        (r"D:\code\MoonMind", None, True),
+        # WSL shapes rewrite on Desktop-confirmed or unknown daemons, and keep
+        # the POSIX namespace on a confirmed native Linux daemon.
+        ("/mnt/d/code/MoonMind", True, True),
+        ("/mnt/d/code/MoonMind", None, True),
+        ("/mnt/d/code/MoonMind", False, False),
+        # Native Linux paths never rewrite regardless of the daemon.
+        ("/srv/moonmind", False, False),
+        ("/srv/moonmind", True, False),
+    ],
+)
+async def test_desktop_rewrite_decision_uses_daemon_signal_for_wsl(
+    tmp_path, monkeypatch, project_dir, probe_result, expected
+):
+    from unittest.mock import AsyncMock
+
+    import moonmind.workflows.skills.deployment_execution as execution
+
+    monkeypatch.setattr(
+        execution, "_probe_docker_desktop_daemon", AsyncMock(return_value=probe_result)
+    )
+    runner = HostDockerComposeRunner(
+        project_dir=project_dir, local_project_dir=str(tmp_path)
+    )
+    assert await runner._use_desktop_host_rewrite() is expected
+
+
+@pytest.mark.asyncio
+async def test_desktop_rewrite_requires_a_local_checkout_for_daemon_input(
+    tmp_path, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    import moonmind.workflows.skills.deployment_execution as execution
+
+    probe = AsyncMock(return_value=True)
+    monkeypatch.setattr(execution, "_probe_docker_desktop_daemon", probe)
+    runner = HostDockerComposeRunner(project_dir="/mnt/d/code/MoonMind")
+    assert await runner._use_desktop_host_rewrite() is False
+    probe.assert_not_awaited()

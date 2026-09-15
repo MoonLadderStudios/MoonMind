@@ -344,6 +344,42 @@ async def successful_release_image(root, version):
     return None
 
 
+async def docker_logs_tail(name, tail_lines=30, timeout_seconds=60):
+    """Return the merged stdout+stderr tail for a release container.
+
+    Updater tracebacks (for example the ``FileNotFoundError`` from an empty
+    state volume) are written to stderr, while the shared ``docker()`` helper
+    returns only stdout. Merging both streams keeps the diagnosis from
+    reporting ``(empty)`` for exactly the failures it must surface.
+    """
+    process = await asyncio.create_subprocess_exec(
+        "docker",
+        "logs",
+        "--tail",
+        str(tail_lines),
+        name,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(), timeout=timeout_seconds
+        )
+    except BaseException:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+        raise
+    if process.returncode:
+        raise RuntimeError(f"Docker logs failed for {name}")
+    merged = stdout.decode(errors="replace")
+    if stderr:
+        merged += ("\n" if merged and not merged.endswith("\n") else "") + stderr.decode(
+            errors="replace"
+        )
+    return merged.strip()
+
+
 async def execute_detached(executor, inputs, context):
     """Launch once or reattach, without retaining self-recreation authority."""
     owner = str(context.get("idempotency_key") or context.get("workflow_id") or "")
@@ -465,36 +501,41 @@ async def execute_detached(executor, inputs, context):
                     except (OSError, ValueError):
                         diagnosis.append("last-error=unreadable")
                     try:
-                        exit_code = existing.get("State", {}).get("ExitCode")
-                        diagnosis.append(f"updater-exit={exit_code}")
+                        state = existing.get("State", {})
+                        diagnosis.append(f"updater-exit={state.get('ExitCode')}")
                     except (AttributeError, TypeError):
-                        pass
+                        # inspect_owned contracts a Mapping; a foreign shape
+                        # carries no exit evidence, so record that explicitly.
+                        diagnosis.append("updater-exit=unknown")
                     try:
-                        tail = await docker("logs", "--tail", "30", name)
+                        tail = await docker_logs_tail(name)
                         diagnosis.append(
                             "updater-logs="
                             + redact_sensitive_text(tail[-2000:] or "(empty)")
                         )
-                    except RuntimeError as exc:
+                    except (RuntimeError, OSError, TimeoutError) as exc:
+                        # Auxiliary log collection must never replace the
+                        # established exhaustion with an unrelated failure.
                         diagnosis.append(
                             "updater-logs=unavailable:"
                             + redact_sensitive_text(str(exc)[:200])
                         )
-                    resume_hint = f"release job {key} (owner {name})"
+                    recovery_hint = f"release job {key} (owner {name})"
                     if owner.startswith("host-update:"):
-                        submission = owner.removeprefix("host-update:")
-                        resume_hint += (
-                            f"; resume with ./tools/update-moonmind.sh --resume {submission}"
-                            f" after fixing the updater mount/inputs"
+                        recovery_hint += (
+                            "; delivery budget exhausted: start a new audited release with"
+                            " ./tools/update-moonmind.sh (do not --resume this submission;"
+                            " resume reuses the spent budget and its stopped container,"
+                            " so it returns here without progressing)"
                         )
                     else:
-                        resume_hint += (
-                            "; retained job requires resumption via release.reconcile"
-                            " or a new audited release"
+                        recovery_hint += (
+                            "; delivery budget exhausted: start a new audited release;"
+                            " its retained workers still require release.reconcile"
                         )
                     raise RuntimeError(
                         "Release updater exhausted three deliveries without terminal evidence"
-                        f" ({resume_hint}; deliveries={deliveries}; "
+                        f" ({recovery_hint}; deliveries={deliveries}; "
                         + "; ".join(diagnosis)
                         + f"; inspect docker logs {name} and {directory / 'request.json'})"
                     )

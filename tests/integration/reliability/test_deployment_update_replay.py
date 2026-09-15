@@ -82,12 +82,52 @@ if args[:2] == ["image", "inspect"]:
     )
     raise SystemExit(0)
 
+if args[:2] == ["info", "--format"]:
+    print(state.get("fakeOperatingSystem", "Docker Desktop"))
+    raise SystemExit(0)
+
+if args[0] == "ps" and args[1:2] == ["-aq"]:
+    wanted = ""
+    if "--filter" in args:
+        wanted = args[args.index("--filter") + 1].removeprefix("name=^/").removesuffix("$")
+    for updater_name, updater_id in state.get("updaters", {}).items():
+        if updater_name == wanted:
+            print(updater_id)
+            break
+    raise SystemExit(0)
+
+if args[0] == "inspect":
+    target = args[1] if len(args) > 1 else ""
+    for updater_name, updater_id in state.get("updaters", {}).items():
+        if target in (updater_id, updater_name):
+            info = state.get("updaterInfo", {}).get(updater_name, {})
+            print(
+                json.dumps(
+                    [
+                        {
+                            "Image": info.get("imageId"),
+                            "State": {"Running": True},
+                            "Config": {
+                                "Labels": {
+                                    "moonmind.release.owner": info.get("owner")
+                                }
+                            },
+                        }
+                    ]
+                )
+            )
+            raise SystemExit(0)
+    raise SystemExit(0)
+
+if args[0] == "update":
+    raise SystemExit(0)
+
 if not args or args[0] != "compose":
     print("unsupported fake Docker command", file=sys.stderr)
     raise SystemExit(2)
 
 command_index = next(
-    (index for index, part in enumerate(args) if part in {"config", "ps", "images", "pull", "up"}),
+    (index for index, part in enumerate(args) if part in {"config", "ps", "images", "pull", "up", "run"}),
     None,
 )
 if command_index is None:
@@ -120,6 +160,45 @@ if command == "images":
 
 if command == "pull":
     state["pullServices"] = selected_services(tail)
+    save_state(state)
+    raise SystemExit(0)
+
+if command == "run":
+    # Detached updater launch. Record the deployment-state bind the daemon
+    # observes without enforcing it here: the test asserts daemon visibility,
+    # and an unrewritten WSL source must fail that assertion exactly as the
+    # production daemon mounted an empty directory for it.
+    name = tail[tail.index("--name") + 1]
+    project_directory = (
+        args[args.index("--project-directory") + 1]
+        if "--project-directory" in args
+        else ""
+    )
+    config = json.loads(Path(args[args.index("-f") + 1]).read_text())
+
+    def _resolve_bind(volume):
+        if isinstance(volume, dict):
+            return volume
+        parts = str(volume).split(":")
+        source = parts[0] if parts else ""
+        target = parts[1] if len(parts) > 1 else ""
+        if source.startswith("."):
+            source = project_directory.rstrip("/") + "/" + source.lstrip("./")
+        return {"source": source, "target": target}
+
+    service = config["services"]["temporal-worker-deployment-control"]
+    state_bind = next(
+        _resolve_bind(volume)
+        for volume in service["volumes"]
+        if _resolve_bind(volume).get("target") == "/workspace/deployment_state"
+    )
+    state["updaterStateBind"] = state_bind
+    request = json.loads(Path(args[-1]).read_text())
+    state.setdefault("updaters", {})[name] = f"updater-{name}"
+    state.setdefault("updaterInfo", {})[name] = {
+        "owner": request["authored"]["owner"],
+        "imageId": request["imageId"],
+    }
     save_state(state)
     raise SystemExit(0)
 
@@ -368,3 +447,130 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
         assert state["initDbBind"]["source"] == windows_replay["expectedBindSource"]
         assert state["initDbBind"]["bind"]["create_host_path"] is False
         assert state["initDbBind"]["read_only"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "daemon_platform", ["Docker Desktop", "Ubuntu 24.04"]
+)
+async def test_wsl_updater_launch_uses_daemon_visible_state_bind(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    daemon_platform: str,
+) -> None:
+    """Detached updater launches from a WSL checkout keep their state bind.
+
+    Replay of the escaped `update-moonmind.sh` failure: the host submission
+    wrote its request to the real deployment state, but the updater launched
+    from inside the worker mounted a WSL `/mnt/<drive>` bind the Docker
+    Desktop daemon could not see. The daemon mounted an empty directory, the
+    updater exited with ``FileNotFoundError`` three times, and the caller
+    exhausted three deliveries without terminal evidence. The journey enters
+    through the production ``launch_updater`` path with real Compose
+    rendering; only the daemon is modeled. On the parent implementation the
+    recorded bind stays ``/mnt/...`` and the daemon-visibility assertion
+    below fails. On a confirmed native Linux daemon the POSIX namespace is
+    preserved instead of rewritten.
+    """
+    import time
+
+    import moonmind.workflows.skills.deployment_execution as execution_module
+    from moonmind.workflows.skills.deployment_release import launch_updater
+
+    replay_id = "deployment-update-wsl-updater-bind-source"
+    manifest = load_replay(replay_id, "manifest.json")
+    real_docker = shutil.which("docker")
+    assert (
+        real_docker is not None
+    ), "reliability journey image must provide Docker Compose"
+
+    leaf = "".join(
+        part for part in tmp_path.name.replace("-", "_") if part.isalnum() or part == "_"
+    )
+    host_project_dir = f"{manifest['hostProjectDir']}-{leaf}"
+    daemon_project_dir = f"{manifest['daemonProjectDir']}-{leaf}"
+    requested_image = "ghcr.io/moonladderstudios/moonmind@sha256:" + "b" * 64
+
+    (tmp_path / "deploy" / "state").mkdir(parents=True)
+    compose_path = tmp_path / "docker-compose.yaml"
+    compose_path.write_text(
+        json.dumps(
+            {
+                "services": {
+                    "temporal-worker-deployment-control": {
+                        "image": requested_image,
+                        "volumes": [
+                            "./deploy/state:/workspace/deployment_state:rw",
+                            ".:/workspace/host_project:ro",
+                        ],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    owner = "host-update:wsl-updater-bind-replay"
+    record = {
+        "authored": {
+            "owner": owner,
+            "inputs": {"stack": "moonmind"},
+            "context": {"idempotency_key": owner},
+        },
+        "image": requested_image,
+        "imageId": "sha256:" + "c" * 64,
+        "deadline": time.time() + 300,
+    }
+    directory = tmp_path / "release-job"
+    directory.mkdir()
+    (directory / "request.json").write_text(
+        json.dumps(record, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    state_path = tmp_path / "engine-state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "fakeOperatingSystem": daemon_platform,
+                "updaters": {},
+                "updaterInfo": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_docker = tmp_path / "docker"
+    fake_docker.write_text(
+        textwrap.dedent(_FAKE_DOCKER_ENGINE).lstrip(),
+        encoding="utf-8",
+    )
+    fake_docker.chmod(
+        fake_docker.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+    )
+    monkeypatch.setenv("MM_DEPLOYMENT_REPLAY_STATE", str(state_path))
+    monkeypatch.setenv("MM_DEPLOYMENT_REPLAY_REAL_DOCKER", real_docker)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    # Reset the daemon-platform probe cache when the implementation under
+    # test provides one; parent implementations without the WSL/Desktop gate
+    # skip this and proceed to the daemon-visibility assertion below.
+    if hasattr(execution_module, "_desktop_daemon_probe_cache"):
+        monkeypatch.setattr(execution_module, "_desktop_daemon_probe_cache", {})
+
+    runner = HostDockerComposeRunner(
+        project_dir=host_project_dir,
+        local_project_dir=str(tmp_path),
+        project_name="moonmind-test-wsl-updater",
+    )
+    observed = await launch_updater(runner, directory, record)
+    assert observed["Image"] == record["imageId"]
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    recorded = state["updaterStateBind"]
+    if daemon_platform == "Docker Desktop":
+        assert recorded["source"] == daemon_project_dir + manifest[
+            "expectedStateBindSourceSuffix"
+        ]
+        assert recorded["bind"]["create_host_path"] is False
+    else:
+        # A confirmed native Linux daemon serves the POSIX mount itself.
+        assert recorded["source"] == host_project_dir + manifest[
+            "expectedStateBindSourceSuffix"
+        ]
