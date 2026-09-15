@@ -45,7 +45,9 @@ Run the relevant automated checks before opening a pull request:
 
 After the first unit-test run, use `./tools/test_unit_docker.sh --no-build` for faster repeat runs.
 
-Behavior changes should include a focused test when practical. Tests requiring live third-party provider credentials are not required unless a maintainer asks for them.
+Use Test-Driven Development: write or update a behavioral test, observe the expected failure, implement the smallest correct change, then refactor with tests green. Behavior-preserving refactors start with passing coverage. Documentation-only changes do not require artificial failing tests.
+
+Inside a MoonMind-managed workflow, use `moonmind container python-tests <pytest paths or node ids>` instead of the host Docker wrappers above. Runner and CI details are in [Pre-Commit Workflow](docs/Development/PreCommitWorkflow.md). Tests requiring live third-party provider credentials are not required unless a maintainer asks for them.
 
 ## Troubleshooting test environments
 
