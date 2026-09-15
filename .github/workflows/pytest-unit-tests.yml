@@ -214,8 +214,12 @@ jobs:
     # Per-row setup stays isolated: fast rows never build images or start
     # Compose services; each reliability shard starts its own isolated
     # Compose PostgreSQL/Temporal/MinIO under its own Docker project name.
-    # Per-test (--timeout 600), job (timeout-minutes: 30) and cleanup
-    # (always() compose down) bounds are preserved; each row writes a
+    # Per-test (--timeout 600 on fast rows, 300 on reliability shards),
+    # step (timeout 480s around each reliability pytest invocation: the
+    # 8-minute hard step ceiling from MoonLadderStudios/MoonMind#4369; the
+    # 30-minute job timeout below stays the outer backstop while per-shard
+    # setup variance is measured), and cleanup (always() compose down)
+    # bounds are preserved; each row writes a
     # uniquely named junit report and attempted cancellation diagnostics.
     needs: select-test-suites
     if: >-
@@ -375,9 +379,9 @@ jobs:
           echo "Reliability shard ${{ matrix.suite }} runs ${#shard_files[@]} files"
           test_start=$SECONDS
           set +e
-          python -m pytest "${shard_files[@]}" \
+          timeout 480s python -m pytest "${shard_files[@]}" \
             -m reliability_journey \
-            -vv --tb=short --durations=25 --timeout 600 \
+            -vv --tb=short --durations=25 --timeout 300 \
             --junitxml=artifacts/pytest-backend-${{ matrix.suite }}.xml 2>&1 | tee artifacts/pytest-backend-${{ matrix.suite }}.log
           status=${PIPESTATUS[0]}
           echo $((SECONDS - test_start)) > "/tmp/backend-${{ matrix.suite }}-test-seconds.txt" || true
@@ -451,7 +455,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Collect reliability shard diagnostics
-        if: (failure() || cancelled()) && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
+        # MoonLadderStudios/MoonMind#4371: compose logs and scoped manifests
+        # are retained on every selected run (success included) so a slow but
+        # passing shard is diagnosable from its artifacts alone. Collection
+        # stays bounded (timeout 100s/60s) with record-and-continue, and the
+        # original test outcome is never replaced.
+        if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         run: |
           set -uo pipefail
           mkdir -p /tmp/pytest-${{ matrix.suite }}
@@ -474,7 +483,7 @@ jobs:
             || echo "scoped manifest copy failed or timed out (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
           echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > /tmp/pytest-${{ matrix.suite }}/cancellation-context.txt
       - name: Upload reliability shard diagnostics
-        if: (failure() || cancelled()) && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
+        if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: pytest-${{ matrix.suite }}-diagnostics-attempt-${{ github.run_attempt }}

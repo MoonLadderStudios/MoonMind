@@ -75,3 +75,32 @@ def test_verifier_reports_missing_duplicate_and_marker_conflicts() -> None:
     assert any("unit_fast conflicts" in error for error in errors)
     assert any("multiple CI owners" in error for error in errors)
     assert any("integration_ci conflicts" in error for error in errors)
+
+
+def test_parameterized_and_new_reliability_cases_keep_exactly_one_owner() -> None:
+    """Shard ownership derives from the file path only, so parameterized
+    expansions of one file stay on that file's shard and newly added files
+    still land on exactly one shard (round-robin when listed, hash fallback
+    otherwise). No case is silently moved or skipped to meet a budget."""
+    first = CollectedNode(
+        nodeid="tests/integration/reliability/test_a.py::test_x[param-1]",
+        path="tests/integration/reliability/test_a.py",
+        markers=frozenset({"reliability_journey"}),
+    )
+    second = CollectedNode(
+        nodeid="tests/integration/reliability/test_a.py::test_x[param-2]",
+        path="tests/integration/reliability/test_a.py",
+        markers=frozenset({"reliability_journey"}),
+    )
+    assert owners(first) == owners(second) == {
+        reliability_shard_for_path("tests/integration/reliability/test_a.py")
+    }
+    assert verify([first, second]) == []
+
+    fresh = _node(
+        "tests/integration/reliability/test_brand_new_4377.py",
+        "reliability_journey",
+    )
+    assert len(owners(fresh)) == 1
+    assert next(iter(owners(fresh))) in set(RELIABILITY_SHARD_NAMES)
+    assert verify([fresh]) == []
