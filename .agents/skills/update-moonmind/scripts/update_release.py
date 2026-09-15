@@ -7,6 +7,7 @@ selected image owns deployment semantics, including canary, promotion and drain.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import subprocess
@@ -25,6 +26,41 @@ def run(args, *, cwd, env=None):
             f"{args[0]} {args[1]} failed (exit {result.returncode}); deployment remains owned by its recorded release job"
         )
     return result.stdout.strip()
+
+
+def _default_operator_urls(rendered):
+    """Loopback defaults so a bare invocation works with published images.
+
+    Mirrors the image-owned ``operator_urls`` rule: a configured
+    ``MOONMIND_PUBLIC_BASE_URL`` stays image-resolved, otherwise published
+    API bindings supply origins with wildcard mapped to their loopback member
+    on the same port. Returns [] when the image must resolve the target
+    (configured base URL) or when no fixed published API port exists.
+    """
+    api = (rendered.get("services", {}) or {}).get("api", {}) or {}
+    environment = api.get("environment", {}) or {}
+    if str(environment.get("MOONMIND_PUBLIC_BASE_URL") or "").strip():
+        return []
+    urls = []
+    for binding in api.get("ports", []) or []:
+        try:
+            if binding.get("protocol", "tcp") != "tcp":
+                continue
+            if int(binding.get("target", 0)) != 8000:
+                continue
+            address = ipaddress.ip_address(binding.get("host_ip") or "0.0.0.0")
+        except ValueError:
+            continue
+        port = str(binding.get("published") or "")
+        if not port.isdecimal() or not 1 <= int(port) <= 65535:
+            continue
+        if address.is_unspecified:
+            address = ipaddress.ip_address(
+                "::1" if address.version == 6 else "127.0.0.1"
+            )
+        authority = f"[{address}]" if address.version == 6 else str(address)
+        urls.append(f"http://{authority}:{port}")
+    return sorted(set(urls))
 
 
 def main(argv=None):
@@ -109,6 +145,7 @@ def main(argv=None):
         )
         project = args.compose_project or rendered["name"]
         submission_id = str(uuid.uuid4())
+        operator_urls = list(args.operator_url) or _default_operator_urls(rendered)
         record = {
             "repo": str(repo),
             "project": project,
@@ -126,7 +163,7 @@ def main(argv=None):
                 "idempotency_key": f"host-update:{submission_id}",
                 "operator": "local-operator",
                 "operator_role": "operator",
-                **({"deployment_operator_urls": args.operator_url} if args.operator_url else {}),
+                **({"deployment_operator_urls": operator_urls} if operator_urls else {}),
             },
         }
         submissions.mkdir(parents=True, exist_ok=True)
@@ -185,6 +222,12 @@ def main(argv=None):
                 f"MOONMIND_DEPLOYMENT_PROJECT_NAME={record['project']}",
                 "-e",
                 f"MOONMIND_DEPLOYMENT_PROJECT_DIR={repo}",
+                # Same substrate protection as the process environment below,
+                # stated explicitly: `run -e` wins over service interpolation,
+                # so the deployment-control submitter and everything it
+                # launches inherit the exclusion even if interpolation drifts.
+                "-e",
+                "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=docker-proxy,sandbox-egress-proxy,postgres",
                 "temporal-worker-deployment-control",
                 "-m",
                 "moonmind.workflows.skills.deployment_release",
@@ -195,7 +238,20 @@ def main(argv=None):
         return subprocess.run(
             command,
             cwd=repo,
-            env={**os.environ, "MOONMIND_IMAGE": record["image"]},
+                env={
+                    **os.environ,
+                    "MOONMIND_IMAGE": record["image"],
+                    # The updater reaches Docker through docker-proxy, and
+                    # postgres/sandbox-egress-proxy are stateful substrate:
+                    # recreating them through a rewritten-bind render on every
+                    # release caused repeated proxy suicide (killing all
+                    # later docker calls) and a postgres removal. Host-
+                    # initiated updates exclude that substrate from
+                    # pull/reconcile/verify while leaving it running.
+                    # Manage substrate updates explicitly, e.g.
+                    # `docker compose up -d docker-proxy`.
+                    "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES": "docker-proxy,sandbox-egress-proxy,postgres",
+                },
             check=False,
         ).returncode
 

@@ -30,7 +30,18 @@ def validate_operator_url(base_url):
 
 
 def operator_urls(configuration, *, declared_urls=None):
-    """Resolve actual operator origins from preserved deployment authority."""
+    """Resolve actual operator origins from preserved deployment authority.
+
+    A configured ``MOONMIND_PUBLIC_BASE_URL`` remains a required target.
+    Explicit ``--operator-url`` declarations supply additional targets without
+    changing bindings. Otherwise fixed published bindings supply the origins.
+    Wildcard bindings default to their loopback member (``127.0.0.1`` for IPv4,
+    ``[::1]`` for IPv6) on the same published port, since a wildcard necessarily
+    includes loopback and it is reachable through the documented host-network /
+    host-gateway transport. LAN, VPN, or proxy paths still need an explicit
+    ``--operator-url`` for full-route evidence; the receipt records exactly
+    which origin was verified.
+    """
     if declared_urls is not None and (
         not isinstance(declared_urls, list)
         or len(declared_urls) > 32
@@ -55,15 +66,17 @@ def operator_urls(configuration, *, declared_urls=None):
             continue
         host = binding.get("host_ip") or "0.0.0.0"
         address = ipaddress.ip_address(host)
-        if address.is_unspecified:
-            raise ValueError(
-                "Wildcard API bindings require an existing operator URL via --operator-url or MOONMIND_PUBLIC_BASE_URL before release"
-            )
         port = str(binding.get("published") or "")
         if not port.isdecimal() or not 1 <= int(port) <= 65535:
             raise ValueError(
                 "Operator verification requires a fixed published API port"
             )
+        if address.is_unspecified:
+            # Wildcard includes loopback; verify that member by default so a
+            # bare update remains executable. Explicit --operator-url targets
+            # are still required to prove LAN/VPN/proxy routes.
+            loopback = "::1" if address.version == 6 else "127.0.0.1"
+            address = ipaddress.ip_address(loopback)
         authority = f"[{address}]" if address.version == 6 else str(address)
         urls.append(f"http://{authority}:{port}")
     if not urls:
