@@ -134,7 +134,6 @@ def test_decide_advance_without_record_even_when_live_matches():
 
 def test_decide_advance_when_candidate_adds_host_family():
     """A newly available optional host ref requires a new revision."""
-    release = _release()
     # Existing record omits `pi` (was unavailable); candidate supplies it.
     recorded_live = {k: v for k, v in _refs().items() if k != "pi"}
     release_missing_pi = OmnigentRelease(
