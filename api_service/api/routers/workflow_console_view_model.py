@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import time
@@ -54,23 +55,92 @@ _GITHUB_REPOSITORY_OPTIONS_CACHE: dict[
     str, tuple[float, tuple["RepositoryOption", ...], str | None]
 ] = {}
 # Scoped caches for the text-first branch picker (MoonLadderStudios/MoonMind#4054).
-# Search pages are keyed by token + repository + query + limit; exact-name
-# observations are keyed by token + repository + case-sensitive branch name;
-# metadata is keyed by token + repository. All three use bounded eviction so a
-# cold lookup can never grow memory without bound.
-_GITHUB_BRANCH_SEARCH_CACHE: dict[
-    str, tuple[float, tuple["BranchOption", ...], str | None, str | None, bool]
+# The raw branch page is keyed by token + repository + limit only, so typing
+# additional characters filters the already-loaded page locally instead of
+# re-downloading the same fixed first page. Exact-name observations are keyed
+# by token + repository + case-sensitive branch name; metadata is keyed by
+# token + repository. All three use bounded eviction so a cold lookup can never
+# grow memory without bound. Suggestion and resolution never fetch metadata as
+# a dependency: callers compose cached metadata separately (suggestions) or
+# read it opportunistically without network (resolution).
+_GITHUB_BRANCH_PAGE_CACHE: dict[
+    str, tuple[float, tuple["BranchOption", ...], str | None, bool]
 ] = {}
 _GITHUB_BRANCH_METADATA_CACHE: dict[str, tuple[float, str | None]] = {}
 _GITHUB_BRANCH_RESOLVE_CACHE: dict[
     str, tuple[float, bool, str | None, str | None]
 ] = {}
+# In-flight async deduplication so concurrent identical lookups share one
+# upstream request instead of fanning out.
+_BRANCH_PAGE_INFLIGHT: dict[str, "asyncio.Task"] = {}
+_BRANCH_METADATA_INFLIGHT: dict[str, "asyncio.Task"] = {}
+_BRANCH_EXACT_INFLIGHT: dict[str, "asyncio.Task"] = {}
+# Shared async client bounds connection pooling across branch operations.
+# Reset via _reset_branch_http_state_for_tests().
+_SHARED_BRANCH_ASYNC_CLIENT: Any | None = None
 _BRANCH_SUGGESTION_DEFAULT_LIMIT = 20
 _BRANCH_SUGGESTION_MAX_LIMIT = 50
 _BRANCH_QUERY_MAX_LENGTH = 100
 _BRANCH_NAME_MAX_LENGTH = 255
 _BRANCH_CACHE_MAX_ENTRIES = 200
 _BRANCH_GITHUB_SINGLE_PAGE = 1
+
+
+def _branch_http_limits() -> Any:
+    """Bounded connection pool shared by branch HTTP clients."""
+
+    try:
+        return httpx.Limits(max_connections=20, max_keepalive_connections=10)
+    except (AttributeError, TypeError):
+        return None
+
+
+def _shared_branch_async_client() -> Any:
+    """Return a reused async client so branch lookups share connections.
+
+    HTTPX recommends reusing client instances to retain connection-pooling
+    benefits. The singleton is scoped to this module and resettable for tests.
+    """
+
+    global _SHARED_BRANCH_ASYNC_CLIENT
+    if _SHARED_BRANCH_ASYNC_CLIENT is None:
+        kwargs: dict[str, Any] = {
+            "timeout": _GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
+        }
+        limits = _branch_http_limits()
+        if limits is not None:
+            kwargs["limits"] = limits
+        _SHARED_BRANCH_ASYNC_CLIENT = httpx.AsyncClient(**kwargs)
+    return _SHARED_BRANCH_ASYNC_CLIENT
+
+
+def _reset_branch_http_state_for_tests() -> None:
+    """Clear branch caches, in-flight maps, and the shared async client."""
+
+    global _SHARED_BRANCH_ASYNC_CLIENT
+    _GITHUB_BRANCH_PAGE_CACHE.clear()
+    _GITHUB_BRANCH_METADATA_CACHE.clear()
+    _GITHUB_BRANCH_RESOLVE_CACHE.clear()
+    _BRANCH_PAGE_INFLIGHT.clear()
+    _BRANCH_METADATA_INFLIGHT.clear()
+    _BRANCH_EXACT_INFLIGHT.clear()
+    _SHARED_BRANCH_ASYNC_CLIENT = None
+
+
+async def _dedupe_async(
+    inflight: dict[str, "asyncio.Task"], key: str, factory: Any
+) -> Any:
+    """Await a shared in-flight task for identical concurrent lookups."""
+
+    existing = inflight.get(key)
+    if existing is not None and not existing.done():
+        return await existing
+    task = asyncio.ensure_future(factory())
+    inflight[key] = task
+    try:
+        return await task
+    finally:
+        inflight.pop(key, None)
 
 _JIRA_CREATE_PAGE_SOURCES = {
     "connections": "/api/jira/connections/verify",
@@ -339,13 +409,14 @@ def _fetch_github_branch_options(
     query: str = "",
     limit: int = _BRANCH_SUGGESTION_DEFAULT_LIMIT,
 ) -> tuple[list[BranchOption], str | None, str | None, bool]:
-    """Fetch at most one bounded branch page plus independent default metadata.
+    """Fetch at most one bounded branch page; never fetch metadata here.
 
-    Form initialization must resolve default-branch metadata even when the
-    suggestion page is slow or fails, so metadata is fetched first and is
-    preserved when the later branch-page request raises. Only a single GitHub
-    branch page is ever read per call; ``has_more`` reports whether GitHub
-    advertises further pages instead of draining them.
+    Metadata is intentionally not a dependency of suggestion search: callers
+    compose cached default-branch metadata separately so one settled value
+    never pays for both a suggestion page and metadata on the same path.
+    Only a single GitHub branch page is ever read per call; ``has_more``
+    reports whether GitHub advertises further pages instead of draining them.
+    The returned ``default_branch`` is always ``None``; use the metadata cache.
     """
 
     normalized_repository = _normalize_repository_value(repository)
@@ -354,97 +425,20 @@ def _fetch_github_branch_options(
     normalized_query = _normalize_branch_query(query)
     clamped_limit = _clamp_branch_suggestion_limit(limit)
     headers = _github_branch_headers(token)
-    next_url: str | None = _GITHUB_BRANCH_DISCOVERY_URL_TEMPLATE.format(
+    branch_url = _GITHUB_BRANCH_DISCOVERY_URL_TEMPLATE.format(
         repository=normalized_repository
     )
-    params: dict[str, int] | None = {"per_page": clamped_limit}
     try:
-        with httpx.Client(
-            timeout=_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
-        ) as client:
-            default_branch = _fetch_repository_default_branch(
-                client, headers, normalized_repository
-            )
+        client_kwargs: dict[str, Any] = {
+            "timeout": _GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
+        }
+        limits = _branch_http_limits()
+        if limits is not None:
+            client_kwargs["limits"] = limits
+        with httpx.Client(**client_kwargs) as client:
             try:
-                page_options: list[BranchOption] = []
-                page_seen: set[str] = set()
-                pages_read = 0
-                has_more = False
-                while next_url and pages_read < _BRANCH_GITHUB_SINGLE_PAGE:
-                    response = client.get(
-                        next_url,
-                        headers=headers,
-                        params=params,
-                    )
-                    params = None
-                    response.raise_for_status()
-                    data = response.json()
-                    if isinstance(data, list):
-                        for item in data:
-                            if not isinstance(item, Mapping):
-                                continue
-                            _append_branch_option(
-                                page_options,
-                                page_seen,
-                                item.get("name"),
-                            )
-                    has_more = bool(response.links.get("next", {}).get("url"))
-                    next_url = None
-                    pages_read += 1
-            except (httpx.HTTPError, ValueError):
-                # A slow/failed suggestion request must not withhold or discard
-                # independently successful default-branch metadata.
-                return [], "GitHub branch lookup is unavailable.", default_branch, False
-    except (httpx.HTTPError, ValueError):
-        return [], "GitHub branch lookup is unavailable.", None, False
-
-    return (
-        _filter_branch_options(page_options, normalized_query),
-        None,
-        default_branch,
-        has_more,
-    )
-
-
-async def _fetch_github_branch_options_async(
-    token: str,
-    repository: str,
-    query: str = "",
-    limit: int = _BRANCH_SUGGESTION_DEFAULT_LIMIT,
-) -> tuple[list[BranchOption], str | None, str | None, bool]:
-    """Awaited async variant so async routes never block the event loop."""
-
-    normalized_repository = _normalize_repository_value(repository)
-    if not token or not normalized_repository:
-        return [], None, None, False
-    normalized_query = _normalize_branch_query(query)
-    clamped_limit = _clamp_branch_suggestion_limit(limit)
-    headers = _github_branch_headers(token)
-    try:
-        async with httpx.AsyncClient(
-            timeout=_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
-        ) as client:
-            try:
-                metadata_response = await client.get(
-                    _GITHUB_REPOSITORY_METADATA_URL_TEMPLATE.format(
-                        repository=normalized_repository
-                    ),
-                    headers=headers,
-                )
-                metadata_response.raise_for_status()
-                metadata = metadata_response.json()
-                default_branch = (
-                    str(metadata.get("default_branch") or "").strip() or None
-                    if isinstance(metadata, dict)
-                    else None
-                )
-            except (httpx.HTTPError, ValueError):
-                default_branch = None
-            try:
-                response = await client.get(
-                    _GITHUB_BRANCH_DISCOVERY_URL_TEMPLATE.format(
-                        repository=normalized_repository
-                    ),
+                response = client.get(
+                    branch_url,
                     headers=headers,
                     params={"per_page": clamped_limit},
                 )
@@ -457,18 +451,125 @@ async def _fetch_github_branch_options_async(
                         if not isinstance(item, Mapping):
                             continue
                         _append_branch_option(
-                            page_options, page_seen, item.get("name")
+                            page_options,
+                            page_seen,
+                            item.get("name"),
                         )
                 has_more = bool(response.links.get("next", {}).get("url"))
             except (httpx.HTTPError, ValueError):
-                return [], "GitHub branch lookup is unavailable.", default_branch, False
+                return [], "GitHub branch lookup is unavailable.", None, False
     except (httpx.HTTPError, ValueError):
         return [], "GitHub branch lookup is unavailable.", None, False
 
     return (
         _filter_branch_options(page_options, normalized_query),
         None,
-        default_branch,
+        None,
+        has_more,
+    )
+
+
+def _fetch_github_branch_page(
+    token: str,
+    repository: str,
+    limit: int = _BRANCH_SUGGESTION_DEFAULT_LIMIT,
+) -> tuple[list[BranchOption], str | None, bool]:
+    """Fetch one raw bounded branch page without filtering or metadata."""
+
+    normalized_repository = _normalize_repository_value(repository)
+    if not token or not normalized_repository:
+        return [], "GitHub branch lookup is unavailable.", False
+    clamped_limit = _clamp_branch_suggestion_limit(limit)
+    headers = _github_branch_headers(token)
+    branch_url = _GITHUB_BRANCH_DISCOVERY_URL_TEMPLATE.format(
+        repository=normalized_repository
+    )
+    client_kwargs: dict[str, Any] = {
+        "timeout": _GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
+    }
+    limits = _branch_http_limits()
+    if limits is not None:
+        client_kwargs["limits"] = limits
+    try:
+        with httpx.Client(**client_kwargs) as client:
+            response = client.get(
+                branch_url, headers=headers, params={"per_page": clamped_limit}
+            )
+            response.raise_for_status()
+            data = response.json()
+            page_options: list[BranchOption] = []
+            page_seen: set[str] = set()
+            if isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, Mapping):
+                        continue
+                    _append_branch_option(page_options, page_seen, item.get("name"))
+            has_more = bool(response.links.get("next", {}).get("url"))
+    except (httpx.HTTPError, ValueError):
+        return [], "GitHub branch lookup is unavailable.", False
+    return page_options, None, has_more
+
+
+async def _fetch_github_branch_page_async(
+    token: str,
+    repository: str,
+    limit: int = _BRANCH_SUGGESTION_DEFAULT_LIMIT,
+) -> tuple[list[BranchOption], str | None, bool]:
+    """Async raw single-page fetch over the shared client (no metadata)."""
+
+    normalized_repository = _normalize_repository_value(repository)
+    if not token or not normalized_repository:
+        return [], "GitHub branch lookup is unavailable.", False
+    clamped_limit = _clamp_branch_suggestion_limit(limit)
+    headers = _github_branch_headers(token)
+    branch_url = _GITHUB_BRANCH_DISCOVERY_URL_TEMPLATE.format(
+        repository=normalized_repository
+    )
+    try:
+        client = _shared_branch_async_client()
+        response = await client.get(
+            branch_url, headers=headers, params={"per_page": clamped_limit}
+        )
+        response.raise_for_status()
+        data = response.json()
+        page_options: list[BranchOption] = []
+        page_seen: set[str] = set()
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, Mapping):
+                    continue
+                _append_branch_option(page_options, page_seen, item.get("name"))
+        has_more = bool(response.links.get("next", {}).get("url"))
+    except (httpx.HTTPError, ValueError):
+        return [], "GitHub branch lookup is unavailable.", False
+    return page_options, None, has_more
+
+
+async def _fetch_github_branch_options_async(
+    token: str,
+    repository: str,
+    query: str = "",
+    limit: int = _BRANCH_SUGGESTION_DEFAULT_LIMIT,
+) -> tuple[list[BranchOption], str | None, str | None, bool]:
+    """Awaited async variant so async routes never block the event loop.
+
+    Metadata-free by design; see the sync variant.
+    """
+
+    normalized_repository = _normalize_repository_value(repository)
+    if not token or not normalized_repository:
+        return [], None, None, False
+    normalized_query = _normalize_branch_query(query)
+    clamped_limit = _clamp_branch_suggestion_limit(limit)
+    page_options, error, has_more = await _fetch_github_branch_page_async(
+        token, normalized_repository, clamped_limit
+    )
+    if error:
+        return [], error, None, False
+    return (
+        _filter_branch_options(page_options, normalized_query),
+        None,
+        None,
         has_more,
     )
 
@@ -497,30 +598,30 @@ def _fetch_github_branch_exact(
         f"/branches/{encoded_branch}"
     )
     try:
-        with httpx.Client(
-            timeout=_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
-        ) as client:
+        client_kwargs: dict[str, Any] = {
+            "timeout": _GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
+        }
+        limits = _branch_http_limits()
+        if limits is not None:
+            client_kwargs["limits"] = limits
+        with httpx.Client(**client_kwargs) as client:
             try:
                 response = client.get(branch_url, headers=headers)
                 if response.status_code == 404:
-                    metadata = _fetch_repository_default_branch(
-                        client, headers, normalized_repository
-                    )
-                    if metadata is None:
-                        # Confirm the repository itself is reachable before
-                        # calling a branch definitively absent.
-                        try:
-                            probe = client.get(
-                                _GITHUB_REPOSITORY_METADATA_URL_TEMPLATE.format(
-                                    repository=normalized_repository
-                                ),
-                                headers=headers,
-                            )
-                            probe.raise_for_status()
-                        except (httpx.HTTPError, ValueError):
-                            return False, None, (
-                                "GitHub branch lookup is unavailable."
-                            ), True
+                    # Confirm the repository itself is reachable before
+                    # calling a branch definitively absent.
+                    try:
+                        probe = client.get(
+                            _GITHUB_REPOSITORY_METADATA_URL_TEMPLATE.format(
+                                repository=normalized_repository
+                            ),
+                            headers=headers,
+                        )
+                        probe.raise_for_status()
+                    except (httpx.HTTPError, ValueError):
+                        return False, None, (
+                            "GitHub branch lookup is unavailable."
+                        ), True
                     return False, None, None, False
                 response.raise_for_status()
                 payload = response.json()
@@ -561,42 +662,40 @@ async def _fetch_github_branch_exact_async(
         f"/branches/{encoded_branch}"
     )
     try:
-        async with httpx.AsyncClient(
-            timeout=_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
-        ) as client:
-            try:
-                response = await client.get(branch_url, headers=headers)
-                if response.status_code == 404:
-                    try:
-                        probe = await client.get(
-                            _GITHUB_REPOSITORY_METADATA_URL_TEMPLATE.format(
-                                repository=normalized_repository
-                            ),
-                            headers=headers,
-                        )
-                        probe.raise_for_status()
-                    except (httpx.HTTPError, ValueError):
-                        return False, None, (
-                            "GitHub branch lookup is unavailable."
-                        ), True
-                    return False, None, None, False
-                response.raise_for_status()
-                payload = response.json()
-                returned = (
-                    str(payload.get("name") or "").strip()
-                    if isinstance(payload, Mapping)
-                    else ""
-                )
-                if returned and returned == candidate:
-                    return True, returned, None, False
-                return False, None, None, True
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code if exc.response is not None else None
-                if status in (403, 429):
+        client = _shared_branch_async_client()
+        try:
+            response = await client.get(branch_url, headers=headers)
+            if response.status_code == 404:
+                try:
+                    probe = await client.get(
+                        _GITHUB_REPOSITORY_METADATA_URL_TEMPLATE.format(
+                            repository=normalized_repository
+                        ),
+                        headers=headers,
+                    )
+                    probe.raise_for_status()
+                except (httpx.HTTPError, ValueError):
                     return False, None, (
                         "GitHub branch lookup is unavailable."
                     ), True
-                raise
+                return False, None, None, False
+            response.raise_for_status()
+            payload = response.json()
+            returned = (
+                str(payload.get("name") or "").strip()
+                if isinstance(payload, Mapping)
+                else ""
+            )
+            if returned and returned == candidate:
+                return True, returned, None, False
+            return False, None, None, True
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status in (403, 429):
+                return False, None, (
+                    "GitHub branch lookup is unavailable."
+                ), True
+            raise
     except (httpx.HTTPError, ValueError):
         return False, None, "GitHub branch lookup is unavailable.", True
 
@@ -604,12 +703,12 @@ def _github_repository_options_cache_key(token: str) -> str:
     return sha256(token.encode("utf-8")).hexdigest()
 
 
-def _github_branch_search_cache_key(
-    token: str, repository: str, query: str, limit: int
+def _github_branch_page_cache_key(
+    token: str, repository: str, limit: int
 ) -> str:
     normalized_repository = _normalize_repository_value(repository) or ""
     raw_key = (
-        f"{token}:{normalized_repository.lower()}:{query}:{int(limit)}"
+        f"page:{token}:{normalized_repository.lower()}:{int(limit)}"
     )
     return sha256(raw_key.encode("utf-8")).hexdigest()
 
@@ -649,36 +748,49 @@ def _get_cached_github_branch_options(
     query: str = "",
     limit: int = _BRANCH_SUGGESTION_DEFAULT_LIMIT,
 ) -> tuple[list[BranchOption], str | None, str | None, bool]:
-    """Return one bounded cached search page with oldest-first eviction."""
+    """Return filtered suggestions from one cached raw page.
+
+    The underlying GitHub page is cached by repository + limit only, so
+    changing the search text filters the already-loaded page locally without
+    re-downloading the same fixed page. Default-branch metadata is composed
+    separately by the caller and is never a dependency of this path.
+    """
 
     clamped_limit = _clamp_branch_suggestion_limit(limit)
     normalized_query = _normalize_branch_query(query)
     now = time.monotonic()
-    cache_key = _github_branch_search_cache_key(
-        token, repository, normalized_query, clamped_limit
+    cache_key = _github_branch_page_cache_key(
+        token, repository, clamped_limit
     )
-    cached = _GITHUB_BRANCH_SEARCH_CACHE.get(cache_key)
+    cached = _GITHUB_BRANCH_PAGE_CACHE.get(cache_key)
     if cached:
-        cached_at, cached_options, cached_error, cached_default_branch, cached_has_more = cached
+        cached_at, cached_page, cached_error, cached_has_more = cached
         if now - cached_at < _GITHUB_REPOSITORY_DISCOVERY_CACHE_TTL_SECONDS:
+            if cached_error:
+                return [], cached_error, None, False
             return (
-                list(cached_options),
-                cached_error,
-                cached_default_branch,
+                _filter_branch_options(list(cached_page), normalized_query),
+                None,
+                None,
                 cached_has_more,
             )
 
-    options, error, default_branch, has_more = _fetch_github_branch_options(
-        token, repository, normalized_query, clamped_limit
+    page_options, error, has_more = _fetch_github_branch_page(
+        token, repository, clamped_limit
     )
     _bounded_cache_put(
-        _GITHUB_BRANCH_SEARCH_CACHE,
+        _GITHUB_BRANCH_PAGE_CACHE,
         cache_key,
-        (now, tuple(options), error, default_branch, has_more),
+        (now, tuple(page_options), error, has_more),
     )
-    # Legacy full-list cache is intentionally not populated: cold discovery is
-    # always bounded to a single page per operation.
-    return options, error, default_branch, has_more
+    if error:
+        return [], error, None, False
+    return (
+        _filter_branch_options(page_options, normalized_query),
+        None,
+        None,
+        has_more,
+    )
 
 
 async def _get_cached_github_branch_options_async(
@@ -692,31 +804,43 @@ async def _get_cached_github_branch_options_async(
     clamped_limit = _clamp_branch_suggestion_limit(limit)
     normalized_query = _normalize_branch_query(query)
     now = time.monotonic()
-    cache_key = _github_branch_search_cache_key(
-        token, repository, normalized_query, clamped_limit
+    cache_key = _github_branch_page_cache_key(
+        token, repository, clamped_limit
     )
-    cached = _GITHUB_BRANCH_SEARCH_CACHE.get(cache_key)
+    cached = _GITHUB_BRANCH_PAGE_CACHE.get(cache_key)
     if cached:
-        cached_at, cached_options, cached_error, cached_default_branch, cached_has_more = cached
+        cached_at, cached_page, cached_error, cached_has_more = cached
         if now - cached_at < _GITHUB_REPOSITORY_DISCOVERY_CACHE_TTL_SECONDS:
+            if cached_error:
+                return [], cached_error, None, False
             return (
-                list(cached_options),
-                cached_error,
-                cached_default_branch,
+                _filter_branch_options(list(cached_page), normalized_query),
+                None,
+                None,
                 cached_has_more,
             )
 
-    options, error, default_branch, has_more = (
-        await _fetch_github_branch_options_async(
-            token, repository, normalized_query, clamped_limit
+    async def _load_page() -> tuple[list[BranchOption], str | None, bool]:
+        return await _fetch_github_branch_page_async(
+            token, repository, clamped_limit
         )
+
+    page_options, error, has_more = await _dedupe_async(
+        _BRANCH_PAGE_INFLIGHT, cache_key, _load_page
     )
     _bounded_cache_put(
-        _GITHUB_BRANCH_SEARCH_CACHE,
+        _GITHUB_BRANCH_PAGE_CACHE,
         cache_key,
-        (now, tuple(options), error, default_branch, has_more),
+        (now, tuple(page_options), error, has_more),
     )
-    return options, error, default_branch, has_more
+    if error:
+        return [], error, None, False
+    return (
+        _filter_branch_options(page_options, normalized_query),
+        None,
+        None,
+        has_more,
+    )
 
 
 def _get_cached_repository_default_branch(
@@ -737,9 +861,13 @@ def _get_cached_repository_default_branch(
             return cached_default, None
     headers = _github_branch_headers(token)
     try:
-        with httpx.Client(
-            timeout=_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
-        ) as client:
+        client_kwargs: dict[str, Any] = {
+            "timeout": _GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
+        }
+        limits = _branch_http_limits()
+        if limits is not None:
+            client_kwargs["limits"] = limits
+        with httpx.Client(**client_kwargs) as client:
             default_branch = _fetch_repository_default_branch(
                 client, headers, normalized_repository
             )
@@ -768,10 +896,10 @@ async def _get_cached_repository_default_branch_async(
         if now - cached_at < _GITHUB_REPOSITORY_DISCOVERY_CACHE_TTL_SECONDS:
             return cached_default, None
     headers = _github_branch_headers(token)
-    try:
-        async with httpx.AsyncClient(
-            timeout=_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS
-        ) as client:
+
+    async def _load_metadata() -> tuple[str | None, str | None]:
+        try:
+            client = _shared_branch_async_client()
             try:
                 response = await client.get(
                     _GITHUB_REPOSITORY_METADATA_URL_TEMPLATE.format(
@@ -788,12 +916,35 @@ async def _get_cached_repository_default_branch_async(
                 )
             except (httpx.HTTPError, ValueError):
                 return None, "GitHub branch lookup is unavailable."
-    except (httpx.HTTPError, ValueError):
-        return None, "GitHub branch lookup is unavailable."
+        except (httpx.HTTPError, ValueError):
+            return None, "GitHub branch lookup is unavailable."
+        return default_branch, None
+
+    default_branch, error = await _dedupe_async(
+        _BRANCH_METADATA_INFLIGHT, cache_key, _load_metadata
+    )
+    if error:
+        return None, error
     _bounded_cache_put(
         _GITHUB_BRANCH_METADATA_CACHE, cache_key, (now, default_branch)
     )
     return default_branch, None
+
+
+def _peek_cached_repository_default_branch(
+    token: str,
+    repository: str,
+) -> str | None:
+    """Return cached default-branch metadata without any network fetch."""
+
+    now = time.monotonic()
+    cache_key = _github_branch_metadata_cache_key(token, repository)
+    cached = _GITHUB_BRANCH_METADATA_CACHE.get(cache_key)
+    if cached:
+        cached_at, cached_default = cached
+        if now - cached_at < _GITHUB_REPOSITORY_DISCOVERY_CACHE_TTL_SECONDS:
+            return cached_default
+    return None
 
 
 def _get_cached_branch_exact(
@@ -847,8 +998,14 @@ async def _get_cached_branch_exact_async(
             if error is None:
                 return found, resolved, error, False
             return found, resolved, error, True
-    found, resolved, error, inconclusive = await _fetch_github_branch_exact_async(
-        token, repository, candidate
+
+    async def _load_exact() -> tuple[bool, str | None, str | None, bool]:
+        return await _fetch_github_branch_exact_async(
+            token, repository, candidate
+        )
+
+    found, resolved, error, inconclusive = await _dedupe_async(
+        _BRANCH_EXACT_INFLIGHT, cache_key, _load_exact
     )
     _bounded_cache_put(
         _GITHUB_BRANCH_RESOLVE_CACHE, cache_key, (now, found, resolved, error)
@@ -931,7 +1088,7 @@ def build_repository_branch_options(
     query: str = "",
     limit: int = _BRANCH_SUGGESTION_DEFAULT_LIMIT,
 ) -> dict[str, Any]:
-    """Build bounded Create-page branch suggestions plus default metadata."""
+    """Build bounded suggestions; metadata composed separately, never coupled."""
 
     normalized_repository = _normalize_repository_value(repository)
     if not normalized_repository:
@@ -951,17 +1108,24 @@ def build_repository_branch_options(
             "hasMore": False,
         }
 
-    options, error, default_branch, has_more = _get_cached_github_branch_options(
+    options, error, _, has_more = _get_cached_github_branch_options(
         github_token,
         normalized_repository,
         query,
         limit,
     )
+    # Default-branch evidence comes from the scoped metadata cache only; a
+    # suggestion lookup never fetches metadata as a dependency.
+    default_branch, metadata_error = _get_cached_repository_default_branch(
+        github_token, normalized_repository
+    )
     if error:
         error = "GitHub branch lookup is unavailable."
+    if metadata_error:
+        metadata_error = "GitHub branch lookup is unavailable."
     return {
         "items": [option.to_payload() for option in options],
-        "error": error,
+        "error": error or metadata_error if not options and metadata_error else error,
         "defaultBranch": default_branch,
         "hasMore": has_more,
     }
@@ -992,19 +1156,28 @@ async def build_repository_branch_options_async(
             "hasMore": False,
         }
 
-    options, error, default_branch, has_more = (
-        await _get_cached_github_branch_options_async(
+    # Run page + metadata concurrently but independently; neither is a
+    # dependency of the other, and each is cached/in-flight-deduplicated.
+    options_result, metadata_result = await asyncio.gather(
+        _get_cached_github_branch_options_async(
             github_token,
             normalized_repository,
             query,
             limit,
-        )
+        ),
+        _get_cached_repository_default_branch_async(
+            github_token, normalized_repository
+        ),
     )
+    options, error, _, has_more = options_result
+    default_branch, metadata_error = metadata_result
     if error:
         error = "GitHub branch lookup is unavailable."
+    if metadata_error:
+        metadata_error = "GitHub branch lookup is unavailable."
     return {
         "items": [option.to_payload() for option in options],
-        "error": error,
+        "error": error or metadata_error if not options and metadata_error else error,
         "defaultBranch": default_branch,
         "hasMore": has_more,
     }
@@ -1097,19 +1270,19 @@ def resolve_repository_branch(repository: str, branch: str) -> dict[str, Any]:
     found, resolved, error, inconclusive = _get_cached_branch_exact(
         github_token, normalized_repository, candidate
     )
-    default_branch, metadata_error = _get_cached_repository_default_branch(
+    # Resolution never waits for metadata: surface opportunistically cached
+    # default-branch evidence only, without any network fetch.
+    default_branch = _peek_cached_repository_default_branch(
         github_token, normalized_repository
     )
     if error:
         error = "GitHub branch lookup is unavailable."
-    if metadata_error:
-        metadata_error = "GitHub branch lookup is unavailable."
     return {
         "found": found,
         "branch": resolved,
         "defaultBranch": default_branch,
-        "error": error or metadata_error,
-        "inconclusive": inconclusive or bool(error or metadata_error),
+        "error": error,
+        "inconclusive": inconclusive or bool(error),
     }
 
 
@@ -1150,21 +1323,19 @@ async def resolve_repository_branch_async(
     found, resolved, error, inconclusive = await _get_cached_branch_exact_async(
         github_token, normalized_repository, candidate
     )
-    default_branch, metadata_error = (
-        await _get_cached_repository_default_branch_async(
-            github_token, normalized_repository
-        )
+    # Resolution never waits for metadata: opportunistically cached evidence
+    # only, without any network fetch.
+    default_branch = _peek_cached_repository_default_branch(
+        github_token, normalized_repository
     )
     if error:
         error = "GitHub branch lookup is unavailable."
-    if metadata_error:
-        metadata_error = "GitHub branch lookup is unavailable."
     return {
         "found": found,
         "branch": resolved,
         "defaultBranch": default_branch,
-        "error": error or metadata_error,
-        "inconclusive": inconclusive or bool(error or metadata_error),
+        "error": error,
+        "inconclusive": inconclusive or bool(error),
     }
 
 
