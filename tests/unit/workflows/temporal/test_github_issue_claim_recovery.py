@@ -18,9 +18,10 @@ from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comm
 from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 
-# The import registers the shared fixture for pytest; the guard keeps checkers
-# that do not model fixture injection from flagging the registration import.
-assert journey is not None
+# The import registers the shared fixture; the alias keeps import linters that
+# do not model pytest fixture injection from flagging the registration.
+_JOURNEY_FIXTURE = journey  # noqa: F841 -- referenced below to keep fixture registration explicit
+assert _JOURNEY_FIXTURE is journey
 
 
 async def history_events(events):
@@ -559,7 +560,8 @@ async def test_missing_binding_falls_back_to_slot_lease_ledger(
         service,
     )
     if fault in {"released", "absent"}:
-        assert await call == []
+        with pytest.raises(ValueError, match="saved_work_requires_recovery"):
+            _ = await call
     else:
         with pytest.raises(ValueError, match="runtime_cleanup_pending"):
-            await call
+            _ = await call
