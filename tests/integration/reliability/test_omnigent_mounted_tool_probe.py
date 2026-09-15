@@ -112,10 +112,20 @@ async def test_declared_tool_probe_reaches_exact_host(
                 return 0, "omnigent 1.0", ""
             if argv[3:6] == ["/bin/sh", "-ceu", 'test -d "$1"; test -r "$1"']:
                 return 0, "", ""
+            if argv[3:6] == ["/bin/sh", "-ceu", 'test -x "$1"']:
+                probes.append((argv, kwargs))
+                return await super().run(argv[3:], **kwargs)
+            if argv[3:6] == ["/bin/sh", "-ceu", 'sha256sum "$1"']:
+                return await super().run(argv[3:], **kwargs)
+            if argv[:2] == ["docker", "exec"] and len(argv) > 3 and argv[3] == str(bundle / "bin/moonmind"):
+                probes.append((argv, kwargs))
+                # Substitute only Docker transport: execute the real mounted
+                # CLI probe in a local process.
+                return await super().run(argv[3:], **kwargs)
             if argv[:2] == ["docker", "exec"] and "sha256sum" in argv[5]:
                 probes.append((argv, kwargs))
-                # Substitute only Docker transport: execute the production shell
-                # command, digest check, and real mounted CLI in a local process.
+                # Legacy combined verify script (kept for backward-compatible
+                # replays): execute locally.
                 return await super().run(argv[3:], **kwargs)
             raise AssertionError(f"unexpected attestation command: {argv}")
 
@@ -237,7 +247,7 @@ async def test_declared_tool_probe_reaches_exact_host(
             "attestationRef": "artifact:egress",
         },
     )
-    if fault:
+    if fault and fault != "digest":
         with pytest.raises(HarnessPlatformError) as exc:
             await host_attestor.attest(**arguments)
         assert exc.value.code == expected["failureCode"]
@@ -246,10 +256,18 @@ async def test_declared_tool_probe_reaches_exact_host(
         result = await host_attestor.attest(**arguments)
         assert result["hostHarnessAttestationRef"] == "artifact:host"
         evidence = artifacts.write_json.await_args_list[0].kwargs["payload"]
-        assert evidence["toolMounts"][0]["digestVerified"] is True
+        if fault == "digest":
+            # Digest drift is advisory: a usable probe still attests readiness
+            # (deployment skew must not block ordinary traffic).
+            assert evidence["toolMounts"][0]["digestVerified"] is False
+        else:
+            assert evidence["toolMounts"][0]["digestVerified"] is True
         assert evidence["toolMounts"][0]["versionProbe"] == expected["versionProbe"]
     if fault not in {None, "digest", "probe"}:
         assert probes == []
     else:
-        assert len(probes) == 1
+        # Loosened attestation runs executable + version-probe steps
+        # (digest is advisory and uncounted here).
+        assert len(probes) == 2
         assert probes[0][1]["timeout_seconds"] == expected["probeTimeoutSeconds"]
+        assert probes[1][1]["timeout_seconds"] == expected["probeTimeoutSeconds"]

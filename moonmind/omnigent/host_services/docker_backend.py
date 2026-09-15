@@ -41,8 +41,15 @@ class DockerCommandBackend:
         out = stdout.decode("utf-8", errors="replace")
         err = stderr.decode("utf-8", errors="replace")
         if check and code != 0:
+            detail = (err or out).strip()[:512]
+            if not detail:
+                # ``test``/probe failures produce no output; an empty message
+                # makes operator triage impossible. Record the exit code and
+                # the safe command head instead of an empty suffix.
+                safe_argv = " ".join(str(arg)[:80] for arg in argv[:5])[:250]
+                detail = f"exit {code} argv={safe_argv or '?'} no output"
             raise HarnessPlatformError(
-                f"Docker host operation failed: {(err or out)[:512]}",
+                f"Docker host operation failed: {detail}",
                 code=failure_code,
             )
         return code, out, err
