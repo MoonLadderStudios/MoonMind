@@ -22,6 +22,7 @@ from moonmind.workflows.temporal.github_issue_lifecycle import (
     attempt_evidence_blocks_admission,
     interpret_issue,
 )
+from moonmind.workflows.temporal.issue_claim_store import ActiveIssueClaimConflict
 
 
 @dataclass
@@ -392,13 +393,65 @@ def _selected_author_identity(candidate: Mapping[str, Any]) -> dict[str, Any] | 
     return {"id": user_id, "login": login.strip()}
 
 
+def _record_rejection(
+    counts: dict[str, Any], issue_number: int, reason: str, **details: Any
+) -> None:
+    """Retain bounded diagnostic samples without changing admission authority."""
+    reasons = counts.setdefault("rejectionCounts", {})
+    reasons[reason] = reasons.get(reason, 0) + 1
+    samples = counts.setdefault("rejectedCandidates", [])
+    # Keep owner diagnostics visible even behind a full page of label rejects.
+    if len(samples) >= 20 and reason == "active_attempt_conflict":
+        for index, sample in enumerate(samples):
+            if sample["reasonCode"] != "active_attempt_conflict":
+                samples.pop(index)
+                break
+    if len(samples) < 20:
+        samples.append({"issueNumber": issue_number, "reasonCode": reason, **details})
+    counts["rejectedCandidatesTruncated"] = sum(reasons.values()) > len(samples)
+
+
+def _exclusion_summary(counts: Mapping[str, Any]) -> str:
+    reasons = counts.get("rejectionCounts", {})
+    if not reasons:
+        return ""
+    summary = (
+        " Exclusions: "
+        + ", ".join(
+            f"{reason.replace('_', ' ')}: {count}"
+            for reason, count in sorted(reasons.items())
+        )
+        + "."
+    )
+    conflicts = reasons.get("active_attempt_conflict", 0)
+    if conflicts:
+        examples = [
+            f"#{item['issueNumber']}"
+            for item in counts.get("rejectedCandidates", [])
+            if item["reasonCode"] == "active_attempt_conflict"
+        ][:5]
+        summary += f" {conflicts} candidate(s) have unresolved attempt ownership"
+        if examples:
+            summary += " (" + ", ".join(examples) + ")"
+        summary += (
+            ". Inspect searchEvidence.rejectedCandidates for recorded owners; "
+            "reconcile stopped writers and preserved work before retrying. "
+            "Removing a status label alone does not release an attempt."
+        )
+    return summary
+
+
 async def resolve_issue(
     *,
     repository: str,
     query: str,
     github_service: GitHubService,
     blockers_from_issue: Callable[[Mapping[str, Any]], Awaitable[list[dict[str, Any]]]],
-    attempt_evidence_resolver: Callable[[Mapping[str, Any]], Awaitable[Mapping[str, Any] | None]] | None = None,
+    reconcile_candidate: Callable[[int], Awaitable[bool]] | None = None,
+    attempt_evidence_resolver: Callable[
+        [Mapping[str, Any]], Awaitable[Mapping[str, Any] | None]
+    ]
+    | None = None,
     recovery_handoff: Mapping[str, Any] | None = None,
     attempt_context: Mapping[str, Any] | None = None,
     pr_identities: Sequence[Mapping[str, Any]] | None = None,
@@ -609,6 +662,9 @@ async def resolve_issue(
                         "reasonCode": "incomplete_evidence",
                     }
                 if "pull_request" in candidate:
+                    counts["pullRequestsSkipped"] = (
+                        counts.get("pullRequestsSkipped", 0) + 1
+                    )
                     continue
                 if not is_complete_open_issue(candidate, repository):
                     return None, {
@@ -639,24 +695,43 @@ async def resolve_issue(
                         counts["authorMismatchesSkipped"] = (
                             int(counts.get("authorMismatchesSkipped") or 0) + 1
                         )
+                        _record_rejection(
+                            counts, candidate["number"], "author_mismatch"
+                        )
                         continue
                 normalized = dict(candidate)
                 labels = candidate["labels"]
                 normalized["labels"] = [label["name"] for label in labels]
-                if has_in_progress_status(normalized):
+                if has_in_progress_status(normalized) and reconcile_candidate is not None:
+                    if await reconcile_candidate(candidate["number"]):
+                        normalized["labels"] = [label for label in normalized["labels"] if label != "status: in-progress"]
+                if has_in_progress_status(
+                    normalized
+                ) or not is_lifecycle_selectable_candidate(normalized):
+                    _record_rejection(
+                        counts,
+                        candidate["number"],
+                        "lifecycle_ineligible",
+                        lifecycleState=interpret_issue(normalized).settled,
+                    )
                     continue
-                if not is_lifecycle_selectable_candidate(normalized):
-                    continue
-                if (
-                    interpret_issue(
-                        {"state": "open", "labels": normalized["labels"]}
-                    ).settled == SETTLED_RECOVERY_NEEDED
-                    and not _recovery_handoff_usable(recovery_handoff)
+                if interpret_issue(
+                    {"state": "open", "labels": normalized["labels"]}
+                ).settled == SETTLED_RECOVERY_NEEDED and not _recovery_handoff_usable(
+                    recovery_handoff
                 ):
+                    _record_rejection(
+                        counts, candidate["number"], "recovery_handoff_missing"
+                    )
                     continue
                 if attempt_evidence_resolver is not None:
-                    candidate_attempt_context: Mapping[str, Any] | None = await attempt_evidence_resolver(normalized)
+                    candidate_attempt_context: (
+                        Mapping[str, Any] | None
+                    ) = await attempt_evidence_resolver(normalized)
                     if attempt_evidence_blocks_admission(candidate_attempt_context):
+                        _record_rejection(
+                            counts, candidate["number"], "active_attempt_conflict"
+                        )
                         continue
                 else:
                     candidate_attempt_context = attempt_context
@@ -667,9 +742,9 @@ async def resolve_issue(
                 # candidate and threaded into the admit decision itself (not a
                 # post-hoc skip): a blocked candidate is denied as
                 # blocked_prerequisite on both the query and fallback paths.
-                candidate_blockers: list[dict[str, Any]] | None = await blockers_from_issue(
-                    normalized
-                )
+                candidate_blockers: (
+                    list[dict[str, Any]] | None
+                ) = await blockers_from_issue(normalized)
                 shared = admit_for_entrypoint(
                     ENTRYPOINT_SEARCH,
                     repository=repository,
@@ -684,9 +759,17 @@ async def resolve_issue(
                 )
                 if not shared.allowed:
                     if shared.reason_code == "read_failure":
-                        return None, {**evidence, "error": shared.summary, "reasonCode": "read_failure"}
+                        return None, {
+                            **evidence,
+                            "error": shared.summary,
+                            "reasonCode": "read_failure",
+                        }
+                    _record_rejection(counts, candidate["number"], shared.reason_code)
                     continue
                 if candidate_blockers:
+                    _record_rejection(
+                        counts, candidate["number"], "blocked_prerequisite"
+                    )
                     continue
                 # Confirm current identity/lifecycle inside the bounded scan so
                 # a stale first candidate does not fail the whole scheduled tick.
@@ -698,33 +781,92 @@ async def resolve_issue(
                     current_response.raise_for_status()
                     current = current_response.json()
                 except (httpx.HTTPError, ValueError) as exc:
-                    return None, {**evidence, "error": f"Candidate confirmation failed: {type(exc).__name__}."}
-                if not isinstance(current, Mapping) or current.get("number") != candidate["number"]:
-                    return None, {**evidence, "error": "Candidate confirmation returned a different or malformed issue."}
+                    return None, {
+                        **evidence,
+                        "error": f"Candidate confirmation failed: {type(exc).__name__}.",
+                    }
+                if (
+                    not isinstance(current, Mapping)
+                    or current.get("number") != candidate["number"]
+                ):
+                    return None, {
+                        **evidence,
+                        "error": "Candidate confirmation returned a different or malformed issue.",
+                    }
                 if current.get("state") == "closed":
+                    _record_rejection(counts, candidate["number"], "candidate_closed")
                     continue
                 if not is_complete_open_issue(current, repository):
-                    return None, {**evidence, "error": "Candidate confirmation evidence is incomplete."}
-                if not is_lifecycle_selectable_candidate(current) or await blockers_from_issue(current):
+                    return None, {
+                        **evidence,
+                        "error": "Candidate confirmation evidence is incomplete.",
+                    }
+                if not is_lifecycle_selectable_candidate(current):
+                    _record_rejection(
+                        counts,
+                        candidate["number"],
+                        "lifecycle_ineligible",
+                        lifecycleState=interpret_issue(current).settled,
+                    )
                     continue
-                if interpret_issue(current).settled == SETTLED_RECOVERY_NEEDED and not _recovery_handoff_usable(recovery_handoff):
+                if await blockers_from_issue(current):
+                    _record_rejection(
+                        counts, candidate["number"], "blocked_prerequisite"
+                    )
+                    continue
+                if interpret_issue(
+                    current
+                ).settled == SETTLED_RECOVERY_NEEDED and not _recovery_handoff_usable(
+                    recovery_handoff
+                ):
+                    _record_rejection(
+                        counts, candidate["number"], "recovery_handoff_missing"
+                    )
                     continue
                 # Recheck author scope on the authoritative issue read before
                 # granting a durable claim; a search hit alone is not authority.
                 selected_author = _selected_author_identity(current)
                 if authenticated_user is not None:
                     if selected_author is None:
-                        return None, {**evidence, "error": "Candidate confirmation author evidence is incomplete.", "reasonCode": "invalid_author_evidence"}
+                        return None, {
+                            **evidence,
+                            "error": "Candidate confirmation author evidence is incomplete.",
+                            "reasonCode": "invalid_author_evidence",
+                        }
                     if selected_author["id"] != authenticated_user["id"]:
                         counts["authorMismatchesSkipped"] += 1
+                        _record_rejection(
+                            counts, candidate["number"], "author_mismatch"
+                        )
                         continue
+                try:
+                    if reserve_candidate is not None and not await reserve_candidate(
+                        int(candidate["number"])
+                    ):
+                        _record_rejection(
+                            counts, candidate["number"], "reservation_rejected"
+                        )
+                        continue
+                except ActiveIssueClaimConflict as exc:
+                    _record_rejection(
+                        counts,
+                        candidate["number"],
+                        exc.evidence.get("reasonCode") or "active_attempt_conflict",
+                        claimEvidence=exc.evidence,
+                    )
+                    continue
                 if selected_author is not None:
                     counts["selectedIssueAuthor"] = dict(selected_author)
-                if reserve_candidate is not None and not await reserve_candidate(int(candidate["number"])):
-                    continue
                 evidence["selectedIssue"] = dict(current)
                 return candidate["number"], evidence
             if len(candidates) < 100:
+                if counts.get("rejectionCounts", {}).get("active_attempt_conflict"):
+                    return None, {
+                        **evidence,
+                        "disposition": "idle",
+                        "summary": "No issue selected." + _exclusion_summary(counts),
+                        "reasonCode": "unresolved_issue_attempts",
+                    }
                 if authenticated_user is not None:
                     return None, {
                         **evidence,
@@ -733,13 +875,15 @@ async def resolve_issue(
                             "No eligible open GitHub issue created by the authenticated "
                             "search account was found; candidate pages exhausted. "
                             "No other author's issue was selected."
-                        ),
+                        )
+                        + _exclusion_summary(counts),
                         "reasonCode": "no_eligible_self_authored_issue",
                     }
                 return None, {
                     **evidence,
                     "disposition": "idle",
-                    "summary": "No eligible open GitHub issue found; candidate pages exhausted.",
+                    "summary": "No eligible open GitHub issue found; candidate pages exhausted."
+                    + _exclusion_summary(counts),
                 }
     if authenticated_user is not None:
         return None, {
@@ -748,11 +892,13 @@ async def resolve_issue(
                 "No eligible GitHub issue created by the authenticated search account "
                 "was found within the 500-candidate scan limit. No other author's "
                 "issue was selected."
-            ),
+            )
+            + _exclusion_summary(counts),
             "reasonCode": "no_eligible_self_authored_issue",
         }
     return None, {
         **evidence,
-        "error": "No eligible GitHub issue found within the 500-candidate scan limit.",
+        "error": "No eligible GitHub issue found within the 500-candidate scan limit."
+        + _exclusion_summary(counts),
         "reasonCode": "no_eligible_candidate",
     }

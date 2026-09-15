@@ -14,7 +14,7 @@ from moonmind.workflows.temporal.workflows.agent_run import (
 
 
 def test_managed_launch_binding_uses_temporal_patch_guard() -> None:
-    source = inspect.getsource(MoonMindAgentRun.run)
+    source = inspect.getsource(MoonMindAgentRun._run_under_claim)
 
     assert "workflow.patched(MANAGED_TASK_WORKFLOW_BINDING_PATCH_ID)" in source
     assert "task_workflow_id = parent_info.workflow_id" in source
@@ -23,7 +23,7 @@ def test_managed_launch_binding_uses_temporal_patch_guard() -> None:
 
 
 def test_managed_launch_profile_tier_policy_is_replay_patched() -> None:
-    source = inspect.getsource(MoonMindAgentRun.run)
+    source = inspect.getsource(MoonMindAgentRun._run_under_claim)
 
     assert re.search(
         r"workflow\.patched\(\s*MANAGED_RUNTIME_PROFILE_TIER_POLICY_PATCH_ID\s*\)",
@@ -34,7 +34,7 @@ def test_managed_launch_profile_tier_policy_is_replay_patched() -> None:
 
 
 def test_auto_runtime_rejection_is_replay_patched_at_dispatch() -> None:
-    source = inspect.getsource(MoonMindAgentRun.run)
+    source = inspect.getsource(MoonMindAgentRun._run_under_claim)
 
     assert "workflow.patched(RESOLVED_RUNTIME_DISPATCH_PATCH_ID)" in source
     assert "request.agent_id.strip().lower() == AUTO_RUNTIME_SENTINEL" in source

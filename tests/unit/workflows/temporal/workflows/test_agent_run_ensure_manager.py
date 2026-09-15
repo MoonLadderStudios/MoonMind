@@ -55,7 +55,7 @@ class TestEnsureManagerAutoStart:
         """``_ensure_manager_and_signal`` must be called with
         ``request_slot=True`` so the auto-start fallback is triggered
         when the ProviderProfileManager is missing."""
-        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun._run_under_claim))
         tree = ast.parse(source)
 
         found_request_slot_call = False
@@ -88,7 +88,7 @@ class TestEnsureManagerAutoStart:
 
     def test_profile_sync_happens_before_slot_request_on_new_patch_path(self):
         """New managed runs must refresh manager profiles before requesting a slot."""
-        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun._run_under_claim))
         tree = ast.parse(source)
 
         patched_block: ast.If | None = None
@@ -230,7 +230,7 @@ class TestEnsureManagerAutoStart:
         """There must be no bare ``manager_handle.signal("request_slot", ...)``
         between ``_ensure_manager_and_signal`` and ``slot_assigned_event``.
         All request_slot signals must go through the auto-start wrapper."""
-        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun._run_under_claim))
         tree = ast.parse(source)
 
         # Collect line numbers of key landmarks and bare signal calls.
@@ -282,7 +282,7 @@ class TestEnsureManagerAutoStart:
 
     def test_ensure_manager_propagates_exact_execution_profile_ref(self):
         """Managed runs with an explicit profile must pass it into slot acquisition."""
-        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun._run_under_claim))
         tree = ast.parse(source)
 
         for node in ast.walk(tree):
@@ -1047,7 +1047,7 @@ class TestEnsureManagerAutoStart:
         assert "manager_id = self._manager_workflow_id(runtime_id)" in source
         assert "return manager_handle, manager_id, runtime_id" in source
 
-        run_source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        run_source = textwrap.dedent(inspect.getsource(MoonMindAgentRun._run_under_claim))
         tree = ast.parse(run_source)
         tuple_assignment_count = 0
         for node in ast.walk(tree):
@@ -1162,7 +1162,7 @@ class TestEnsureManagerAutoStart:
 
     def test_slot_wait_runtime_update_preempts_simultaneous_slot_assignment(self):
         """The wait loop must consume runtime edits even if slot_assigned is also set."""
-        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun.run))
+        source = textwrap.dedent(inspect.getsource(MoonMindAgentRun._run_under_claim))
 
         assert "and not self.slot_assigned_event.is_set()" not in source
         assert source.count("if self.runtime_selection_updated_event.is_set():") == 2

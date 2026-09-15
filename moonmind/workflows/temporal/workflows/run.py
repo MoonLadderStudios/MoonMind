@@ -9308,6 +9308,7 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 "summary",
             ),
             "moonmind.github.get_issue": (
+                "issueClaimLease",
                 "searchEvidence",
                 "repository",
                 "issueNumber",
@@ -20615,6 +20616,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                             "the admitted workflow executionPlanRef"
                         )
                 parameters["executionPlanRef"] = admitted_plan_ref
+        lease = (self._trusted_issue_context or {}).get("issueClaimLease")
+        if isinstance(lease, Mapping):
+            parameters["issueClaimLease"] = dict(lease)
         if repository_operation:
             if repository_operation not in {"read", "write"}:
                 raise ValueError(
@@ -22416,6 +22420,27 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         return "managed" if normalized_agent_id in _MANAGED_AGENT_IDS else "external"
 
     async def _run_integration_stage(
+        self, *, parameters: dict[str, Any], plan_ref: Optional[str]
+    ) -> None:
+        lease = (self._trusted_issue_context or {}).get("issueClaimLease")
+        if lease:
+            from moonmind.workflows.temporal.github_issue_lease_workflow import execute_with_issue_lease
+
+            async def renew(payload):
+                route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("github_issue.renew_claim")
+                return await workflow.execute_activity(
+                    "github_issue.renew_claim", payload,
+                    **self._execute_kwargs_for_route(route),
+                )
+
+            return await execute_with_issue_lease(
+                lease=lease,
+                execute=lambda: self._run_integration_under_claim(parameters=parameters, plan_ref=plan_ref),
+                renew=renew,
+            )
+        return await self._run_integration_under_claim(parameters=parameters, plan_ref=plan_ref)
+
+    async def _run_integration_under_claim(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
     ) -> None:
         self._awaiting_external = True

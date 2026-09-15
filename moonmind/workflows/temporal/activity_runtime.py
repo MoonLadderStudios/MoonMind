@@ -1095,6 +1095,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "github_issue_finalize_failed_attempt",
     ),
+    "github_issue.renew_claim": ("integrations", "github_issue_renew_claim"),
     "github_issue.reconcile_handoffs": (
         "integrations",
         "github_issue_reconcile_handoffs",
@@ -5261,6 +5262,10 @@ class TemporalIntegrationActivities:
             **outputs,
         }
 
+    async def github_issue_renew_claim(self, payload, /):
+        from moonmind.workflows.temporal.github_issue_claim_lease import renew_execution_claim
+        return await renew_execution_claim(payload)
+
     async def github_issue_reconcile_handoffs(self, payload, /, **kwargs):
         """Reconcile interrupted issue handoffs through the bounded scan (durable entrypoint).
 
@@ -5291,9 +5296,10 @@ class TemporalIntegrationActivities:
 
         repository = str(_first("repository", "repo") or "").strip()
         if not repository:
-            raise TemporalActivityRuntimeError(
-                "github_issue.reconcile_handoffs requires repository"
+            from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import (
+                reconcile_local_github_issue_claims,
             )
+            return await reconcile_local_github_issue_claims(state_dir=_first("stateDir", "state_dir"))
         raw_numbers = _first("issueNumbers", "issue_numbers")
         issue_numbers = None
         if isinstance(raw_numbers, (list, tuple)):

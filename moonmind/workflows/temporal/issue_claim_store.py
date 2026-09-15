@@ -19,12 +19,15 @@ from temporalio import activity
 from api_service.db.models import GitHubIssueClaim
 from moonmind.workflows.temporal.github_issue_attempts import (
     parse_attempt_comment,
-    stable_attempt_marker,
 )
 
 
 class ActiveIssueClaimConflict(ValueError):
     """Another durable owner reserved this candidate before any local write."""
+
+    def __init__(self, message: str, *, evidence: Mapping[str, Any] | None = None):
+        super().__init__(message)
+        self.evidence = dict(evidence or {})
 
 
 def claim_owner(context: Mapping[str, Any] | None = None) -> str:
@@ -61,6 +64,11 @@ class ClaimReceipt:
     def handoff(self) -> dict[str, Any]:
         parsed = parse_attempt_comment(self.comment_body)
         return {
+            **({"issueClaimLease": {
+                "owner": self.owner, "attemptId": self.attempt_id,
+                "repository": self.repository, "issueNumber": self.issue_number,
+                "commentId": self.comment_id,
+            }} if parsed.handoff and parsed.handoff.lease_expires_at else {}),
             "attemptId": self.attempt_id,
             "existingAttemptCommentId": self.comment_id,
             "admittedIdentity": {
@@ -240,8 +248,17 @@ class IssueClaimStore:
                 await session.rollback()
             row = await session.get(GitHubIssueClaim, owner)
             if row is None:
+                active = await self.active_for_issue(repository, issue_number)
                 raise ActiveIssueClaimConflict(
-                    "active_attempt_conflict: another durable owner selected this issue"
+                    "active_attempt_conflict: another durable owner selected this issue",
+                    evidence={
+                        "source": "local_claim",
+                        **(
+                            {"owner": active.owner, "attemptId": active.attempt_id}
+                            if active is not None
+                            else {}
+                        ),
+                    },
                 )
             if (row.repository, row.issue_number) != (
                 repository.casefold(),
@@ -298,12 +315,12 @@ def inspect_claim_comments(
 ) -> str | None:
     """Validate own provenance and reject active contenders or conflicting copies."""
     own = []
-    contenders = False
+    contenders = []
     observed_release = receipt.released
-    marker = stable_attempt_marker(receipt.attempt_id)
     for comment in comments:
         body = str(comment.get("body") or "")
-        if marker in body:
+        parsed = parse_attempt_comment(body)
+        if parsed.attempt_id == receipt.attempt_id:
             if str(
                 (comment.get("user") or {}).get("id") or ""
             ) != receipt.actor_id or body not in {
@@ -319,8 +336,11 @@ def inspect_claim_comments(
                 parsed.handoff and parsed.handoff.activity == "released"
             )
             continue
-        parsed = parse_attempt_comment(body)
         if parsed.status == "no_marker":
+            continue
+        from moonmind.workflows.temporal.github_issue_claim_lease import expired
+        if (parsed.handoff is not None and not parsed.handoff.operator_hold
+            and parsed.handoff.activity != "attention" and expired(parsed.handoff)):
             continue
         if parsed.handoff is None or parsed.handoff.activity in {
             "preparing",
@@ -329,7 +349,21 @@ def inspect_claim_comments(
             "releasing",
             "attention",
         }:
-            contenders = True
+            contender = {
+                "commentId": str(comment.get("id") or ""),
+                "parseStatus": parsed.status,
+                "attemptId": parsed.attempt_id,
+            }
+            if parsed.handoff is not None:
+                contender.update(
+                    {
+                        "deploymentId": parsed.handoff.deployment_id,
+                        "workflowId": parsed.handoff.workflow_id,
+                        "runId": parsed.handoff.run_id,
+                        "activity": parsed.handoff.activity,
+                    }
+                )
+            contenders.append(contender)
     own = list(dict.fromkeys(own))
     if len(own) > 1:
         from moonmind.observability.metrics import increment_counter
@@ -343,12 +377,22 @@ def inspect_claim_comments(
         )
     if contenders and not observed_release:
         raise ActiveIssueClaimConflict(
-            "active_attempt_conflict: another unresolved attempt is present"
+            "active_attempt_conflict: another unresolved attempt is present",
+            evidence={
+                "source": "github_comments",
+                "unresolvedAttemptCount": len(contenders),
+                "attempts": contenders[:10],
+                "attemptsTruncated": len(contenders) > 10,
+            },
         )
     return own[0] if own else None
 
 
 async def verify_claim(receipt: ClaimReceipt, service) -> bool:
+    from moonmind.workflows.temporal.github_issue_claim_lease import expired
+    handoff = parse_attempt_comment(receipt.comment_body).handoff
+    if handoff is not None and expired(handoff):
+        raise ValueError("claim_lease_expired: the old attempt cannot resume shared writes")
     listed = await service.list_issue_comments(
         repo=receipt.repository, issue_number=receipt.issue_number
     )
@@ -380,6 +424,14 @@ async def publish_claim_comment(
     store: IssueClaimStore, receipt: ClaimReceipt, service, body: str
 ) -> str:
     """Persist an update intent, reconcile its response, then commit its receipt."""
+    # Ordinary lifecycle updates must retain the admitted lease contract.
+    from dataclasses import replace
+    from moonmind.workflows.temporal.github_issue_attempts import render_attempt_comment
+    admitted = parse_attempt_comment(receipt.comment_body).handoff
+    proposed = parse_attempt_comment(body).handoff
+    if admitted and proposed and admitted.lease_expires_at and not proposed.lease_expires_at:
+        body = render_attempt_comment(replace(proposed,
+            lease_renewed_at=admitted.lease_renewed_at, lease_expires_at=admitted.lease_expires_at))
     # Finish any acknowledged-by-GitHub update before accepting a new intent.
     listed = await service.list_issue_comments(
         repo=receipt.repository, issue_number=receipt.issue_number
