@@ -214,10 +214,12 @@ jobs:
     # Per-row setup stays isolated: fast rows never build images or start
     # Compose services; each reliability shard starts its own isolated
     # Compose PostgreSQL/Temporal/MinIO under its own Docker project name.
-    # Reliability budgets (MoonLadderStudios/MoonMind#4369): short per-test
-    # pytest timeout (150s PR / 300s schedule), ~8-min PR step ceiling via
-    # `timeout 480s` (12-min schedule ceiling via step timeout-minutes),
+    # Reliability budgets (MoonLadderStudios/MoonMind#4369, #4384): short per-test
+    # pytest timeout (150s PR / 300s schedule), ~10-min PR step ceiling via
+    # `timeout 600s` (12-min schedule ceiling via step timeout-minutes),
     # and bounded cleanup (always() compose down wrapped in timeout 100s).
+    # The PR ceiling stays above the heaviest duration-balanced partition
+    # load (~500s) plus collection/shutdown overhead.
     # Fast rows keep the pre-existing --timeout 600. Each row writes a
     # uniquely named junit report and attempted cancellation diagnostics.
     needs: select-test-suites
@@ -378,8 +380,10 @@ jobs:
         id: run-reliability
         if: startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         # Schedule ceiling (12 min) covers the longer diagnostic budget;
-        # PRs enforce the shorter ~8-min budget via `timeout 480s` below
-        # (MoonLadderStudios/MoonMind#4369). Never cap the serial suite
+        # PRs enforce the shorter ~10-min budget via `timeout 600s` below
+        # (MoonLadderStudios/MoonMind#4369, #4384: heaviest duration-balanced
+        # partition load is ~500s, so the PR ceiling keeps headroom for
+        # collection/shutdown overhead). Never cap the serial suite
         # first: this bound applies per duration-balanced shard only.
         timeout-minutes: 12
         env:
@@ -397,8 +401,9 @@ jobs:
           mapfile -t shard_files < <(python3 tools/ci/reliability_shard_partition.py --shard "$shard")
           echo "Reliability shard ${{ matrix.suite }} runs ${#shard_files[@]} files"
           # Short reliability budgets with PR-vs-schedule differentiation
-          # (MoonLadderStudios/MoonMind#4369): PRs fail fast with a 150s
-          # per-test timeout and an 8-min step ceiling; schedules keep
+          # (MoonLadderStudios/MoonMind#4369, #4384): PRs fail fast with a 150s
+          # per-test timeout and a 10-min step ceiling (600s stays above the
+          # ~500s heaviest partition load); schedules keep
           # collecting diagnostics with a 300s per-test timeout under the
           # 12-min step ceiling above.
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
@@ -406,7 +411,7 @@ jobs:
             step_budget=660
           else
             pytest_timeout=150
-            step_budget=480
+            step_budget=600
           fi
           test_start=$SECONDS
           set +e

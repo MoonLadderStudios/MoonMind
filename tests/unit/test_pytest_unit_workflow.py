@@ -292,14 +292,15 @@ def test_parallel_shards_bound_hung_tests_and_spread_large_modules() -> None:
     assert "--dist loadfile" not in api_command
     assert "--dist loadfile" in temporal_command
     # Reliability shards run serially with their own short per-test bound
-    # (MoonLadderStudios/MoonMind#4369): 150s PR / 300s schedule, never the
-    # fast-lane 600s. Step ceilings: ~8-min PR via `timeout 480s`, 12-min
-    # schedule via step timeout-minutes.
+    # (MoonLadderStudios/MoonMind#4369, #4384): 150s PR / 300s schedule, never the
+    # fast-lane 600s. Step ceilings: ~10-min PR via `timeout 600s` (above the
+    # ~500s heaviest partition load), 12-min schedule via step timeout-minutes.
     assert "-n auto" not in reliability_command
     assert "--timeout 600" not in reliability_command
     assert "pytest_timeout=150" in reliability_command
     assert "pytest_timeout=300" in reliability_command
-    assert "step_budget=480" in reliability_command
+    assert "step_budget=600" in reliability_command
+    assert "step_budget=480" not in reliability_command
     assert "--timeout \"$pytest_timeout\"" in reliability_command
 
 
