@@ -359,14 +359,6 @@ class AgentSkillMaterializer:
 
         if not alias_dir.exists() and not alias_dir.is_symlink():
             return
-        if alias_dir.is_symlink() and is_moonmind_owned_projection(
-            alias_dir,
-            target=active_dir,
-            owned_roots=(active_dir.parent, active_dir),
-        ):
-            return
-        if alias_dir.is_dir() and not alias_dir.is_symlink():
-            return
         if alias_dir.is_symlink() and not alias_dir.exists():
             raise RuntimeError(
                 "existing symlink does not resolve to a materialized snapshot: "
@@ -376,6 +368,14 @@ class AgentSkillMaterializer:
                 "alias; repair through the workspace/materialization owner without "
                 "deleting repo-authored skill sources or discarding run work"
             )
+        if alias_dir.is_symlink() and is_moonmind_owned_projection(
+            alias_dir,
+            target=active_dir,
+            owned_roots=(active_dir.parent, active_dir),
+        ):
+            return
+        if alias_dir.is_dir() and not alias_dir.is_symlink():
+            return
         raise RuntimeError(
             "existing symlink does not resolve under a MoonMind-owned active skill root; "
             f"conflicting alias at {alias_dir}; repair through the "

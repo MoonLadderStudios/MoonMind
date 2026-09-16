@@ -47,8 +47,7 @@ If no constraints are provided, default to addressing all applicable feedback.
   error: stop as blocked instead of substituting stale repository code.
 2. Resolve PR and collect all comments.
 - Resolve the comments helper as `$FIX_COMMENTS_SKILL_DIR/tools/get_branch_pr_comments.py` before reading any existing comments artifact:
-  - Fall back to `tools/get_branch_pr_comments.py` only for repositories that intentionally mirror skill helper tools into the repo root.
-  - If neither helper exists, stop as blocked with reason `comments_helper_missing`; do not use a stale `var/pr_comments/current-branch-comments.json`.
+  - If the bundled helper is missing, stop as blocked with reason `comments_helper_missing`; do not use a stale `var/pr_comments/current-branch-comments.json` and do not substitute repository-mirrored code.
 - Run the resolved helper with `python3 <helper> --output var/pr_comments/current-branch-comments.json`.
 - If PR resolution or comment retrieval fails, stop and ask the user for a PR number/URL or GitHub credential fix. Do not continue from pre-fetched or stale comments unless the helper successfully refreshed `var/pr_comments/current-branch-comments.json` in this run.
 - Load `var/pr_comments/current-branch-comments.json` and treat every entry in `comments` as input feedback.
