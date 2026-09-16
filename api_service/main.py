@@ -258,6 +258,8 @@ async def _sweep_secret_invalidation_outbox() -> int:
         try:
             subscribe_secret_invalidations(_log_invalidation)
         except Exception:
+            # Startup replay is idempotent; a duplicate subscriber
+            # registration is safe to ignore and continue the sweep.
             pass
         async with get_async_session_context() as session:
             swept = await SecretsService.sweep_invalidations(session)
