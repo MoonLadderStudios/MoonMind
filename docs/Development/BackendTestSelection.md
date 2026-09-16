@@ -159,8 +159,9 @@ only fixed trusted pytest commands with ordinary quoted parameters.
 - Fast rows keep the pre-existing per-test (`--timeout 600`), job
   (`timeout-minutes: 30`), and cleanup (`always()` compose `down -v`,
   wrapped in `timeout 100s`) bounds. Reliability shards use short budgets
-  (MoonLadderStudios/MoonMind#4369): 150s per-test timeout and an ~8-min
-  step ceiling on PRs (`timeout 480s`), 300s per-test under a 12-min step
+  (MoonLadderStudios/MoonMind#4369, #4384): 150s per-test timeout and a ~10-min
+  step ceiling on PRs (`timeout 600s`, above the ~500s heaviest partition
+  load), 300s per-test under a 12-min step
   ceiling on schedules. Reliability collection steps are additionally
   wrapped in `timeout 100s`/`timeout 60s` so one slow diagnostic command
   cannot stall the row; each command records its own failure to
@@ -242,7 +243,7 @@ success-path text log/JUnit upload, `-q` reliability verbosity):
 2. Fix the revision/configuration: compare runs on the same commit (or
    adjacent commits with no test/workflow changes), same workflow file,
    same reliability budgets (150s PR / 300s schedule per-test timeout,
-   8-min PR / 12-min schedule step ceilings), same runner class
+   10-min PR / 12-min schedule step ceilings), same runner class
    (`ubuntu-latest`).
 3. Repeat each side at least twice to separate ordinary timing noise from a
    real shift; do not add a performance gate on the result.
