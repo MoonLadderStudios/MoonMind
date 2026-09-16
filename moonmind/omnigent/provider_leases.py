@@ -6,6 +6,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Mapping, NoReturn, Protocol
 
+from moonmind.omnigent.harness_platform.credential_bindings import (
+    model_bindings_of,
+)
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
 )
@@ -127,7 +130,13 @@ class OmnigentProviderLeaseCoordinator:
         """
 
         by_profile: dict[str, list[str]] = {}
-        for slot, binding in plan.payload.credentialBindings.items():
+        # Type-aware consumption (MoonLadderStudios/MoonMind#4009): only
+        # model-authority bindings enter ProviderProfileManager lookup and
+        # the admitted model-capacity match. Repository slots use issuance
+        # (#4007) and never inherit model capacity semantics.
+        for slot, binding in model_bindings_of(
+            plan.payload.credentialBindings
+        ).items():
             by_profile.setdefault(binding.providerProfileRef, []).append(slot)
         if admitted_capacity is not None:
             return await self._consume_admitted_capacity(

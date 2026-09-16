@@ -19,6 +19,9 @@ from uuid import NAMESPACE_URL, uuid5
 from moonmind.omnigent.control_plane.cleanup_authority import (
     CanonicalCleanupAuthority,
 )
+from moonmind.omnigent.harness_platform.credential_bindings import (
+    model_bindings_of,
+)
 from moonmind.omnigent.harness_platform.harness_registry import (
     canonical_harness_id,
     find_harness_registration,
@@ -217,7 +220,9 @@ async def omnigent_evaluate_session_admission_activity(
         plan = await _load_verified_execution_plan(request.omnigent_execution_plan)
         selected_profiles = {
             binding.providerProfileRef
-            for binding in plan.payload.credentialBindings.values()
+            for binding in model_bindings_of(
+                plan.payload.credentialBindings
+            ).values()
         }
         if request.execution_profile_ref not in selected_profiles:
             raise ValueError(
@@ -364,7 +369,9 @@ async def _plan_capacity_authority(
     selected = sorted(
         {
             binding.providerProfileRef
-            for binding in plan.payload.credentialBindings.values()
+            for binding in model_bindings_of(
+                plan.payload.credentialBindings
+            ).values()
         }
     )
     if len(selected) != 1:
@@ -713,7 +720,9 @@ async def _reconstruct_plan_bound_request(
 
     profile_refs = {
         item.providerProfileRef
-        for item in plan.payload.credentialBindings.values()
+        for item in model_bindings_of(
+            plan.payload.credentialBindings
+        ).values()
     }
     if len(profile_refs) != 1:
         raise ValueError("execution plan has ambiguous Provider Profile authority")
@@ -887,7 +896,9 @@ def _bind_request_to_execution_plan(
 
     selected_profiles = {
         binding.providerProfileRef
-        for binding in plan.payload.credentialBindings.values()
+        for binding in model_bindings_of(
+            plan.payload.credentialBindings
+        ).values()
     }
     if request.execution_profile_ref not in selected_profiles:
         raise ValueError(
@@ -1026,7 +1037,9 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
         raise ValueError("Agent Profile snapshot artifact is invalid")
     planned_profiles = {
         value.providerProfileRef
-        for value in persisted.payload.credentialBindings.values()
+        for value in model_bindings_of(
+            persisted.payload.credentialBindings
+        ).values()
     }
     if str(profile_snapshot.get("providerProfileRef") or "") not in planned_profiles:
         raise ValueError("Agent Profile artifact conflicts with Provider Profile plan")
@@ -2625,7 +2638,9 @@ async def omnigent_ensure_provider_profile_lease_activity(
     if execution_plan is not None:
         selected_profiles = {
             binding.providerProfileRef
-            for binding in execution_plan.payload.credentialBindings.values()
+            for binding in model_bindings_of(
+                execution_plan.payload.credentialBindings
+            ).values()
         }
         if len(selected_profiles) != 1:
             raise ValueError(
@@ -2744,7 +2759,11 @@ async def omnigent_ensure_provider_profile_lease_activity(
         )
 
         provider_leases: dict[str, dict[str, Any]] = {}
-        for slot, binding in execution_plan.payload.credentialBindings.items():
+        # Model leases only (MoonLadderStudios/MoonMind#4009): repository
+        # slots are served by issuance, never by Provider Profile leases.
+        for slot, binding in model_bindings_of(
+            execution_plan.payload.credentialBindings
+        ).items():
             credential_runtime_ref = (
                 f"credential-runtime:{lease.lease_id}:"
                 f"{int(profile.credential_generation)}"

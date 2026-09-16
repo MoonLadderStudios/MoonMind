@@ -21,7 +21,12 @@ from pydantic import (
 
 from moonmind.omnigent.harness_platform.support import SupportKeyPayload
 
-from moonmind.omnigent.harness_platform.credential_bindings import CredentialBinding
+from moonmind.omnigent.harness_platform.credential_bindings import (
+    CredentialBinding,
+    ModelAuthorityBinding,
+    RepositoryAuthorityBinding,
+    is_repository_authority,
+)
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -236,7 +241,22 @@ class OmnigentExecutionPlanPayload(BaseModel):
     harnessImplementationRef: str = Field(alias="harnessImplementationRef")
     agentSource: dict[str, Any] = Field(alias="agentSource")
     credentialBindingSetRef: str = Field(alias="credentialBindingSetRef")
-    credentialBindings: dict[str, CredentialBinding] = Field(alias="credentialBindings")
+    # Union payload (MoonLadderStudios/MoonMind#4009): legacy v1 plans carry
+    # model-only CredentialBinding entries; plans admitting repository
+    # authority carry v2 entries with explicit authorityKind discriminators.
+    # Old v1-only readers reject union entries via extra="forbid" instead of
+    # misinterpreting repository authority as model authority.
+    credentialBindings: dict[
+        str, CredentialBinding | ModelAuthorityBinding | RepositoryAuthorityBinding
+    ] = Field(alias="credentialBindings")
+    # Compact validated repository snapshot refs (slot -> access snapshot).
+    # Pre-host decisions only: acquired secret revision/issuance, use
+    # ownership, generations, materialized paths, and cleanup handles live
+    # at the runtime boundary, never here. Omitted when no repository
+    # authority is admitted so historical v1 bytes keep their digest.
+    repositoryAuthorityRefs: dict[str, str] | None = Field(
+        default=None, alias="repositoryAuthorityRefs"
+    )
     hostClassRef: str = Field(alias="hostClassRef")
     hostImageRef: str | None = Field(default=None, alias="hostImageRef")
     omnigentHostBuildDigest: str | None = Field(
@@ -289,6 +309,8 @@ class OmnigentExecutionPlanPayload(BaseModel):
         payload = handler(self)
         if self.omnigentVersion is None:
             payload.pop("omnigentVersion", None)
+        if self.repositoryAuthorityRefs is None:
+            payload.pop("repositoryAuthorityRefs", None)
         return payload
 
     @model_validator(mode="after")
@@ -323,6 +345,29 @@ class OmnigentExecutionPlanPayload(BaseModel):
             "checkpoint_branch",
         }:
             raise ValueError("workspaceMutation is unsupported")
+        if self.repositoryAuthorityRefs is not None:
+            import re as _re
+
+            _snapshot_re = _re.compile(
+                r"^repository-access-snapshot:sha256:[0-9a-f]{64}$"
+            )
+            for slot, snapshot_ref in self.repositoryAuthorityRefs.items():
+                binding = self.credentialBindings.get(slot)
+                if binding is None or not is_repository_authority(binding):
+                    raise ValueError(
+                        f"repositoryAuthorityRefs slot {slot!r} is not an admitted "
+                        "repository-authority binding"
+                    )
+                if not _snapshot_re.fullmatch(snapshot_ref):
+                    raise ValueError(
+                        f"repositoryAuthorityRefs slot {slot!r} must be a snapshot digest ref"
+                    )
+                admitted = getattr(binding, "repositoryAccessSnapshotRef", None)
+                if admitted is not None and admitted != snapshot_ref:
+                    raise ValueError(
+                        f"repositoryAuthorityRefs slot {slot!r} conflicts with the "
+                        "admitted binding snapshot"
+                    )
         exact_launch_authority = (
             self.hostImageRef,
             self.omnigentHostBuildDigest,
@@ -368,6 +413,7 @@ def canonical_payload_bytes(
         "admissionAuthority",
         "supportIdentity",
         "runtimeProviderRollout",
+        "repositoryAuthorityRefs",
     ):
         if data.get(optional_v1_field) is None:
             data.pop(optional_v1_field, None)
