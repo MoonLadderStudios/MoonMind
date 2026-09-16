@@ -10,35 +10,49 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))
+import sys
+
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import pytest
 
-from tools.ci.reliability_shard_partition import partition as _lpt_partition  # noqa: E402
-from tools.ci.reliability_shard_partition import (  # noqa: E402
-    shard_for_path as _partition_shard_for_path,
-)
 PROVIDER_MARKERS = {"provider_verification", "requires_credentials"}
 
-
-_PARTITION_CACHE: dict[str, str] | None = None
-
-
-def reliability_partition() -> dict[str, str]:
-    """Map every reliability test file to its deterministic shard (LPT)."""
-    global _PARTITION_CACHE
-    if _PARTITION_CACHE is not None:
-        return dict(_PARTITION_CACHE)
-    _PARTITION_CACHE = _lpt_partition()
-    return dict(_PARTITION_CACHE)
+# Deterministic duration-balanced reliability sharding
+# (MoonLadderStudios/MoonMind#4367): the backend matrix runs four isolated
+# reliability shards. The single partition authority is
+# tools/ci/reliability_shard_partition.py (greedy longest-processing-time
+# over advisory duration hints); this verifier imports it so local ownership
+# and CI execute the same file in the same shard. Timing history is an
+# optimization hint only: files absent from the weights file receive the
+# default weight and are always selected, never skipped.
+from tools.ci.reliability_shard_partition import (
+    SHARD_COUNT as RELIABILITY_SHARD_COUNT,
+)
+from tools.ci.reliability_shard_partition import (
+    SHARD_NAMES as RELIABILITY_SHARD_NAMES,
+)
+from tools.ci.reliability_shard_partition import (
+    reliability_shard_for_file as _authority_shard_for_file,
+)
 
 
 def reliability_shard_for_path(path: str) -> str:
     """Return the deterministic reliability shard owning a test path."""
-    return _partition_shard_for_path(path, reliability_partition())
+    import hashlib
+
+    filename = path.rsplit("/", 1)[-1]
+    try:
+        return _authority_shard_for_file(filename)
+    except (OSError, ValueError):
+        # Partition authority unavailable for this path; fall through to
+        # hash-based sharding so every path still maps to exactly one shard.
+        pass
+    digest = int(hashlib.md5(path.encode("utf-8")).hexdigest(), 16)
+    return RELIABILITY_SHARD_NAMES[digest % RELIABILITY_SHARD_COUNT]
 
 
 @dataclass(frozen=True)

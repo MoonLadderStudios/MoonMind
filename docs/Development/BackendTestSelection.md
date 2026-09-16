@@ -156,17 +156,17 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   `MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-<suite>_default` so
   fixture tests attach to their row's isolated Compose network instead of
   the retired single-job `moonmind-reliability-qualification_default`.
-- Per-test (`--timeout 600` on fast rows, `--timeout 420` on reliability
-  rows), test-step (reliability pytest wrapped in `timeout 660s` for an
-  11-minute ceiling above the 510-525s LPT partition with an explicit
-  budget-exceeded annotation), job
-  (`timeout-minutes: 20`), and cleanup (`always()` compose `down -v`,
-  wrapped in `timeout 100s`) bounds are preserved on every row. Reliability
-  collection steps are additionally wrapped in `timeout 100s`/`timeout 60s`
-  so one slow diagnostic command cannot stall the row; each command
-  records its own failure to `collection-status.txt` without stopping the
-  remaining bounded collection or cleanup, and the original test failure
-  is never replaced.
+- Fast rows keep the pre-existing per-test (`--timeout 600`), job
+  (`timeout-minutes: 30`), and cleanup (`always()` compose `down -v`,
+  wrapped in `timeout 100s`) bounds. Reliability shards use short budgets
+  (MoonLadderStudios/MoonMind#4369, #4384): 150s per-test timeout and a ~10-min
+  step ceiling on PRs (`timeout 600s`, above the ~500s heaviest partition
+  load), 300s per-test under a 12-min step
+  ceiling on schedules. Reliability collection steps are additionally
+  wrapped in `timeout 100s`/`timeout 60s` so one slow diagnostic command
+  cannot stall the row; each command records its own failure to
+  `collection-status.txt` without stopping the remaining bounded collection
+  or cleanup, and the original test failure is never replaced.
 - Each row streams combined stdout/stderr through
   `2>&1 | tee artifacts/pytest-backend-<suite>.log` with
   `PYTHONUNBUFFERED=1` and `set -euo pipefail` (plus `PIPESTATUS`
@@ -210,18 +210,15 @@ only fixed trusted pytest commands with ordinary quoted parameters.
 
 Reliability sharding is deterministic and duration-balanced
 (MoonLadderStudios/MoonMind#4367): files matching
-`tests/integration/reliability/test_*.py` are assigned with a greedy
-longest-processing-time partition over the timing hints in
-`tools/ci/reliability_shard_timings.json`. The CI workflow implements this
-with `python3 tools/ci/partition_reliability_shards.py --shard <N>`;
-`tools/verify_test_shard_ownership.py` enforces the same partition through
-the shared `tools/ci/reliability_shard_partition.py` module, so local
-ownership checks and CI execute each file in the same shard. Timing hints
-are an optimization hint only: new, renamed, or stale entries fall back to
-the default weight and every file is still selected exactly once. Refresh
-the hints from recent per-shard `pytest-backend-<suite>-durations.json`
-snapshots; never add exact test-count, timing-file freshness, test-filename,
-or preferred-wording gates.
+`tests/integration/reliability/test_*.py` are assigned by greedy
+longest-processing-time balancing over advisory duration hints in
+`tools/ci/reliability_shard_weights.json`. The single partition authority
+is `tools/ci/reliability_shard_partition.py`, called by the CI workflow as
+`python3 tools/ci/reliability_shard_partition.py --shard N` and imported by
+`tools/verify_test_shard_ownership.py` in `reliability_shard_for_path()`,
+so local ownership checks and CI execute each file in the same shard.
+Timing history is an optimization hint only: new or unweighted files run
+via `DEFAULT_WEIGHT_SECONDS` and are never skipped.
 
 Diagnostic limitation: a canceled sibling may exit before writing its
 junit report or Compose logs. Cancellation uploads are best-effort
@@ -242,11 +239,12 @@ success-path text log/JUnit upload, `-q` reliability verbosity):
 1. Fix the selected universe: run with the same selector outputs (same
    `unit_fast`/`api_component`/`temporal_boundary`/`reliability_journey`
    selection, same reliability file set from
-   `python3 tools/ci/partition_reliability_shards.py --shard <N>`).
+   `python3 tools/ci/reliability_shard_partition.py --shard N`).
 2. Fix the revision/configuration: compare runs on the same commit (or
    adjacent commits with no test/workflow changes), same workflow file,
-   same per-row `--timeout` / `timeout 660s` / `timeout-minutes: 20`
-   bounds, same runner class (`ubuntu-latest`).
+   same reliability budgets (150s PR / 300s schedule per-test timeout,
+   10-min PR / 12-min schedule step ceilings), same runner class
+   (`ubuntu-latest`).
 3. Repeat each side at least twice to separate ordinary timing noise from a
    real shift; do not add a performance gate on the result.
 4. Separate cold and warm setup: record dependency-install/Compose-pull
@@ -425,19 +423,18 @@ MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability \
   -m reliability_journey -q --durations=25
 ```
 
-Run one duration-balanced reliability shard locally (mirrors the CI
-matrix partition; list a shard's files first, then run them):
+Run one deterministic reliability shard locally (mirrors the CI matrix
+`tools/ci/reliability_shard_partition.py --shard N` selection):
 
 ```bash
-python3 tools/ci/partition_reliability_shards.py --shard 0
-mapfile -t shard_files < <(python3 tools/ci/partition_reliability_shards.py --shard 0)
+mapfile -t shard_files < <(python3 tools/ci/reliability_shard_partition.py --shard 0)
 MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest "${shard_files[@]}" \
   -m reliability_journey -q --durations=25
 ```
 
-Shard indexes `0`–`3` map to `reliability-shard-1`–`reliability-shard-4`.
-`tools/verify_test_shard_ownership.py` assigns each file to the same shard
-via `reliability_shard_for_path()`.
+Shards 1-3 use `--shard 1` through `--shard 3`.
+`tools/verify_test_shard_ownership.py` assigns each file to
+the same shard via `reliability_shard_for_path()`.
 
 Run the checkpoint archive cold-resume replay directly:
 
@@ -458,8 +455,7 @@ The archive replay deliberately destroys the source workspace before using
 durable artifact evidence to restore a distinct destination and retries the
 restore idempotently. It exercises production capture/restore engines and the
 artifact boundary, but does not substitute for the Temporal-to-managed-AgentRun
-journey. The required CI reliability shards each carry an 11-minute test-step
-budget (above the 510-525s LPT partition) inside a 20-minute job ceiling.
+journey. The required CI reliability job has a 30-minute budget.
 
 Verify that every eligible provider-free node has exactly one owner:
 

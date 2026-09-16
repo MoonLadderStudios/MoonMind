@@ -1,96 +1,144 @@
-"""Duration-balanced reliability shard partition (pure stdlib).
+#!/usr/bin/env python3
+"""Duration-balanced reliability shard partition (MoonLadderStudios/MoonMind#4367).
 
-MoonLadderStudios/MoonMind#4367: single source of truth for assigning
-tests/integration/reliability/test_*.py files to the four isolated backend
-matrix shards. Both the CI partition CLI
-(tools/ci/partition_reliability_shards.py) and the ownership verifier
-(tools/verify_test_shard_ownership.py) consume this module so local checks
-and CI execute each file in the same shard.
+Files under ``tests/integration/reliability/test_*.py`` are assigned to four
+isolated shards by greedy longest-processing-time balancing over advisory
+duration hints from ``reliability_shard_weights.json``: the heaviest file
+goes to the currently least-loaded shard, ties broken lexicographically so
+the partition is deterministic.
 
-Timing hints (tools/ci/reliability_shard_timings.json) are an optimization
-hint only: unknown, new, renamed, or stale entries fall back to the default
-weight, every discovered file is assigned to exactly one shard, and no exact
-test-count, timing freshness, filename, or preferred-wording gate is added.
+This module is the single partition authority shared by CI (the
+``backend-matrix`` reliability rows call it as a CLI) and by
+``tools/verify_test_shard_ownership.py`` (which imports
+:func:`reliability_shard_for_path`). Timing history is an optimization hint
+only: files absent from the weights file -- including newly added tests --
+receive ``DEFAULT_WEIGHT_SECONDS`` and are always selected, never skipped.
+
+Guardrails: no exact test-count, timing-file freshness, test-filename, or
+preferred-wording gates. A missing or unreadable weights file degrades to a
+uniform default weight, never to an empty shard selection.
 """
 
 from __future__ import annotations
 
-import hashlib
+import argparse
 import json
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+RELIABILITY_DIR = REPO_ROOT / "tests" / "integration" / "reliability"
+WEIGHTS_PATH = Path(__file__).resolve().parent / "reliability_shard_weights.json"
 
 SHARD_COUNT = 4
 SHARD_NAMES = tuple(f"reliability-shard-{index + 1}" for index in range(SHARD_COUNT))
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-TIMINGS_PATH = REPO_ROOT / "tools" / "ci" / "reliability_shard_timings.json"
-RELIABILITY_DIR = REPO_ROOT / "tests" / "integration" / "reliability"
 
-
-def load_weights() -> tuple[dict[str, float], float]:
+def _load_weights() -> tuple[dict[str, float], float]:
+    """Return (per-filename weights, default weight). Never raises."""
     try:
-        payload = json.loads(TIMINGS_PATH.read_text(encoding="utf-8"))
+        payload = json.loads(WEIGHTS_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {}, 15.0
-    raw_weights = payload.get("weights", {})
-    try:
-        default_weight = float(payload.get("default_weight_seconds", 15.0))
-    except (TypeError, ValueError):
-        default_weight = 15.0
+        return {}, 20.0
     weights: dict[str, float] = {}
-    if isinstance(raw_weights, dict):
-        for name, value in raw_weights.items():
+    raw = payload.get("weights", {})
+    if isinstance(raw, dict):
+        for name, value in raw.items():
             try:
                 weights[str(name)] = float(value)
             except (TypeError, ValueError):
                 continue
-    return weights, default_weight
+    try:
+        default = float(payload.get("DEFAULT_WEIGHT_SECONDS", 20.0))
+    except (TypeError, ValueError):
+        default = 20.0
+    return weights, default
 
 
-def discover_files() -> list[str]:
+def _reliability_files() -> list[str]:
     try:
         return sorted(p.name for p in RELIABILITY_DIR.glob("test_*.py"))
     except OSError:
         return []
 
 
-def partition(
-    candidates: list[str] | None = None,
-    weights: dict[str, float] | None = None,
-    default_weight: float | None = None,
-) -> dict[str, str]:
-    """Greedy longest-processing-time assignment (deterministic)."""
-    if candidates is None:
-        candidates = discover_files()
-    if weights is None or default_weight is None:
-        loaded_weights, loaded_default = load_weights()
-        weights = loaded_weights if weights is None else weights
-        default_weight = loaded_default if default_weight is None else default_weight
-    loads = [0.0] * SHARD_COUNT
-    assignment: dict[str, str] = {}
-    for filename in sorted(
-        candidates, key=lambda n: (-weights.get(n, default_weight), n)
-    ):
-        index = min(range(SHARD_COUNT), key=lambda i: (loads[i], i))
-        loads[index] += weights.get(filename, default_weight)
-        assignment[filename] = SHARD_NAMES[index]
+def partition() -> dict[str, list[str]]:
+    """Assign every reliability file to exactly one shard, balanced by weight."""
+    weights, default = _load_weights()
+    files = _reliability_files()
+    totals = [0.0] * SHARD_COUNT
+    assignment: dict[str, list[str]] = {name: [] for name in SHARD_NAMES}
+    # Heaviest first, lexicographic tiebreak for determinism. Pure greedy
+    # longest-processing-time: each file joins the currently least-loaded
+    # shard, so the heaviest files naturally spread across distinct shards.
+    ordered = sorted(files, key=lambda name: (-weights.get(name, default), name))
+    for name in ordered:
+        shard = min(range(SHARD_COUNT), key=lambda i: (totals[i], i))
+        assignment[SHARD_NAMES[shard]].append(name)
+        totals[shard] += weights.get(name, default)
+    for members in assignment.values():
+        members.sort()
     return assignment
 
 
-def shard_loads(
-    assignment: dict[str, str], weights: dict[str, float], default_weight: float
-) -> dict[str, float]:
-    loads = {name: 0.0 for name in SHARD_NAMES}
-    for filename, shard in assignment.items():
-        loads[shard] += weights.get(filename, default_weight)
-    return loads
+def shard_index_for_file(filename: str) -> int:
+    """Return the 0-based shard index owning a reliability filename."""
+    assignment = partition()
+    for index, name in enumerate(SHARD_NAMES):
+        if filename in assignment[name]:
+            return index
+    # File appeared after the partition snapshot (e.g. mid-run listing
+    # skew): place it deterministically without dropping it.
+    weights, default = _load_weights()
+    totals = {
+        name: sum(weights.get(member, default) for member in members)
+        for name, members in assignment.items()
+    }
+    return min(range(SHARD_COUNT), key=lambda i: (totals[SHARD_NAMES[i]], i))
 
 
-def shard_for_path(path: str, assignment: dict[str, str] | None = None) -> str:
-    filename = path.rsplit("/", 1)[-1]
-    if assignment is None:
-        assignment = partition()
-    if filename in assignment:
-        return assignment[filename]
-    digest = int(hashlib.md5(path.encode("utf-8")).hexdigest(), 16)
-    return SHARD_NAMES[digest % SHARD_COUNT]
+def reliability_shard_for_file(filename: str) -> str:
+    """Return the deterministic shard name owning a reliability filename."""
+    return SHARD_NAMES[shard_index_for_file(filename)]
+
+
+def files_for_shard(shard: int) -> list[str]:
+    """Return the sorted filenames owned by a 0-based shard index."""
+    if shard not in range(SHARD_COUNT):
+        raise ValueError(f"unknown reliability shard {shard!r}")
+    return partition()[SHARD_NAMES[shard]]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--shard",
+        required=True,
+        help="0-based shard index (0-3); prints one file per line",
+    )
+    parser.add_argument(
+        "--names",
+        action="store_true",
+        help="print shard names instead of shard files",
+    )
+    args = parser.parse_args(argv)
+    if args.names:
+        print("\n".join(SHARD_NAMES))
+        return 0
+    try:
+        shard = int(args.shard)
+    except ValueError:
+        print(f"error: unknown reliability shard {args.shard!r}", file=sys.stderr)
+        return 2
+    try:
+        files = files_for_shard(shard)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    for name in files:
+        print(f"tests/integration/reliability/{name}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
