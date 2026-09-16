@@ -272,6 +272,32 @@ class OmnigentExecutionPlanningService:
         request_payload = request.model_dump(
             by_alias=True, mode="json", exclude_none=True
         )
+        # These authority inputs shape the immutable plan through
+        # ``compile_once`` but are not part of the request model. Bind them
+        # into the persisted request identity so an idempotency-key retry
+        # that changes repository declarations, workspace snapshots, source
+        # kinds, or worker capabilities cannot silently reuse a previously
+        # bound plan compiled under different authority constraints.
+        request_payload["_authorityInputs"] = json.loads(
+            json.dumps(
+                {
+                    "trustedRepositoryDeclarations": (
+                        dict(trusted_repository_declarations)
+                        if trusted_repository_declarations is not None
+                        else None
+                    ),
+                    "workspaceSourceKind": workspace_source_kind,
+                    "workspaceAccessSnapshotRef": workspace_access_snapshot_ref,
+                    "workerAuthorityKinds": (
+                        [str(kind) for kind in worker_authority_kinds]
+                        if worker_authority_kinds is not None
+                        else None
+                    ),
+                },
+                sort_keys=True,
+                default=str,
+            )
+        )
 
         async def compile_once() -> OmnigentExecutionPlanEnvelope:
             return await self._compile(
@@ -432,7 +458,10 @@ class OmnigentExecutionPlanningService:
                 omnigent_version=catalog_result.snapshot.omnigentVersion,
                 integration_mode=integration_mode,
                 materializer_refs=[
-                    item.materializerRef for item in binding_set.bindings.values()
+                    item.materializerRef
+                    for item in model_bindings_of(
+                        binding_set.bindings
+                    ).values()
                 ],
                 architecture=host_architecture,
                 requested_host_mode=policy.hostMode,

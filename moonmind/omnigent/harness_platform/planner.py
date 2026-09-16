@@ -614,7 +614,8 @@ def compile_execution_plan(
     # are rejected; agent-supplied keys never create declarations.
     repository_slot_requirements: dict[str, dict[str, Any]] | None = None,
     # Workspace-source enforcement (REQ-06): admitted source kind for this
-    # plan ("scratch" | "anonymous" | "save_only"). None preserves the
+    # plan ("scratch" | "repository" | "artifact" | "checkpoint" |
+    # "existing_workspace" | "anonymous" | "save_only"). None preserves the
     # historical behavior (no source-kind enforcement). When supplied, the
     # existing validate_workspace_source_bindings helper runs before any
     # acquisition side effect.

@@ -264,6 +264,7 @@ class InMemoryRuntimeBindingStore:
         execution_plan_ref: str,
         execution_scope_ref: str,
         provider_leases: dict[str, dict[str, Any]],
+        repository_issuance: dict[str, dict[str, Any]] | None = None,
         host_binding_ref: str | None = None,
         host_lease_ref: str | None = None,
         host_lease_generation: int | None = None,
@@ -275,6 +276,7 @@ class InMemoryRuntimeBindingStore:
             executionPlanRef=execution_plan_ref,
             executionScopeRef=execution_scope_ref,
             providerLeases=provider_leases,
+            repositoryIssuance=repository_issuance,
             hostBindingRef=host_binding_ref,
             hostLeaseRef=host_lease_ref,
             hostLeaseGeneration=host_lease_generation,
@@ -432,6 +434,10 @@ class InMemoryRuntimeBindingStore:
             executionPlanRef=current.binding.executionPlanRef,
             executionScopeRef=current.binding.executionScopeRef,
             providerLeases=provider_leases,
+            repositoryIssuance={
+                slot: record.model_dump(by_alias=True, mode="json")
+                for slot, record in current.binding.repositoryIssuance.items()
+            },
         )
         if replacement.providerLeases == current.binding.providerLeases:
             return current.binding
@@ -490,10 +496,13 @@ class InMemoryRuntimeBindingStore:
         )
         # Cannot mutate plan decisions or acquired generations; only add host info
         # Re-create with new host fields but preserve providerLeases (immutable)
+        # and acquired repository issuance (it must survive host attestation
+        # so it can still be refreshed or cleaned up).
         updated = create_runtime_binding(
             executionPlanRef=existing.executionPlanRef,
             executionScopeRef=existing.executionScopeRef,
             providerLeases={k: v.model_dump(by_alias=True, mode="json") for k, v in existing.providerLeases.items()},
+            repositoryIssuance={k: v.model_dump(by_alias=True, mode="json") for k, v in existing.repositoryIssuance.items()},
             hostBindingRef=host_binding_ref,
             hostLeaseRef=host_lease_ref,
             hostLeaseGeneration=host_lease_generation,
@@ -541,6 +550,7 @@ class InMemoryRuntimeBindingStore:
             executionPlanRef=existing.executionPlanRef,
             executionScopeRef=existing.executionScopeRef,
             providerLeases={k: v.model_dump(by_alias=True, mode="json") for k, v in existing.providerLeases.items()},
+            repositoryIssuance={k: v.model_dump(by_alias=True, mode="json") for k, v in existing.repositoryIssuance.items()},
             hostBindingRef=existing.hostBindingRef,
             hostLeaseRef=existing.hostLeaseRef,
             hostLeaseGeneration=existing.hostLeaseGeneration,
@@ -741,6 +751,9 @@ class DbRuntimeBindingStore:
             executionPlanRef=record.execution_plan_ref,
             executionScopeRef=record.execution_scope_ref,
             providerLeases=dict(record.provider_leases_json or {}),
+            repositoryIssuance=dict(
+                getattr(record, "repository_issuance_json", None) or {}
+            ),
             hostBindingRef=record.host_binding_ref,
             hostLeaseRef=record.host_lease_ref,
             hostLeaseGeneration=record.host_lease_generation,
@@ -914,6 +927,7 @@ class DbRuntimeBindingStore:
         execution_plan_ref: str,
         execution_scope_ref: str,
         provider_leases: dict[str, dict[str, Any]],
+        repository_issuance: dict[str, dict[str, Any]] | None = None,
     ) -> OmnigentRuntimeBinding:
         from api_service.db.models import (
             OmnigentExecutionPlanRecord,
@@ -928,6 +942,7 @@ class DbRuntimeBindingStore:
                 executionPlanRef=execution_plan_ref,
                 executionScopeRef=execution_scope_ref,
                 providerLeases=provider_leases,
+                repositoryIssuance=repository_issuance,
             )
             # Serialize the one-current-binding-per-execution decision on the
             # immutable plan authority. Different executions intentionally
@@ -976,6 +991,10 @@ class DbRuntimeBindingStore:
                 provider_leases_json={
                     slot: lease.model_dump(mode="json", by_alias=True)
                     for slot, lease in binding.providerLeases.items()
+                },
+                repository_issuance_json={
+                    slot: record.model_dump(mode="json", by_alias=True)
+                    for slot, record in binding.repositoryIssuance.items()
                 },
                 credential_runtime_handles_json={
                     slot: lease.credentialRuntimeRef
@@ -1042,6 +1061,10 @@ class DbRuntimeBindingStore:
                 slot: lease.model_dump(mode="json", by_alias=True)
                 for slot, lease in updated.providerLeases.items()
             }
+            record.repository_issuance_json = {
+                slot: issuance.model_dump(mode="json", by_alias=True)
+                for slot, issuance in updated.repositoryIssuance.items()
+            }
             record.credential_runtime_handles_json = {
                 slot: lease.credentialRuntimeRef
                 for slot, lease in updated.providerLeases.items()
@@ -1082,6 +1105,10 @@ class DbRuntimeBindingStore:
                 executionPlanRef=current.executionPlanRef,
                 executionScopeRef=current.executionScopeRef,
                 providerLeases=provider_leases,
+                repositoryIssuance={
+                    slot: record.model_dump(mode="json", by_alias=True)
+                    for slot, record in current.repositoryIssuance.items()
+                },
             )
 
         current = await self.get_state(runtime_binding_ref)
@@ -1167,6 +1194,10 @@ class DbRuntimeBindingStore:
                     slot: lease.model_dump(mode="json", by_alias=True)
                     for slot, lease in current.providerLeases.items()
                 },
+                repositoryIssuance={
+                    slot: record.model_dump(mode="json", by_alias=True)
+                    for slot, record in current.repositoryIssuance.items()
+                },
                 hostBindingRef=host_binding_ref,
                 hostLeaseRef=host_lease_ref,
                 hostLeaseGeneration=host_lease_generation,
@@ -1216,6 +1247,10 @@ class DbRuntimeBindingStore:
                 providerLeases={
                     slot: lease.model_dump(mode="json", by_alias=True)
                     for slot, lease in current.providerLeases.items()
+                },
+                repositoryIssuance={
+                    slot: record.model_dump(mode="json", by_alias=True)
+                    for slot, record in current.repositoryIssuance.items()
                 },
                 hostBindingRef=current.hostBindingRef,
                 hostLeaseRef=current.hostLeaseRef,

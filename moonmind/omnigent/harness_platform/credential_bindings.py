@@ -452,12 +452,23 @@ def create_binding_set_raw(data: dict[str, Any]) -> CredentialBindingSet:
     if not isinstance(raw_bindings, dict):
         raise _binding_conflict("binding set bindings must be a mapping")
     _check_slot_aliases(raw_bindings)
-    return create_binding_set(
+    rebuilt = create_binding_set(
         bindingSetId=str(data.get("bindingSetId")),
         version=int(data.get("version", 0)),
         bindings=dict(raw_bindings),
         schema_version=schema_version,
     )
+    # A raw persisted binding set carries its immutable digest linkage in
+    # ``data["digest"]``. Rebuilding recomputes the digest, so a tampered
+    # binding that retains its original digest must fail closed here
+    # instead of returning with a freshly valid digest.
+    supplied_digest = data.get("digest")
+    if supplied_digest is not None and str(supplied_digest) != rebuilt.digest:
+        raise _binding_conflict(
+            "persisted binding set digest does not match its bindings; "
+            "the binding set was modified after its digest was recorded"
+        )
+    return rebuilt
 
 
 def parse_binding_set_ref(ref: str) -> tuple[str, int, str]:
@@ -634,6 +645,15 @@ def validate_workspace_source_bindings(
     """Enforce workspace-source binding rules at plan admission.
 
     - ``scratch``: no repository binding.
+    - ``repository``: repository bindings admitted through declared slots
+      (slot declaration checks already ran in the planner); model-only
+      sets remain valid for public-source checkouts that need no
+      credential.
+    - ``artifact`` / ``checkpoint`` / ``existing_workspace``: content is
+      addressed by digest/contract/grant rather than live repository
+      credentials. Repository bindings are permitted only when a declared
+      slot admits them (e.g. a repository base under an artifact/checkpoint
+      overlay); undeclared slots are already rejected by the planner.
     - ``anonymous``: explicit permitted access snapshot with no secret slot
       or dummy credential (repository bindings carry issuance, so none are
       admitted; the snapshot travels in the plan's repository refs).
@@ -647,6 +667,13 @@ def validate_workspace_source_bindings(
             raise _slot_unbound(
                 f"scratch workspace must not carry repository bindings: {sorted(repo)}"
             )
+        return
+    if source_kind in ("repository", "artifact", "checkpoint", "existing_workspace"):
+        # Canonical workspace-source kinds (moonmind.omnigent.workspace_sources
+        # ``WorkspaceSourceKind``). Declared-slot admission already ran in the
+        # planner, so no additional binding restriction applies here beyond
+        # the per-kind rules below. ``repository`` checkouts without admitted
+        # repository authority stay model-only; that is valid, not an error.
         return
     if source_kind == "anonymous":
         if repo:
@@ -782,12 +809,18 @@ def assert_worker_supports_binding_set(
 
     An incompatible old worker rejects new authority without
     global-credential fallback: a model-only worker refuses any set
-    carrying repository authority.
+    carrying repository authority, and any worker that did not advertise
+    model authority refuses plan admission (every binding set requires
+    model authority through :func:`required_worker_authority_kinds`).
     """
     kinds = {str(kind).strip().lower() for kind in worker_authority_kinds}
-    if repository_authority_bindings(binding_set) and "repository" not in kinds:
+    required = set(required_worker_authority_kinds(binding_set))
+    missing = sorted(kind for kind in required if kind not in kinds)
+    if missing:
         raise _binding_conflict(
-            "worker supports model authority only and cannot consume repository authority"
+            f"worker lacks required authority kinds {missing}; "
+            "plan admission requires "
+            f"{sorted(required)} but worker advertises {sorted(kinds)}"
         )
 
 
