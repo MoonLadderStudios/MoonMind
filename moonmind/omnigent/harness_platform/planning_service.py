@@ -28,6 +28,7 @@ from moonmind.omnigent.harness_platform.catalog_service import (
 from moonmind.omnigent.harness_platform.credential_bindings import (
     CredentialBindingSet,
     create_binding_set,
+    model_bindings_of,
     parse_binding_set_ref,
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
@@ -956,7 +957,9 @@ class OmnigentPlannedHostResolver:
             integration_mode=harness.capabilities.integrationMode or "native-server",
             materializer_refs=[
                 item.materializerRef
-                for item in plan.payload.credentialBindings.values()
+                for item in model_bindings_of(
+                    plan.payload.credentialBindings
+                ).values()
             ],
             architecture=plan.payload.hostArchitecture or self._architecture,
             requested_host_mode=policy.hostMode,

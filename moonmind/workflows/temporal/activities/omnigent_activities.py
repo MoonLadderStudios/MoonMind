@@ -11,6 +11,9 @@ from typing import Any
 from temporalio import activity
 
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+from moonmind.omnigent.harness_platform.credential_bindings import (
+    model_bindings_of,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 _IMMUTABLE_RECOVERY_DIMENSIONS = (
@@ -122,9 +125,13 @@ async def omnigent_prepare_child_execution_plan_activity(
     agent_profile_snapshot = await _read_json_artifact(
         profile_snapshot_ref.removeprefix("artifact:")
     )
+    # Model authority only (MoonLadderStudios/MoonMind#4009): repository
+    # slots use issuance and never enter Provider Profile derivation.
     provider_profile_refs = {
         binding.providerProfileRef
-        for binding in parent_plan.payload.credentialBindings.values()
+        for binding in model_bindings_of(
+            parent_plan.payload.credentialBindings
+        ).values()
     }
     if len(provider_profile_refs) != 1:
         raise ValueError("parent execution plan has ambiguous Provider Profile authority")

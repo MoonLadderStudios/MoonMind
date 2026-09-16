@@ -35,6 +35,10 @@ from moonmind.omnigent.harness_platform.catalog import (
 )
 from moonmind.omnigent.harness_platform.credential_bindings import (
     CredentialBindingSet,
+    is_repository_authority,
+    model_authority_bindings,
+    model_bindings_of,
+    model_materializer_refs,
     validate_binding_set_for_plan,
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
@@ -267,7 +271,7 @@ def _rollout_provider_profile_ref(
 
     refs = {
         str(binding.providerProfileRef).strip()
-        for binding in credential_binding_set.bindings.values()
+        for binding in model_authority_bindings(credential_binding_set).values()
         if str(binding.providerProfileRef).strip()
     }
     return next(iter(refs)) if len(refs) == 1 else ""
@@ -309,7 +313,7 @@ def _build_rollout_selection_context(
 
     freshness = resolve_support_evidence_freshness(support_identity)
     required_slots = [slot.id for slot in profile.credentialSlots if not slot.optional]
-    bound_slots = credential_binding_set.bindings
+    bound_slots = model_bindings_of(credential_binding_set.bindings)
     provider_profile_available = all(
         slot in bound_slots
         and bool(str(bound_slots[slot].providerProfileRef).strip())
@@ -601,6 +605,12 @@ def compile_execution_plan(
     rollback_generation: str | None = None,
     rollback_owner_cohort: str | None = None,
     rollback_exercise_records: Sequence[RollbackExerciseRecord] | None = None,
+    # Repository slot declarations derived from the admitted
+    # workspace/tool/Skill/publication requirements
+    # (MoonLadderStudios/MoonMind#4009 REQ-03): slot -> {"allowedRoles": ...,
+    # "allowedMaterializers": ...}. Repository bindings without a declaration
+    # are rejected; agent-supplied keys never create declarations.
+    repository_slot_requirements: dict[str, dict[str, Any]] | None = None,
 ) -> OmnigentExecutionPlanEnvelope:
     # 1. Validate agent profile (resolve snapshot)
     profile = validate_agent_profile(agent_profile)
@@ -681,13 +691,17 @@ def compile_execution_plan(
     # 5. Resolved skills
     skills = validate_skill_refs_for_plan(resolved_skills)
 
-    # 6-7. Credential binding set
+    # 6-7. Credential binding set (type-aware: repository authority is
+    # declared through admitted workspace/tool/Skill/publication
+    # requirements, never through agent-supplied slot keys).
     required_slots = [s.id for s in profile.credentialSlots if not s.optional]
     declared_slots = [s.id for s in profile.credentialSlots]
+    repository_decls = dict(repository_slot_requirements or {})
     validate_binding_set_for_plan(
         binding_set=credential_binding_set,
         required_slots=required_slots,
         declared_slots=declared_slots,
+        declared_repository_slots=repository_decls,
     )
     # Validate each binding's materializer exists and is compatible with host class later
 
@@ -730,9 +744,10 @@ def compile_execution_plan(
         h for h in harness_catalog.harnesses if h.id == profile.harness.id
     )
     integration_mode = harness_record.capabilities.integrationMode or "native-server"
-    materializer_refs = [
-        b.materializerRef for b in credential_binding_set.bindings.values()
-    ]
+    # Only model bindings enter the model support/combination identity: one
+    # model profile plus two repository roles is not a multi-model plan, and
+    # repository delivery contracts never enter ProviderProfileManager.
+    materializer_refs = model_materializer_refs(credential_binding_set)
     validate_policy_for_host_class(
         policy=selected_launch_policy,
         host_class=selected_host_class,
@@ -748,6 +763,21 @@ def compile_execution_plan(
     elif host_mode_for_materializer == "static_compose":
         host_mode_for_materializer = "static-connected"
     for slot, binding in credential_binding_set.bindings.items():
+        if is_repository_authority(binding):
+            # Repository issuance uses #4007 and cannot inherit model
+            # cooldown/OAuth-home exclusivity. Kind, delivery contract, and
+            # role were already checked against the admitted declaration
+            # above; there is no model materializer registry lookup here.
+            decl = repository_decls.get(slot) or {}
+            allowed_roles = decl.get("allowedRoles")
+            if allowed_roles is not None and (
+                binding.repositoryRole not in tuple(allowed_roles)
+            ):
+                raise HarnessPlatformError(
+                    f"repository slot {slot} role {binding.repositoryRole} not admitted",
+                    code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_SLOT_UNBOUND,
+                )
+            continue
         # Enforce slot auth constraints: materializer auth model and provider must be accepted by profile slot
         slot_decl = next((s for s in profile.credentialSlots if s.id == slot), None)
         if slot_decl is not None:
@@ -1096,6 +1126,15 @@ def compile_execution_plan(
                 slot: binding.model_dump(by_alias=True, mode="json")
                 for slot, binding in credential_binding_set.bindings.items()
             },
+            # Compact validated snapshot refs for admitted repository
+            # authority. Omitted for model-only plans so their canonical
+            # bytes (and digests) are unchanged.
+            "repositoryAuthorityRefs": {
+                slot: binding.repositoryAccessSnapshotRef
+                for slot, binding in credential_binding_set.bindings.items()
+                if is_repository_authority(binding)
+            }
+            or None,
             "hostClassRef": selected_host_class.ref,
             "hostImageRef": host_image_ref,
             "omnigentHostBuildDigest": omnigent_host_build_digest,

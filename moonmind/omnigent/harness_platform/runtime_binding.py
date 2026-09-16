@@ -30,6 +30,46 @@ class RuntimeBindingProviderLease(BaseModel):
     credentialRuntimeRef: str = Field(alias="credentialRuntimeRef")
 
 
+class RepositoryIssuanceRecord(BaseModel):
+    """Post-acquisition repository evidence for one admitted slot.
+
+    MoonLadderStudios/MoonMind#4009 REQ-05: acquired secret
+    revision/issuance, use ownership, credential generation, materialized
+    paths, and cleanup handles live at this runtime boundary, never in the
+    plan. Only compact refs and digests are persisted here; raw values
+    never enter this durable object.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    connectionRef: str = Field(alias="connectionRef")
+    issuanceRef: str = Field(alias="issuanceRef")
+    snapshotRef: str = Field(alias="snapshotRef")
+    credentialRevision: str = Field(alias="credentialRevision")
+    useOwner: str = Field(alias="useOwner")
+
+    @model_validator(mode="after")
+    def validate_refs(self) -> "RepositoryIssuanceRecord":
+        import re as _re
+
+        if not self.connectionRef.strip():
+            raise ValueError("connectionRef required")
+        if not _re.fullmatch(
+            r"^repository-access-snapshot:sha256:[0-9a-f]{64}$", self.snapshotRef
+        ):
+            raise ValueError("snapshotRef must be a snapshot digest ref")
+        for field_name in ("issuanceRef", "credentialRevision", "useOwner"):
+            value = str(getattr(self, field_name) or "")
+            if not value.strip():
+                raise ValueError(f"{field_name} is required")
+            for pattern in ("ghp_", "ghs_", "sk-", "-----BEGIN", "token="):
+                if pattern in value:
+                    raise ValueError(
+                        f"{field_name} must not carry raw credential material"
+                    )
+        return self
+
+
 class OmnigentRuntimeBinding(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -38,6 +78,12 @@ class OmnigentRuntimeBinding(BaseModel):
     executionPlanRef: str = Field(alias="executionPlanRef")
     executionScopeRef: str | None = Field(default=None, alias="executionScopeRef")
     providerLeases: dict[str, RuntimeBindingProviderLease] = Field(alias="providerLeases")
+    # Repository issuance evidence, keyed by binding slot. Empty for
+    # model-only executions; omitted from the digest while empty so
+    # historical model-only bindings keep their exact ref.
+    repositoryIssuance: dict[str, RepositoryIssuanceRecord] = Field(
+        default_factory=dict, alias="repositoryIssuance"
+    )
     # Host authority is intentionally absent in the first immutable stage. It
     # is added only after the host lease has been acquired and attested.
     hostBindingRef: str | None = Field(default=None, alias="hostBindingRef")
@@ -118,6 +164,11 @@ def compute_runtime_binding_ref(binding: dict[str, Any] | OmnigentRuntimeBinding
     # record it so two executions can safely realize the same immutable plan.
     if payload.get("executionScopeRef") is None:
         payload.pop("executionScopeRef", None)
+    # Bindings persisted before repository issuance existed did not
+    # include this field in their digest. New bindings with repository
+    # authority always record it, so model-only history keeps verifying.
+    if not payload.get("repositoryIssuance"):
+        payload.pop("repositoryIssuance", None)
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return "omnigent-runtime-binding:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -127,6 +178,7 @@ def create_runtime_binding(
     executionPlanRef: str,
     executionScopeRef: str | None = None,
     providerLeases: dict[str, dict[str, Any]],
+    repositoryIssuance: dict[str, dict[str, Any]] | None = None,
     hostBindingRef: str | None = None,
     hostLeaseRef: str | None = None,
     hostLeaseGeneration: int | None = None,
@@ -146,6 +198,7 @@ def create_runtime_binding(
         "executionPlanRef": executionPlanRef,
         "executionScopeRef": executionScopeRef,
         "providerLeases": providerLeases,
+        "repositoryIssuance": repositoryIssuance or {},
         "hostBindingRef": hostBindingRef,
         "hostLeaseRef": hostLeaseRef,
         "hostLeaseGeneration": hostLeaseGeneration,
@@ -162,6 +215,36 @@ def create_runtime_binding(
     }
     raw["runtimeBindingRef"] = compute_runtime_binding_ref(raw)
     return OmnigentRuntimeBinding.model_validate(raw)
+
+
+def release_unused_repository_issuance(
+    binding: OmnigentRuntimeBinding,
+    slots: list[str],
+) -> tuple[OmnigentRuntimeBinding, list[str]]:
+    """Release actually-acquired, unused repository issuance for `slots`.
+
+    Used for partial acquisition, failed attachment, cancellation, worker
+    restart, and late completion (MoonLadderStudios/MoonMind#4009 REQ-08).
+    Only the named slots' issuance is returned for release: never another
+    consumer's model lease or refreshed issuance. Returns the narrowed
+    binding plus the released issuance refs.
+    """
+    remaining = {
+        slot: record for slot, record in binding.repositoryIssuance.items()
+        if slot not in set(slots)
+    }
+    released = [
+        binding.repositoryIssuance[slot].issuanceRef
+        for slot in slots
+        if slot in binding.repositoryIssuance
+    ]
+    raw = binding.model_dump(by_alias=True, mode="json")
+    raw["repositoryIssuance"] = {
+        slot: record.model_dump(by_alias=True, mode="json")
+        for slot, record in remaining.items()
+    }
+    raw["runtimeBindingRef"] = compute_runtime_binding_ref(raw)
+    return OmnigentRuntimeBinding.model_validate(raw), released
 
 
 def assert_runtime_binding_generation_sticky(
