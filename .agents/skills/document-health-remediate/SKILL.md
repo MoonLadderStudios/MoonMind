@@ -67,11 +67,13 @@ Consume a `document-health-review` report and apply the approved document mainte
 
 ## Document Role First
 
-Resolve the document role before editing, using `docs/Workflows/MoonSpecDocumentModel.md`: factual implementation references are corrected against the checkout; authorized desired-state designs keep their intended behavior (buggy code never downgrades them; record the implementation gap); temporary execution artifacts are never promoted into canonical docs. An authorized proposed design needs no pre-existing implementation but must never be labeled implemented.
+Resolve the document role before editing, applying these inline rules:
 
-# Document Health Remediate
+- **Factual implementation reference**: correct against the checkout; verify every claim.
+- **Authorized desired-state design**: keep its intended behavior (buggy code never downgrades it; record the implementation gap). An authorized proposed design needs no pre-existing implementation but must never be labeled implemented.
+- **Temporary execution artifact**: never promote into canonical docs.
 
-Consume a `document-health-review` report and apply the approved document maintenance actions to the current repository checkout.
+When the repository provides `docs/Workflows/MoonSpecDocumentModel.md`, use it for class precedence and authority mapping; otherwise the inline rules above are the complete classification procedure.
 
 This skill is execution-focused, not review-focused.
 
@@ -115,12 +117,12 @@ Optional:
 - Scope limit (`target_scope`), such as a single document, directory, action type, or severity (for example `P0`/`P1`).
 - Allowed actions (`allowed_actions`), such as `update`, `merge`, `split`, `move`, `archive`, `delete`.
 - Disallowed actions (`disallowed_actions`), such as `no-delete` or `no-archive`.
-- Whether destructive actions are allowed (`allow_destructive`, default false). An external report alone never authorizes deletion or broadens scope; destructive actions require this explicit permission or an already-authorized bounded maintenance request.
+- Whether destructive actions are allowed (`allow_destructive`, default false). `allow_destructive` is the sole authority for destructive actions: an external report alone never authorizes deletion or broadens scope. Direct user authorization for destructive work must be mapped to `allow_destructive: true` by the caller before execution, never inferred inside this skill from report prose or conversation history.
 - Preferred archive directory.
 - Preferred target directory for moved or split documents.
 - Validation commands requested by the user.
 
-Permission rule: honor an already-authorized bounded maintenance request without repeatedly asking for permission; otherwise make no destructive change without explicit `allow_destructive` permission. Preserve unrelated user changes and report skipped, stale, and blocked findings individually with reasons.
+Permission rule: make no destructive change unless `allow_destructive` is true. An already-authorized bounded maintenance request satisfies this rule only through `allow_destructive: true` set by the caller; the skill never infers destructive permission from report prose or conversation history. Preserve unrelated user changes and report skipped, stale, and blocked findings individually with reasons.
 
 Example invocations:
 
@@ -292,7 +294,9 @@ The ordering matters. Do not delete, archive, or move files before preserving co
 ### Phase 2: Build an action ledger
 
 - For every finding, record one ledger entry with: target path, action type, severity, source/target paths where relevant, preservation requirements, and reference-repair follow-ups.
-- Apply scope limits, allowed/disallowed actions, and the destructive-actions flag now, marking filtered entries as `skipped` with the reason.
+- Apply scope limits and allowed/disallowed actions now, marking filtered entries as `skipped` with the reason.
+- Apply the destructive-actions flag now: a destructive action requested while `allow_destructive` is false is marked `blocked` (authorization denied), never `skipped`. A validation failure that prevents an otherwise authorized action is likewise `blocked`.
+- Ledger statuses are `applied`, `stale`, `skipped`, `blocked`, and `needs_clarification`. `blocked` means authorization or validation prevented remediation; it is never reported as `skipped`.
 
 ### Phase 3: Validate the report against the current checkout
 
@@ -312,27 +316,29 @@ The ordering matters. Do not delete, archive, or move files before preserving co
 ### Phase 6: Apply merges
 
 - Move useful unique content from the source document into the chosen canonical target.
-- Run the preservation check, then delete or archive the source per the report.
+- Run the preservation check, update inbound references to the source, then delete or archive the source per the report.
 
 ### Phase 7: Apply splits
 
-- Create the focused target documents, distribute content, and leave a pointer or index entry so readers can find the split pieces.
+- Create the focused target documents, distribute content, update inbound references that pointed at the split source, and leave a pointer or index entry so readers can find the split pieces.
 
 ### Phase 8: Apply moves
 
 - Relocate the document to its correct directory, creating new directories where the report calls for them.
+- Update that document's inbound references as part of the move, before the source path disappears.
 
 ### Phase 9: Apply archives
 
 - Move the document into the archive directory (preferred archive directory when supplied) so it is preserved outside the active docs tree.
+- Update that document's inbound references as part of the archive, before the source path disappears.
 
 ### Phase 10: Apply deletions
 
 - Remove documents only after their unique content is preserved or intentionally discarded and their inbound references are updated.
 
-### Phase 11: Repair references
+### Phase 11: Repair references (final sweep)
 
-- After all path-changing actions, update Markdown links, relative links, plain-text path mentions, docs indexes, README references, architecture indexes, and agent/skill references that point at moved, merged, split, archived, deleted, or renamed documents.
+- After all path-changing actions, sweep for any remaining Markdown links, relative links, plain-text path mentions, docs indexes, README references, architecture indexes, and agent/skill references that point at moved, merged, split, archived, deleted, or renamed documents, and verify the per-action repairs above left no dangling references.
 
 ### Phase 12: Run validation
 
@@ -343,13 +349,13 @@ The ordering matters. Do not delete, archive, or move files before preserving co
 ### Phase 13: Produce final remediation summary
 
 - Summarize exactly what changed, grouped by action type, including paths created, edited, moved, archived, and deleted.
-- List held-back (`stale`), `skipped`, and `needs_clarification` entries with reasons.
+- List held-back (`stale`), `skipped`, `blocked`, and `needs_clarification` entries with reasons.
 - Include the validation commands run and their results, or the blocker if validation could not run.
 
 ## Outputs
 
 - The list of applied actions grouped by type (update, merge, split, move, archive, delete) with affected paths.
-- The action ledger, including entries held back as `stale`, `skipped`, or `needs_clarification`, each with a reason.
+- The action ledger, including entries held back as `stale`, `skipped`, `blocked`, or `needs_clarification`, each with a reason.
 - Reference-repair results: which references were updated and any that still need manual attention.
 - Validation commands run and their results, or the reason validation was not run.
 - A concise final remediation summary of exactly what changed.
@@ -359,7 +365,7 @@ The ordering matters. Do not delete, archive, or move files before preserving co
 - Report cannot be located or parsed: stop and report the missing path or the unparseable content.
 - A report finding no longer matches the current checkout: mark it `stale` and do not apply it.
 - Preservation check fails for a merge or delete: do not remove the source; report the unique content at risk.
-- A requested action is disallowed, or a destructive action is requested when destructive actions are not permitted: skip it and report why.
+- A requested action is disallowed: mark it `skipped` and report why. A destructive action is requested while destructive actions are not permitted: mark it `blocked` and report why.
 - Target or final path cannot be determined: skip the move/merge/split and keep the source intact.
 - Reference repair leaves unresolved or ambiguous references: report them for manual follow-up.
 - Required validation cannot run: keep the applied changes if they are safe and source-evident, but report the blocked command and reason.
