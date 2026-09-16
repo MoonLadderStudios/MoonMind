@@ -10,19 +10,24 @@ from moonmind.workflows.executions.routing import (
 
 # --- T004: Always returns "temporal" when submit_enabled=True ---
 
+# MoonLadderStudios/MoonMind#4190: the Manifest product is retired, so the
+# routing helper no longer accepts a Manifest-only flag. Routing is uniform.
+def test_routing_signature_has_no_manifest_flag() -> None:
+    """Retirement regression: no Manifest-only routing parameter remains."""
+    import inspect
+
+    params = inspect.signature(get_routing_target_for_workflow).parameters
+    assert "is_manifest" not in params
+    assert "manifest" not in params
+
+
 @pytest.mark.parametrize(
-    ("is_manifest", "is_run"),
-    [
-        (True, False),
-        (False, True),
-        (False, False),
-        (True, True),
-    ],
-    ids=["manifest", "run", "default", "both"],
+    "is_run",
+    [True, False],
+    ids=["run", "default"],
 )
 def test_routing_always_returns_temporal(
     monkeypatch: pytest.MonkeyPatch,
-    is_manifest: bool,
     is_run: bool,
 ) -> None:
     """All task types route to Temporal when submit is enabled."""
@@ -33,7 +38,7 @@ def test_routing_always_returns_temporal(
         raising=False,
     )
     assert (
-        get_routing_target_for_workflow(is_manifest=is_manifest, is_run=is_run)
+        get_routing_target_for_workflow(is_run=is_run)
         == "temporal"
     )
 
@@ -70,7 +75,7 @@ def test_routing_raises_when_submit_disabled(
         raising=False,
     )
     with pytest.raises(TemporalSubmitDisabledError, match="legacy queue.*no longer supported"):
-        get_routing_target_for_workflow(is_manifest=True)
+        get_routing_target_for_workflow(is_run=True)
 
 def test_routing_raises_for_run_when_submit_disabled(
     monkeypatch: pytest.MonkeyPatch,
@@ -88,7 +93,7 @@ def test_routing_raises_for_run_when_submit_disabled(
 def test_routing_raises_for_default_when_submit_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Even default routing (no manifest/run flags) fails fast."""
+    """Even default routing (no flags) fails fast."""
     monkeypatch.setattr(
         settings.temporal_dashboard,
         "submit_enabled",
