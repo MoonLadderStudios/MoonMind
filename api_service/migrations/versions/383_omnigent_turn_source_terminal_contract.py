@@ -28,6 +28,10 @@ down_revision: Union[str, None] = "382_issue_claim_ownership_end"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+# Alembic discovers the module-level revision attributes above; reference them
+# so static analysis does not flag them as unused globals.
+__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
+
 
 _TURN_SOURCES = (
     "initial",
@@ -74,6 +78,20 @@ def downgrade() -> None:
     bind = op.get_bind()
     if not sa.inspect(bind).has_table("omnigent_turn_attempts"):
         return
+    # Converge v2 rows before restoring the 8-value constraint: PostgreSQL
+    # validates existing rows when adding a CHECK, so dropping the permissive
+    # constraint while a ``terminal_contract_continuation`` row exists would
+    # fail ``alembic downgrade``. A terminal-contract continuation is a bounded
+    # same-session continuation like ``repository_continuation``; converge it
+    # there rather than leaving a row the restored constraint would reject
+    # (mirrors the 366 convergence of retired values to their canonical form).
+    op.execute(
+        sa.text(
+            "UPDATE omnigent_turn_attempts "
+            "SET lineage_kind = 'repository_continuation' "
+            "WHERE lineage_kind = 'terminal_contract_continuation'"
+        )
+    )
     op.drop_constraint(_CHECK_NAME, "omnigent_turn_attempts", type_="check")
     op.create_check_constraint(
         _CHECK_NAME, "omnigent_turn_attempts", _allowed_sql(_PREVIOUS_TURN_SOURCES)
