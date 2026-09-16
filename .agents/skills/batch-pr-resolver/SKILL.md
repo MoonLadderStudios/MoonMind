@@ -50,7 +50,10 @@ test -n "$BATCH_PR_RESOLVER_SKILL_DIR" && test -f "$BATCH_PR_RESOLVER_SKILL_DIR/
 ```
 
 Inside MoonMind, `MOONMIND_ACTIVE_SKILLS_DIR` is always set; a checked-in
-`.agents/skills` directory must never shadow the selected snapshot. Outside
+`.agents/skills` directory must never shadow the selected snapshot. When no
+skill-specific override is present, the helper resolves to
+`${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/batch-pr-resolver/bin/batch_pr_resolver.py`.
+Outside
 MoonMind, set `BATCH_PR_RESOLVER_SKILL_DIR` to the directory containing this
 `SKILL.md` (no MoonMind-only environment variables required). A missing
 selected helper is a materialization/packaging error: stop as blocked instead

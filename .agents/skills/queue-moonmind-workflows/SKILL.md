@@ -94,7 +94,10 @@ For direct create requests, idempotency is stored at `request.idempotencyKey`.
 
    Inside MoonMind, `MOONMIND_ACTIVE_SKILLS_DIR` is always set and the helper
    below resolves from it; a checked-in `.agents/skills` directory must never
-   shadow the selected snapshot. Outside MoonMind, set
+   shadow the selected snapshot. When no skill-specific override is present,
+   the helper resolves to
+   `${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/queue-moonmind-workflows/scripts/queue_moonmind_workflows.py`.
+   Outside MoonMind, set
    `QUEUE_MOONMIND_WORKFLOWS_SKILL_DIR` to the directory containing this
    `SKILL.md` (no MoonMind-only environment variables required). A missing
    selected helper is a materialization/packaging error: stop as blocked

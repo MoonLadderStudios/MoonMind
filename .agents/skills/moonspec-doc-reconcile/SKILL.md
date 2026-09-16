@@ -97,7 +97,7 @@ Escalate instead of editing when:
 
 To escalate:
 
-1. If the repository provides an issue-tracker escalation skill (for example the `jira-issue-creator` skill from the resolved active bundle: `$MOONMIND_ACTIVE_SKILLS_DIR/jira-issue-creator/SKILL.md` inside MoonMind, the installed skills directory outside MoonMind), read it and follow its workflow, then report `ESCALATED` with the issue key and URL.
+1. If the repository provides an issue-tracker escalation skill (for example `.agents/skills/jira-issue-creator/SKILL.md`), read it and follow its workflow, then report `ESCALATED` with the issue key and URL.
 2. If no issue-tracker integration is available, still report `ESCALATED`: record the document path, the contradicted claim, the implementation evidence, and why the update needs an owner decision in the structured output and markdown summary so it reaches the run report or pull request body.
 
 Escalation does not retroactively fail verification or block the surrounding orchestration.
