@@ -56,7 +56,10 @@ def test_code_improvement_proposal_skill_documents_github_and_jira_publishing() 
     text = _skill_text()
 
     # GitHub routes to a repository; Jira routes to a project/issue type/component.
-    assert "POST /rest/api/3/issue" in text
+    # The trusted Jira tool surface is the primary creation path; raw provider
+    # API shapes are not the primary path.
+    assert "trusted Jira tool surface" in text
+    assert "are not the primary path here" in text
     assert "Atlassian Document Format" in text
     assert (
         "GitHub routes to a repository; Jira routes to a project, issue type, "

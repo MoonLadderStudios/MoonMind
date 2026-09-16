@@ -279,7 +279,7 @@ GitHub payload shape:
 
 Recommended GitHub labels: `code-quality`, `technical-debt`, `refactor`, `bug`, `performance`, `architecture`, `testing`, `needs-triage`.
 
-For Jira, keep the internal issue body in Markdown first, then convert it to Atlassian Document Format (ADF) at the final publishing step. Fetch create metadata for the target project and issue type first, because Jira fields vary by project; map requested fields to Jira field IDs through metadata instead of hardcoding custom field IDs. Then create the issue via `POST /rest/api/3/issue` (or the trusted Jira tool surface). Payload shape:
+For Jira, keep the internal issue body in Markdown first, then convert it to Atlassian Document Format (ADF) at the final publishing step. Fetch create metadata for the target project and issue type first, because Jira fields vary by project; map requested fields to Jira field IDs through metadata instead of hardcoding custom field IDs. Then create the issue through the trusted Jira tool surface (create operation with metadata-resolved fields, honoring the request's existing write intent, validation, and receipt semantics). A standalone adapter is permitted only when explicitly authorized, with equivalent write-intent, validation, and receipt semantics. Raw provider API shapes such as `POST /rest/api/3/issue` are not the primary path here; they belong only in the portable bundle per the epic packaging contract. Payload shape:
 
 ```json
 {
