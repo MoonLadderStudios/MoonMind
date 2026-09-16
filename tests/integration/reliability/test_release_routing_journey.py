@@ -83,6 +83,43 @@ async def connect():
     return await Client.connect(address)
 
 
+async def _await_temporal_condition(
+    description, fetch, *, attempts, interval_seconds, is_ready=None
+):
+    """Bounded real-dependency polling helper (MoonLadderStudios/MoonMind#4374).
+
+    Deduplicates the repeated ``for _ in range(N): ... await asyncio.sleep()``
+    polling loops against the real isolated Temporal service. Every call keeps
+    real production recovery coverage: real server observations with real
+    short waits; only the duplicated loop scaffolding is shared. A fetch that
+    keeps raising re-raises its last error (matching the previous inline
+    ``if attempt == N-1: raise`` shape); a condition that never becomes ready
+    fails loudly instead of passing silently. Production
+    poller-freshness/recovery windows are untouched.
+    """
+    last_error = None
+    last_value = None
+    for attempt in range(attempts):
+        try:
+            last_value = await fetch()
+        except Exception as exc:  # noqa: BLE001 - retried as not-ready
+            last_error = exc
+            last_value = None
+            ready = False
+        else:
+            last_error = None
+            ready = is_ready(last_value) if is_ready is not None else bool(last_value)
+            if ready:
+                return last_value
+        if attempt == attempts - 1:
+            break
+        await asyncio.sleep(interval_seconds)
+    if last_error is not None:
+        raise last_error
+    pytest.fail(f"Timed out waiting for real Temporal condition: {description}")
+    raise AssertionError(f"unreachable: {description}")  # pragma: no cover
+
+
 async def test_schedule_recovers_when_installed_release_replaces_absent_current_worker(
     tmp_path,
     monkeypatch,
@@ -166,11 +203,16 @@ async def test_schedule_recovers_when_installed_release_replaces_absent_current_
             await adapter.trigger_schedule(
                 definition_id=definition_id, scheduled_at=scheduled_at
             )
-            for _ in range(50):
-                actions = (await schedule.describe()).info.recent_actions
-                if actions:
-                    break
-                await asyncio.sleep(0.1)
+
+            async def _recent_actions():
+                return (await schedule.describe()).info.recent_actions
+
+            actions = await _await_temporal_condition(
+                "scheduled run to appear in recent actions",
+                _recent_actions,
+                attempts=50,
+                interval_seconds=0.1,
+            )
             assert actions
             started = client.get_workflow_handle(actions[-1].action.workflow_id)
             assert await started.result() == {"digest": current, "status": "verified"}
@@ -178,19 +220,30 @@ async def test_schedule_recovers_when_installed_release_replaces_absent_current_
             await adapter.trigger_schedule(
                 definition_id=definition_id, scheduled_at=scheduled_at
             )
-            for _ in range(50):
-                actions = (await schedule.describe()).info.recent_actions
-                if len(actions) == 2:
-                    break
-                await asyncio.sleep(0.1)
+            actions = await _await_temporal_condition(
+                "second scheduled run to appear in recent actions",
+                _recent_actions,
+                attempts=50,
+                interval_seconds=0.1,
+                is_ready=lambda recent: len(recent) == 2,
+            )
             assert len(actions) == 2
             fresh = client.get_workflow_handle(actions[-1].action.workflow_id)
             assert fresh.id == started.id
-            for _ in range(100):
-                if (await fresh.describe()).run_id != first_run_id:
-                    break
-                await asyncio.sleep(0.1)
-            assert (await fresh.describe()).run_id != first_run_id
+
+            async def _fresh_run_id():
+                return (await fresh.describe()).run_id
+
+            assert (
+                await _await_temporal_condition(
+                    "rescheduled run to start a new run id",
+                    _fresh_run_id,
+                    attempts=100,
+                    interval_seconds=0.1,
+                    is_ready=lambda run_id: run_id != first_run_id,
+                )
+                != first_run_id
+            )
             assert await fresh.result() == {"digest": current, "status": "verified"}
         finally:
             await schedule.delete()
@@ -344,14 +397,12 @@ async def test_candidate_canary_compare_and_set_and_inflight_upgrade(
             assert await handle.result() == expected
             assert calls == expected
             if pinned:
-                for _ in range(50):
-                    if await version_drained(client, f"{deployment}.{a}"):
-                        break
-                    await asyncio.sleep(1)
-                else:
-                    pytest.fail(
-                        "Temporal did not confirm old pinned work drained after completion"
-                    )
+                assert await _await_temporal_condition(
+                    "Temporal to confirm old pinned work drained after completion",
+                    lambda: version_drained(client, f"{deployment}.{a}"),
+                    attempts=50,
+                    interval_seconds=1,
+                )
 
 
 async def test_unversioned_inflight_workflow_moves_to_qualified_release(
@@ -422,16 +473,19 @@ async def test_unversioned_inflight_workflow_moves_to_qualified_release(
                 deployment_config=config,
             ),
         ):
-            for attempt in range(60):
-                try:
-                    previous = current_version(
-                        await routing_snapshot(client, deployment)
-                    )
-                    break
-                except Exception:
-                    if attempt == 59:
-                        raise
-                    await asyncio.sleep(1)
+
+            async def _previous_version():
+                return current_version(await routing_snapshot(client, deployment))
+
+            # Any successful snapshot (including "" / "__unversioned__")
+            # counts as ready; persistent errors re-raise.
+            previous = await _await_temporal_condition(
+                "routing snapshot to become readable",
+                _previous_version,
+                attempts=60,
+                interval_seconds=1,
+                is_ready=lambda _version: True,
+            )
             assert previous in {"", "__unversioned__"}
             await promote_version(
                 client,
@@ -480,13 +534,21 @@ async def test_manual_trigger_correlates_authored_identity_and_reports_overlap()
             result = await adapter.trigger_schedule(
                 definition_id=definition, request_id=str(uuid4()), scheduled_at=marker
             )
-            for _ in range(50):
-                result = await adapter.observe_schedule_trigger(
+            async def _observe_trigger():
+                return await adapter.observe_schedule_trigger(
                     definition_id=definition, scheduled_at=marker
                 )
-                if result.disposition == "started":
-                    break
-                await asyncio.sleep(0.1)
+
+            # The canary/upgrade journey above remains the real production
+            # recovery coverage; this observation poll keeps its real waits
+            # behind the shared helper (MoonLadderStudios/MoonMind#4374).
+            result = await _await_temporal_condition(
+                "manual schedule trigger to report started",
+                _observe_trigger,
+                attempts=50,
+                interval_seconds=0.1,
+                is_ready=lambda outcome: outcome.disposition == "started",
+            )
             assert result.disposition == "started"
             assert result.scheduled_at == marker
             assert result.workflow_id and result.run_id

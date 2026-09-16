@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import traceback
 import urllib.error
 import urllib.request
@@ -43,6 +44,19 @@ child_idempotency_key = _CLIENT.child_idempotency_key
 normalize_publish_mode = _CLIENT.normalize_publish_mode
 normalize_runtime_id = _CLIENT.normalize_runtime_id
 validate_execution_envelope = _CLIENT.validate_execution_envelope
+
+_BATCH_TARGETS_PATH = SHARED_ROOT / "repository_batch_targets.py"
+_BATCH_TARGETS_SPEC = importlib.util.spec_from_file_location(
+    "batch_workflows_repository_targets", _BATCH_TARGETS_PATH
+)
+if _BATCH_TARGETS_SPEC is None or _BATCH_TARGETS_SPEC.loader is None:
+    raise RuntimeError(
+        "resolved skill snapshot is missing portable batch targets: "
+        f"{_BATCH_TARGETS_PATH}"
+    )
+_BATCH_TARGETS = importlib.util.module_from_spec(_BATCH_TARGETS_SPEC)
+sys.modules[_BATCH_TARGETS_SPEC.name] = _BATCH_TARGETS
+_BATCH_TARGETS_SPEC.loader.exec_module(_BATCH_TARGETS)
 
 logger = logging.getLogger(__name__)
 
@@ -1022,19 +1036,13 @@ def _read_execution_fanout_token() -> str | None:
     return _text(os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN")) or None
 
 
-def _submit_jobs_via_http(
-    submissions: list[ChildSubmission],
-    *,
-    moonmind_url: str,
-    worker_token: str | None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    created: list[dict[str, Any]] = []
-    errors: list[dict[str, Any]] = []
+def _auth_headers() -> dict[str, str]:
     headers: dict[str, str] = {"Content-Type": "application/json"}
     fanout_token = _read_execution_fanout_token()
     if fanout_token:
         headers["Authorization"] = f"Bearer {fanout_token}"
         headers["X-MoonMind-Execution-Fanout"] = "v1"
+    worker_token = _read_worker_token()
     if worker_token:
         headers["X-MoonMind-Worker-Token"] = worker_token
     task_workflow_id = _task_workflow_id_from_env()
@@ -1043,6 +1051,80 @@ def _submit_jobs_via_http(
     agent_run_id = _agent_run_id_from_env()
     if agent_run_id:
         headers["X-MoonMind-Agent-Run-Identifier"] = agent_run_id
+    return headers
+
+
+def _describe_execution(*, moonmind_url: str, workflow_id: str) -> dict[str, Any]:
+    """Verify one queued child via the execution API (lost-ack recovery)."""
+
+    endpoint = (
+        moonmind_url.rstrip("/")
+        + API_EXECUTIONS_ENDPOINT
+        + "/"
+        + workflow_id
+    )
+    http_request = urllib.request.Request(
+        endpoint, headers=_auth_headers(), method="GET"
+    )
+    with urllib.request.urlopen(http_request, timeout=30.0) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if not isinstance(data, dict):
+        raise RuntimeError("execution API describe response must be a JSON object")
+    return data
+
+
+def _cancel_owned_execution(*, moonmind_url: str, workflow_id: str) -> dict[str, Any]:
+    """Request cancellation of one owned child through the execution API."""
+
+    endpoint = (
+        moonmind_url.rstrip("/")
+        + API_EXECUTIONS_ENDPOINT
+        + "/"
+        + workflow_id
+        + "/cancel"
+    )
+    encoded = json.dumps({"reason": "repository batch cancel"}).encode("utf-8")
+    http_request = urllib.request.Request(
+        endpoint, data=encoded, headers=_auth_headers(), method="POST"
+    )
+    with urllib.request.urlopen(http_request, timeout=30.0) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if not isinstance(data, dict):
+        raise RuntimeError("execution API cancel response must be a JSON object")
+    return data
+
+
+def _child_status_from_describe(described: dict[str, Any]) -> str:
+    raw = ""
+    for key in ("status", "state", "phase"):
+        candidate = described.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            raw = candidate.strip().lower()
+            break
+    if raw in {"queued", "pending", "preparing", "scheduled", "waiting"}:
+        return "queued" if raw in {"queued", "pending", "scheduled", "waiting"} else "running"
+    if raw in {"running", "executing", "in_progress", "preparing"}:
+        return "running"
+    if raw in {"completed", "succeeded", "success", "complete"}:
+        return "succeeded"
+    if raw in {"failed", "error", "errored"}:
+        return "failed"
+    if raw in {"canceled", "cancelled", "terminated"}:
+        return "canceled"
+    if raw in {"blocked"}:
+        return "blocked"
+    return "unknown"
+
+
+def _submit_jobs_via_http(
+    submissions: list[ChildSubmission],
+    *,
+    moonmind_url: str,
+    worker_token: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    created: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    headers = _auth_headers()
     endpoint = moonmind_url.rstrip("/") + API_EXECUTIONS_ENDPOINT
     for submission in submissions:
         envelope = submission.queue_request
@@ -1129,6 +1211,77 @@ def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _write_repository_batch_translation(
+    *,
+    artifacts_dir: Path,
+    aggregate: dict[str, Any],
+    execution_ref: str | None,
+    run_ref: str,
+) -> None:
+    """Translate the repository aggregate into the Skill-declared terminal artifact.
+
+    The ``batch-github-workflows`` Skill declares
+    ``artifacts/batch-workflows-result.json`` with
+    ``batch_workflows_fanout.v1``. The repository path writes
+    ``batch-repositories-result.json`` with ``repository_batch_fanout.v1``.
+    To satisfy the terminal contract without losing per-target evidence,
+    also write a translated ``batch-workflows-result.json`` that references
+    the repository aggregate.
+    """
+
+    status = str(aggregate.get("status") or "failed")
+    status_map = {
+        "queued": "queued",
+        "partial": "partial_failure",
+        "failed": "failed",
+        "blocked": "failed",
+        "canceled": "failed",
+        "no_op": "no_op",
+    }
+    translated_status = status_map.get(status, "failed")
+    per_target = aggregate.get("targets") if isinstance(aggregate.get("targets"), list) else []
+    queued = [
+        {"targetRef": item.get("targetRef"), "workflowId": item.get("workflowId")}
+        for item in per_target
+        if isinstance(item, dict) and item.get("status") == "queued" and item.get("workflowId")
+    ]
+    skipped = [
+        {"ref": item.get("targetRef"), "reason": item.get("reason")}
+        for item in per_target
+        if isinstance(item, dict) and item.get("status") in {"skipped", "blocked"}
+    ]
+    errors = [
+        {
+            "code": item.get("reason") or "BATCH_FANOUT_FAILED",
+            "error": (item.get("error") or item.get("reason") or "target failed")[:1024],
+            "targetRef": item.get("targetRef"),
+        }
+        for item in per_target
+        if isinstance(item, dict) and item.get("status") in {"unknown", "failed", "blocked", "canceled"}
+    ]
+    translation = {
+        "schemaVersion": "moonmind.batch-workflows-result.v1",
+        "contractId": "batch_workflows_fanout.v1",
+        "executionRef": execution_ref,
+        "timestamp": aggregate.get("timestamp"),
+        "status": translated_status,
+        "runRef": run_ref,
+        "requested": aggregate.get("requested", len(per_target)),
+        "created": len(queued),
+        "queued": queued,
+        "skipped": skipped,
+        "errors": errors,
+        "failure": aggregate.get("failure"),
+        "repositoryBatch": {
+            "manifestDigest": aggregate.get("manifestDigest"),
+            "resultArtifact": REPOSITORY_BATCH_RESULT_ARTIFACT,
+            "status": status,
+            "contractId": aggregate.get("contractId"),
+        },
+    }
+    _write_artifacts(artifacts_dir / "batch-workflows-result.json", translation)
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Resolve issue targets and queue one child MoonMind workflow per target."
@@ -1206,13 +1359,788 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--task-context-path", default=None)
     parser.add_argument("--artifacts-dir", default="artifacts")
+    parser.add_argument(
+        "--repository-targets-file",
+        default=None,
+        help=(
+            "Explicit bounded multi-repository target list (JSON array) for "
+            "isolated fan-out (MoonLadderStudios/MoonMind#1657). Cannot be "
+            "combined with --targets or --github-issue-range."
+        ),
+    )
+    parser.add_argument(
+        "--approved-batch-digest",
+        default=None,
+        help=(
+            "Operator-approved repository-batch manifest digest. Preflight "
+            "writes the manifest for review; dispatch requires this digest "
+            "to match the frozen target set exactly."
+        ),
+    )
+    parser.add_argument(
+        "--allow-partial",
+        dest="allow_partial",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Explicitly allow dispatch of the preflight-accessible subset "
+            "while recording inaccessible targets as skipped."
+        ),
+    )
+    parser.add_argument(
+        "--max-repositories",
+        type=int,
+        default=_BATCH_TARGETS.DEFAULT_MAX_REPOSITORY_TARGETS,
+        help="Hard cap on repository-batch targets (default 10).",
+    )
+    parser.add_argument(
+        "--batch-budget-file",
+        default=None,
+        help="Optional JSON budget descriptors for a repository batch.",
+    )
+    parser.add_argument(
+        "--upstream-evidence-file",
+        default=None,
+        help=(
+            "Optional JSON mapping of upstream target refs to verified "
+            "revision/artifact evidence for dependent repository phases."
+        ),
+    )
+    parser.add_argument(
+        "--preflight-only",
+        dest="preflight_only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Freeze and report the batch manifest without dispatching.",
+    )
+    parser.add_argument(
+        "--retry-failed-only",
+        dest="retry_failed_only",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Selected retry: resubmit failed/canceled/unknown targets from "
+            "the prior aggregate without republishing completed ones."
+        ),
+    )
+    parser.add_argument(
+        "--cancel-owned",
+        dest="cancel_owned",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Cancel owned queued/running children recorded in the prior "
+            "aggregate instead of dispatching."
+        ),
+    )
+    parser.add_argument(
+        "--capacity-polls",
+        type=int,
+        default=6,
+        help="Bounded capacity-gate polls before a waiting target blocks.",
+    )
+    parser.add_argument(
+        "--capacity-poll-interval",
+        type=float,
+        default=10.0,
+        help="Seconds between capacity-gate polls.",
+    )
     return parser.parse_args(argv)
+
+
+REPOSITORY_BATCH_MANIFEST_ARTIFACT = "batch-repository-manifest.json"
+REPOSITORY_BATCH_RESULT_ARTIFACT = "batch-repositories-result.json"
+
+
+def _load_json_document(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise BatchInputError(f"JSON file not found: {path}") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"cannot read JSON file {path}: {exc}") from exc
+
+
+def _repository_batch_entries(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, dict):
+        raw = raw.get("targets")
+    if not isinstance(raw, list) or not raw:
+        raise _BATCH_TARGETS.RepositoryBatchError(
+            "REPOSITORY_BATCH_EMPTY",
+            "repository targets file must hold a non-empty JSON array",
+        )
+    return raw
+
+
+def _refresh_owned_status(
+    *, moonmind_url: str, workflow_id: str
+) -> tuple[str, dict[str, Any] | None]:
+    try:
+        described = _describe_execution(
+            moonmind_url=moonmind_url, workflow_id=workflow_id
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return "admission_lost", None
+        return "unknown", None
+    except Exception:  # noqa: BLE001 - describe failures stay unknown
+        return "unknown", None
+    return _child_status_from_describe(described), described
+
+
+def _wait_for_capacity(
+    *,
+    moonmind_url: str,
+    owned: dict[str, str],
+    max_concurrency: int,
+    polls: int,
+    interval: float,
+) -> None:
+    """Bounded N+1 capacity wait refreshing owned children in place.
+
+    Synthetic ``unconfirmed:`` reservations for ambiguous admissions retain
+    a capacity slot without a refreshable workflowId; they are counted as
+    active and never refreshed away within this run, so a response loss on
+    each POST cannot leave the entire batch running concurrently.
+    """
+
+    remaining = max(0, int(polls))
+    while remaining > 0:
+        active = [
+            workflow_id
+            for workflow_id, status in owned.items()
+            if status in {"queued", "running", "unknown", "waiting"}
+        ]
+        if len(active) < max_concurrency:
+            return
+        if interval > 0:
+            time.sleep(interval)
+        remaining -= 1
+        for workflow_id in active:
+            if workflow_id.startswith("unconfirmed:"):
+                continue
+            status, _ = _refresh_owned_status(
+                moonmind_url=moonmind_url, workflow_id=workflow_id
+            )
+            if status == "admission_lost":
+                owned.pop(workflow_id, None)
+            elif status != "unknown":
+                owned[workflow_id] = status
+
+
+def _submit_repository_child(
+    *,
+    moonmind_url: str,
+    envelope: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """POST one child and verify admission; never count unverified queueing."""
+
+    body = {
+        "type": str(envelope["type"]),
+        "payload": envelope["payload"],
+        "priority": int(envelope.get("priority", 0)),
+        "maxAttempts": int(envelope.get("maxAttempts", 3)),
+    }
+    endpoint = moonmind_url.rstrip("/") + API_EXECUTIONS_ENDPOINT
+    try:
+        encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
+        http_request = urllib.request.Request(
+            endpoint, data=encoded, headers=_auth_headers(), method="POST"
+        )
+        with urllib.request.urlopen(http_request, timeout=30.0) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        if not isinstance(data, dict):
+            return None, "execution API response must be a JSON object"
+        workflow_id = str(
+            data.get("workflowId") or data.get("taskId") or data.get("id") or ""
+        ).strip()
+        if not workflow_id:
+            return None, "execution API response is missing workflowId"
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read(65536).decode("utf-8", errors="replace")
+            return None, f"{exc}: {detail}"
+        except Exception:
+            return None, str(exc)
+    except Exception as exc:  # noqa: BLE001 - reported per target
+        # A transport failure after server-side admission is ambiguous: the
+        # caller retries under the same idempotency key and reconciles.
+        return None, f"submission_unconfirmed: {exc}"
+    status, _ = _refresh_owned_status(
+        moonmind_url=moonmind_url, workflow_id=workflow_id
+    )
+    if status == "admission_lost":
+        return None, "admission_unconfirmed: child missing immediately after queueing"
+    if status == "unknown":
+        return (
+            None,
+            "admission_unconfirmed: child verification returned unknown; "
+            "preserved for bounded reconciliation instead of counting as queued",
+        )
+    return workflow_id, None
+
+
+def _run_cancel_owned(args: argparse.Namespace, artifacts_dir: Path) -> int:
+    result_path = artifacts_dir / REPOSITORY_BATCH_RESULT_ARTIFACT
+    prior = _load_json_document(result_path)
+    if not isinstance(prior, dict) or not isinstance(prior.get("targets"), list):
+        print("error: no repository-batch aggregate to cancel from", flush=True)
+        return 2
+    moonmind_url = _text(os.getenv("MOONMIND_URL"))
+    if not moonmind_url:
+        print("error: MOONMIND_URL is required to cancel owned children", flush=True)
+        return 2
+    manifest = {
+        "digest": prior.get("manifestDigest"),
+        "runRef": prior.get("runRef"),
+    }
+    per_target: list[dict[str, Any]] = []
+    canceled = 0
+    targeted = 0
+    for item in prior["targets"]:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        workflow_id = _text(item.get("workflowId"))
+        if not workflow_id or status not in {"queued", "running", "unknown", "waiting"}:
+            per_target.append(dict(item))
+            continue
+        targeted += 1
+        try:
+            _cancel_owned_execution(
+                moonmind_url=moonmind_url, workflow_id=workflow_id
+            )
+            status_after, _ = _refresh_owned_status(
+                moonmind_url=moonmind_url, workflow_id=workflow_id
+            )
+            final_status = (
+                status_after if status_after in {"canceled", "failed", "succeeded"}
+                else "canceled"
+            )
+            per_target.append({**item, "status": final_status, "reason": "cancel_requested"})
+            if final_status == "canceled":
+                canceled += 1
+        except Exception as exc:  # noqa: BLE001 - reported per target
+            per_target.append(
+                {**item, "status": status, "reason": "cancel_failed", "error": str(exc)[:1024]}
+            )
+    aggregate = _BATCH_TARGETS.build_batch_aggregate_result(
+        manifest=manifest,
+        per_target=per_target,
+        batch_status="canceled" if targeted and canceled == targeted else "partial",
+    )
+    _write_artifacts(result_path, aggregate)
+    _write_repository_batch_translation(
+        artifacts_dir=artifacts_dir,
+        aggregate=aggregate,
+        execution_ref=_text(os.getenv("MOONMIND_STEP_EXECUTION_ID")),
+        run_ref="repository-batch:cancel-owned",
+    )
+    print(json.dumps(aggregate, indent=2))
+    print(f"canceled={canceled} targeted={targeted}")
+    return 0 if targeted and canceled == targeted else 1
+
+
+def _run_repository_batch(args: argparse.Namespace, artifacts_dir: Path) -> int:
+    manifest_path = artifacts_dir / REPOSITORY_BATCH_MANIFEST_ARTIFACT
+    result_path = artifacts_dir / REPOSITORY_BATCH_RESULT_ARTIFACT
+    execution_ref = _text(os.getenv("MOONMIND_STEP_EXECUTION_ID"))
+    # Load the prior aggregate before replacing it: resume and selected
+    # retry reconcile against it, and a corrupt prior fails closed instead
+    # of silently submitting fresh duplicates.
+    prior_result: dict[str, Any] | None = None
+    if result_path.exists() and not args.preflight_only:
+        raw_prior = _load_json_document(result_path)
+        if not isinstance(raw_prior, dict) or not isinstance(
+            raw_prior.get("targets"), list
+        ):
+            raise RuntimeError(
+                f"prior repository-batch aggregate is corrupt: {result_path}"
+            )
+        prior_result = raw_prior
+    if not args.preflight_only:
+        try:
+            result_path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeError(f"cannot remove stale result artifact: {exc}") from exc
+
+    def _fail_aggregate(
+        manifest: dict[str, Any] | None,
+        per_target: list[dict[str, Any]],
+        *,
+        code: str,
+        message: str,
+        batch_status: str,
+        exit_code: int,
+    ) -> int:
+        aggregate = _BATCH_TARGETS.build_batch_aggregate_result(
+            manifest=manifest or {"digest": None, "runRef": args.run_ref},
+            per_target=per_target,
+            batch_status=batch_status,
+            failure={"code": code, "message": message[:1024]},
+        )
+        _write_artifacts(result_path, aggregate)
+        try:
+            _write_repository_batch_translation(
+                artifacts_dir=artifacts_dir,
+                aggregate=aggregate,
+                execution_ref=_text(os.getenv("MOONMIND_STEP_EXECUTION_ID")),
+                run_ref=str(args.run_ref),
+            )
+        except Exception:
+            # Translation is best-effort for the legacy Skill contract; the
+            # primary repository aggregate is already persisted above.
+            pass
+        print(json.dumps(aggregate, indent=2))
+        return exit_code
+
+    try:
+        if not execution_ref:
+            raise RuntimeError("MOONMIND_STEP_EXECUTION_ID is required")
+        if args.targets is not None or args.github_issue_range:
+            raise BatchInputError(
+                "use either --repository-targets-file or the single-repository "
+                "batch inputs, not both"
+            )
+        if not args.repository_targets_file:
+            raise BatchInputError("--repository-targets-file is required")
+        raw_targets = _load_json_document(Path(args.repository_targets_file))
+        entries = _repository_batch_entries(raw_targets)
+        budget_raw: Any = {}
+        if args.batch_budget_file:
+            budget_raw = _load_json_document(Path(args.batch_budget_file))
+        elif args.max_repositories != _BATCH_TARGETS.DEFAULT_MAX_REPOSITORY_TARGETS:
+            budget_raw = {"maxTargets": args.max_repositories}
+        budget = _BATCH_TARGETS.parse_batch_budget(budget_raw)
+        if args.max_repositories != _BATCH_TARGETS.DEFAULT_MAX_REPOSITORY_TARGETS:
+            budget = _BATCH_TARGETS.RepositoryBatchBudget(
+                max_targets=min(
+                    args.max_repositories, _BATCH_TARGETS.HARD_MAX_REPOSITORY_TARGETS
+                ),
+                max_concurrency=budget.max_concurrency,
+                max_child_spend_usd=budget.max_child_spend_usd,
+                max_attempts_per_child=budget.max_attempts_per_child,
+            )
+        normalized = _BATCH_TARGETS.normalize_repository_batch(
+            entries, max_targets=budget.max_targets
+        )
+        constraints = _read_constraints(args)
+        manifest = _BATCH_TARGETS.freeze_repository_batch_manifest(
+            normalized,
+            task={
+                "runRef": args.run_ref,
+                "constraints": constraints,
+                "publishMode": _normalize_publish_mode(args.publish_mode),
+            },
+            budget=budget,
+        )
+        _write_artifacts(manifest_path, manifest)
+        if args.preflight_only:
+            print(json.dumps(manifest, indent=2))
+            print(f"manifest_digest={manifest['digest']} targets={len(normalized.targets)}")
+            return 0
+        try:
+            _BATCH_TARGETS.verify_manifest_unchanged(
+                manifest, args.approved_batch_digest or ""
+            )
+        except _BATCH_TARGETS.RepositoryBatchError as exc:
+            return _fail_aggregate(
+                manifest,
+                [],
+                code=exc.code,
+                message=str(exc),
+                batch_status="failed",
+                exit_code=2,
+            )
+        preflight = _BATCH_TARGETS.preflight_repository_batch(
+            normalized,
+            allow_partial=bool(args.allow_partial),
+            publish_mode=_normalize_publish_mode(args.publish_mode),
+        )
+        if preflight.blocked:
+            return _fail_aggregate(
+                manifest,
+                [
+                    {
+                        "targetRef": item.target_ref,
+                        "status": "blocked" if not item.accessible else "waiting",
+                        "reason": item.reason,
+                    }
+                    for item in preflight.targets
+                ],
+                code="REPOSITORY_BATCH_PREFLIGHT_BLOCKED",
+                message=preflight.failure or "preflight blocked dispatch",
+                batch_status="blocked",
+                exit_code=2,
+            )
+        accessible_refs = {
+            item.target_ref for item in preflight.targets if item.accessible
+        }
+        skipped_entries: list[dict[str, Any]] = [
+            {
+                "targetRef": item.target_ref,
+                "status": "skipped",
+                "reason": item.reason,
+            }
+            for item in preflight.targets
+            if not item.accessible
+        ]
+        releasable = [
+            target for target in normalized.targets if target.target_ref in accessible_refs
+        ]
+        skipped_refs = {
+            item["targetRef"] for item in skipped_entries if item.get("targetRef")
+        }
+        blocked_due_to_missing: list[dict[str, Any]] = []
+        if skipped_refs:
+            remaining: list[_BATCH_TARGETS.ParsedRepositoryTarget] = []
+            excluded: set[str] = set(skipped_refs)
+            pending = list(releasable)
+            changed = True
+            while changed:
+                changed = False
+                next_pending: list[_BATCH_TARGETS.ParsedRepositoryTarget] = []
+                for target in pending:
+                    missing = [dep for dep in target.depends_on if dep in excluded]
+                    if missing:
+                        blocked_due_to_missing.append(
+                            _BATCH_TARGETS.per_target_entry(
+                                target,
+                                status="blocked",
+                                reason="upstream_skipped",
+                                error="upstream {} excluded by preflight; dependent blocked".format(
+                                    ",".join(sorted(missing))
+                                )[:1024],
+                            )
+                        )
+                        excluded.add(target.target_ref)
+                        changed = True
+                    else:
+                        next_pending.append(target)
+                pending = next_pending
+            releasable = pending
+        evidence_map: dict[str, Any] = {}
+        if args.upstream_evidence_file:
+            raw_evidence = _load_json_document(Path(args.upstream_evidence_file))
+            if not isinstance(raw_evidence, dict):
+                raise BatchInputError("--upstream-evidence-file must hold an object")
+            evidence_map = raw_evidence
+        try:
+            phases = _BATCH_TARGETS.resolve_target_phases(releasable)
+        except _BATCH_TARGETS.RepositoryBatchError as exc:
+            if exc.code == "REPOSITORY_BATCH_DEPENDENCY_CYCLE":
+                return _fail_aggregate(
+                    manifest,
+                    [*skipped_entries, *blocked_due_to_missing],
+                    code=exc.code,
+                    message=str(exc),
+                    batch_status="failed",
+                    exit_code=2,
+                )
+            raise
+        ordered: list[_BATCH_TARGETS.ParsedRepositoryTarget] = []
+        blocked_entries: list[dict[str, Any]] = list(blocked_due_to_missing)
+        for phase in phases:
+            releasable_phase, blocked_phase = _BATCH_TARGETS.gate_dependent_targets(
+                phase,
+                verify_upstream_evidence=(lambda ref: evidence_map.get(ref)),
+            )
+            ordered.extend(
+                sorted(releasable_phase, key=lambda item: item.target_ref)
+            )
+            for blocked in blocked_phase:
+                target = next(
+                    item
+                    for item in phase
+                    if item.target_ref == blocked["targetRef"]
+                )
+                blocked_entries.append(
+                    _BATCH_TARGETS.per_target_entry(
+                        target, status="blocked", reason=blocked["reason"]
+                    )
+                )
+        prior: dict[str, Any] | None = prior_result
+        # Resume and selected retry reconcile against the prior aggregate
+        # loaded before this run replaced it; a digest change submits fresh
+        # under new idempotency keys instead of reusing prior admissions.
+        to_submit, reused = _BATCH_TARGETS.reconcile_with_prior_result(
+            manifest_digest=str(manifest["digest"]),
+            targets=ordered,
+            prior_result=prior,
+            retry_failed_only=bool(args.retry_failed_only),
+        )
+        moonmind_url = _text(os.getenv("MOONMIND_URL"))
+        if not moonmind_url:
+            raise BatchInputError(
+                "MOONMIND_URL is not set; repository batch requires the "
+                "MoonMind Temporal execution API"
+            )
+        runtime = _resolve_runtime_selection(args.task_context_path)
+        target_by_ref = {target.target_ref: target for target in ordered}
+        prior_by_ref: dict[str, dict[str, Any]] = {}
+        if isinstance(prior, dict):
+            for item in prior.get("targets") or []:
+                if isinstance(item, dict) and _text(item.get("targetRef")):
+                    prior_by_ref[str(item.get("targetRef"))] = item
+        per_target: list[dict[str, Any]] = []
+        per_target.extend(skipped_entries)
+        per_target.extend(blocked_entries)
+        for reuse in reused:
+            ref = reuse["targetRef"]
+            target = target_by_ref.get(ref)
+            if target is None:
+                continue
+            if reuse["reason"] == "already_queued" and reuse.get("workflowId"):
+                status, described = _refresh_owned_status(
+                    moonmind_url=moonmind_url, workflow_id=reuse["workflowId"]
+                )
+                if status == "admission_lost":
+                    to_submit.append((target, 0))
+                    continue
+                evidence = None
+                publication = None
+                if isinstance(described, dict):
+                    for key in ("evidence", "publication", "publicationEvidence"):
+                        candidate = described.get(key)
+                        if isinstance(candidate, dict):
+                            if key == "publication" or "publication" in key.lower():
+                                publication = candidate
+                            else:
+                                evidence = candidate
+                    revision = described.get("revision") or described.get("preparedRevision")
+                    if evidence is None and isinstance(revision, dict):
+                        evidence = {"revision": revision}
+                per_target.append(
+                    _BATCH_TARGETS.per_target_entry(
+                        target,
+                        status=status if status != "unknown" else "unknown",
+                        workflow_id=reuse["workflowId"],
+                        reason="already_queued",
+                        evidence=evidence,
+                        publication=publication,
+                    )
+                )
+            else:
+                prior_entry = prior_by_ref.get(ref, {})
+                prior_status = str(
+                    prior_entry.get("status") or reuse.get("status") or ""
+                ).strip().lower()
+                if prior_status not in {
+                    "succeeded",
+                    "failed",
+                    "blocked",
+                    "canceled",
+                }:
+                    prior_status = (
+                        "succeeded"
+                        if reuse.get("reason") == "retry_skipped_completed"
+                        else "failed"
+                    )
+                preserved: dict[str, Any] = {
+                    "targetRef": ref,
+                    "status": prior_status,
+                    "reason": reuse["reason"],
+                    "attempt": int(reuse.get("attempt") or 0),
+                }
+                for carry_key in (
+                    "workflowId",
+                    "idempotencyKey",
+                    "evidence",
+                    "publication",
+                    "error",
+                ):
+                    if prior_entry.get(carry_key) is not None:
+                        preserved[carry_key] = prior_entry[carry_key]
+                per_target.append(preserved)
+        owned: dict[str, str] = {}
+        for item in per_target:
+            workflow_id = _text(item.get("workflowId"))
+            status = str(item.get("status") or "")
+            if workflow_id and status in {"queued", "running", "unknown"}:
+                owned[workflow_id] = status
+        run_ref = str(args.run_ref)
+        goal = (constraints.strip().splitlines() or [f"Execute {run_ref}."])[0][:500]
+        submitted = 0
+        submit_errors = 0
+        prebuilt: list[tuple[Any, int, dict[str, Any]]] = []
+        build_failures: list[dict[str, Any]] = []
+        for target, attempt in to_submit:
+            try:
+                envelope = _BATCH_TARGETS.build_multi_repo_child_request(
+                    target,
+                    manifest_digest=str(manifest["digest"]),
+                    run_ref=run_ref,
+                    goal=goal,
+                    constraints=constraints,
+                    publish_mode=str(manifest["publishMode"]),
+                    runtime_mode=runtime.mode,
+                    runtime_model=runtime.model,
+                    runtime_effort=runtime.effort,
+                    runtime_provider_profile=runtime.provider_profile,
+                    max_attempts=budget.max_attempts_per_child,
+                    attempt=attempt,
+                    parent_execution_ref=execution_ref,
+                )
+            except _BATCH_TARGETS.RepositoryBatchError as exc:
+                build_failures.append(
+                    _BATCH_TARGETS.per_target_entry(
+                        target, status="blocked", reason=exc.code, attempt=attempt,
+                        error=str(exc),
+                    )
+                )
+                continue
+            prebuilt.append((target, attempt, envelope))
+        if build_failures and not bool(args.allow_partial):
+            per_target.extend(build_failures)
+            return _fail_aggregate(
+                manifest,
+                per_target,
+                code="REPOSITORY_BATCH_PREFLIGHT_BLOCKED",
+                message="pre-dispatch envelope verification failed; no children queued",
+                batch_status="blocked",
+                exit_code=2,
+            )
+        per_target.extend(build_failures)
+        for target, attempt, envelope in prebuilt:
+            _wait_for_capacity(
+                moonmind_url=moonmind_url,
+                owned=owned,
+                max_concurrency=budget.max_concurrency,
+                polls=int(args.capacity_polls),
+                interval=float(args.capacity_poll_interval),
+            )
+            active_owned = sum(
+                1 for status in owned.values() if status in {"queued", "running", "unknown", "waiting"}
+            )
+            capacity_hold = _BATCH_TARGETS.gate_on_capacity(
+                running_owned=active_owned,
+                max_concurrency=budget.max_concurrency,
+                target_ref=target.target_ref,
+            )
+            if capacity_hold is not None:
+                per_target.append(
+                    _BATCH_TARGETS.per_target_entry(
+                        target, status="blocked", reason="capacity_exhausted",
+                        attempt=attempt,
+                    )
+                )
+                continue
+            workflow_id, error = _submit_repository_child(
+                moonmind_url=moonmind_url, envelope=envelope
+            )
+            idempotency_key = str(envelope["payload"].get("idempotencyKey") or "")
+            if workflow_id is None:
+                submit_errors += 1
+                owned[f"unconfirmed:{target.target_ref}:{attempt}"] = "unknown"
+                per_target.append(
+                    _BATCH_TARGETS.per_target_entry(
+                        target, status="unknown", reason="submission_unconfirmed",
+                        idempotency_key=idempotency_key, error=error,
+                        attempt=attempt,
+                    )
+                )
+            else:
+                submitted += 1
+                owned[workflow_id] = "queued"
+                per_target.append(
+                    _BATCH_TARGETS.per_target_entry(
+                        target, status="queued", workflow_id=workflow_id,
+                        idempotency_key=idempotency_key, attempt=attempt,
+                    )
+                )
+            interim = _BATCH_TARGETS.build_batch_aggregate_result(
+                manifest=manifest, per_target=list(per_target),
+                batch_status="partial" if submit_errors else "queued",
+            )
+            _write_artifacts(result_path, interim)
+            try:
+                _write_repository_batch_translation(
+                    artifacts_dir=artifacts_dir,
+                    aggregate=interim,
+                    execution_ref=execution_ref,
+                    run_ref=run_ref,
+                )
+            except Exception:
+                # Interim translation is best-effort; the interim repository
+                # aggregate is already persisted above.
+                pass
+    except _BATCH_TARGETS.RepositoryBatchError as exc:
+        return _fail_aggregate(
+            None, [], code=exc.code, message=str(exc),
+            batch_status="failed", exit_code=2,
+        )
+    except Exception as exc:  # evidence must survive dispatch failures
+        failure_code = (
+            "BATCH_FANOUT_INPUT_INVALID"
+            if isinstance(exc, BatchInputError)
+            else "BATCH_FANOUT_FAILED"
+        )
+        return _fail_aggregate(
+            None, [], code=failure_code, message=str(exc),
+            batch_status="failed",
+            exit_code=2 if isinstance(exc, BatchInputError) else 1,
+        )
+    if submit_errors > 0 and not bool(args.allow_partial) and submitted > 0:
+        for workflow_id in list(owned.keys()):
+            if workflow_id.startswith("unconfirmed:"):
+                continue
+            try:
+                _cancel_owned_execution(
+                    moonmind_url=moonmind_url, workflow_id=workflow_id
+                )
+            except Exception:
+                # Best-effort rollback; per-target status is still updated to
+                # canceled below to preserve fail-before-dispatch semantics.
+                pass
+        for item in per_target:
+            if item.get("status") == "queued" and item.get("workflowId") in owned:
+                item["status"] = "canceled"
+                item["reason"] = "rollback_after_admission_failure"
+        owned.clear()
+    queued = sum(1 for item in per_target if item.get("status") == "queued")
+    terminal_bad = sum(
+        1
+        for item in per_target
+        if item.get("status") in {"unknown", "blocked", "failed", "canceled", "skipped"}
+    )
+    if not per_target:
+        batch_status = "no_op"
+    elif submit_errors == 0 and terminal_bad == 0:
+        batch_status = "queued"
+    elif queued > 0:
+        batch_status = "partial"
+    else:
+        batch_status = "failed"
+    aggregate = _BATCH_TARGETS.build_batch_aggregate_result(
+        manifest=manifest, per_target=per_target, batch_status=batch_status,
+        failure=(
+            {"code": "BATCH_FANOUT_PARTIAL_FAILURE", "message": "some targets need attention"}
+            if batch_status in {"partial", "failed"} else None
+        ),
+    )
+    _write_artifacts(result_path, aggregate)
+    _write_repository_batch_translation(
+        artifacts_dir=artifacts_dir,
+        aggregate=aggregate,
+        execution_ref=execution_ref,
+        run_ref=run_ref,
+    )
+    print(json.dumps(aggregate, indent=2))
+    print(
+        f"queued={submitted} errors={submit_errors} "
+        f"targets={len(per_target)} manifest={manifest['digest']}"
+    )
+    return 0 if batch_status in {"queued", "no_op"} else 1
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     targets_path = Path(args.targets) if args.targets else None
     artifacts_dir = _resolve_artifacts_dir(args.artifacts_dir)
+    if args.repository_targets_file or args.cancel_owned:
+        if args.cancel_owned:
+            return _run_cancel_owned(args, artifacts_dir)
+        return _run_repository_batch(args, artifacts_dir)
     result_path = artifacts_dir / "batch-workflows-result.json"
     try:
         result_path.unlink(missing_ok=True)

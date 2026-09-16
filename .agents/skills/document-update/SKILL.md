@@ -8,13 +8,21 @@ metadata:
 
 # Document Update
 
-Update one or more technical documents so they accurately describe the implementation that exists in the current checkout.
+Update one or more technical documents so they accurately describe the implementation that exists in the current checkout. All guidance here is model-neutral: decisions rest on document purpose, source authority, and authorized capabilities.
 
 ## Purpose
 
 Correct documentation drift by comparing the document's claims against source code, tests, schemas, configuration, and runtime entrypoints, then editing the document to describe the actual system behavior.
 
-For canonical documentation under `docs/`, do not downgrade the documented desired state to match a buggy or incomplete implementation. When code contradicts the intended architecture, contract, operator-visible behavior, or target semantics, report the implementation gap clearly and preserve the canonical desired-state framing unless the user explicitly asks to change the target contract.
+## Document Role First
+
+Resolve the document role before editing, using `docs/Workflows/MoonSpecDocumentModel.md`:
+
+- **Factual implementation reference**: correct factual drift against the checkout.
+- **Authorized desired-state design**: preserve the intended behavior. When code contradicts the intended architecture, contract, operator-visible behavior, or target semantics, report the implementation gap clearly and preserve the canonical desired-state framing unless the user explicitly asks to change the target contract. Buggy or incomplete code never downgrades canonical desired state.
+- **Temporary execution artifact**: update in place as working material; never treat it as desired-state authority.
+
+An authorized proposed design needs no pre-existing implementation to be written, but must never be falsely labeled implemented.
 
 ## Inputs
 
@@ -69,7 +77,7 @@ For canonical documentation under `docs/`, do not downgrade the documented desir
    - Read the constitution (`AGENTS.md`), `README.md`, and the main architecture document under `docs/`.
    - Assess whether the drift-correcting update would move the document toward or away from those canonical sources.
    - If the update is clearly aligned with the constitution, README, and architecture, proceed to edit the document.
-   - If the update appears to contradict the project's declared direction, or if the correct direction is uncertain, do **not** edit the document. Instead, proceed to step 8 (Jira fallback).
+   - If the update appears to contradict the project's declared direction, or if the correct direction is uncertain, do **not** edit the document. Instead, proceed to step 8 (provider-neutral escalation).
    - If the needed work spans many documents or cannot be made safely in one bounded edit, write a `docs/tmp/` improvement plan that records the findings, authority owners, and proposed follow-up instead of broadening the update.
 
 6. Edit the document.
@@ -87,21 +95,22 @@ For canonical documentation under `docs/`, do not downgrade the documented desir
    - Add any extra targeted code tests needed when the documentation change depends on behavior that is not already evident from existing tests or source inspection.
    - If verification cannot be run, record the exact blocker.
 
-8. Jira fallback for misaligned updates.
-   - If step 5 determined that the document update is not aligned with the project's direction, create a Jira issue instead of editing the document.
-   - Read `.agents/skills/jira-issue-creator/SKILL.md` and follow its workflow.
-   - The Jira issue must include:
+ 8. Provider-neutral escalation for misaligned updates.
+   - If step 5 determined that the document update is not aligned with the project's direction, do not edit the document. Escalate instead.
+   - When an authorized tracker integration exists, use its actual metadata and verified receipt: read `.agents/skills/jira-issue-creator/SKILL.md` and follow its workflow when the authorized integration is Jira. The issue must include:
      - A clear summary naming the document and the planned update.
      - A description that explains the drift found in the drift ledger.
      - An explicit statement of why the update may conflict with the constitution, README, or main architecture document.
      - The specific document path and relevant implementation evidence.
-   - Do not edit the document when creating the Jira fallback issue.
-   - Report the created Jira issue key and URL as the primary output.
+   - Otherwise retain a complete structured handoff with document, claim, evidence, owning decision, and resume condition so the work can continue without that integration. A missing tracker integration must not force a desired-state rewrite and must not erase a useful review.
+   - A denied mutation is never retried through broader credentials or a wider scope.
+   - Do not edit the document when escalating.
+   - Report the escalation record as the primary output (issue key and URL when a tracker issue was created, otherwise the structured handoff).
 
 9. Finalize the evidence.
    - Summarize which document changed, what drift was corrected, and the implementation evidence used.
    - Include validation commands and results.
-   - If a Jira fallback issue was created, include its key, URL, and rationale.
+   - If an escalation record was produced, include it (issue key and URL when a tracker issue was created, otherwise the structured handoff) and its rationale.
    - If requested by the task, commit the documentation update with a concise message.
 
 ## Outputs
@@ -111,7 +120,7 @@ For canonical documentation under `docs/`, do not downgrade the documented desir
 - Implementation evidence references, including file paths and relevant tests or schemas.
 - Validation commands run and their result, or the reason validation was not run.
 - Commit hash when the user requested a commit.
-- Jira issue key and URL when a misaligned update triggered the Jira fallback.
+- Escalation record when a misaligned update triggered escalation (tracker issue key and URL, or the structured handoff).
 
 ## Failure Modes
 
@@ -121,5 +130,5 @@ For canonical documentation under `docs/`, do not downgrade the documented desir
 - The document describes intended behavior that code does not implement: report the gap clearly and update only if the user's goal is to document actual behavior.
 - Required verification cannot run: keep the doc update if source evidence is sufficient, but report the blocked command and reason.
 - Secret-like content appears in examples or copied logs: redact it before writing or reporting.
-- Document update contradicts the constitution, README, or architecture: do not edit; create a Jira issue and report the misalignment.
-- Jira fallback blocked: report the exact blocker and preserve the drift ledger for manual review.
+- Document update contradicts the constitution, README, or architecture: do not edit; produce a provider-neutral escalation record and report the misalignment.
+- Escalation blocked: report the exact blocker and preserve the drift ledger for manual review.
