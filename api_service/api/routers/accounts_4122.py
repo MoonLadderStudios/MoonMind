@@ -930,7 +930,7 @@ async def accounts_recovery_redeem(
             redeem_recovery_and_rotate_password,
         )
 
-        user = await redeem_recovery_and_rotate_password(
+        await redeem_recovery_and_rotate_password(
             session, login=login, nonce=nonce, hashed_password=hashed
         )
         redacted_lifecycle_event("recovery", action="redeemed", login=login)
