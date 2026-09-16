@@ -14,12 +14,13 @@ Missing configuration or a denied managed operation is a blocker: report it and 
 
 ## Modes
 
-- `draft` (default; the dry-run path): strictly non-mutating. Compose and validate the issue payload, perform zero issue/comment/status writes, and return the exact payload that would be sent with status `draft`.
+- `draft` (default when the request carries no explicit write intent; the dry-run path): strictly non-mutating. Compose and validate the issue payload, perform zero issue/comment/status writes, and return the exact payload that would be sent with status `draft`.
 - `create`: mutating. Requires the request's existing explicit write intent (the user already asked to open, file, or create the ticket). When that intent is present, complete creation without adding a second routine confirmation step. Without explicit write intent, stay in `draft` and report `blocked_awaiting_write_intent` instead of creating anything.
+- When `mode` is omitted, resolve it from the request: explicit open/file/create wording (for example "create a Jira story") selects `create`; requests without write intent stay in `draft`. An explicitly supplied `mode` always wins over this inference.
 
 ## Inputs
 
-- Required: `mode` (`draft` default, or `create`). Draft/proposal requests are strictly non-mutating and perform zero writes.
+- Required: `mode` (`draft` default when the request carries no explicit write intent, or `create`). Omitted `mode` with explicit open/file/create wording selects `create`; otherwise it stays `draft`. Draft/proposal requests are strictly non-mutating and perform zero writes.
 - Required: Jira project key or enough context to identify one.
 - Required: issue type (`Task`, `Story`, `Bug`, or `Sub-task`). Use `jira.list_create_issue_types` to resolve the name to an `issueTypeId`. Default to `Task` only when the user does not specify.
 - Required: summary/title.
@@ -65,7 +66,8 @@ Missing configuration or a denied managed operation is a blocker: report it and 
 - Before creating any issue from `stories.json`, verify every story has source traceability. Canonical declarative breakdowns require an original source document path through `story.sourceReference.path`, `source.referencePath`, or `source.path`. Trusted Jira, inline, and `imperative-input` breakdowns without a document path must preserve source title/key and `coverageIds`; do not block solely because those sources lack a canonical path.
 - Otherwise use only an explicitly authorized standalone adapter that preserves equivalent task semantics (same field validation, write-intent gating, and receipt handling). Never fall back to raw credentials, scraped secrets, or a broader-authority HTTP call.
 - Send only the fields needed for the requested issue.
-- Treat retries carefully: before retrying after an uncertain network failure, use `jira.search_issues` to search by a stable summary/project/reporter marker to avoid duplicate tickets. An incomplete search is not proof no prior issue exists: reconcile the uncertain outcome through the existing receipt mechanism before repeating the write.
+- Persist a stable operation identity before the create POST and use it as the creation receipt basis: generate a unique operation key (for example a UUID), persist it to the workflow ledger/artifacts, and include it verbatim in searchable issue data (a unique marker token in the description plus a label when the project schema permits). When the trusted tool offers an idempotent create keyed by that identity, use it.
+- Treat retries carefully: after an uncertain create outcome (timeout or lost response where no receipt was returned), reconcile through that persisted operation identity first — re-fetch by the exact marker via `jira.search_issues`/`jira.get_issue` and check for the returned receipt — before repeating the write. Summary/project/reporter similarity alone is not a usable receipt and an incomplete search is not proof no prior issue exists: do not repeat the create until the receipt is reconciled or the operator explicitly accepts the duplicate risk.
 
 ## Breakdown Story Behavior
 
@@ -107,4 +109,4 @@ When invoked after `moonspec-breakdown` or when the request references story bre
 - Authentication or authorization failure: state that Jira access is unavailable or insufficient and identify the target project/operation.
 - Required Jira field missing: list the field name Jira requires and ask for its value.
 - Unsupported issue type or field: explain which value is unsupported for the selected project.
-- Uncertain retry state: search for a matching recently created issue before creating another one.
+- Uncertain retry state: reconcile the persisted operation identity (exact marker search plus receipt check) before creating another issue; never treat an incomplete similarity search as proof of absence.

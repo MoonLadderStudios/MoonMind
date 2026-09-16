@@ -154,12 +154,12 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
    - Record the planned transition ID/name (or already-done/blocked/skipped). Execute it only in step 9, after the comment posts successfully.
 
 7. Draft the Jira comment.
-   - Start with the verdict, issue key, the verification mode used (`branch` or `main/trunk`), branch name, commit SHA, and comparison ref (or "verified against current state of default branch" for main/trunk mode).
-   - In main/trunk mode, list the merge commit SHA(s) or merged PR number(s) identified as the implementation evidence, when known.
-   - Include blockers or gaps first for `PARTIAL`, `FAIL`, or `BLOCKED`.
-   - Include a compact coverage table and evidence references.
-   - Include validation observed, clearly separating passing tests from tests not run.
-   - Include status update outcome when `update status` is true: skipped because verdict was not `PASS`, already done, transitioned with selected transition, or blocked/failed with sanitized reason.
+    - Start with the verdict, issue key, the verification mode used (`branch` or `main/trunk`), branch name, commit SHA, and comparison ref (or "verified against current state of default branch" for main/trunk mode).
+    - In main/trunk mode, list the merge commit SHA(s) or merged PR number(s) identified as the implementation evidence, when known.
+    - Include blockers or gaps first for `PARTIAL`, `FAIL`, or `BLOCKED`.
+    - Include a compact coverage table and evidence references.
+    - Include validation observed, clearly separating passing tests from tests not run.
+    - Include only the planned status update when `update status` is true: the transition ID/name selected in step 6 (or already-done/blocked/skipped), described explicitly as planned/pending execution after this comment posts. Do not claim `transitioned` or `failed` here; the confirmed transition result is recorded only after step 9 executes, in the ledger and outputs (with a separate follow-up Jira comment only when operator context explicitly requests one).
    - Do not paste long private Jira text, raw command dumps, credentials, auth headers, cookies, or full environment/config dumps.
 
 Suggested comment shape (branch mode):
@@ -182,8 +182,8 @@ Validation:
 - Tests run: `<command>` -> `<result>`
 - Tests not run: <reason>
 
-Status update:
-- <omitted when `update status` is false; otherwise already done / transitioned / skipped / blocked>
+Status update (planned, pending execution after this comment):
+- <omitted when `update status` is false; otherwise already done / planned transition ID-name / skipped / blocked>
 ```
 
 Suggested comment shape (main/trunk mode, work already merged):
@@ -206,8 +206,8 @@ Validation:
 - Tests run: `<command>` -> `<result>`
 - Tests not run: <reason>
 
-Status update:
-- <omitted when `update status` is false; otherwise already done / transitioned / skipped / blocked>
+Status update (planned, pending execution after this comment):
+- <omitted when `update status` is false; otherwise already done / planned transition ID-name / skipped / blocked>
 ```
 
 8. Scan and post to Jira.
