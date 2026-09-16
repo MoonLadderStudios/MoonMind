@@ -594,7 +594,13 @@ def _accounts_lifecycle_key() -> bytes:
         )
 
         secret = resolve_session_secret(
-            explicit_secret=(os.environ.get("MOONMIND_SESSION_SECRET") or "").strip() or None,
+            # Mirror the API boundary (build_moonmind_control_plane_config):
+            # the supported JWT_SECRET legacy alias resolves when
+            # MOONMIND_SESSION_SECRET is absent so CLI-minted capabilities
+            # redeem with the same lifecycle key the API verifies with.
+            explicit_secret=(os.environ.get("MOONMIND_SESSION_SECRET") or "").strip()
+            or (os.environ.get("JWT_SECRET") or "").strip()
+            or None,
             key_path=default_session_key_path(),
             allow_generate=False,
             for_remote_production=False,
@@ -659,8 +665,31 @@ def accounts_mint_recovery(
 )
 def accounts_restore_access(
     login: str = typer.Argument(..., help="Existing login to restore administrator access for."),
-    recovery_token: str = typer.Option(..., "--recovery-token", help="Operator-held recovery capability (minted by accounts mint-recovery)."),
-    new_password: str = typer.Option("", "--new-password", help="Optional replacement password (min 12 chars); otherwise credentials are retained."),
+    recovery_token: str | None = typer.Option(
+        None,
+        "--recovery-token",
+        help="Operator-held recovery capability. Prefer the hidden prompt or "
+        "MOONMIND_RECOVERY_TOKEN env / --recovery-token-file; argv exposes "
+        "secrets via process listings and shell history.",
+    ),
+    new_password: str | None = typer.Option(
+        None,
+        "--new-password",
+        help="Optional replacement password (min 12 chars); otherwise credentials "
+        "are retained. Prefer the hidden prompt or MOONMIND_NEW_PASSWORD env / "
+        "--new-password-file; argv exposes secrets via process listings.",
+    ),
+    recovery_token_file: str | None = typer.Option(
+        None,
+        "--recovery-token-file",
+        help="Read the recovery capability from a protected file descriptor "
+        "instead of argv (e.g., --recovery-token-file <(printf '%s' \"$TOKEN\")).",
+    ),
+    new_password_file: str | None = typer.Option(
+        None,
+        "--new-password-file",
+        help="Read the replacement password from a protected file instead of argv.",
+    ),
 ) -> None:
     """Redeem a recovery capability locally and restore administrator access.
 
@@ -677,7 +706,42 @@ def accounts_restore_access(
     if not clean:
         typer.secho("Error: login is required.", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
-    if new_password and not (12 <= len(new_password) <= 256):
+
+    def _read_secret_file(path: str | None, *, what: str) -> str:
+        if not path:
+            return ""
+        try:
+            return Path(path).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            typer.secho(f"Error: cannot read {what} file: {exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+
+    # Prefer protected descriptors over argv: file > env > argv, then a
+    # hidden prompt for the required capability so routine operator use
+    # never places recovery material in process listings or shell history.
+    resolved_token = (
+        _read_secret_file(recovery_token_file, what="recovery capability")
+        or (os.environ.get("MOONMIND_RECOVERY_TOKEN") or "").strip()
+        or (recovery_token or "").strip()
+    )
+    if not resolved_token:
+        try:
+            import getpass as _getpass
+
+            resolved_token = _getpass.getpass("Recovery capability: ").strip()
+        except (EOFError, KeyboardInterrupt) as exc:
+            typer.secho("Error: recovery capability is required.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+    if not resolved_token:
+        typer.secho("Error: recovery capability is required.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    resolved_password = (
+        _read_secret_file(new_password_file, what="replacement password")
+        or (os.environ.get("MOONMIND_NEW_PASSWORD") or "")
+        or (new_password or "")
+    )
+    # Do not echo the secret back into argv-derived state.
+    if resolved_password and not (12 <= len(resolved_password) <= 256):
         typer.secho("Error: replacement password must be 12-256 chars.", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
@@ -695,15 +759,15 @@ def accounts_restore_access(
         try:
             async with maker() as db_session:
                 hashed: str | None = None
-                if new_password:
+                if resolved_password:
                     from moonmind.security.omnigent_auth_qualification import (
                         qualify_password_hash,
                     )
 
-                    hashed = await _asyncio.to_thread(qualify_password_hash, new_password)
+                    hashed = await _asyncio.to_thread(qualify_password_hash, resolved_password)
                 user = await redeem_recovery_and_restore_access(
                     db_session,
-                    token=recovery_token,
+                    token=resolved_token,
                     key=_accounts_lifecycle_key(),
                     login=clean,
                     hashed_password=hashed,
