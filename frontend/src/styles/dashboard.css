@@ -6740,6 +6740,25 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding-left: 2.35rem;
 }
 
+/* The branch search action lives inside the branch grid cell so the floating
+ * row keeps its four-column contract (repo, branch, publish, submit) at every
+ * breakpoint. The cell splits into input + action without affecting the outer grid. */
+.queue-inline-selector--branch {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.queue-inline-selector--branch input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.queue-branch-search {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .queue-step-authoring-controls {
   display: grid;
   gap: 0.45rem;

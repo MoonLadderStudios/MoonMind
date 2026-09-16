@@ -214,17 +214,14 @@ jobs:
     # Per-row setup stays isolated: fast rows never build images or start
     # Compose services; each reliability shard starts its own isolated
     # Compose PostgreSQL/Temporal/MinIO under its own Docker project name.
-    # Per-test (--timeout 600 on fast rows, 300 on reliability shards),
-    # step (timeout 480s around each reliability pytest invocation: the
-    # 8-minute hard step ceiling from MoonLadderStudios/MoonMind#4369) and
-    # job (timeout-minutes: 20 covering setup, test step, bounded
-    # diagnostics and cleanup per shard) bounds are enforced; each row writes a
+    # Reliability budgets (MoonLadderStudios/MoonMind#4369, #4384): short per-test
+    # pytest timeout (150s PR / 300s schedule), ~10-min PR step ceiling via
+    # `timeout 600s` (12-min schedule ceiling via step timeout-minutes),
+    # and bounded cleanup (always() compose down wrapped in timeout 100s).
+    # The PR ceiling stays above the heaviest duration-balanced partition
+    # load (~500s) plus collection/shutdown overhead.
+    # Fast rows keep the pre-existing --timeout 600. Each row writes a
     # uniquely named junit report and attempted cancellation diagnostics.
-    # Budget (worst case per reliability row): 180s dependency startup +
-    # 480s test step + 100s compose-logs + 60s manifest copy + 100s compose
-    # down = 920s, leaving ~280s of the 1200s job budget for the evidence
-    # summary, uploads, and runner variance so GitHub never kills the job
-    # before the always() cleanup runs.
     needs: select-test-suites
     if: >-
       needs.select-test-suites.outputs.unit_fast == 'true' ||
@@ -232,7 +229,7 @@ jobs:
       needs.select-test-suites.outputs.temporal_boundary == 'true' ||
       needs.select-test-suites.outputs.reliability_journey == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
       matrix:
@@ -274,10 +271,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libcairo2-dev pkg-config
       - name: Cache pip dependencies
-        if: matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
+        # Shared immutable dependency layers (MoonLadderStudios/MoonMind#4376):
+        # pip/uv package caches are content-addressed and safe to share
+        # across shards and runs; no mutable release state lives here.
+        # Each reliability shard still boots isolated Compose services under
+        # its own project name with fresh volumes (see below).
+        if: >-
+          (matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true') ||
+          (startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true')
         uses: actions/cache@v6
         with:
-          path: ~/.cache/pip
+          path: |
+            ~/.cache/pip
+            ~/.cache/uv
           key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-pip-
@@ -297,6 +303,14 @@ jobs:
         if: startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         run: |
           set -euo pipefail
+          # Reuse immutable dependency image layers across shards
+          # (MoonLadderStudios/MoonMind#4376): postgres/temporal/minio are
+          # pinned prebuilt images, so `pull` warms the runner layer cache
+          # from the registry without sharing mutable release state. Each
+          # shard still starts isolated services under its own Compose
+          # project name with fresh volumes; no volume, network, or routing
+          # state is shared between shards.
+          docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml pull --quiet
           docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml up -d --wait --wait-timeout 180
           dependency_ip() {
             local container
@@ -365,6 +379,13 @@ jobs:
       - name: Run hermetic reliability shard
         id: run-reliability
         if: startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
+        # Schedule ceiling (12 min) covers the longer diagnostic budget;
+        # PRs enforce the shorter ~10-min budget via `timeout 600s` below
+        # (MoonLadderStudios/MoonMind#4369, #4384: heaviest duration-balanced
+        # partition load is ~500s, so the PR ceiling keeps headroom for
+        # collection/shutdown overhead). Never cap the serial suite
+        # first: this bound applies per duration-balanced shard only.
+        timeout-minutes: 12
         env:
           MOONMIND_FORCE_LOCAL_TESTS: "1"
           PYTHONUNBUFFERED: "1"
@@ -372,20 +393,31 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           shard="${{ matrix.shard }}"
-          case "$shard" in
-            0) filter='NR % 4 == 1' ;;
-            1) filter='NR % 4 == 2' ;;
-            2) filter='NR % 4 == 3' ;;
-            3) filter='NR % 4 == 0' ;;
-            *) echo "::error::unknown reliability shard $shard" >&2; exit 1 ;;
-          esac
-          mapfile -t shard_files < <(ls tests/integration/reliability/test_*.py | sort | awk "$filter")
+          # Single partition authority (MoonLadderStudios/MoonMind#4367):
+          # duration-balanced greedy LPT over advisory hints in
+          # tools/ci/reliability_shard_weights.json, shared with
+          # tools/verify_test_shard_ownership.py. New files absent from
+          # the weights file run via DEFAULT_WEIGHT_SECONDS; never skipped.
+          mapfile -t shard_files < <(python3 tools/ci/reliability_shard_partition.py --shard "$shard")
           echo "Reliability shard ${{ matrix.suite }} runs ${#shard_files[@]} files"
+          # Short reliability budgets with PR-vs-schedule differentiation
+          # (MoonLadderStudios/MoonMind#4369, #4384): PRs fail fast with a 150s
+          # per-test timeout and a 10-min step ceiling (600s stays above the
+          # ~500s heaviest partition load); schedules keep
+          # collecting diagnostics with a 300s per-test timeout under the
+          # 12-min step ceiling above.
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            pytest_timeout=300
+            step_budget=660
+          else
+            pytest_timeout=150
+            step_budget=600
+          fi
           test_start=$SECONDS
           set +e
-          timeout 480s python -m pytest "${shard_files[@]}" \
+          timeout "${step_budget}s" python -m pytest "${shard_files[@]}" \
             -m reliability_journey \
-            -vv --tb=short --durations=25 --timeout 300 \
+            -vv --tb=short --durations=25 --timeout "$pytest_timeout" \
             --junitxml=artifacts/pytest-backend-${{ matrix.suite }}.xml 2>&1 | tee artifacts/pytest-backend-${{ matrix.suite }}.log
           status=${PIPESTATUS[0]}
           echo $((SECONDS - test_start)) > "/tmp/backend-${{ matrix.suite }}-test-seconds.txt" || true
@@ -459,11 +491,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Collect reliability shard diagnostics
-        # MoonLadderStudios/MoonMind#4371: compose logs and scoped manifests
-        # are retained on every selected run (success included) so a slow but
-        # passing shard is diagnosable from its artifacts alone. Collection
-        # stays bounded (timeout 100s/60s) with record-and-continue, and the
-        # original test outcome is never replaced.
+        # Every-run retention (MoonLadderStudios/MoonMind#4371): dependency
+        # logs, replays, manifests and per-shard timings upload on every
+        # run, not only on failure/cancellation. Collection stays bounded
+        # (timeout 100s logs, timeout 60s manifest copy) and never replaces
+        # the original test outcome.
         if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         run: |
           set -uo pipefail
