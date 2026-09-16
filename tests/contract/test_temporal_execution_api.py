@@ -1011,7 +1011,11 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
                     "idempotencyKey": "manifest-0",
                 },
             )
-            assert manifest_response.status_code == 201
+            # MoonLadderStudios/MoonMind#4190: native ManifestIngest is retired;
+            # new admissions are rejected actionably while ordinary pagination
+            # below still covers the surviving UserWorkflow surface.
+            assert manifest_response.status_code == 422
+            assert "was retired" in str(manifest_response.json())
 
             await client.post(f"/api/executions/{created_ids[0]}/cancel", json={})
 
@@ -1587,6 +1591,13 @@ async def test_task_shaped_create_preserves_image_input_attachments(tmp_path, mo
 
 @pytest.mark.asyncio
 async def test_manifest_execution_status_and_node_page_contract(tmp_path):
+    """Retirement regression — MoonLadderStudios/MoonMind#4190.
+
+    Native ManifestIngest admission is retired: creation is rejected
+    actionably and no Manifest-only status/node routes remain. Historical
+    rows stay readable through the generic authorized readers covered in
+    tests/unit/config/test_manifest_remediation_4190.py.
+    """
     original_db_url = db_base.DATABASE_URL
     original_engine = db_base.engine
     original_session_maker = db_base.async_session_maker
@@ -1631,46 +1642,14 @@ async def test_manifest_execution_status_and_node_page_contract(tmp_path):
                     "idempotencyKey": "manifest-contract-create-1",
                 },
             )
-            assert create_response.status_code == 201
-            created = create_response.json()
-            workflow_id = created["workflowId"]
-            assert created["workflowType"] == "MoonMind.ManifestIngest"
-            assert manifest_artifact_ref in created["artifactRefs"]
-            assert created["executionPolicy"]["maxConcurrency"] == 6
-            assert created["counts"]["ready"] == 1
-            assert created["counts"]["running"] == 1
-            assert created["counts"]["failed"] == 1
+            assert create_response.status_code == 422
+            assert "was retired" in str(create_response.json())
 
-            update_response = await client.post(
-                f"/api/executions/{workflow_id}/update",
-                json={
-                    "updateName": "SetConcurrency",
-                    "maxConcurrency": 4,
-                    "idempotencyKey": "manifest-set-concurrency-1",
-                },
+            schema = app.openapi()
+            assert not any(
+                "manifest-status" in path or "manifest-nodes" in path
+                for path in schema["paths"]
             )
-            assert update_response.status_code == 200
-            assert update_response.json()["accepted"] is True
-
-            status_response = await client.get(
-                f"/api/executions/{workflow_id}/manifest-status"
-            )
-            assert status_response.status_code == 200
-            status_payload = status_response.json()
-            assert status_payload["workflowId"] == workflow_id
-            assert status_payload["maxConcurrency"] == 4
-            assert status_payload["failurePolicy"] == "best_effort"
-            assert status_payload["counts"]["running"] == 1
-
-            nodes_response = await client.get(
-                f"/api/executions/{workflow_id}/manifest-nodes",
-                params={"state": "running", "limit": 10},
-            )
-            assert nodes_response.status_code == 200
-            nodes_payload = nodes_response.json()
-            assert nodes_payload["count"] == 1
-            assert nodes_payload["items"][0]["nodeId"] == "node-b"
-            assert nodes_payload["items"][0]["workflowType"] == "MoonMind.UserWorkflow"
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine

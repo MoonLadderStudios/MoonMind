@@ -391,3 +391,48 @@ def test_excluded_manifests_present_and_importable() -> None:
 
     import moonmind.omnigent.effective_capabilities  # noqa: F401
     import moonmind.workflows.temporal.recovery_manifest  # noqa: F401
+
+
+def test_historical_manifest_read_allowed_but_admission_rejected() -> None:
+    """R4: generic read/admission split without retired parser/registration.
+
+    Historical rows resolve through the generic authorized read path
+    (``_resolve_execution_entry``) while the production registry carries no
+    executable ManifestIngest registration and the deleted product modules
+    stay unimportable. New ManifestIngest admission is rejected actionably
+    at the schema boundary (``CreateExecutionRequest``), preserving the
+    original completed outcome without launching anything.
+    """
+    import pydantic
+
+    from api_service.api.routers.executions import _resolve_execution_entry
+    from moonmind.schemas.temporal_models import CreateExecutionRequest
+    from moonmind.workflows.temporal.workflow_registry import (
+        STATIC_WORKFLOW_REGISTRATIONS,
+    )
+
+    registered_types = {
+        str(getattr(r, "workflow_type", "")) for r in STATIC_WORKFLOW_REGISTRATIONS
+    }
+    assert "MoonMind.ManifestIngest" not in registered_types
+
+    for module_name in DELETED_PRODUCT_MODULES:
+        try:
+            spec = importlib.util.find_spec(module_name)
+        except (ImportError, ModuleNotFoundError):
+            spec = None
+        assert spec is None, module_name
+
+    historical = SimpleNamespace(
+        entry="manifest",
+        workflow_type=SimpleNamespace(value="MoonMind.ManifestIngest"),
+    )
+    assert _resolve_execution_entry(historical, {}) == "manifest"
+
+    with pytest.raises(pydantic.ValidationError, match="was retired"):
+        CreateExecutionRequest.model_validate(
+            {
+                "workflowType": "MoonMind.ManifestIngest",
+                "initialParameters": {"task": {"instructions": "new work"}},
+            }
+        )
