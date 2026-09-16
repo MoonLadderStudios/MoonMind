@@ -12869,6 +12869,10 @@ export interface components {
             slug: string;
             /** Status */
             status: string;
+            /** Credentialrevision */
+            credentialRevision?: number;
+            /** Policyrevision */
+            policyRevision?: number;
             /** Details */
             details: {
                 [key: string]: unknown;

@@ -15,7 +15,13 @@ from api_service.api.schemas import (
     SecretUsageResponse,
 )
 from api_service.db.models import SecretStatus
-from api_service.services.secrets import SecretsService
+from api_service.services.secrets import (
+    SecretConflictError,
+    SecretFencedError,
+    SecretReferenceProtectedError,
+    SecretRepairRequiredError,
+    SecretsService,
+)
 from api_service.services.settings_catalog import settings_permissions_for_user
 from moonmind.utils.logging import redact_sensitive_payload
 
@@ -24,6 +30,21 @@ _STATUS_CHANGE_PERMISSIONS = frozenset({"secrets.disable", "secrets.rotate"})
 logger = structlog.get_logger(__name__)
 
 router = APIRouter()
+
+
+def _mutation_conflict(detail: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=detail,
+    )
+
+
+async def _run_mutation(fn, *args, **kwargs):
+    """Translate revision-fenced secret errors into 409 Conflict responses."""
+    try:
+        return await fn(*args, **kwargs)
+    except (SecretConflictError, SecretFencedError, SecretRepairRequiredError) as exc:
+        raise _mutation_conflict(str(exc)) from exc
 
 
 def _uuid_attr(value: Any) -> UUID | None:
@@ -91,7 +112,9 @@ async def update_secret(
     db: AsyncSession = Depends(get_async_session),
     user: Any = Depends(get_current_user()),
 ) -> SecretMetadataResponse:
-    secret = await SecretsService.update_secret(db, slug, request.plaintext)
+    secret = await _run_mutation(
+        SecretsService.update_secret, db, slug, request.plaintext
+    )
     if not secret:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found"
@@ -110,7 +133,9 @@ async def rotate_secret(
     db: AsyncSession = Depends(get_async_session),
     user: Any = Depends(get_current_user()),
 ) -> SecretMetadataResponse:
-    secret = await SecretsService.rotate_secret(db, slug, request.plaintext)
+    secret = await _run_mutation(
+        SecretsService.rotate_secret, db, slug, request.plaintext
+    )
     if not secret:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found"
@@ -139,7 +164,8 @@ async def update_secret_status(
             ),
         )
     new_status = SecretStatus(request.status)
-    secret = await SecretsService.set_status(
+    secret = await _run_mutation(
+        SecretsService.set_status,
         db,
         slug,
         new_status,
@@ -162,7 +188,10 @@ async def delete_secret(
     slug: str,
     db: AsyncSession = Depends(get_async_session),
 ) -> None:
-    deleted = await SecretsService.delete_secret(db, slug)
+    try:
+        deleted = await SecretsService.delete_secret(db, slug)
+    except SecretReferenceProtectedError as exc:
+        raise _mutation_conflict(str(exc)) from exc
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found"

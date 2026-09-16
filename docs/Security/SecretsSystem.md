@@ -461,6 +461,46 @@ Provider Profiles and runtime launches should fail explicitly when a referenced 
 
 The system should make it possible to rotate secrets without rewriting durable provider-profile contracts when the reference identity remains the same.
 
+### 12.0 Atomic rotation, revisions, and invalidation (#4006)
+
+One transaction owns each secret mutation: activation, binding-revision
+bookkeeping, and metadata-only audit/outbox records commit together, and no
+success response precedes the durable transition. Helpers never commit
+around a caller-owned transaction.
+
+- `credential_revision` advances only on value/identity changes (create,
+  update, validated rotation, validated repair, overwriting import);
+  `policy_revision` advances on metadata-only lifecycle transitions
+  (status changes). Both are monotonic integers; timestamps are never
+  generation authority.
+- Rotation activates the validated replacement as `ACTIVE` at a new
+  credential revision, recorded as a `secrets.rotated` audit event — never
+  as an indefinitely unreadable state. `ROTATED` marks pre-existing history
+  and is handled only through the reviewed `repair_rotated_secret` path.
+- Candidates are validated outside row-locked work through the injected
+  probe boundary and bound to an opaque HMAC candidate fingerprint, the
+  expected active revision, and actor/owner identity. Stale or mismatched
+  validation is fenced; the prior active secret is left unchanged.
+- Each mutation accepts a stable `request_id`: retries reconcile the
+  recorded receipt without advancing revisions twice, and conflicting reuse
+  is rejected. Resolution checks expected revision and active state in one
+  authoritative read.
+- Revision/invalidation evidence is recorded transactionally in the
+  `secret_invalidation_outbox`; cache notifications are delivered after
+  commit (`sweep_invalidations` recovers leftovers after restarts).
+  Acquisition always rechecks the authoritative revision, so a lost
+  notification can never validate stale authority.
+- Deletion protection uses a complete server-side inventory (Settings,
+  Provider Profiles, RepositoryConnections) in the same transaction as the
+  delete; usage display remains caller-filtered. Diagnostics carry bounded
+  codes and per-type counts only — no secret material and no consumer
+  identities across scopes.
+
+Connection-policy revalidation against the live host record is owned by the
+repository-reference integration (the follow-up to #4005); rotation accepts
+the agreed `expected_policy_revision` binding, records it in audit/outbox
+evidence, and requires explicit re-admission on ownership change.
+
 ### 12.1 Launch and Retry Semantics
 
 For operator clarity, MoonMind should treat secret usage as follows:
