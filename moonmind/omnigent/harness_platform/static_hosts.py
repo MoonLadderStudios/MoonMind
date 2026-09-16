@@ -225,19 +225,19 @@ def validate_static_combination(
          "OPENCODE_CREDENTIAL_GENERATION"} - {row.generation_env}
     )
     for key in sorted(other_generations):
-        if key in environment:
+        if str(environment.get(key) or "").strip():
             raise HarnessPlatformError(
                 f"static host {service} must not carry {key}",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT,
             )
     for key in FORBIDDEN_STATIC_AMBIENT_KEYS:
-        if key in environment:
+        if str(environment.get(key) or "").strip():
             raise HarnessPlatformError(
                 f"static host {service} must not carry ambient {key}",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT,
             )
     for key in FORBIDDEN_STATIC_CONTROL_KEYS:
-        if key in environment:
+        if str(environment.get(key) or "").strip():
             raise HarnessPlatformError(
                 f"static host {service} must not accept control variable {key}",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
@@ -823,7 +823,8 @@ def trace_static_credential_ownership(
         "provider_lease_ref": lease_ref,
         "verified_generation": generation,
         "registered_host_id": host,
-        "exclusive": active_session_count <= 1,
+        # active_session_count > 1 raises above, so exclusivity holds here.
+        "exclusive": True,
         "execution_modes_observed": tuple(modes),
     }
 

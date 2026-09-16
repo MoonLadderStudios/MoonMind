@@ -187,8 +187,15 @@ printf '%s\n' "$pack_ref" > "$state_root/runtime-pack"
 credential_timeout=${MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS:-1800}
 skill_timeout=${MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS:-600}
 readiness_interval=5
-case "$credential_timeout:$skill_timeout" in
-  *[!0-9]*|*:*[^0-9]*|"") echo "static readiness timeouts must be positive integers" >&2; exit 64 ;;
+# Validate each timeout independently: the joined "1800:600" value always
+# contains the ":" separator, which itself matches a digits-only rejection
+# pattern applied to the pair. Checking the pair jointly exits 64 even for
+# the defaults, before either readiness probe can run.
+case "$credential_timeout" in
+  ""|*[!0-9]*) echo "static readiness timeouts must be positive integers" >&2; exit 64 ;;
+esac
+case "$skill_timeout" in
+  ""|*[!0-9]*) echo "static readiness timeouts must be positive integers" >&2; exit 64 ;;
 esac
 [ "$credential_timeout" -ge "$readiness_interval" ] || { echo "credential readiness timeout is below the probe interval" >&2; exit 64; }
 [ "$skill_timeout" -ge "$readiness_interval" ] || { echo "skill readiness timeout is below the probe interval" >&2; exit 64; }

@@ -317,12 +317,28 @@ def test_empty_selectors_fail_closed_on_rendered_inputs() -> None:
             materializer_ref="claude-oauth-home@1",
             environment=empty_rendered,
         )
-    # Empty ambient and cross-runtime selectors still fail: presence alone
-    # fails closed, even with an empty value.
+    # Empty ambient and cross-runtime selectors are treated as unset: the
+    # canonical worker service defines credential keys (including as empty
+    # strings) that are not part of the static service environment, so an
+    # empty rendered value must not fail closed. Only a non-empty rendered
+    # value is a credential-isolation violation.
     for poison in (
         {"ANTHROPIC_API_KEY": ""},
         {"CODEX_CREDENTIAL_GENERATION": ""},
         {"OPENCODE_CREDENTIAL_GENERATION": ""},
+    ):
+        rendered = static_hosts.render_static_service_env(raw_claude, {})
+        rendered.update(poison)
+        static_hosts.validate_static_combination(
+            service="omnigent-host-claude",
+            pack_ref="claude-native-pack@1",
+            materializer_ref="claude-oauth-home@1",
+            environment=rendered,
+        )
+    for poison in (
+        {"ANTHROPIC_API_KEY": "secret"},
+        {"CODEX_CREDENTIAL_GENERATION": "7"},
+        {"OPENCODE_CREDENTIAL_GENERATION": "3"},
     ):
         rendered = static_hosts.render_static_service_env(raw_claude, {})
         rendered.update(poison)
@@ -1270,16 +1286,35 @@ def test_production_prelaunch_gate_rejects_unpinned_image_at_launch() -> None:
     assert excinfo.value.code == "OMNIGENT_HARNESS_BUILD_MISMATCH"
 
 
-def test_production_prelaunch_gate_rejects_ambient_selector() -> None:
-    poisoned = _pinned_claude_operator_env()
-    poisoned["ANTHROPIC_API_KEY"] = "secret"
-    with pytest.raises(OmnigentOAuthHostError) as excinfo:
-        OmnigentOAuthHostRuntime._admit_static_compose_prelaunch(
-            binding=_production_claude_binding(),
-            host_lease=_production_claude_lease(),
-            operator_env=poisoned,
+def test_production_prelaunch_gate_ignores_worker_ambient_but_rejects_rendered_selector() -> None:
+    # The canonical worker service defines credential keys (including as
+    # empty strings) that are not part of the static service environment:
+    # the prelaunch gate judges the rendered service environment, so worker
+    # ambient selectors must not reject an otherwise qualified launch.
+    ambient = _pinned_claude_operator_env()
+    ambient["ANTHROPIC_API_KEY"] = "secret"
+    ambient["CLAUDE_API_KEY"] = ""
+    admission = OmnigentOAuthHostRuntime._admit_static_compose_prelaunch(
+        binding=_production_claude_binding(),
+        host_lease=_production_claude_lease(),
+        operator_env=ambient,
+    )
+    assert admission["service"] == "omnigent-host-claude"
+    # A forbidden selector in the rendered service environment still fails
+    # closed at the launch boundary.
+    raw = _claude_raw_env()
+    poisoned_raw = dict(raw)
+    poisoned_raw["ANTHROPIC_API_KEY"] = "secret"
+    rendered = static_hosts.render_static_service_env(
+        poisoned_raw, _pinned_claude_operator_env()
+    )
+    with pytest.raises(HarnessPlatformError):
+        static_hosts.validate_static_combination(
+            service="omnigent-host-claude",
+            pack_ref="claude-native-pack@1",
+            materializer_ref="claude-oauth-home@1",
+            environment=rendered,
         )
-    assert excinfo.value.code == HostPreflightFailure.COMPETING_CREDENTIAL.value
 
 
 @pytest.mark.asyncio

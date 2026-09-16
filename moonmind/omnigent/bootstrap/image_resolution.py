@@ -723,14 +723,27 @@ def require_static_host_image_authority(
 ) -> str:
     """Fail closed unless a digest-pinned static launch image is resolved.
 
-    This is the bootstrap persistence boundary for the static rows
+    This is the bootstrap *persistence* boundary for the static rows
     (MoonLadderStudios/MoonMind#3936 R3): ``shared_ref`` is the resolved
     ``OMNIGENT_SHARED_HOST_IMAGE_REF`` about to be persisted/exported.
     The bounded legacy ``OMNIGENT_HOST_IMAGE_REF`` alias is honored only
     when the shared ref is unset, mirroring
     ``moonmind.omnigent.harness_platform.static_hosts.resolve_effective_static_host_image``.
     Anything else (unset, mutable tag, invalid pin) raises instead of
-    admitting a static launch on an unqualified image.
+    persisting an unqualified image identity.
+
+    This persistence gate runs inside the API container *after* Compose has
+    already started creating profile-selected services, so by itself it
+    cannot prevent the mutable fallback image from being pulled and
+    launched. Qualified static launches must additionally pass the
+    operator-side prelaunch admission boundary
+    ``moonmind.omnigent.harness_platform.static_hosts.admit_static_host_compose_launch``
+    (managed launches pass the same boundary through
+    ``OmnigentOAuthHostRuntime._admit_static_compose_prelaunch`` immediately
+    before ``docker compose up``) or require the digest directly in Compose
+    before service creation. A direct ``docker compose up`` that bypasses
+    that prelaunch admission launches the mutable fallback below and is not
+    a qualified static launch.
     """
 
     source = os.environ if env is None else env
