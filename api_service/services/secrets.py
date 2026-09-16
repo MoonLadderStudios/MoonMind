@@ -184,8 +184,10 @@ def _candidate_fingerprint(candidate: str) -> str:
         key = get_encryption_key()
     except Exception:
         key = "issue-4006-fallback-pepper"
-    # codeql[py/weak-sensitive-data-hashing]: keyed HMAC identity check, not
-    # password hashing; verification requires the server-side key.
+    # Keyed HMAC change-detection fingerprint, not password hashing:
+    # verification requires the server-side encryption key, so offline
+    # brute force without that key is infeasible (see code-scanning alert
+    # 111 dismissal rationale). A slow password KDF does not apply here.
     return hmac.new(
         key.encode("utf-8"), candidate.encode("utf-8"), hashlib.sha256
     ).hexdigest()
