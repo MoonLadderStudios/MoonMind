@@ -89,12 +89,9 @@ non-main completion branches are supported under the shared acceptance policy.
 
 Do not expect raw Jira credentials inside the managed agent shell. MoonMind keeps Atlassian credentials on the trusted control-plane/tool side. Use Jira artifacts or trusted Jira tool output as the source of truth. Use `jira.add_comment` for comment mutation, and use `jira.get_transitions` plus `jira.transition_issue` for status mutation when `update status` is explicitly true.
 
-If Jira content is not already available to the runtime, use the trusted MCP path when exposed:
-
-1. List tools with `GET $MOONMIND_URL/mcp/tools`.
-2. Verify Jira authentication with `POST $MOONMIND_URL/mcp/tools/call` and JSON `{"tool":"jira.verify_connection","arguments":{}}`.
-3. Fetch the issue with `POST $MOONMIND_URL/mcp/tools/call` and JSON `{"tool":"jira.get_issue","arguments":{"issueKey":"ENG-123"}}`.
-4. If `update status` is true, fetch available transitions with `POST $MOONMIND_URL/mcp/tools/call` and JSON `{"tool":"jira.get_transitions","arguments":{"issueKey":"ENG-123"}}`, then transition only through `jira.transition_issue` with JSON `{"tool":"jira.transition_issue","arguments":{"issueKey":"ENG-123","transitionId":"101","fields":{}}}` after the PASS-only checks below succeed.
+If Jira content is not already available to the runtime, use the trusted MCP path when exposed; see
+[the provider command catalog](references/provider-commands.md) for the
+selected-provider invocation shapes, and load it only when calling that path.
 
 If `jira.verify_connection` reports `jira_auth_failed`, or `jira.get_issue` / `jira.add_comment` is unavailable or policy-denied, report `BLOCKED`. If `update status` is true and transition tools are unavailable or policy-denied, leave the verification/comment path intact but report status update as skipped/blocked in the outputs and Jira comment. Do not scrape private Atlassian browser pages, ask for `ATLASSIAN_API_KEY`, or call Jira directly with raw credentials.
 
@@ -216,14 +213,9 @@ Status update:
 8. Scan and post to Jira.
    - Before posting, scan the outgoing comment for secret-like patterns such as `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
    - If any secret-like content appears, do not post. Redact and re-scan.
-   - If the bundled helper is materialized, post with:
-
-```bash
-.agents/skills/jira-verify/tools/post_jira_comment.py --issue <ISSUE> --body-file <comment_file>
-```
-
-   - When the MoonMind API requires auth, provide an existing runtime token via `MOONMIND_AUTH_HEADER`, `MOONMIND_API_TOKEN`, `MOONMIND_AUTH_TOKEN`, `MOONMIND_BEARER_TOKEN`, or `MOONMIND_API_KEY`; do not print those values.
-   - Otherwise call the trusted Jira tool directly with `jira.add_comment` and arguments `{"issueKey":"<ISSUE>","body":"<comment text>"}`.
+   - Post through the bundled helper or the trusted Jira tool directly; see
+     [the provider command catalog](references/provider-commands.md) for the
+     invocation shapes.
    - Bind the post to the exact issue, comment content, verification subject, and operation identity through the returned receipt (comment ID/URL). If the post outcome is unknown (timeout or ambiguous response), reconcile it first — re-fetch recent comments for the issue and check for the receipt — before posting again. An incomplete search is not proof no prior comment exists.
    - If posting fails, keep the comment body artifact and report the exact trusted-tool blocker. Do not claim Jira was updated, and do not transition the issue: report the status update as `blocked`.
 
