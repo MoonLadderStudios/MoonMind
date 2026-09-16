@@ -127,7 +127,7 @@ Prefer findings that are:
 - evidence-backed and tied to exact files and line ranges,
 - likely to improve correctness, performance, maintainability, modularity, or architecture alignment,
 - specific enough for an engineer to implement,
-- validated by a test or manual verification plan.
+- validated by an executable test or verification plan suitable to the repository.
 
 Avoid findings that are:
 
@@ -366,7 +366,7 @@ Rationale: `<why this matters now>`
 - [ ] Integration test for `<flow>`
 - [ ] Existing test suite passes
 - [ ] Linter/typechecker passes
-- [ ] Manual smoke test for `<user-facing flow>`
+- [ ] Targeted executable verification from the repository's own acceptance entrypoints (tests, checks, or documented validation commands) covering `<user-facing flow>`
 
 ## Architecture alignment
 
