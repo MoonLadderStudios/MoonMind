@@ -40,7 +40,7 @@ If the caller disappears, resume the printed submission with `--resume <submissi
 
 ## Options
 
-Optional arguments are `--compose-project <name>`, `--image-repository <repository>`, and `--dry-run` (show the intended release operation without fetching or deploying). The deployment-owned `docker-compose.override.yaml` (or `.yml`) accompanies the image's base configuration.
+Optional arguments are `--compose-project <name>`, `--image-repository <repository>`, and `--dry-run` (show the intended release operation without fetching or deploying). A `--dry-run` preview never establishes completion: it writes no submission and proves nothing about the installed deployment. The deployment-owned `docker-compose.override.yaml` (or `.yml`) accompanies the image's base configuration.
 
 `--local-build` is an explicit development-only escape hatch for exercising an
 unpublished working tree (for example a feature branch awaiting its published
