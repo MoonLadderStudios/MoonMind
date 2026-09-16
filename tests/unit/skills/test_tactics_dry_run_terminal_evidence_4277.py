@@ -61,7 +61,11 @@ def test_tactics_dry_run_is_non_mutating_and_reports_skipped_preview(
         **os.environ,
         "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
         "COMMAND_LOG": str(tmp_path / "commands.log"),
+        # Isolate the dry-run from the real home directory: the entrypoint
+        # must not require or mutate shared worker cache dirs for a preview.
+        "HOME": str(tmp_path / "fake-home"),
     }
+    (tmp_path / "fake-home").mkdir(exist_ok=True)
     # The entrypoint delegates to the managed Python path when MoonMind
     # session identity is present; this regression targets the portable
     # direct-Docker fallback, so run without session identity.
