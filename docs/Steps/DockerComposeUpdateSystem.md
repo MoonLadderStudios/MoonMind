@@ -987,8 +987,10 @@ through the operator URL. The preflight never infers ingress authorization or
 prints rendered environment/inspect payloads, including OIDC credentials.
 
 The host scripts require Python 3.10+ and Docker Compose V2, validated before
-deployment changes. Fetching a branch selects its published source-SHA image
-without changing the checkout. Failed qualification preserves current routing
+deployment changes. Fetching a branch selects the newest published source-SHA
+image on that branch's first-parent history (up to 20 commits) without changing
+the checkout, so a just-fetched tip whose publish workflow has not finished yet
+falls back to its newest published ancestor with a recorded notice. Failed qualification preserves current routing
 and normal services. Explicit specialized maintenance skips the API check only
 when its dependency closure and orphan removal cannot affect the API.
 
