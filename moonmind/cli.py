@@ -46,6 +46,18 @@ app.add_typer(worker_app, name="worker")
 app.add_typer(container_app, name="container")
 app.add_typer(workflow_app, name="workflow")
 
+accounts_app = typer.Typer(
+    help=(
+        "Built-in accounts lifecycle operations (MoonLadderStudios/MoonMind#4122). "
+        "Operator-held, expiring, one-use bootstrap/recovery capabilities for "
+        "protected first-owner setup and local administrator recovery. "
+        "Capability tokens are printed once to this operator terminal and "
+        "must be delivered out of band; they are never logged. The existing "
+        "User UUID and audit trail are preserved."
+    )
+)
+app.add_typer(accounts_app, name="accounts")
+
 
 def _print_container_job_result(result: ContainerJobResult) -> None:
     for line in result.log_tail:
@@ -556,6 +568,163 @@ def workflow_logs(
         raise typer.Exit(code=3) from exc
     finally:
         client.close()
+
+
+def _accounts_lifecycle_key() -> bytes:
+    """Resolve the operator-held lifecycle HMAC key for capability minting.
+
+    Prefers the explicit ``MOONMIND_ACCOUNTS_KEY`` (at least 32 bytes);
+    otherwise derives a domain-separated key from the durable session
+    secret, mirroring the API boundary in
+    ``api_service/api/routers/accounts_4122.py``.
+    """
+    from moonmind.security.account_lifecycle_4122 import MIN_KEY_BYTES
+
+    explicit = (os.environ.get("MOONMIND_ACCOUNTS_KEY") or "").strip()
+    if explicit:
+        raw = explicit.encode("utf-8")
+        if len(raw) < MIN_KEY_BYTES:
+            typer.secho("Error: MOONMIND_ACCOUNTS_KEY must be at least 32 bytes.", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
+        return raw
+    try:
+        from moonmind.security.auth_modes_4120 import (
+            default_session_key_path,
+            resolve_session_secret,
+        )
+
+        secret = resolve_session_secret(
+            explicit_secret=(os.environ.get("MOONMIND_SESSION_SECRET") or "").strip() or None,
+            key_path=default_session_key_path(),
+            allow_generate=False,
+            for_remote_production=False,
+        )
+    except Exception as exc:
+        typer.secho(f"Error: no lifecycle key material available: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    from moonmind.security.account_lifecycle_4122 import derive_lifecycle_key
+
+    return derive_lifecycle_key(bytes(secret))
+
+
+@accounts_app.command(
+    "mint-bootstrap",
+    help="Mint an operator-held first-owner bootstrap capability for LOGIN.",
+)
+def accounts_mint_bootstrap(
+    login: str = typer.Argument(..., help="Login name the capability is bound to."),
+    ttl_seconds: int = typer.Option(1800, "--ttl-seconds", min=60, max=86400),
+) -> None:
+    """Print a single-use bootstrap capability (operator delivery only)."""
+    from moonmind.security.account_lifecycle_4122 import mint_bootstrap_capability
+
+    clean = (login or "").strip()
+    if not clean:
+        typer.secho("Error: login is required.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    try:
+        token = mint_bootstrap_capability(clean, key=_accounts_lifecycle_key(), ttl_seconds=ttl_seconds)
+    except Exception as exc:
+        typer.secho(f"Error: cannot mint bootstrap capability: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(token)
+
+
+@accounts_app.command(
+    "mint-recovery",
+    help="Mint an operator-held recovery capability for LOGIN.",
+)
+def accounts_mint_recovery(
+    login: str = typer.Argument(..., help="Login name the capability is bound to."),
+    ttl_seconds: int = typer.Option(900, "--ttl-seconds", min=60, max=86400),
+) -> None:
+    """Print a single-use recovery capability (operator delivery only)."""
+    from moonmind.security.account_lifecycle_4122 import mint_recovery_capability
+
+    clean = (login or "").strip()
+    if not clean:
+        typer.secho("Error: login is required.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    try:
+        token = mint_recovery_capability(clean, key=_accounts_lifecycle_key(), ttl_seconds=ttl_seconds)
+    except Exception as exc:
+        typer.secho(f"Error: cannot mint recovery capability: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(token)
+
+
+@accounts_app.command(
+    "restore-access",
+    help="Local operator recovery: reactivate and promote LOGIN (preserves UUID).",
+)
+def accounts_restore_access(
+    login: str = typer.Argument(..., help="Existing login to restore administrator access for."),
+    recovery_token: str = typer.Option(..., "--recovery-token", help="Operator-held recovery capability (minted by accounts mint-recovery)."),
+    new_password: str = typer.Option("", "--new-password", help="Optional replacement password (min 12 chars); otherwise credentials are retained."),
+) -> None:
+    """Redeem a recovery capability locally and restore administrator access.
+
+    The tested recovery path the last-admin refusal points at: consumes
+    the one-use nonce and, in the same transaction, reactivates and
+    promotes the login so a stranded deployment regains an
+    administrator. The existing ``User`` row (UUID, ownership records)
+    is preserved; only a redacted audit event is recorded and only the
+    outcome (never the capability) is printed.
+    """
+    import asyncio as _asyncio
+
+    clean = (login or "").strip()
+    if not clean:
+        typer.secho("Error: login is required.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+    if new_password and not (12 <= len(new_password) <= 256):
+        typer.secho("Error: replacement password must be 12-256 chars.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    async def _run() -> str:
+        from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from api_service.db.base import DATABASE_URL
+        from api_service.services.account_lifecycle_store_4122 import (
+            redeem_recovery_and_restore_access,
+        )
+
+        engine = create_async_engine(DATABASE_URL, future=True)
+        maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        try:
+            async with maker() as db_session:
+                hashed: str | None = None
+                if new_password:
+                    from moonmind.security.omnigent_auth_qualification import (
+                        qualify_password_hash,
+                    )
+
+                    hashed = await _asyncio.to_thread(qualify_password_hash, new_password)
+                user = await redeem_recovery_and_restore_access(
+                    db_session,
+                    token=recovery_token,
+                    key=_accounts_lifecycle_key(),
+                    login=clean,
+                    hashed_password=hashed,
+                )
+                return str(user.id)
+        finally:
+            await engine.dispose()
+
+    try:
+        user_id = _asyncio.run(_run())
+    except Exception as exc:
+        typer.secho(
+            f"Error: recovery failed ({getattr(exc, 'code', type(exc).__name__)}).",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    from moonmind.security.account_lifecycle_4122 import redacted_lifecycle_event
+
+    redacted_lifecycle_event("recovery", action="restore_access", login=clean)
+    typer.echo(f"restored administrator access for {clean} (user_id={user_id})")
 
 
 def main() -> None:
