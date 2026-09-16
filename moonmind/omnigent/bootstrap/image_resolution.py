@@ -137,6 +137,12 @@ async def _resolve_running_server_image(
     return await _resolve_via_docker_inspect(image, inspect_ref=image_id)
 
 
+async def resolve_live_server_image_ref(image: str) -> str | None:
+    """Resolve the immutable image used by this deployment's live server."""
+
+    return await _resolve_running_server_image(image, dict(os.environ))
+
+
 async def _resolve_via_docker_pull(image: str, tag: str) -> str | None:
     # Try docker pull
     ref = f"{image}:{tag}"
