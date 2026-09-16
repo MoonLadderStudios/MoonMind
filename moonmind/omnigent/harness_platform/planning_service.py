@@ -250,7 +250,10 @@ class OmnigentExecutionPlanningService:
         )
 
     async def plan(
-        self, request: AgentExecutionRequest
+        self,
+        request: AgentExecutionRequest,
+        *,
+        trusted_repository_declarations: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> OmnigentExecutionPlanEnvelope:
         selection = AgentProfileSelection.from_request(request)
         workflow_id = (
@@ -268,7 +271,10 @@ class OmnigentExecutionPlanningService:
         )
 
         async def compile_once() -> OmnigentExecutionPlanEnvelope:
-            return await self._compile(request, selection)
+            return await self._compile(
+                request, selection,
+                trusted_repository_declarations=trusted_repository_declarations,
+            )
 
         return await self._usages.load_or_bind(
             identity=ExecutionPlanUsageIdentity(
@@ -284,6 +290,8 @@ class OmnigentExecutionPlanningService:
         self,
         request: AgentExecutionRequest,
         selection: AgentProfileSelection,
+        *,
+        trusted_repository_declarations: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> OmnigentExecutionPlanEnvelope:
         from api_service.db.models import (
             ManagedAgentProviderProfile,
@@ -487,14 +495,13 @@ class OmnigentExecutionPlanningService:
             }
             capture_payload = dict(profile.capture)
             # MoonLadderStudios/MoonMind#4009: repository slot declarations
-            # derive from admitted profile authority only; agent-supplied
-            # binding keys never create declarations. No admitted profile
-            # field carries repository declarations yet (delivery #4011 /
-            # publication #1090 own that production lifecycle; issuance is
-            # #4007), so this stays fail-closed ({}) until those owners
-            # supply trusted declarations.
+            # derive from admitted profile authority plus trusted delivery /
+            # publication declarations when those owners supply them (#4011 /
+            # #1090; issuance is #4007). Agent-supplied binding keys never
+            # create declarations. Fail-closed ({}) without trusted input.
             repository_slot_requirements = derive_repository_slot_requirements(
                 profile_document=dict(version_row.document),
+                trusted_repository_declarations=trusted_repository_declarations,
             )
             return compile_execution_plan(
                 agent_profile=profile,

@@ -875,3 +875,526 @@ def test_derive_repository_slot_requirements_validates_trusted_declarations():
                 }
             },
         )
+
+
+# --------------------------------------------------------------------------
+# Remediation: production lifecycle wiring (REQ-03/06/07/08, ACC-01/05/06/07)
+# --------------------------------------------------------------------------
+
+def _remediation_planner_fixture():
+    from datetime import UTC, datetime
+
+    from moonmind.omnigent.harness_platform.catalog import (
+        HarnessImplementationIdentity,
+        TrustState,
+        classify_harness_trust,
+        create_catalog_snapshot,
+    )
+    from moonmind.omnigent.harness_platform.host_classes import (
+        HOST_CLASSES,
+        register_host_class,
+    )
+    from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
+
+    saved = dict(HOST_CLASSES)
+    HOST_CLASSES.clear()
+    impl = HarnessImplementationIdentity.model_validate(
+        {
+            "sourceKind": "core",
+            "package": "omnigent",
+            "version": "1.0.0",
+            "digest": "sha256:" + "a" * 64,
+            "pluginEntryPoint": None,
+        }
+    )
+    register_host_class(
+        {
+            "omnigentVersion": "1.0.0",
+            "omnigentBuildDigest": "sha256:" + "b" * 64,
+            "architectures": ["linux/amd64"],
+            "integrationModes": ["native-server"],
+            "features": {
+                "workspaceBind": True,
+                "readOnlyRoot": True,
+                "restrictedEgress": True,
+            },
+            "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+            "hostClassId": "repo-test-standard",
+            "version": 1,
+            "imageRef": "ghcr.io/example/host@sha256:" + "a" * 64,
+            "declaredHarnessImplementations": [
+                {
+                    "harnessId": "opencode-native",
+                    "implementationRef": impl.implementation_ref(),
+                    "runtimeDependencies": [],
+                }
+            ],
+            "materializerRefs": ["opencode-auth-json@1", "none@1"],
+        }
+    )
+    catalog = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="1.0.0",
+        omnigentBuildDigest="sha256:" + "b" * 64,
+        sourceDigest="sha256:" + "c" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "aliases": [],
+                "label": "OpenCode",
+                "implementation": {
+                    "sourceKind": "core",
+                    "package": "omnigent",
+                    "version": "1.0.0",
+                    "digest": "sha256:" + "a" * 64,
+                    "pluginEntryPoint": None,
+                },
+                "runtimeRequirements": {},
+                "capabilities": {"integrationMode": "native-server"},
+                "setupSteps": [],
+            }
+        ],
+        observedAt=datetime.now(UTC),
+    )
+    profile = {
+        "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+        "endpointRef": "default",
+        "source": {
+            "kind": "upstream",
+            "upstreamId": "opencode-native-ui",
+            "upstreamVersion": "1.0.0",
+            "upstreamSnapshotDigest": "sha256:" + "d" * 64,
+        },
+        "harness": {
+            "id": "opencode-native",
+            "catalogRef": catalog.catalogRef,
+            "implementationRef": impl.implementation_ref(),
+        },
+        "requirements": {
+            "harness": {"required": [], "preferred": []},
+            "moonmind": {"required": []},
+            "host": {"required": []},
+        },
+        "credentialSlots": [
+            {
+                "id": "primary-model",
+                "optional": False,
+                "acceptedAuthModels": ["own-auth"],
+                "acceptedProviderIds": ["opencode"],
+            }
+        ],
+        "model": {},
+        "workspace": {"mutation": "read_only"},
+        "skills": [],
+        "tools": [],
+        "capture": {"stream": False, "evidence": False},
+        "continuations": {},
+        "publish": {},
+        "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+    }
+    skills = ResolvedSkillSet.model_validate(
+        {
+            "resolvedSkillSetRef": "artifact:test",
+            "resolvedSkillSetDigest": "sha256:" + "a" * 64,
+            "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64,
+        }
+    )
+    trust = classify_harness_trust(
+        harnessId="opencode-native",
+        implementation=impl,
+        trustState=TrustState.core_trusted,
+    )
+    return saved, catalog, profile, skills, trust
+
+
+def test_production_compilers_forward_trusted_declarations():
+    """REQ-03: production compile paths accept trusted delivery declarations.
+
+    Both production compilers stay fail-closed ({}) without trusted input,
+    and forward delivery/publication declarations (#4011/#1090) to the
+    shared derivation when those owners supply them.
+    """
+    import inspect
+
+    from moonmind.omnigent.harness_platform.planning_service import (
+        OmnigentExecutionPlanningService,
+    )
+    import api_service.services.omnigent_execution_plan_service as plan_service
+
+    assert "trusted_repository_declarations" in inspect.signature(
+        OmnigentExecutionPlanningService.plan
+    ).parameters
+    assert "trusted_repository_declarations" in inspect.signature(
+        OmnigentExecutionPlanningService._compile
+    ).parameters
+    assert "trusted_repository_declarations" in inspect.signature(
+        plan_service.compile_and_persist_execution_plan
+    ).parameters
+    derived = cb.derive_repository_slot_requirements(
+        profile_document={},
+        trusted_repository_declarations={
+            "src": {
+                "allowedRoles": ("source_read",),
+                "allowedMaterializers": ("repository-broker@1",),
+            }
+        },
+    )
+    assert derived["src"]["allowedRoles"] == ("source_read",)
+    assert cb.derive_repository_slot_requirements(profile_document={}) == {}
+
+
+def test_planner_enforces_workspace_source_and_worker_barrier():
+    """REQ-06/REQ-08/REQ-09: planner admission enforces source rules + barrier."""
+    from moonmind.omnigent.harness_platform.host_classes import HOST_CLASSES
+    from moonmind.omnigent.harness_platform.planner import compile_execution_plan
+
+    saved, catalog, profile, skills, trust = _remediation_planner_fixture()
+    try:
+        model_only = create_binding_set(
+            bindingSetId="mixed",
+            version=1,
+            bindings={
+                "primary-model": {
+                    "authorityKind": "provider_profile",
+                    "providerProfileRef": "opencode-go-default",
+                    "materializerRef": "opencode-auth-json@1",
+                },
+            },
+            schema_version="moonmind.omnigent-credential-bindings.v2",
+        )
+        repo_set = create_binding_set(
+            bindingSetId="mixed",
+            version=1,
+            bindings={
+                "primary-model": {
+                    "authorityKind": "provider_profile",
+                    "providerProfileRef": "opencode-go-default",
+                    "materializerRef": "opencode-auth-json@1",
+                },
+                "src": _v2_repo_slot(),
+            },
+            schema_version="moonmind.omnigent-credential-bindings.v2",
+        )
+        decls = {
+            "src": {
+                "allowedRoles": ("source_read",),
+                "allowedMaterializers": ("repository-broker@1",),
+            }
+        }
+        base = {
+            "agent_profile": profile,
+            "harness_catalog": catalog,
+            "trust_record": trust,
+            "resolved_skills": skills,
+            "host_class_ref": "repo-test-standard@1",
+            "launch_policy_ref": "omnigent-on-demand@1",
+            "model_qualified_id": "opencode/test-model",
+            "model_effort": None,
+            "model_route_ref": "opencode-go",
+            "model_normalized_options": {},
+        }
+        # Scratch must not carry repository bindings.
+        with pytest.raises(HarnessPlatformError):
+            compile_execution_plan(
+                **base,
+                credential_binding_set=repo_set,
+                repository_slot_requirements=decls,
+                workspace_source_kind="scratch",
+            )
+        # Anonymous carries the permitted snapshot, never a secret slot.
+        envelope = compile_execution_plan(
+            **base,
+            credential_binding_set=model_only,
+            workspace_source_kind="anonymous",
+            workspace_access_snapshot_ref=REPO_SNAPSHOT,
+        )
+        assert envelope.payload.repositoryAuthorityRefs is None
+        with pytest.raises(HarnessPlatformError):
+            compile_execution_plan(
+                **base,
+                credential_binding_set=model_only,
+                workspace_source_kind="anonymous",
+                workspace_access_snapshot_ref=None,
+            )
+        # Save-only must not hold destination credentials.
+        dest_set = create_binding_set(
+            bindingSetId="mixed",
+            version=1,
+            bindings={
+                "primary-model": {
+                    "authorityKind": "provider_profile",
+                    "providerProfileRef": "opencode-go-default",
+                    "materializerRef": "opencode-auth-json@1",
+                },
+                "dst": _v2_repo_slot(
+                    repositoryRole="destination_write",
+                    repositoryAccessSnapshotRef=(
+                        "repository-access-snapshot:sha256:" + "d" * 64
+                    ),
+                ),
+            },
+            schema_version="moonmind.omnigent-credential-bindings.v2",
+        )
+        with pytest.raises(HarnessPlatformError):
+            compile_execution_plan(
+                **base,
+                credential_binding_set=dest_set,
+                repository_slot_requirements={
+                    "dst": {
+                        "allowedRoles": ("destination_write",),
+                        "allowedMaterializers": ("repository-broker@1",),
+                    }
+                },
+                workspace_source_kind="save_only",
+            )
+        # Worker barrier: a model-only worker rejects repository authority
+        # without fallback; a repository-capable worker admits it.
+        with pytest.raises(HarnessPlatformError):
+            compile_execution_plan(
+                **base,
+                credential_binding_set=repo_set,
+                repository_slot_requirements=decls,
+                worker_authority_kinds=("model",),
+            )
+        admitted = compile_execution_plan(
+            **base,
+            credential_binding_set=repo_set,
+            repository_slot_requirements=decls,
+            worker_authority_kinds=("model", "repository"),
+        )
+        assert admitted.payload.repositoryAuthorityRefs == {"src": REPO_SNAPSHOT}
+    finally:
+        HOST_CLASSES.clear()
+        HOST_CLASSES.update(saved)
+
+
+def test_attenuated_child_grants_require_fresh_snapshots():
+    """REQ-07/ACC-05: child re-admission needs its own attenuated snapshot."""
+    parent = create_binding_set(
+        bindingSetId="mixed",
+        version=1,
+        bindings={
+            "primary-model": {
+                "authorityKind": "provider_profile",
+                "providerProfileRef": "opencode-go-default",
+                "materializerRef": "opencode-auth-json@1",
+            },
+            "src": _v2_repo_slot(),
+        },
+        schema_version="moonmind.omnigent-credential-bindings.v2",
+    )
+    child_snapshot = "repository-access-snapshot:sha256:" + "e" * 64
+    grants = cb.attenuated_child_grants_for(
+        parent_binding_set=parent,
+        child_target_ref="child-target-1",
+        child_attempt_ref="child-attempt-1",
+        child_snapshot_refs={"src": child_snapshot},
+    )
+    assert list(grants.keys()) == ["src"]
+    assert grants["src"].binding.repositoryAccessSnapshotRef == child_snapshot
+    assert grants["src"].child_target_ref == "child-target-1"
+    # Missing child snapshot fails closed (parent visibility is not permission).
+    with pytest.raises(HarnessPlatformError):
+        cb.attenuated_child_grants_for(
+            parent_binding_set=parent,
+            child_target_ref="child-target-1",
+            child_attempt_ref="child-attempt-1",
+            child_snapshot_refs={},
+        )
+    # Verbatim parent-snapshot replay is not attenuation.
+    with pytest.raises(HarnessPlatformError):
+        cb.attenuated_child_grants_for(
+            parent_binding_set=parent,
+            child_target_ref="child-target-1",
+            child_attempt_ref="child-attempt-1",
+            child_snapshot_refs={"src": REPO_SNAPSHOT},
+        )
+    # Model slots are never copied as child repository grants.
+    assert "primary-model" not in grants
+
+
+def test_release_crash_cancel_rotation_revocation_semantics():
+    """REQ-08/ACC-06/INV-003: ownership-scoped release + barrier behavior."""
+    from moonmind.omnigent.harness_platform.runtime_binding import (
+        create_runtime_binding,
+        release_unused_repository_issuance,
+    )
+
+    plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
+    leases = {
+        "primary-model": {
+            "providerProfileRef": "opencode-go-default",
+            "providerLeaseRef": "lease-1",
+            "credentialGeneration": 7,
+            "credentialRuntimeRef": "credential-runtime:lease-1:7",
+        }
+    }
+    issuance = {
+        "src": {
+            "connectionRef": "repo-conn-main",
+            "issuanceRef": "issuance-1",
+            "snapshotRef": REPO_SNAPSHOT,
+            "credentialRevision": "rev-1",
+            "useOwner": "attempt:1",
+        },
+        "dst": {
+            "connectionRef": "repo-conn-main",
+            "issuanceRef": "issuance-2",
+            "snapshotRef": "repository-access-snapshot:sha256:" + "d" * 64,
+            "credentialRevision": "rev-1",
+            "useOwner": "attempt:1",
+        },
+    }
+    binding = create_runtime_binding(
+        executionPlanRef=plan_ref,
+        providerLeases=leases,
+        repositoryIssuance=issuance,
+    )
+    # Crash/partial acquisition: release only the failed slot; sibling and
+    # model lease are untouched.
+    narrowed, released = release_unused_repository_issuance(binding, ["src"])
+    assert released == ["issuance-1"]
+    assert list(narrowed.repositoryIssuance.keys()) == ["dst"]
+    # Cancel race: releasing the same slot again is idempotent and releases
+    # nothing further (never another consumer's resources).
+    _, released_again = release_unused_repository_issuance(narrowed, ["src"])
+    assert released_again == []
+    # Rotation: a refreshed snapshot is a distinct attenuated binding, never
+    # a verbatim replay of the revoked snapshot.
+    parent = create_binding_set(
+        bindingSetId="mixed",
+        version=1,
+        bindings={
+            "primary-model": {
+                "authorityKind": "provider_profile",
+                "providerProfileRef": "opencode-go-default",
+                "materializerRef": "opencode-auth-json@1",
+            },
+            "src": _v2_repo_slot(),
+        },
+        schema_version="moonmind.omnigent-credential-bindings.v2",
+    )
+    rotated = cb.attenuate_repository_binding_for_child(
+        parent_binding=parent.bindings["src"],
+        child_target_ref="child-target-1",
+        child_attempt_ref="child-attempt-2",
+        child_snapshot_ref="repository-access-snapshot:sha256:" + "f" * 64,
+    )
+    assert rotated.binding.repositoryAccessSnapshotRef != REPO_SNAPSHOT
+    # Revocation wins: a model-only worker cannot consume the revoked set's
+    # repository authority shape even after release bookkeeping.
+    with pytest.raises(HarnessPlatformError):
+        cb.assert_worker_supports_binding_set(("model",), parent)
+
+
+def test_mixed_plan_end_to_end_capacity_runtime_release():
+    """ACC-01/ACC-04/ACC-07: mixed plan traverses compile, capacity, runtime."""
+    from moonmind.omnigent.harness_platform.host_classes import HOST_CLASSES
+    from moonmind.omnigent.harness_platform.planner import compile_execution_plan
+    from moonmind.omnigent.harness_platform.runtime_binding import (
+        create_runtime_binding,
+        release_unused_repository_issuance,
+    )
+
+    saved, catalog, profile, skills, trust = _remediation_planner_fixture()
+    try:
+        binding_set = create_binding_set(
+            bindingSetId="mixed",
+            version=1,
+            bindings={
+                "primary-model": {
+                    "authorityKind": "provider_profile",
+                    "providerProfileRef": "opencode-go-default",
+                    "materializerRef": "opencode-auth-json@1",
+                },
+                "src": _v2_repo_slot(),
+                "dst": _v2_repo_slot(
+                    repositoryRole="destination_write",
+                    repositoryAccessSnapshotRef=(
+                        "repository-access-snapshot:sha256:" + "d" * 64
+                    ),
+                ),
+            },
+            schema_version="moonmind.omnigent-credential-bindings.v2",
+        )
+        # Trusted delivery declarations produce admitted slots; agent keys
+        # alone never do (fail-closed default is {}).
+        assert cb.derive_repository_slot_requirements(profile_document={}) == {}
+        decls = cb.derive_repository_slot_requirements(
+            profile_document={},
+            trusted_repository_declarations={
+                "src": {
+                    "allowedRoles": ("source_read",),
+                    "allowedMaterializers": ("repository-broker@1",),
+                },
+                "dst": {
+                    "allowedRoles": ("destination_write",),
+                    "allowedMaterializers": ("repository-broker@1",),
+                },
+            },
+        )
+        envelope = compile_execution_plan(
+            agent_profile=profile,
+            harness_catalog=catalog,
+            trust_record=trust,
+            resolved_skills=skills,
+            credential_binding_set=binding_set,
+            repository_slot_requirements=decls,
+            host_class_ref="repo-test-standard@1",
+            launch_policy_ref="omnigent-on-demand@1",
+            model_qualified_id="opencode/test-model",
+            model_effort=None,
+            model_route_ref="opencode-go",
+            model_normalized_options={},
+            worker_authority_kinds=("model", "repository"),
+        )
+        # One model profile plus two repository roles is not multi-model:
+        # only model bindings enter capacity accounting.
+        assert cb.model_profile_refs(binding_set) == ["opencode-go-default"]
+        assert set(cb.model_bindings_of(dict(binding_set.bindings)).keys()) == {
+            "primary-model"
+        }
+        assert envelope.payload.repositoryAuthorityRefs == {
+            "src": REPO_SNAPSHOT,
+            "dst": "repository-access-snapshot:sha256:" + "d" * 64,
+        }
+        runtime = create_runtime_binding(
+            executionPlanRef=envelope.planRef,
+            providerLeases={
+                "primary-model": {
+                    "providerProfileRef": "opencode-go-default",
+                    "providerLeaseRef": "lease-1",
+                    "credentialGeneration": 3,
+                    "credentialRuntimeRef": "credential-runtime:lease-1:3",
+                }
+            },
+            repositoryIssuance={
+                "src": {
+                    "connectionRef": "repo-conn-main",
+                    "issuanceRef": "issuance-src",
+                    "snapshotRef": REPO_SNAPSHOT,
+                    "credentialRevision": "rev-1",
+                    "useOwner": "attempt:1",
+                },
+                "dst": {
+                    "connectionRef": "repo-conn-main",
+                    "issuanceRef": "issuance-dst",
+                    "snapshotRef": "repository-access-snapshot:sha256:" + "d" * 64,
+                    "credentialRevision": "rev-1",
+                    "useOwner": "attempt:1",
+                },
+            },
+        )
+        narrowed, released = release_unused_repository_issuance(runtime, ["src"])
+        assert released == ["issuance-src"]
+        assert list(narrowed.repositoryIssuance.keys()) == ["dst"]
+        for blob in (
+            json.dumps(envelope.payload.model_dump(by_alias=True, mode="json")),
+            json.dumps(narrowed.model_dump(by_alias=True, mode="json")),
+        ):
+            assert "credentialGeneration" not in blob or "providerLeases" in blob
+            for canary in ("ghp_", "ghs_", "sk-", "-----BEGIN", "token="):
+                assert canary not in blob
+    finally:
+        HOST_CLASSES.clear()
+        HOST_CLASSES.update(saved)

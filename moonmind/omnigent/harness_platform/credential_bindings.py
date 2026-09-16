@@ -741,6 +741,35 @@ def attenuate_repository_binding_for_child(
     )
 
 
+def attenuated_child_grants_for(
+    *,
+    parent_binding_set: CredentialBindingSet,
+    child_target_ref: str,
+    child_attempt_ref: str,
+    child_snapshot_refs: Mapping[str, str],
+) -> dict[str, ChildRepositoryGrant]:
+    """Compose attenuated child re-admission for every parent repo slot.
+
+    Thin production composition over :func:`attenuate_repository_binding_for_child`
+    for fan-out, continuation, remediation, and workspace-restore callers
+    (MoonLadderStudios/MoonMind#4009 REQ-07). Each parent repository slot
+    requires its own freshly admitted child snapshot; missing slots, verbatim
+    parent-snapshot replay, and raw credential material all fail closed.
+    Model-authority slots are never copied here: the child plan re-derives
+    model authority through its own admission.
+    """
+    grants: dict[str, ChildRepositoryGrant] = {}
+    for slot, binding in repository_authority_bindings(parent_binding_set).items():
+        child_snapshot = child_snapshot_refs.get(slot) if isinstance(child_snapshot_refs, Mapping) else None
+        grants[slot] = attenuate_repository_binding_for_child(
+            parent_binding=binding,
+            child_target_ref=child_target_ref,
+            child_attempt_ref=child_attempt_ref,
+            child_snapshot_ref=child_snapshot,
+        )
+    return grants
+
+
 def assert_worker_supports_binding_set(
     worker_authority_kinds: tuple[str, ...] | list[str],
     binding_set: CredentialBindingSet,
