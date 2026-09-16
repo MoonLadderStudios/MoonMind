@@ -47,11 +47,13 @@ If no constraints are provided, default to addressing all applicable feedback.
   error: stop as blocked instead of substituting stale repository code.
 2. Resolve PR and collect all comments.
 - Resolve the comments helper as `$FIX_COMMENTS_SKILL_DIR/tools/get_branch_pr_comments.py` before reading any existing comments artifact; its repository-default path is `.agents/skills/fix-comments/tools/get_branch_pr_comments.py`:
-  - If the declared bundled helper is missing, first attempt supported
-    bundle materialization/repair through the owning boundary (re-resolve
-    the immutable active skill set via the run's skill materialization path
-    and re-check the helper). Only if the helper is still missing after that
-    bounded recovery, stop as blocked with reason `comments_helper_missing`;
+  - If the declared bundled helper is missing, first request repair of the
+    same immutable snapshot through the owning skill-materialization
+    boundary and re-check the helper. Never re-resolve or discover a
+    different skill set during execution: resolution happens once before
+    launch, so only the same resolved content may be repaired. Only if the
+    helper is still missing after that bounded recovery, stop as blocked
+    with reason `comments_helper_missing`;
     do not use a stale `var/pr_comments/current-branch-comments.json` and do
     not substitute repository-mirrored code, an ad hoc collector, a stale
     artifact, or a native classifier.
@@ -135,7 +137,7 @@ If no constraints are provided, default to addressing all applicable feedback.
     -f threadId="$THREAD_ID" \
     -f query='mutation($threadId:ID!){resolveReviewThread(input:{threadId:$threadId}){thread{isResolved}}}'
   ```
-- Refresh `var/pr_comments/current-branch-comments.json` after resolving threads. Do not report success while any handled, non-outdated review comment still has `thread_resolved=false`. Never invent a clean result from pagination failure: if any comment/thread page failed to load, keep the affected items blocking and report the incomplete inventory explicitly.
+- Refresh `var/pr_comments/current-branch-comments.json` after resolving threads. Do not report success while any handled, non-outdated review comment still has `thread_resolved=false`. Never invent a clean result from pagination failure: the refreshed artifact carries `thread_inventory_complete`, and when it is false or missing the thread inventory is incomplete — keep the affected items blocking and report the incomplete inventory explicitly.
 - After any push or no-op verification, re-check that the remote PR branch head SHA equals local `HEAD` by writing canonical evidence through the shared helper:
   ```bash
   python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" write-pushed \
