@@ -24,6 +24,22 @@ If no inputs are provided, investigate the failing CI checks for the current bra
 
 ## Workflow
 
+0. Resolve helpers exclusively from the run's immutable active bundle.
+
+  ```bash
+  FIX_CI_SKILL_DIR="${FIX_CI_SKILL_DIR:-${MOONMIND_ACTIVE_SKILLS_DIR:+$MOONMIND_ACTIVE_SKILLS_DIR/fix-ci}}"
+  ACTIVE_SKILLS_DIR="${MOONMIND_ACTIVE_SKILLS_DIR:-$(dirname "$FIX_CI_SKILL_DIR")}"
+  test -n "$FIX_CI_SKILL_DIR" && test -f "$FIX_CI_SKILL_DIR/SKILL.md"
+  ```
+
+  Inside MoonMind, `MOONMIND_ACTIVE_SKILLS_DIR` is always set and the shared
+  helper below resolves from it; a checked-in `.agents/skills` directory must
+  never shadow the selected snapshot. Outside MoonMind, set `FIX_CI_SKILL_DIR`
+  to the directory containing this `SKILL.md` (no MoonMind-only environment
+  variables required). A missing selected helper is a
+  materialization/packaging error: stop as blocked instead of substituting
+  stale repository code.
+
 1. Identify the failing check.
 - If not provided, run `gh pr view --json statusCheckRollup` or `gh run list --branch <current-branch> --json` to find failing checks.
 - Fetch the failing logs using `gh run view <run-id> --log` or similar if necessary.
@@ -58,14 +74,14 @@ If no inputs are provided, investigate the failing CI checks for the current bra
 - Write `artifacts/publish_result.json` through the shared helper after every
   pushed or verified no-op outcome:
   ```bash
-  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-pushed \
+  python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" write-pushed \
     --skill-id fix-ci \
     --repo "$REPO" \
     --branch "$BRANCH"
   ```
   If no commit was needed, use:
   ```bash
-  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-no-op \
+  python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" write-no-op \
     --skill-id fix-ci \
     --repo "$REPO" \
     --branch "$BRANCH"
@@ -78,7 +94,7 @@ If no inputs are provided, investigate the failing CI checks for the current bra
   or the task explicitly forbids pushing, write blocked evidence and stop with
   the current SHA, check state, and next action:
   ```bash
-  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-blocked \
+  python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" write-blocked \
     --skill-id fix-ci \
     --repo "$REPO" \
     --branch "$BRANCH" \
