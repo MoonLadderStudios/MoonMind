@@ -765,3 +765,57 @@ def test_runtime_issuance_release_is_ownership_scoped():
     # lease and the sibling issuance are untouched.
     assert narrowed.providerLeases["primary-model"].credentialGeneration == 7
     assert list(narrowed.repositoryIssuance.keys()) == ["dst"]
+
+
+def test_v2_authority_rejected_by_retained_v1_plan_reader_without_fallback():
+    """REQ-09/ACC-03: a v1-only plan reader rejects v2 authority; no fallback.
+
+    Exercises the actual retained reader fixture (the historical plan
+    payload contract), not a re-implementation of its Pydantic shape: v1
+    model-only bindings are still admitted while any repository-authority
+    entry fails closed instead of being reinterpreted as model authority.
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    from pydantic import TypeAdapter, ValidationError
+
+    fixture = (
+        Path(__file__).parents[2]
+        / "integration"
+        / "reliability"
+        / "replays"
+        / "omnigent-plan-reader-skew"
+        / "retained_execution_plan.py"
+    )
+    assert fixture.is_file()
+    spec = importlib.util.spec_from_file_location(
+        "retained_plan_reader_v2_skew", fixture
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        annotation = module.OmnigentExecutionPlanPayload.model_fields[
+            "credentialBindings"
+        ].annotation
+        adapter = TypeAdapter(annotation)
+        # Historical v1 model-only bindings remain readable.
+        adapter.validate_python({"primary-model": dict(V1_MODEL_SLOT)})
+        # v2 repository authority is rejected, never reinterpreted as
+        # model authority and never silently dropped.
+        with pytest.raises(ValidationError):
+            adapter.validate_python(
+                {"primary-model": dict(V1_MODEL_SLOT), "src": _v2_repo_slot()}
+            )
+        # The retained payload contract has no repositoryAuthorityRefs
+        # field, so a v2 payload carrying it fails closed via
+        # extra="forbid" instead of losing the new authority silently.
+        assert (
+            "repositoryAuthorityRefs"
+            not in module.OmnigentExecutionPlanPayload.model_fields
+        )
+    finally:
+        sys.modules.pop(spec.name, None)
