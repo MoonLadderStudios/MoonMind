@@ -18465,7 +18465,10 @@ export interface operations {
     cancel_execution_api_executions__workflow_id__cancel_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                Authorization?: string | null;
+                "X-MoonMind-Execution-Fanout"?: string | null;
+            };
             path: {
                 workflow_id: string;
             };

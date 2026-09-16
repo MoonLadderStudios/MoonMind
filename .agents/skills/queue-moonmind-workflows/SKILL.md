@@ -85,27 +85,40 @@ For direct create requests, idempotency is stored at `request.idempotencyKey`.
 
 ## Workflow
 
-1. Resolve the child targets and write the manifest to a managed artifact path,
-   usually `artifacts/queue-moonmind-workflows-manifest.json`.
-2. Run the helper:
+1. Resolve helpers exclusively from the run's immutable active bundle.
 
    ```bash
-   python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/queue-moonmind-workflows/scripts/queue_moonmind_workflows.py" \
+   QUEUE_MOONMIND_WORKFLOWS_SKILL_DIR="${QUEUE_MOONMIND_WORKFLOWS_SKILL_DIR:-${MOONMIND_ACTIVE_SKILLS_DIR:+$MOONMIND_ACTIVE_SKILLS_DIR/queue-moonmind-workflows}}"
+   test -n "$QUEUE_MOONMIND_WORKFLOWS_SKILL_DIR" && test -f "$QUEUE_MOONMIND_WORKFLOWS_SKILL_DIR/SKILL.md"
+   ```
+
+   Inside MoonMind, `MOONMIND_ACTIVE_SKILLS_DIR` is always set and the helper
+   below resolves from it; a checked-in `.agents/skills` directory must never
+   shadow the selected snapshot. When no skill-specific override is present,
+   the helper resolves to
+   `${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/queue-moonmind-workflows/scripts/queue_moonmind_workflows.py`.
+   Outside MoonMind, set
+   `QUEUE_MOONMIND_WORKFLOWS_SKILL_DIR` to the directory containing this
+   `SKILL.md` (no MoonMind-only environment variables required). A missing
+   selected helper is a materialization/packaging error: stop as blocked
+   instead of substituting stale repository code.
+
+2. Resolve the child targets and write the manifest to a managed artifact path,
+   usually `artifacts/queue-moonmind-workflows-manifest.json`.
+3. Run the helper:
+
+   ```bash
+   python3 "$QUEUE_MOONMIND_WORKFLOWS_SKILL_DIR/scripts/queue_moonmind_workflows.py" \
      --manifest artifacts/queue-moonmind-workflows-manifest.json \
      --max-workflows 25
    ```
 
-   Resolve the helper exclusively from the resolved immutable bundle via
-   `$MOONMIND_ACTIVE_SKILLS_DIR`. The repo-relative
-   `.agents/skills/queue-moonmind-workflows/scripts/...` path is only a
-   portable-host fallback when no active Skill snapshot is set.
-
-3. Read the helper output. A successful queue has:
+4. Read the helper output. A successful queue has:
    - `submitted > 0`
    - `verified == submitted`
    - `errors == []`
    - one `workflowId` per queued item
-4. Report queued workflow IDs and the summary artifact path. If any item failed
+5. Report queued workflow IDs and the summary artifact path. If any item failed
    submission or verification, report the run as failed/partial and include the
    specific failing `ref` values.
 

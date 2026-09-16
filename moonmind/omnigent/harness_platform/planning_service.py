@@ -422,14 +422,53 @@ class OmnigentExecutionPlanningService:
             # Discovery is advisory. The actual host attests the selected model
             # before session creation; a cached observation cannot grant or
             # revoke that authority, including after an image update.
+            #
+            # Rebuilt host images change SHA/patch while keeping the same
+            # repository. The persisted policy snapshot may still pin the
+            # previous digest while Host Class selection reads current
+            # deployment evidence. Same-repository drift is reconciled to the
+            # selected Host Class image (launch-time attestation re-verifies
+            # major.minor); a foreign repository still fails closed.
+            #
+            # Two cases keep the exact conflict: legacy Codex plans are
+            # consumed by a coordinator that recompiles launch authority from
+            # the unchanged policy snapshot and rejects a reconciled digest,
+            # so admitting a reconciled Codex plan would guarantee a later
+            # failure; and an explicitly requested Host Class is preserved as
+            # explicit selection authority rather than silently rewritten.
             if str(effective_launch.get("hostImageRef") or "") != (
                 host_class.imageRef
             ):
-                raise HarnessPlatformError(
-                    "effective launch host image conflicts with the selected "
-                    "Host Class",
-                    code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+                if harness.id == "codex-native" or self._requested_host_class_ref(
+                    request
+                ) is not None:
+                    raise HarnessPlatformError(
+                        "effective launch host image conflicts with the selected "
+                        "Host Class",
+                        code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+                    )
+                from moonmind.omnigent.host_image_drift import (
+                    reconcile_effective_launch_to_selected_host,
                 )
+
+                reconciled = reconcile_effective_launch_to_selected_host(
+                    effective_launch, host_class.imageRef
+                )
+                if reconciled is None:
+                    raise HarnessPlatformError(
+                        "effective launch host image conflicts with the selected "
+                        "Host Class",
+                        code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+                    )
+                import logging
+
+                logging.getLogger(__name__).info(
+                    "planning host image drift: reconciling same-repo policy "
+                    "image to selected Host Class (planned=%s selected=%s)",
+                    str(effective_launch.get("hostImageRef") or "")[:80],
+                    host_class.imageRef[:80],
+                )
+                effective_launch = reconciled
             (
                 policy_artifact_ref,
                 policy_artifact_digest,

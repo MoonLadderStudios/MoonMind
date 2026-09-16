@@ -72,9 +72,10 @@ def test_supported_action_types_and_safety_rules_documented() -> None:
     ):
         assert heading in text
 
-    # Merge preservation check, split >2000-line rule, conservative delete.
+    # Merge preservation check, conservative delete, size-as-signal (no auto-split rule).
     assert "preservation check" in text
-    assert "line_count > 2000" in text
+    assert "investigation signal" in text
+    assert "large file alone does not force" in text.lower()
     assert "most conservative action" in text
 
 

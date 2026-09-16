@@ -122,7 +122,10 @@ def _replace_link(
             ):
                 message = (
                     f"Cannot replace adapter link at {path}: existing symlink does "
-                    "not resolve under a MoonMind-owned active skill root"
+                    "not resolve under a MoonMind-owned active skill root; "
+                    "repair through the workspace/materialization owner without "
+                    "deleting or relocating repo-authored skill sources or "
+                    "discarding run work"
                 )
                 if optional:
                     return SkillAliasResult(
@@ -135,7 +138,10 @@ def _replace_link(
             path.unlink()
         else:
             message = (
-                f"Cannot create adapter link at {path}: existing non-symlink path present"
+                f"Cannot create adapter link at {path}: existing non-symlink path present; "
+                "leaving repo-authored sources untouched and preserving run work; "
+                "the run-scoped active visiblePath remains authoritative; "
+                "repair through the workspace/materialization owner"
             )
             if optional:
                 return SkillAliasResult(

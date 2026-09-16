@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -10,7 +9,36 @@ import pytest
 from temporalio.api.enums.v1 import TaskQueueType
 from temporalio.service import RPCError, RPCStatusCode
 
+from moonmind.workflows.temporal import release_routing
 from moonmind.workflows.temporal.release_routing import bootstrap_version_routing
+
+
+class _FakeClock:
+    """Narrowly scoped controlled time for routing-aging waits.
+
+    Replaces only release_routing's module-scoped sleep/clock (never global
+    asyncio.sleep), advancing the fake monotonic clock on every sleep so the
+    real production windows (_ROUTE_DEATH_TIMEOUT_SECONDS) are exercised
+    without real-time waits or busy loops.
+    """
+
+    def __init__(self):
+        self.now = 1000.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self):
+        return self.now
+
+    async def sleep(self, delay):
+        self.sleeps.append(float(delay))
+        self.now += float(delay)
+
+
+def _use_fake_clock(monkeypatch):
+    clock = _FakeClock()
+    monkeypatch.setattr(release_routing, "_routing_sleep", clock.sleep)
+    monkeypatch.setattr(release_routing, "_routing_monotonic", clock.monotonic)
+    return clock
 
 
 def _not_found():
@@ -248,16 +276,11 @@ async def test_steward_preserves_live_current_route(monkeypatch):
     displaced by a newer restarted image; qualification and promotion stay
     with the authorized release controller.
     """
-    from moonmind.workflows.temporal import release_routing
-
-    async def _no_sleep(delay):
-        return None
-
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
-    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
-    # Shorten the re-verification window; the fake pollers below never expire.
-    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_TIMEOUT_SECONDS", 3)
-    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_POLL_SECONDS", 1)
+    # Controlled time only: the fake pollers below never expire, so the
+    # steward must observe the full production re-verification window with
+    # fake sleeps instead of a real-time busy loop.
+    clock = _use_fake_clock(monkeypatch)
     server, old, new = _server_with_current_old_new()
     queue = "mm.workflow.user.v2"
     server.add_poller("old", queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW)
@@ -272,6 +295,7 @@ async def test_steward_preserves_live_current_route(monkeypatch):
     assert server.canaries_started == []
     assert server.set_current_calls == []
     assert server.current == old
+    assert clock.now - 1000.0 >= release_routing._ROUTE_DEATH_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio
@@ -282,15 +306,8 @@ async def test_steward_promotes_after_restart_in_flight_dies(monkeypatch):
     rolling restart. Once they expire with no replacement, the deployed
     release is promoted instead of waiting indefinitely.
     """
-    from moonmind.workflows.temporal import release_routing
-
-    async def _no_sleep(delay):
-        return None
-
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
-    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
-    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_TIMEOUT_SECONDS", 30)
-    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_POLL_SECONDS", 1)
+    _use_fake_clock(monkeypatch)
     server, _old, new = _server_with_current_old_new()
     queue = "mm.workflow.user.v2"
     server.add_poller(
@@ -313,12 +330,8 @@ async def test_steward_fails_loud_when_own_version_never_registers(monkeypatch):
     cannot be qualified; a loud startup error retries the process instead of
     caching a parked result that nobody will revisit.
     """
-
-    async def _no_sleep(delay):
-        return None
-
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
-    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    _use_fake_clock(monkeypatch)
     server, old, new = _server_with_current_old_new()
     del server.versions[new]
     with pytest.raises(RuntimeError, match="did not register"):
@@ -389,15 +402,8 @@ async def test_steward_parks_on_partial_outage(monkeypatch):
     others went quiet, startup must preserve the route for the authorized
     release controller instead of promoting over the surviving workers.
     """
-    from moonmind.workflows.temporal import release_routing
-
-    async def _no_sleep(delay):
-        return None
-
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
-    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
-    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_TIMEOUT_SECONDS", 3)
-    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_POLL_SECONDS", 1)
+    _use_fake_clock(monkeypatch)
     server, old, new = _server_with_current_old_new()
     queue = "mm.workflow.user.v2"
     server.add_poller("old", queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW)
@@ -421,12 +427,8 @@ async def test_steward_requires_every_served_queue(monkeypatch):
     not registered -- a missing or late fleet -- stewardship must fail
     loudly instead of promoting a release ordinary workflows cannot use.
     """
-
-    async def _no_sleep(delay):
-        return None
-
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
-    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    _use_fake_clock(monkeypatch)
     server = _FakeServer()
     queue = "mm.workflow.user.v2"
     other = "mm.activity.agent_runtime"
@@ -468,3 +470,25 @@ async def test_steward_reraises_failed_ordinary_verification(monkeypatch):
         await bootstrap_version_routing(_FakeClient(server), _spec("new"))
     assert server.current == new
     assert server.set_current_calls == [new]
+
+
+def test_routing_aging_uses_scoped_time_with_production_windows_intact():
+    """MoonLadderStudios/MoonMind#4374: no global sleep patch, no window cuts.
+
+    The routing-aging waits resolve through module-scoped indirection that
+    defaults to the real asyncio.sleep/time.monotonic, while the production
+    poller-freshness (90s) and route-death (120s) windows stay at their
+    deployed values. Tests must narrow time via release_routing's module
+    attributes, never by patching asyncio globally.
+    """
+    import asyncio
+    import inspect
+    import time
+
+    assert release_routing._routing_sleep is asyncio.sleep
+    assert release_routing._routing_monotonic is time.monotonic
+    assert release_routing._ROUTE_DEATH_TIMEOUT_SECONDS == 120
+    assert release_routing._ROUTE_DEATH_POLL_SECONDS == 10
+    source = inspect.getsource(release_routing._await_no_live_pollers)
+    assert "_routing_sleep" in source
+    assert "_routing_monotonic" in source
