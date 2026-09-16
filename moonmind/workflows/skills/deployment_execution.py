@@ -503,6 +503,106 @@ def _is_wsl_distro_path(path: str) -> bool:
     )
 
 
+def _read_self_container_id() -> str | None:
+    """Return the container id of the running worker, if it is containerized."""
+
+    identity = os.environ.get("HOSTNAME") or os.environ.get("CONTAINER_ID")
+    if identity and identity.strip():
+        return identity.strip()
+    try:
+        return Path("/etc/hostname").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def daemon_bind_source(
+    local_mount: str,
+    *,
+    attempts: int = 1,
+    backoff_seconds: float = 0.0,
+) -> str | None:
+    """Return the daemon-recorded host source of our own ``local_mount``.
+
+    The worker reads the deployment checkout and its durable state through bind
+    mounts the same daemon created, so that daemon's mount table is evidence of
+    which host path resolves to them. Reusing the recorded source keeps new
+    Compose containers on a path the daemon has already resolved, instead of
+    inferring a Desktop/WSL namespace from the path's shape: the namespace that
+    serves a checkout differs between Docker Desktop backends and versions, and
+    a wrong guess mounts empty directories rather than failing.
+
+    Retries with linear backoff so a transient ``docker inspect`` failure (for
+    example the deployment socket proxy still starting) does not permanently
+    discard the evidence. Returns ``None`` when the container identity or the
+    daemon stays unreadable, leaving the caller's configured path in place.
+    """
+
+    container_id = _read_self_container_id()
+    if not container_id:
+        return None
+    import subprocess  # local import — only needed when evidence is consulted.
+    import time
+
+    target = str(local_mount).rstrip("/") or "/"
+    for attempt in range(max(1, attempts)):
+        try:
+            result = subprocess.run(
+                ["docker", "inspect", "--format", "{{json .Mounts}}", container_id],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+        except (
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            OSError,
+        ):
+            if attempt + 1 < max(1, attempts):
+                time.sleep(backoff_seconds * (attempt + 1))
+            continue
+        try:
+            mounts = json.loads(result.stdout)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(mounts, list):
+            return None
+        for mount in mounts:
+            if not isinstance(mount, Mapping):
+                continue
+            destination = str(mount.get("Destination") or "").rstrip("/") or "/"
+            if destination != target:
+                continue
+            source = str(mount.get("Source") or "").strip()
+            if source:
+                return source
+        return None
+    return None
+
+
+_daemon_bind_source_cache: dict[tuple[str, str], str | None] = {}
+
+
+async def _resolve_daemon_bind_source(local_mount: str) -> str | None:
+    """Cache the daemon's recorded source for ``local_mount`` per daemon."""
+
+    target = str(local_mount).rstrip("/") or "/"
+    key = (os.environ.get("DOCKER_HOST", ""), target)
+    if key not in _daemon_bind_source_cache:
+        _daemon_bind_source_cache[key] = await asyncio.to_thread(
+            daemon_bind_source, target
+        )
+    return _daemon_bind_source_cache[key]
+
+
+def _observed_daemon_bind_source(local_mount: str) -> str | None:
+    """Read already-resolved evidence without blocking on the daemon."""
+
+    target = str(local_mount).rstrip("/") or "/"
+    return _daemon_bind_source_cache.get((os.environ.get("DOCKER_HOST", ""), target))
+
+
 _desktop_daemon_probe_cache: dict[str, bool | None] = {}
 
 
@@ -672,6 +772,7 @@ class HostDockerComposeRunner:
     ) -> Mapping[str, Any]:
         # Validate at the side-effect owner, before any Compose recreation.
         # Config rendering uses worker-visible paths; it never creates mounts.
+        await self._record_daemon_host_dir()
         try:
             await asyncio.to_thread(
                 check_compose_access,
@@ -788,7 +889,23 @@ class HostDockerComposeRunner:
     def _local_dir(self) -> Path:
         return Path(self.local_project_dir or self.project_dir).expanduser()
 
+    async def _record_daemon_host_dir(self) -> str | None:
+        """Resolve, once per daemon, the host path serving this checkout."""
+
+        if not self.local_project_dir:
+            return None
+        return await _resolve_daemon_bind_source(str(self._local_dir()))
+
     def _host_dir(self) -> Path:
+        # The daemon's own record of this checkout's bind source outranks the
+        # configured path: it is the path the daemon demonstrably resolves.
+        observed = (
+            _observed_daemon_bind_source(str(self._local_dir()))
+            if self.local_project_dir
+            else None
+        )
+        if observed:
+            return Path(observed)
         return Path(self.project_dir).expanduser()
 
     def _compose_file_path(self) -> Path:
@@ -924,6 +1041,9 @@ class HostDockerComposeRunner:
     async def _use_desktop_host_rewrite(self) -> bool:
         """Decide whether daemon-bound Compose input needs the host rewrite.
 
+        The daemon's recorded source for this worker's own checkout bind
+        settles the question without guessing whenever it is readable. Only
+        when that evidence is unavailable does the path's shape decide:
         Windows drive-letter paths are unambiguous Desktop signals. A bare
         ``/mnt/<drive>`` shape may instead be a native Linux mount, so it is
         rewritten only when the reachable daemon confirms Docker Desktop (or
@@ -932,6 +1052,11 @@ class HostDockerComposeRunner:
         non-Desktop daemon keeps the POSIX namespace untouched.
         """
         if not (self._requires_desktop_host_rewrite() and self.local_project_dir):
+            return False
+        if await self._record_daemon_host_dir():
+            # The daemon created this worker's own checkout bind, so its
+            # recorded source needs no namespace guess. Rewriting a path the
+            # daemon already resolves is what mounted empty state directories.
             return False
         if _is_wsl_distro_path(str(self.project_dir)):
             if await _probe_docker_desktop_daemon() is False:
@@ -1159,6 +1284,7 @@ class HostDockerComposeRunner:
         max_stdout_chars: int | None = 512,
         max_stderr_chars: int | None = 512,
     ) -> Mapping[str, Any]:
+        await self._record_daemon_host_dir()
         self._ensure_host_project_read_alias()
         env = os.environ.copy()
         if requested_image:

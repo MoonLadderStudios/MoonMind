@@ -96,6 +96,13 @@ if args[0] == "ps" and args[1:2] == ["-aq"]:
             break
     raise SystemExit(0)
 
+if args[:3] == ["inspect", "--format", "{{json .Mounts}}"]:
+    # The worker reads its own mount table to learn which host path this
+    # daemon resolves for the checkout. An engine that records none leaves
+    # the caller with no evidence.
+    print(json.dumps(state.get("selfMounts", [])))
+    raise SystemExit(0)
+
 if args[0] == "inspect":
     target = args[1] if len(args) > 1 else ""
     for updater_name, updater_id in state.get("updaters", {}).items():
@@ -451,26 +458,32 @@ async def test_deployment_update_reconciles_non_image_infrastructure(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "daemon_platform", ["Docker Desktop", "Ubuntu 24.04"]
+    "daemon_platform,records_own_mounts",
+    [
+        ("Docker Desktop", True),
+        ("Docker Desktop", False),
+        ("Ubuntu 24.04", False),
+    ],
 )
 async def test_wsl_updater_launch_uses_daemon_visible_state_bind(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     daemon_platform: str,
+    records_own_mounts: bool,
 ) -> None:
     """Detached updater launches from a WSL checkout keep their state bind.
 
     Replay of the escaped `update-moonmind.sh` failure: the host submission
     wrote its request to the real deployment state, but the updater launched
-    from inside the worker mounted a WSL `/mnt/<drive>` bind the Docker
-    Desktop daemon could not see. The daemon mounted an empty directory, the
-    updater exited with ``FileNotFoundError`` three times, and the caller
-    exhausted three deliveries without terminal evidence. The journey enters
+    from inside the worker mounted a bind the daemon resolved somewhere else.
+    The daemon mounted an empty directory, the updater exited with
+    ``FileNotFoundError`` three times, and the caller exhausted three
+    deliveries without terminal evidence. Which namespace serves a WSL
+    checkout differs between Docker Desktop backends, so the daemon's own
+    record of this worker's checkout bind decides when it is readable; the
+    path's shape decides only without that evidence. The journey enters
     through the production ``launch_updater`` path with real Compose
-    rendering; only the daemon is modeled. On the parent implementation the
-    recorded bind stays ``/mnt/...`` and the daemon-visibility assertion
-    below fails. On a confirmed native Linux daemon the POSIX namespace is
-    preserved instead of rewritten.
+    rendering; only the daemon is modeled.
     """
     import time
 
@@ -532,6 +545,18 @@ async def test_wsl_updater_launch_uses_daemon_visible_state_bind(
                 "fakeOperatingSystem": daemon_platform,
                 "updaters": {},
                 "updaterInfo": {},
+                # Docker Desktop serves this checkout at the WSL path itself
+                # and records that source for the worker's own mount.
+                "selfMounts": (
+                    [
+                        {
+                            "Source": host_project_dir,
+                            "Destination": str(tmp_path),
+                        }
+                    ]
+                    if records_own_mounts
+                    else []
+                ),
             }
         ),
         encoding="utf-8",
@@ -544,6 +569,7 @@ async def test_wsl_updater_launch_uses_daemon_visible_state_bind(
     fake_docker.chmod(
         fake_docker.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
     )
+    monkeypatch.setenv("HOSTNAME", "replay-deployment-worker")
     monkeypatch.setenv("MM_DEPLOYMENT_REPLAY_STATE", str(state_path))
     monkeypatch.setenv("MM_DEPLOYMENT_REPLAY_REAL_DOCKER", real_docker)
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
@@ -571,7 +597,14 @@ async def test_wsl_updater_launch_uses_daemon_visible_state_bind(
 
     state = json.loads(state_path.read_text(encoding="utf-8"))
     recorded = state["updaterStateBind"]
-    if daemon_platform == "Docker Desktop":
+    if records_own_mounts:
+        # The daemon resolved this checkout at the WSL path for the worker's
+        # own bind, so the updater inherits it instead of a guessed namespace.
+        assert recorded["source"] == host_project_dir + manifest[
+            "expectedStateBindSourceSuffix"
+        ]
+    elif daemon_platform == "Docker Desktop":
+        # No evidence: an unconfirmed Desktop namespace is the only signal.
         assert recorded["source"] == daemon_project_dir + manifest[
             "expectedStateBindSourceSuffix"
         ]
