@@ -368,8 +368,6 @@ Rationale: `<why this matters now>`
 - [ ] Linter/typechecker passes
 - [ ] Executable acceptance for `<user-facing flow>` (command, fixture, or automated check; not a mandatory human smoke test)
 
-A clean review may legitimately produce no findings: report `no_findings` with the reviewed scope and evidence instead of inventing a ticket to fill a quota.
-
 ## Architecture alignment
 
 Relevant documented expectations:
@@ -419,7 +417,9 @@ Use the issue for human planning and the optional SARIF for file/line-level stat
 
 ## Output statuses
 
-Report exactly one terminal status: `dry_run` (payload only), `published` (issue created, include URL/key), `duplicate` (matched an existing open issue, no new issue created), `needs_routing` (no backend could be resolved), or `blocked` (a required tool, permission, or field is unavailable). Include sanitized blocker details when blocked.
+A clean review may legitimately produce no findings: report `no_findings` with the reviewed scope and evidence instead of inventing a ticket to fill a quota.
+
+Report exactly one terminal status: `dry_run` (payload only), `published` (issue created, include URL/key), `duplicate` (matched an existing open issue, no new issue created), `needs_routing` (no backend could be resolved), `no_findings` (review completed with evidence and nothing met the proposal bar), or `blocked` (a required tool, permission, or field is unavailable). Include sanitized blocker details when blocked.
 
 ## Failure modes
 

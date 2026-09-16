@@ -302,9 +302,16 @@ Examples:
 Success criteria must be:
 
 - Measurable: include time, percentage, count, rate, or similar metrics.
-- Technology-agnostic: no frameworks, languages, databases, or tools.
-- User-focused: describe user or business outcomes rather than internals.
+- Technology-agnostic by default: no frameworks, languages, databases, or tools
+  beyond what the original request explicitly requires.
+- User-focused by default: describe user or business outcomes rather than
+  internals, unless the request itself states a technical contract.
 - Verifiable: testable without knowing implementation details.
+- Source-faithful: an explicit technical threshold, interface name, platform
+  constraint, or negative requirement from the original request is a valid
+  criterion preserved unchanged in meaning (see step 11). It is never
+  rewritten as a business metric and never discarded for being
+  technology-specific.
 
 Good examples:
 
@@ -312,13 +319,15 @@ Good examples:
 - `System supports 10,000 concurrent users`
 - `95% of searches return results in under 1 second`
 - `Task completion rate improves by 40%`
+- `API responds within 200ms` (when the request explicitly requires a 200ms
+  API threshold — an explicit technical contract, not an invented metric)
 
-Bad examples:
+Bad examples (invented implementation metrics the request never named):
 
-- `API response time is under 200ms`
-- `Database can handle 1000 TPS`
+- `API response time is under 200ms` (when no request threshold exists)
+- `Database can handle 1000 TPS` (when no request throughput exists)
 - `React components render efficiently`
-- `Redis cache hit rate above 80%`
+- `Redis cache hit rate above 80%` (when no request cache objective exists)
 
 ## Outputs
 

@@ -26,9 +26,13 @@ The controller records an immutable submission, starts one named updater with du
 
 Completion requires a terminal release receipt naming the exact source SHA,
 the pinned repository digest of the promoted image, and the verified installed
-readiness for every affected service. Report the unfinished phase and its
-recorded recovery owner when bounded recovery exhausts; preserve primary
-deployment success when only cleanup remains.
+readiness for every affected service. The serialized terminal result carries
+the verified `sourceRevision` in its outputs alongside `resolvedDigest` and
+`releaseReadinessArtifactRef`; receipt recovery validates that bound
+`sourceRevision` together with the digest before granting image authority, so
+the receipt is self-sufficient and never depends on an unbound second record.
+Report the unfinished phase and its recorded recovery owner when bounded
+recovery exhausts; preserve primary deployment success when only cleanup remains.
 
 - Verify readiness against the declared operator addresses from the immutable
   submission (`--operator-url` plus any configured base URL). An image pull,

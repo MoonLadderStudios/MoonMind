@@ -2865,7 +2865,10 @@ async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
                 "Document health review",
                 "Document health remediate",
             ]
-            assert [step["skill"]["id"] for step in steps] == ["auto", "auto"]
+            assert [step["skill"]["id"] for step in steps] == [
+                "document-health-review",
+                "document-health-remediate",
+            ]
             assert [
                 step["annotations"]["documentHealthRole"] for step in steps
             ] == ["review", "remediate"]
