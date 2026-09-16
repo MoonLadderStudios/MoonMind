@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
+from datetime import UTC
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -32,7 +34,9 @@ from moonmind.workflows.temporal import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from temporalio.client import WorkflowExecutionStatus
 
 CURRENT_USER_DEP = get_current_user()
 CURRENT_USER_OPTIONAL_DEP = get_current_user_optional()
@@ -124,6 +128,41 @@ def _walk_openapi_schema(
 
     return []
 
+class _StubCanceledDescription:
+    """Minimal WorkflowExecutionDescription shape for canceled contract rows.
+
+    MoonLadderStudios/MoonMind#4190: contract tests run without live
+    Temporal workers, so graceful cancel cannot be observed as a live
+    CANCELED close. The fake adapter records the accepted cancel below and
+    both describe paths surface it here so the DB projection stays canceled
+    instead of falling back to a stale live state.
+    """
+
+    def __init__(self, workflow_id: str) -> None:
+        now = datetime.now(UTC)
+        self.id = workflow_id
+        self.run_id = "run-contract-stub"
+        self.namespace = "default"
+        self.workflow_type = "MoonMind.UserWorkflow"
+        self.status = WorkflowExecutionStatus.CANCELED
+        self.search_attributes: dict[str, object] = {}
+        self.execution_time = now
+        self.start_time = now
+        self.close_time = now
+        self.previous_run_id = None
+        self.first_execution_run_id = None
+
+    async def memo(self) -> dict[str, object]:
+        return {}
+
+
+_CONTRACT_CANCELED_WORKFLOW_IDS: set[str] = set()
+
+
+def _contract_canceled_description(workflow_id: str) -> _StubCanceledDescription:
+    return _StubCanceledDescription(workflow_id)
+
+
 class _QueryHandle:
     def __init__(self, state: dict[str, dict[str, object]], workflow_id: str) -> None:
         self._state = state
@@ -132,6 +171,19 @@ class _QueryHandle:
     async def query(self, name: str):
         workflow_state = self._state.get(self._workflow_id, {})
         return workflow_state.get(name)
+
+    async def describe(self):
+        # Production fetch_workflow_execution (client.py) calls
+        # handle.describe(). The stub previously implemented only query(),
+        # so every authoritative read logged AttributeError and fell back
+        # to the DB row. Surface canceled rows explicitly; otherwise raise
+        # a controlled fallback so non-canceled rows keep their DB state
+        # instead of being overwritten by a fabricated RUNNING description.
+        if self._workflow_id in _CONTRACT_CANCELED_WORKFLOW_IDS:
+            return _contract_canceled_description(self._workflow_id)
+        raise RuntimeError(
+            "contract stub has no live Temporal description; preserving DB projection"
+        )
 
 class _QueryClient:
     def __init__(self, state: dict[str, dict[str, object]]) -> None:
@@ -155,6 +207,60 @@ def _reset_dependency_overrides():
     app.dependency_overrides.clear()
     yield
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _fake_temporal_cancel_confirmation(monkeypatch):
+    """Confirm graceful cancels without live Temporal workers.
+
+    Production cancel requires Temporal to report CANCELED before the DB
+    projection turns terminal (_require_processable_graceful_cancellation).
+    Contract containers have no workers to observe the request, so the live
+    describe stays RUNNING and the DB stays executing. Record accepted
+    cancels and report them as CANCELED; delegate everything else to the
+    live adapter so start/update/signal behavior is unchanged.
+    """
+    _CONTRACT_CANCELED_WORKFLOW_IDS.clear()
+    original_cancel = TemporalClientAdapter.cancel_workflow
+    original_terminate = TemporalClientAdapter.terminate_workflow
+    original_describe = TemporalClientAdapter.describe_workflow
+
+    async def _fake_cancel(self, workflow_id: str) -> None:
+        _CONTRACT_CANCELED_WORKFLOW_IDS.add(workflow_id)
+        try:
+            await original_cancel(self, workflow_id)
+        except Exception:
+            pass
+
+    async def _fake_terminate(
+        self, workflow_id: str, *, reason: str, run_id: str | None = None
+    ) -> None:
+        _CONTRACT_CANCELED_WORKFLOW_IDS.add(workflow_id)
+        try:
+            await original_terminate(
+                self, workflow_id, reason=reason, run_id=run_id
+            )
+        except Exception:
+            pass
+
+    async def _fake_describe(
+        self, workflow_id: str, *, run_id: str | None = None
+    ):
+        if workflow_id in _CONTRACT_CANCELED_WORKFLOW_IDS:
+            return _contract_canceled_description(workflow_id)
+        return await original_describe(self, workflow_id, run_id=run_id)
+
+    monkeypatch.setattr(TemporalClientAdapter, "cancel_workflow", _fake_cancel)
+    monkeypatch.setattr(
+        TemporalClientAdapter, "terminate_workflow", _fake_terminate
+    )
+    monkeypatch.setattr(
+        TemporalClientAdapter, "describe_workflow", _fake_describe
+    )
+    try:
+        yield
+    finally:
+        _CONTRACT_CANCELED_WORKFLOW_IDS.clear()
 
 @pytest.fixture
 def query_state():
