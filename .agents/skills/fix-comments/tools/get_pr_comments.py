@@ -226,14 +226,23 @@ def api_post_json(
 
 def fetch_review_thread_status(
     owner: str, repo: str, pr_number: int, token: str | None
-) -> dict[int, dict[str, Any]]:
+) -> tuple[dict[int, dict[str, Any]], bool]:
     """Fetch isResolved/isOutdated for each review thread comment via GraphQL.
 
-    Returns a mapping of comment database ID to thread identity and state.
-    Returns {} on any failure so callers gracefully fall back.
+    Returns a ``(mapping, complete)`` pair mapping comment database ID to
+    thread identity and state. ``complete`` is True only when every thread
+    page and every nested comment page loaded successfully; any transport
+    or GraphQL failure (including a missing token, which the GraphQL API
+    requires) returns the best-effort mapping with ``complete=False`` so
+    callers keep the affected items blocking instead of treating a partial
+    inventory as clean.
     """
     if not token:
-        return {}
+        eprint(
+            "Warning: No GitHub token available; review-thread inventory "
+            "is incomplete."
+        )
+        return {}, False
 
     query = """
     query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
@@ -246,6 +255,7 @@ def fetch_review_thread_status(
               isResolved
               isOutdated
               comments(first: 100) {
+                pageInfo { hasNextPage endCursor }
                 nodes { databaseId }
               }
             }
@@ -254,6 +264,37 @@ def fetch_review_thread_status(
       }
     }
     """
+
+    thread_comments_query = """
+    query($threadId: ID!, $cursor: String) {
+      node(id: $threadId) {
+        ... on PullRequestReviewThread {
+          id
+          isResolved
+          isOutdated
+          comments(first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { databaseId }
+          }
+        }
+      }
+    }
+    """
+
+    def record_comment(
+        result: dict[int, dict[str, Any]],
+        thread_id: Any,
+        is_resolved: bool,
+        is_outdated: bool,
+        comment: dict[str, Any],
+    ) -> None:
+        db_id = comment.get("databaseId")
+        if db_id is not None:
+            result[db_id] = {
+                "threadId": thread_id,
+                "isResolved": is_resolved,
+                "isOutdated": is_outdated,
+            }
 
     result: dict[int, dict[str, Any]] = {}
     cursor: str | None = None
@@ -283,16 +324,40 @@ def fetch_review_thread_status(
             nodes = threads_data.get("nodes", [])
 
             for thread in nodes:
+                thread_id = thread.get("id")
                 is_resolved = thread.get("isResolved", False)
                 is_outdated = thread.get("isOutdated", False)
-                for comment in thread.get("comments", {}).get("nodes", []):
-                    db_id = comment.get("databaseId")
-                    if db_id is not None:
-                        result[db_id] = {
-                            "threadId": thread.get("id"),
-                            "isResolved": is_resolved,
-                            "isOutdated": is_outdated,
-                        }
+                comments_data = thread.get("comments", {})
+                for comment in comments_data.get("nodes", []):
+                    record_comment(
+                        result, thread_id, is_resolved, is_outdated, comment
+                    )
+                comments_cursor = (comments_data.get("pageInfo") or {}).get(
+                    "endCursor"
+                )
+                while (comments_data.get("pageInfo") or {}).get("hasNextPage"):
+                    followup = api_post_json(
+                        "https://api.github.com/graphql",
+                        {
+                            "query": thread_comments_query,
+                            "variables": {
+                                "threadId": thread_id,
+                                "cursor": comments_cursor,
+                            },
+                        },
+                        token,
+                    )
+                    thread_node = (followup.get("data") or {}).get("node") or {}
+                    is_resolved = thread_node.get("isResolved", is_resolved)
+                    is_outdated = thread_node.get("isOutdated", is_outdated)
+                    comments_data = thread_node.get("comments", {})
+                    for comment in comments_data.get("nodes", []):
+                        record_comment(
+                            result, thread_id, is_resolved, is_outdated, comment
+                        )
+                    comments_cursor = (comments_data.get("pageInfo") or {}).get(
+                        "endCursor"
+                    )
 
             page_info = threads_data.get("pageInfo", {})
             if page_info.get("hasNextPage"):
@@ -302,9 +367,9 @@ def fetch_review_thread_status(
 
     except Exception as exc:
         eprint(f"Warning: GraphQL thread status fetch failed: {exc}")
-        return {}
+        return result, False
 
-    return result
+    return result, True
 
 def fetch_paginated(url: str, token: str | None) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
@@ -435,7 +500,9 @@ def main() -> None:
     issue_comments_raw = fetch_paginated(f"{base}/issues/{pr_number}/comments", token)
     review_comments_raw = fetch_paginated(f"{base}/pulls/{pr_number}/comments", token)
 
-    thread_status = fetch_review_thread_status(owner, repo, pr_number, token)
+    thread_status, threads_complete = fetch_review_thread_status(
+        owner, repo, pr_number, token
+    )
 
     comments: list[dict[str, Any]] = []
     comments.extend(normalize_issue_comment(c) for c in issue_comments_raw)
@@ -458,6 +525,10 @@ def main() -> None:
         "pr_title": pr_metadata.get("title"),
         "pr_url": pr_metadata.get("html_url"),
         "comment_count": len(comments),
+        # Fail-closed thread inventory flag: false means at least one thread
+        # or nested comment page could not be verified, so consumers must
+        # keep the affected items blocking and never invent a clean result.
+        "thread_inventory_complete": threads_complete,
         "comments": comments,
     }
 
