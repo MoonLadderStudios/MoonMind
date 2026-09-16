@@ -1,4 +1,10 @@
 # Disposable dependencies for authority-handoff qualification; never the installed stack.
+# MoonLadderStudios/MoonMind#4376: every backend-matrix reliability shard
+# starts this file under its own isolated Docker project name
+# (moonmind-reliability-<suite>) with its own network and volumes, so no
+# mutable release state is shared between shards. Dependency-layer reuse
+# comes from the native Docker layer cache (pinned upstream images pulled
+# once per runner) plus the workflow pip cache; no custom cache subsystem.
 services:
   minio:
     image: quay.io/minio/minio:RELEASE.2025-02-03T21-03-04Z@sha256:a62e44a7db506b8ed114a44e67b4996c4f1ecca981d9c6e40aa2581334999313

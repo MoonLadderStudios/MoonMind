@@ -10,10 +10,65 @@ import argparse
 import ipaddress
 import json
 import os
+import re
 import subprocess
 import tempfile
 import uuid
 from pathlib import Path
+
+
+_MAX_DIAGNOSTIC_CHARS = 4000
+_MAX_COMMAND_CHARS = 1000
+
+_URL_USERINFO_RE = re.compile(r"(://)[^/\s:]+:[^/\s@]+@")
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)(password|passwd|token|secret|authorization|cookie)(\s*[:=]\s*)(\S+)"
+)
+
+
+def _redact_diagnostics(text):
+    """Redact likely credential material while keeping registry diagnostics."""
+    redacted = _URL_USERINFO_RE.sub(r"\1***@", text or "")
+    return _SECRET_ASSIGNMENT_RE.sub(r"\1\2***", redacted)
+
+
+def _docker_pull_hint(combined_lower):
+    if (
+        "cannot connect to the docker daemon" in combined_lower
+        or "is the docker daemon running" in combined_lower
+        or "permission denied while trying to connect" in combined_lower
+    ):
+        return (
+            "Hint: the Docker daemon is unreachable; start Docker Desktop "
+            "(or check DOCKER_HOST and socket permissions) and retry."
+        )
+    if (
+        "unauthorized" in combined_lower
+        or "authentication required" in combined_lower
+        or "no basic auth credentials" in combined_lower
+        or "login required" in combined_lower
+        or "permission_denied" in combined_lower
+        or "denied: denied" in combined_lower
+        or "access denied" in combined_lower
+    ):
+        return (
+            "Hint: registry authentication failed; run `docker login ghcr.io` "
+            "with an account that can read the release repository and retry."
+        )
+    if (
+        "manifest unknown" in combined_lower
+        or "manifest for" in combined_lower
+        or "name unknown" in combined_lower
+        or "no such image" in combined_lower
+        or "not found" in combined_lower
+    ):
+        return (
+            "Hint: the fetched commit has no published image yet; check the "
+            "image publish workflow for that SHA, wait for it to publish, then "
+            "retry. Never substitute `latest` for the pinned sha-<commit> image; "
+            "for local development use --local-build instead."
+        )
+    return ""
 
 
 def run(args, *, cwd, env=None):
@@ -21,11 +76,32 @@ def run(args, *, cwd, env=None):
         args, cwd=cwd, env=env, capture_output=True, text=True, timeout=900
     )
     if result.returncode:
-        # Docker/Git diagnostics can contain registry or remote credentials.
-        raise RuntimeError(
-            f"{args[0]} {args[1]} failed (exit {result.returncode}); deployment remains owned by its recorded release job"
+        command = f"{args[0]} {args[1]}" if len(args) > 1 else str(args[0])
+        full_command = _redact_diagnostics(" ".join(str(part) for part in args))[
+            :_MAX_COMMAND_CHARS
+        ]
+        stdout = getattr(result, "stdout", "") or ""
+        stderr = getattr(result, "stderr", "") or ""
+        combined = f"{stdout}\n{stderr}".strip()
+        detail = _redact_diagnostics(combined).strip()[-_MAX_DIAGNOSTIC_CHARS:]
+        hint = ""
+        if len(args) > 1 and args[0] == "docker" and args[1] == "pull":
+            hint = _docker_pull_hint(combined.lower())
+        message = (
+            f"{command} failed (exit {result.returncode}); "
+            "deployment remains owned by its recorded release job"
+            f"\nCommand (redacted): {full_command}"
         )
-    return result.stdout.strip()
+        if detail:
+            message += f"\nDiagnostics (redacted):\n{detail}"
+        else:
+            message += "\nDiagnostics: no output captured."
+        if hint:
+            message += f"\n{hint}"
+        # Docker/Git diagnostics can contain registry or remote credentials,
+        # so only the redacted form above is reported.
+        raise RuntimeError(message)
+    return (getattr(result, "stdout", "") or "").strip()
 
 
 def _default_operator_urls(rendered):
@@ -79,10 +155,24 @@ def main(argv=None):
         "--resume", help="Resume the printed submission ID using its original inputs"
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--local-build", action="store_true",
+        help="Development-only working-tree overlay update (bind-mounts live "
+        "source via docker-compose.development.yaml). Never an immutable "
+        "release: no image is pulled, published, or digest-pinned and no "
+        "release submission is recorded. The default immutable path is "
+        "unchanged when this flag is absent.",
+    )
     args = parser.parse_args(argv)
     if args.resume and args.operator_url:
         raise ValueError("Resume preserves the original operator URLs; omit --operator-url")
+    if args.local_build and args.resume:
+        raise ValueError("Resume replays a recorded release submission; omit --local-build")
+    if args.local_build and args.image_repository != parser.get_default("image_repository"):
+        raise ValueError("A local working-tree update uses no registry image; omit --image-repository")
     repo = args.repo.resolve(strict=True)
+    if args.local_build:
+        return _local_build_update(args, repo)
     submissions = repo / "deploy" / "state" / "release-submissions"
     if args.resume:
         submission_id = str(uuid.UUID(args.resume))
@@ -120,7 +210,13 @@ def main(argv=None):
             ["git", "rev-parse", "--verify", "FETCH_HEAD^{commit}"], cwd=repo
         )
         image = f"{args.image_repository}:sha-{revision}"
-        run(["docker", "pull", image], cwd=repo)
+        try:
+            run(["docker", "pull", image], cwd=repo)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"Published image {image} for origin/{args.branch} revision "
+                f"{revision} is unavailable; {exc}"
+            ) from exc
         observed = json.loads(run(["docker", "image", "inspect", image], cwd=repo))[0]
         if (
             observed.get("Config", {})
@@ -254,6 +350,148 @@ def main(argv=None):
                 },
             check=False,
         ).returncode
+
+
+def _compose_ps_state(*, repo, project):
+    """Return {service name: sorted port bindings} for the Compose project."""
+    output = run(
+        ["docker", "compose", "--project-name", project, "ps", "--format", "json"],
+        cwd=repo,
+    )
+    try:
+        records = json.loads(output or "[]")
+    except ValueError:
+        records = []
+        for line in (output or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except ValueError:
+                continue
+    if isinstance(records, dict):
+        records = [records]
+    state = {}
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("Name") or item.get("Service") or "")
+        bindings = sorted(
+            "{url}:{published}->{target}/{proto}".format(
+                url=pub.get("URL") or "",
+                published=pub.get("PublishedPort") or "",
+                target=pub.get("TargetPort") or "",
+                proto=pub.get("Protocol") or "",
+            )
+            for pub in (item.get("Publishers") or [])
+            if isinstance(pub, dict)
+        )
+        if name:
+            state[name] = bindings
+    return state
+
+
+def _check_operator_url(url, *, timeout_seconds=30):
+    import urllib.request
+
+    target = url.rstrip("/") + "/healthz"
+    request = urllib.request.Request(target, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            status = response.getcode()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Operator URL {url} failed its health check; deployment update did not verify"
+        ) from exc
+    if status != 200:
+        raise RuntimeError(
+            f"Operator URL {url} returned HTTP {status} from /healthz; deployment update did not verify"
+        )
+
+
+def _local_build_update(args, repo):
+    """Recreate the stack on the live-source development overlay.
+
+    Development-only: exercises the working tree without building,
+    publishing, or pinning any image. Writes no release submission and
+    claims no digest. Deployment-owned `.env` is never modified.
+    """
+    head = run(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=repo)
+    dirty = bool(
+        run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=no"], cwd=repo
+        ).strip()
+    )
+    overlay = repo / "docker-compose.development.yaml"
+    if not overlay.exists():
+        overlay = repo / "docker-compose.development.yml"
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "action": "local_source_overlay_update",
+                    "repository": str(repo),
+                    "source": "working-tree",
+                    "head": head,
+                    "dirty": dirty,
+                    "overlay": overlay.name if overlay.exists() else None,
+                    "operatorUrls": list(args.operator_url),
+                    "checkoutMutation": False,
+                    "releaseSubmission": "none (development-only; not an immutable release)",
+                }
+            )
+        )
+        return 0
+    if not overlay.exists():
+        raise RuntimeError(
+            "The repository has no live-source development overlay; refusing a local working-tree update"
+        )
+    rendered = json.loads(
+        run(["docker", "compose", "config", "--format", "json"], cwd=repo)
+    )
+    project = args.compose_project or rendered["name"]
+    before = _compose_ps_state(repo=repo, project=project)
+    if not before:
+        raise RuntimeError(
+            "Could not read pre-update Compose state; refusing a local working-tree update without a binding baseline"
+        )
+    command = [
+        "docker",
+        "compose",
+        "--project-name",
+        project,
+        "--project-directory",
+        str(repo),
+        "-f",
+        "docker-compose.yaml",
+        "-f",
+        overlay.name,
+        "up",
+        "-d",
+        "--wait",
+        "--wait-timeout",
+        "600",
+    ]
+    result = subprocess.run(command, cwd=repo, capture_output=True, text=True, timeout=900)
+    if result.returncode:
+        raise RuntimeError(
+            f"docker compose up failed (exit {result.returncode}); deployment remains on its previous containers"
+        )
+    after = _compose_ps_state(repo=repo, project=project)
+    for name, bindings in before.items():
+        if after.get(name) != bindings:
+            raise RuntimeError(
+                f"Published bindings changed for {name}; expected the overlay update to preserve operator access"
+            )
+    for url in args.operator_url:
+        _check_operator_url(url)
+    print(
+        "Local working-tree overlay update verified (development-only; not an "
+        f"immutable release; head {head[:12]}{' dirty' if dirty else ''})",
+        flush=True,
+    )
+    return 0
 
 
 if __name__ == "__main__":
