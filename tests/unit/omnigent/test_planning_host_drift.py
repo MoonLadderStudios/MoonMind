@@ -72,6 +72,35 @@ def test_reconcile_foreign_repository_fails_closed():
     )
 
 
+def test_reconcile_placeholders_and_mutable_tags_fail_closed():
+    real = "ghcr.io/example/host@sha256:" + "b" * 64
+    assert (
+        reconcile_effective_launch_to_selected_host(
+            _launch("ghcr.io/example/host@sha256:" + "0" * 64), real
+        )
+        is None
+    )
+    assert (
+        reconcile_effective_launch_to_selected_host(
+            _launch("ghcr.io/example/host@sha256:" + "c" * 64), real
+        )
+        is None
+    )
+    assert (
+        reconcile_effective_launch_to_selected_host(
+            _launch("ghcr.io/example/host:latest"), real
+        )
+        is None
+    )
+    assert (
+        reconcile_effective_launch_to_selected_host(
+            _launch("ghcr.io/example/host@sha256:" + "a" * 64),
+            "ghcr.io/example/host:latest",
+        )
+        is None
+    )
+
+
 class _ArtifactService:
     def __init__(self) -> None:
         self.payloads: dict[str, bytes] = {}
