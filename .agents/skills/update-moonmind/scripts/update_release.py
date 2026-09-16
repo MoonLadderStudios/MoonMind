@@ -7,7 +7,6 @@ selected image owns deployment semantics, including canary, promotion and drain.
 from __future__ import annotations
 
 import argparse
-import ipaddress
 import json
 import os
 import re
@@ -102,41 +101,6 @@ def run(args, *, cwd, env=None):
         # so only the redacted form above is reported.
         raise RuntimeError(message)
     return (getattr(result, "stdout", "") or "").strip()
-
-
-def _default_operator_urls(rendered):
-    """Loopback defaults so a bare invocation works with published images.
-
-    Mirrors the image-owned ``operator_urls`` rule: a configured
-    ``MOONMIND_PUBLIC_BASE_URL`` stays image-resolved, otherwise published
-    API bindings supply origins with wildcard mapped to their loopback member
-    on the same port. Returns [] when the image must resolve the target
-    (configured base URL) or when no fixed published API port exists.
-    """
-    api = (rendered.get("services", {}) or {}).get("api", {}) or {}
-    environment = api.get("environment", {}) or {}
-    if str(environment.get("MOONMIND_PUBLIC_BASE_URL") or "").strip():
-        return []
-    urls = []
-    for binding in api.get("ports", []) or []:
-        try:
-            if binding.get("protocol", "tcp") != "tcp":
-                continue
-            if int(binding.get("target", 0)) != 8000:
-                continue
-            address = ipaddress.ip_address(binding.get("host_ip") or "0.0.0.0")
-        except ValueError:
-            continue
-        port = str(binding.get("published") or "")
-        if not port.isdecimal() or not 1 <= int(port) <= 65535:
-            continue
-        if address.is_unspecified:
-            address = ipaddress.ip_address(
-                "::1" if address.version == 6 else "127.0.0.1"
-            )
-        authority = f"[{address}]" if address.version == 6 else str(address)
-        urls.append(f"http://{authority}:{port}")
-    return sorted(set(urls))
 
 
 def main(argv=None):
@@ -241,7 +205,7 @@ def main(argv=None):
         )
         project = args.compose_project or rendered["name"]
         submission_id = str(uuid.uuid4())
-        operator_urls = list(args.operator_url) or _default_operator_urls(rendered)
+        operator_urls = list(args.operator_url)
         record = {
             "repo": str(repo),
             "project": project,
