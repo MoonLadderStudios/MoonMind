@@ -184,3 +184,95 @@ def test_main_pull_failure_names_branch_revision_and_image(tmp_path, monkeypatch
     assert revision in message
     assert f":sha-{revision}" in message
     assert "origin/main" in message
+
+
+def _init_two_commit_repo(repo):
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+    git("init", "-b", "main")
+    git("config", "user.email", "qualification@example.invalid")
+    git("config", "user.name", "Qualification")
+    (repo / "source.txt").write_text("v1")
+    git("add", ".")
+    git("commit", "-m", "first")
+    parent = git("rev-parse", "HEAD")
+    (repo / "source.txt").write_text("v2")
+    git("add", ".")
+    git("commit", "-m", "second")
+    tip = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    return parent, tip
+
+
+def test_falls_back_to_newest_published_ancestor(tmp_path, monkeypatch):
+    """Default update uses newest published ancestor when tip has no image yet."""
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    parent, tip = _init_two_commit_repo(repo)
+    assert parent != tip
+    original_run = subprocess.run
+    digest = "sha256:" + "b" * 64
+    pulls = []
+
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        if args[1] == "pull":
+            pulls.append(args[2])
+            if args[2].endswith(tip):
+                return SimpleNamespace(returncode=1, stdout="", stderr="manifest unknown")
+            assert args[2].endswith(parent)
+            return SimpleNamespace(returncode=0, stdout="pulled")
+        if args[1:3] == ["image", "inspect"]:
+            output = json.dumps(
+                [
+                    {
+                        "RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"],
+                        "Config": {"Labels": {"org.opencontainers.image.revision": parent}},
+                    }
+                ]
+            )
+            return SimpleNamespace(returncode=0, stdout=output)
+        if args[1:3] == ["compose", "config"]:
+            return SimpleNamespace(returncode=0, stdout='{"name":"existing-project"}')
+        if args[1] == "run":
+            return SimpleNamespace(returncode=0, stdout="services: {}")
+        if args[1] == "compose":
+            payload = json.loads(args[-1])
+            assert payload["inputs"]["sourceRevision"] == parent
+            assert payload["inputs"]["requestedTipRevision"] == tip
+            assert payload["inputs"]["skippedUnpublishedRevisions"] == [tip]
+            return SimpleNamespace(returncode=0, stdout="")
+        raise AssertionError(f"unexpected docker command: {args}")
+
+    monkeypatch.setattr(update.subprocess, "run", command)
+    assert update.main(["--repo", str(repo)]) == 0
+    assert len(pulls) == 2
+    assert pulls[0].endswith(tip)
+    assert pulls[1].endswith(parent)
+    submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
+    record = json.loads(submission.read_text())
+    assert record["inputs"]["sourceRevision"] == parent
+    assert record["inputs"]["requestedTipRevision"] == tip
+
+
+def test_unpublished_tip_does_not_mask_auth_failure(tmp_path, monkeypatch):
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    _init_two_commit_repo(repo)
+    original_run = subprocess.run
+    pulls = []
+
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        assert args[1] == "pull"
+        pulls.append(args[2])
+        return SimpleNamespace(
+            returncode=1, stdout="", stderr="unauthorized: authentication required"
+        )
+
+    monkeypatch.setattr(update.subprocess, "run", command)
+    with pytest.raises(RuntimeError, match="docker login"):
+        update.main(["--repo", str(repo)])
+    assert len(pulls) == 1
