@@ -208,7 +208,8 @@ keys — those raise and must go through the existing API owner/coordination
 path. Snapshot and binding owners patch only their memo keys and artifact
 refs; snapshot identity is immutable and binding revisions cannot move
 backwards. Repair-status bookkeeping (`sync_state`/`sync_error`/`source_mode`
-only) and artifact-linkage rows are narrow bookkeeping writes that never touch
+only, via `api_service.core.sync.mark_projection_repair_status`) and
+artifact-linkage rows are narrow bookkeeping writes that never touch
 lifecycle, identity, parameters, or memo.
 
 The execution service supplies complete parameter and ordinary memo snapshots,

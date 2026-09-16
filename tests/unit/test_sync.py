@@ -1966,6 +1966,135 @@ async def test_api_shaped_canonical_patch_accepts_scheduled_for_and_rejects_move
 
 
 @pytest.mark.asyncio
+async def test_repair_status_helper_touches_only_bookkeeping_fields(tmp_path):
+    """R8: narrow repair-status writes go through the shared mutator owner and
+    never touch lifecycle, identity, parameters, memo, or refs."""
+    from api_service.core.sync import mark_projection_repair_status
+    from api_service.db.models import Base
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            _seed_execution(
+                session, "mm:repair-status-narrow", updated_at=stored_at,
+                refs=["ref-1"], parameters={"targetRuntime": "codex_cli"},
+                memo={"title": "Task"},
+            )
+            await session.commit()
+
+            before = await session.get(
+                TemporalExecutionRecord, "mm:repair-status-narrow"
+            )
+            before_state = before.state
+            before_run = before.run_id
+            before_memo = dict(before.memo or {})
+            before_params = dict(before.parameters or {})
+            before_refs = list(before.artifact_refs or [])
+            before_source_mode = before.source_mode
+
+            marked = await mark_projection_repair_status(
+                session, workflow_id="mm:repair-status-narrow",
+                sync_state=TemporalExecutionProjectionSyncState.STALE,
+                sync_error="visibility lag",
+            )
+            await session.commit()
+            await session.refresh(marked)
+
+            assert marked.sync_state is TemporalExecutionProjectionSyncState.STALE
+            assert marked.sync_error == "visibility lag"
+            assert marked.state == before_state
+            assert marked.run_id == before_run
+            assert dict(marked.memo or {}) == before_memo
+            assert dict(marked.parameters or {}) == before_params
+            assert list(marked.artifact_refs or []) == before_refs
+            # Narrow status patch is not a meaningful lifecycle revision.
+            assert marked.projection_version == 1
+            # ...and it never advances sync bookkeeping it does not own.
+            assert _as_utc(marked.last_synced_at) == stored_at
+            assert marked.source_mode == before_source_mode
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_repair_status_helper_rejects_fresh_and_unknown_states(tmp_path):
+    """R8: FRESH is only reachable through the full mutator; unknown states raise."""
+    import pytest as _pytest
+
+    from api_service.core.sync import mark_projection_repair_status
+    from api_service.db.models import Base
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            _seed_execution(session, "mm:repair-status-guard", updated_at=stored_at)
+            await session.commit()
+
+            with _pytest.raises(ValueError):
+                await mark_projection_repair_status(
+                    session, workflow_id="mm:repair-status-guard",
+                    sync_state=TemporalExecutionProjectionSyncState.FRESH,
+                )
+                await session.rollback()
+            with _pytest.raises(ValueError):
+                await mark_projection_repair_status(
+                    session, workflow_id="mm:repair-status-guard",
+                    sync_state="bogus",
+                )
+                await session.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_repair_status_helper_applies_source_mode_and_missing_row(tmp_path):
+    """R8: source_mode changes only when explicitly passed; missing rows yield None."""
+    from api_service.core.sync import mark_projection_repair_status
+    from api_service.db.models import (
+        Base,
+        TemporalExecutionProjectionSourceMode,
+    )
+
+    engine, session_factory = _sqlite_session_factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with session_factory() as session:
+            assert await mark_projection_repair_status(
+                session, workflow_id="mm:repair-status-missing",
+                sync_state=TemporalExecutionProjectionSyncState.STALE,
+            ) is None
+
+            stored_at = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
+            _seed_execution(session, "mm:repair-status-mode", updated_at=stored_at)
+            await session.commit()
+
+            marked = await mark_projection_repair_status(
+                session, workflow_id="mm:repair-status-mode",
+                sync_state=TemporalExecutionProjectionSyncState.REPAIR_PENDING,
+                sync_error="projection write failed",
+                source_mode=TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE,
+            )
+            await session.commit()
+            await session.refresh(marked)
+            assert marked.sync_state is TemporalExecutionProjectionSyncState.REPAIR_PENDING
+            assert marked.sync_error == "projection write failed"
+            assert marked.source_mode is (
+                TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
+            )
+            # last_synced_at still never advances on a narrow status patch.
+            assert _as_utc(marked.last_synced_at) == stored_at
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_snapshot_owner_patch_applies_first_write_to_both_rows(tmp_path):
     """REQ-02: a first-time snapshot-owner patch carries snapshot memo keys
     and refs to both canonical and projection rows through the mutator."""

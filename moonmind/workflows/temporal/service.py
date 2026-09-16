@@ -4221,12 +4221,22 @@ class TemporalExecutionService:
         workflow_id: str,
         sync_error: str | None = None,
     ) -> TemporalExecutionRecord:
-        record = await self._require_projection_execution(
-            workflow_id,
-            include_orphaned=True,
+        # Narrow repair-status bookkeeping (issue #3946 R8): lifecycle,
+        # identity, parameters, memo, and refs are owned by the shared
+        # mutator; this delegates the status-only patch to the shared
+        # boundary in api_service.core.sync so the field list has one owner.
+        from api_service.core.sync import mark_projection_repair_status
+
+        record = await mark_projection_repair_status(
+            self._session,
+            workflow_id=self.canonicalize_workflow_id(workflow_id),
+            sync_state=TemporalExecutionProjectionSyncState.STALE,
+            sync_error=sync_error,
         )
-        record.sync_state = TemporalExecutionProjectionSyncState.STALE
-        record.sync_error = (sync_error or "").strip() or None
+        if record is None:
+            raise TemporalExecutionNotFoundError(
+                f"Workflow execution {workflow_id} was not found"
+            )
         await self._session.commit()
         await self._session.refresh(record)
         return record
@@ -4317,12 +4327,20 @@ class TemporalExecutionService:
         workflow_id: str,
         sync_error: str | None = None,
     ) -> TemporalExecutionRecord:
-        record = await self._require_projection_execution(
-            workflow_id,
-            include_orphaned=True,
+        # Narrow repair-status bookkeeping (issue #3946 R8): see
+        # mark_projection_stale for the shared-boundary delegation.
+        from api_service.core.sync import mark_projection_repair_status
+
+        record = await mark_projection_repair_status(
+            self._session,
+            workflow_id=self.canonicalize_workflow_id(workflow_id),
+            sync_state=TemporalExecutionProjectionSyncState.REPAIR_PENDING,
+            sync_error=sync_error,
         )
-        record.sync_state = TemporalExecutionProjectionSyncState.REPAIR_PENDING
-        record.sync_error = (sync_error or "").strip() or None
+        if record is None:
+            raise TemporalExecutionNotFoundError(
+                f"Workflow execution {workflow_id} was not found"
+            )
         await self._session.commit()
         await self._session.refresh(record)
         return record
@@ -4333,12 +4351,20 @@ class TemporalExecutionService:
         workflow_id: str,
         sync_error: str | None = None,
     ) -> TemporalExecutionRecord:
-        record = await self._require_projection_execution(
-            workflow_id,
-            include_orphaned=True,
+        # Narrow repair-status bookkeeping (issue #3946 R8): see
+        # mark_projection_stale for the shared-boundary delegation.
+        from api_service.core.sync import mark_projection_repair_status
+
+        record = await mark_projection_repair_status(
+            self._session,
+            workflow_id=self.canonicalize_workflow_id(workflow_id),
+            sync_state=TemporalExecutionProjectionSyncState.ORPHANED,
+            sync_error=sync_error,
         )
-        record.sync_state = TemporalExecutionProjectionSyncState.ORPHANED
-        record.sync_error = (sync_error or "").strip() or None
+        if record is None:
+            raise TemporalExecutionNotFoundError(
+                f"Workflow execution {workflow_id} was not found"
+            )
         await self._session.commit()
         await self._session.refresh(record)
         return record
@@ -6236,22 +6262,6 @@ class TemporalExecutionService:
             return None
         return record
 
-    async def _require_projection_execution(
-        self,
-        workflow_id: str,
-        *,
-        include_orphaned: bool,
-    ) -> TemporalExecutionRecord:
-        record = await self._load_projection_execution(
-            workflow_id,
-            include_orphaned=include_orphaned,
-        )
-        if record is None:
-            raise TemporalExecutionNotFoundError(
-                f"Workflow execution {workflow_id} was not found"
-            )
-        return record
-
     def _apply_filters(
         self,
         stmt: Select[Any],
@@ -6411,25 +6421,23 @@ class TemporalExecutionService:
         *,
         sync_error: str,
     ) -> TemporalExecutionRecord | None:
-        # Repair-status fallback (REQ-02, justified bypass): reachable only
-        # after the shared mutator raised and the caller rolled back. It sets
-        # projection repair bookkeeping (sync_state/sync_error/source_mode)
-        # without touching lifecycle, identity, parameters, memo, or refs, so
-        # no lifecycle field is written outside mutate_execution_projection.
+        # Repair-status fallback (issue #3946 R8): reachable only after the
+        # shared mutator raised and the caller rolled back. The status-only
+        # patch delegates to the shared boundary in api_service.core.sync so
+        # no lifecycle field is written outside the cohesive service.
         # Caller owns commit/rollback of this narrow status patch.
+        from api_service.core.sync import mark_projection_repair_status
+
         try:
-            projection = await self._load_projection_execution(
-                snapshot["workflow_id"],
-                include_orphaned=True,
+            projection = await mark_projection_repair_status(
+                self._session,
+                workflow_id=snapshot["workflow_id"],
+                sync_state=TemporalExecutionProjectionSyncState.REPAIR_PENDING,
+                sync_error=sync_error[:1000] or "projection_sync_failed",
+                source_mode=TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE,
             )
             if projection is None:
                 return None
-
-            projection.sync_state = TemporalExecutionProjectionSyncState.REPAIR_PENDING
-            projection.sync_error = sync_error[:1000] or "projection_sync_failed"
-            projection.source_mode = (
-                TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE
-            )
             await self._session.commit()
             await self._session.refresh(projection)
             return projection
@@ -6457,6 +6465,11 @@ class TemporalExecutionService:
         *,
         sync_error: str,
     ) -> TemporalExecutionRecord:
+        # Detached read-only fallback (issue #3946 R8): returned when no
+        # projection row exists and the mutator cannot repair one. It is
+        # never added to the session or persisted — callers serialize it
+        # directly — so it is not a writer bypass. Repair stays with the
+        # shared mutator on the next reconciling write.
         return TemporalExecutionRecord(
             **source,
             projection_version=0,
