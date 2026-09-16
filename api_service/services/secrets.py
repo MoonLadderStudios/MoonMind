@@ -25,7 +25,7 @@ Design rules owned by this service:
   rejected.
 * Candidate validation happens outside row-locked work via the injected
   probe boundary (``validator`` / ``validation`` envelope). The result is
-  bound to an opaque HMAC candidate fingerprint, the expected active
+  bound to an opaque key-bound candidate fingerprint, the expected active
   revision, and actor/owner identity. Plain tokens and publicly comparable
   digests are never persisted.
 * Restart-safe invalidation: revision evidence is recorded transactionally in
@@ -45,7 +45,6 @@ changes.
 """
 
 import hashlib
-import hmac
 import inspect
 import structlog
 from typing import Any, Awaitable, Callable, Sequence
@@ -169,14 +168,22 @@ def _status_value(status: Any) -> str:
     return status.value if isinstance(status, SecretStatus) else str(status)
 
 
+# Domain-separated slow derivation for candidate binding (same pattern as
+# moonmind/provider_profiles/lease_client.py): candidate values originate at
+# credential-sensitive boundaries, so bind them with scrypt keyed by the
+# server secret instead of a fast hash. The stored fingerprint stays opaque
+# without the server key and is stable for change detection.
+_CANDIDATE_FINGERPRINT_DOMAIN = b"moonmind-secret-candidate-fingerprint-v1"
+
+
 def _candidate_fingerprint(candidate: str) -> str:
     """Opaque candidate identity bound with the server encryption key.
 
-    HMAC (not a plain hash) so the stored fingerprint is not publicly
-    comparable: an attacker with the fingerprint cannot test candidate
-    tokens against it without the server key. This is a keyed change-detection
-    fingerprint, not password storage or password verification, so a
-    deliberately slow password hash (bcrypt/scrypt/argon2) does not apply.
+    Slow scrypt derivation (not a fast hash) so the stored fingerprint is
+    not brute-forceable at hash speed and not publicly comparable: testing
+    a candidate requires the server key. Deterministic for change
+    detection; this is an identity binding, not password storage, so no
+    per-value salt is stored.
     """
     try:
         from api_service.core.encryption import get_encryption_key
@@ -184,13 +191,14 @@ def _candidate_fingerprint(candidate: str) -> str:
         key = get_encryption_key()
     except Exception:
         key = "issue-4006-fallback-pepper"
-    # Keyed HMAC change-detection fingerprint, not password hashing:
-    # verification requires the server-side encryption key, so offline
-    # brute force without that key is infeasible (see code-scanning alert
-    # 111 dismissal rationale). A slow password KDF does not apply here.
-    return hmac.new(
-        key.encode("utf-8"), candidate.encode("utf-8"), hashlib.sha256
-    ).hexdigest()
+    return hashlib.scrypt(
+        candidate.encode("utf-8"),
+        salt=_CANDIDATE_FINGERPRINT_DOMAIN + key.encode("utf-8"),
+        n=2**14,
+        r=8,
+        p=1,
+        dklen=32,
+    ).hex()
 
 
 def _redacted_revision_json(secret: ManagedSecret) -> dict[str, Any]:
