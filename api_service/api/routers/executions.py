@@ -2793,7 +2793,10 @@ def _build_temporal_execution_query(
     include_order: bool = False,
     usable_search_attributes: frozenset[str] | None = None,
 ) -> tuple[str, str]:
-    query_parts: list[str] = []
+    # Continue-As-New predecessors retain stale mm_state values. Product
+    # routes follow the successor, so exclude predecessors before pagination
+    # and counting across list, metrics, and facets.
+    query_parts: list[str] = ['ExecutionStatus!="ContinuedAsNew"']
     usable_attrs = usable_search_attributes or frozenset()
 
     def excluded(alias: str) -> bool:
