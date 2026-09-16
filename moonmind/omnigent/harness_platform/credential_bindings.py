@@ -758,6 +758,10 @@ def attenuated_child_grants_for(
     Model-authority slots are never copied here: the child plan re-derives
     model authority through its own admission.
     """
+    validate_child_snapshot_coverage(
+        parent_binding_set=parent_binding_set,
+        child_snapshot_refs=child_snapshot_refs,
+    )
     grants: dict[str, ChildRepositoryGrant] = {}
     for slot, binding in repository_authority_bindings(parent_binding_set).items():
         child_snapshot = child_snapshot_refs.get(slot) if isinstance(child_snapshot_refs, Mapping) else None
@@ -784,6 +788,74 @@ def assert_worker_supports_binding_set(
     if repository_authority_bindings(binding_set) and "repository" not in kinds:
         raise _binding_conflict(
             "worker supports model authority only and cannot consume repository authority"
+        )
+
+
+def plan_bindings_have_repository_authority(bindings: Any) -> bool:
+    """Lightweight repository-authority probe for production call sites.
+
+    Works on raw plan-payload binding mappings without requiring a full
+    binding-set rebuild, so legacy/test plan shapes with model-only
+    SimpleNamespace values probe as model-only instead of crashing. Any
+    positive probe must still go through the versioned constructor before
+    a grant or admission decision is made.
+    """
+
+    try:
+        values = list(dict(bindings or {}).values())
+    except Exception:
+        return False
+    return any(is_repository_authority(binding) for binding in values)
+
+
+def required_worker_authority_kinds(
+    binding_set: CredentialBindingSet,
+) -> tuple[str, ...]:
+    """Return the worker authority kinds a binding set requires.
+
+    Model-only sets (legacy v1 or v2 model) require ``("model",)``; any set
+    carrying repository authority requires ``("model", "repository")``.
+    Production worker admission compares the worker's advertised kinds
+    against this requirement via :func:`assert_worker_supports_binding_set`
+    instead of re-deriving the rule per call site.
+    """
+    if repository_authority_bindings(binding_set):
+        return ("model", "repository")
+    return ("model",)
+
+
+def validate_child_snapshot_coverage(    *,
+    parent_binding_set: CredentialBindingSet,
+    child_snapshot_refs: Mapping[str, str] | None,
+) -> None:
+    """Require exact attenuated-snapshot coverage for child inheritance.
+
+    Every parent repository slot needs its own freshly admitted child
+    snapshot, and unknown extra child snapshots are rejected so a caller
+    cannot smuggle an undeclared grant into the child. Model slots are
+    never part of this mapping: the child plan re-derives model authority
+    through its own admission.
+    """
+    parent_slots = set(repository_authority_bindings(parent_binding_set).keys())
+    supplied = dict(child_snapshot_refs or {})
+    if not parent_slots:
+        if supplied:
+            raise _binding_conflict(
+                f"child snapshots name unknown slots: {sorted(supplied)}"
+            )
+        return
+    missing = sorted(slot for slot in parent_slots if slot not in supplied)
+    if missing:
+        raise _binding_conflict(
+            "child work requires its own admitted repository access snapshot "
+            f"for slots {missing}; parent-workflow visibility is not permission "
+            f"({REPOSITORY_DECLARATION_OWNER} own declarations, "
+            f"{REPOSITORY_ISSUANCE_OWNER} owns issuance)"
+        )
+    extra = sorted(slot for slot in supplied if slot not in parent_slots)
+    if extra:
+        raise _binding_conflict(
+            f"child snapshots name unknown slots: {extra}"
         )
 
 

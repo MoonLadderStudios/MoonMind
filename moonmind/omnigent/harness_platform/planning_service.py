@@ -254,6 +254,9 @@ class OmnigentExecutionPlanningService:
         request: AgentExecutionRequest,
         *,
         trusted_repository_declarations: Mapping[str, Mapping[str, Any]] | None = None,
+        workspace_source_kind: str | None = None,
+        workspace_access_snapshot_ref: str | None = None,
+        worker_authority_kinds: tuple[str, ...] | list[str] | None = None,
     ) -> OmnigentExecutionPlanEnvelope:
         selection = AgentProfileSelection.from_request(request)
         workflow_id = (
@@ -274,6 +277,9 @@ class OmnigentExecutionPlanningService:
             return await self._compile(
                 request, selection,
                 trusted_repository_declarations=trusted_repository_declarations,
+                workspace_source_kind=workspace_source_kind,
+                workspace_access_snapshot_ref=workspace_access_snapshot_ref,
+                worker_authority_kinds=worker_authority_kinds,
             )
 
         return await self._usages.load_or_bind(
@@ -292,6 +298,9 @@ class OmnigentExecutionPlanningService:
         selection: AgentProfileSelection,
         *,
         trusted_repository_declarations: Mapping[str, Mapping[str, Any]] | None = None,
+        workspace_source_kind: str | None = None,
+        workspace_access_snapshot_ref: str | None = None,
+        worker_authority_kinds: tuple[str, ...] | list[str] | None = None,
     ) -> OmnigentExecutionPlanEnvelope:
         from api_service.db.models import (
             ManagedAgentProviderProfile,
@@ -511,6 +520,9 @@ class OmnigentExecutionPlanningService:
                 resolved_skills=skills,
                 credential_binding_set=binding_set,
                 repository_slot_requirements=repository_slot_requirements,
+                workspace_source_kind=workspace_source_kind,
+                workspace_access_snapshot_ref=workspace_access_snapshot_ref,
+                worker_authority_kinds=worker_authority_kinds,
                 host_class_ref=host_class.ref,
                 host_class=host_class,
                 launch_policy_ref=policy.ref,
