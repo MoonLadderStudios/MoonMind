@@ -177,6 +177,8 @@ async def omnigent_prepare_child_execution_plan_activity(
     # closed instead of silently widening or dropping scope. Workspace
     # restore likewise cannot restore grants: it must supply fresh snapshots.
     parent_repo_slots: dict[str, Any] = {}
+    child_trusted_repository_declarations: dict[str, dict[str, Any]] = {}
+    child_repository_bindings: dict[str, dict[str, Any]] = {}
     child_snapshot_refs_value = payload.get("childRepositorySnapshotRefs")
     child_snapshot_refs: dict[str, str] = (
         dict(child_snapshot_refs_value)
@@ -211,6 +213,24 @@ async def omnigent_prepare_child_execution_plan_activity(
         )
         initial_parameters["childRepositoryGrants"] = {
             slot: grant.model_dump(by_alias=True, mode="json")
+            for slot, grant in child_grants.items()
+        }
+        # The child compiler builds a model-only binding set unless the
+        # re-admitted repository authority is carried explicitly. Derive
+        # the child's trusted repository declarations and bindings from
+        # the attenuated grants composed above so the compiled child plan
+        # retains the repository authority that was just re-admitted
+        # (MoonLadderStudios/MoonMind#4009 REQ-07). Each declaration admits
+        # only the attenuated grant's own role and delivery contract.
+        child_trusted_repository_declarations = {
+            slot: {
+                "allowedRoles": (grant.binding.repositoryRole,),
+                "allowedMaterializers": (grant.binding.materializerRef,),
+            }
+            for slot, grant in child_grants.items()
+        }
+        child_repository_bindings = {
+            slot: grant.binding.model_dump(by_alias=True, mode="json")
             for slot, grant in child_grants.items()
         }
     elif child_snapshot_refs:
@@ -310,6 +330,10 @@ async def omnigent_prepare_child_execution_plan_activity(
             task_input_snapshot_ref=input_snapshot_ref,
             task_input_snapshot_digest=input_snapshot_digest,
             db_session=db_session,
+            trusted_repository_declarations=(
+                child_trusted_repository_declarations or None
+            ),
+            repository_bindings=(child_repository_bindings or None),
         )
     initial_parameters["omnigentExecutionPlan"] = child_plan.binding.model_dump(
         mode="json", by_alias=True, exclude_none=True

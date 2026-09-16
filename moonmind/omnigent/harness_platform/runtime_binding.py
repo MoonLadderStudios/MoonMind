@@ -62,7 +62,7 @@ class RepositoryIssuanceRecord(BaseModel):
             value = str(getattr(self, field_name) or "")
             if not value.strip():
                 raise ValueError(f"{field_name} is required")
-            for pattern in ("ghp_", "ghs_", "sk-", "-----BEGIN", "token="):
+            for pattern in ("ghp_", "ghs_", "github_pat_", "sk-", "-----BEGIN", "token="):
                 if pattern in value:
                     raise ValueError(
                         f"{field_name} must not carry raw credential material"
@@ -220,6 +220,11 @@ def create_runtime_binding(
 def release_unused_repository_issuance(
     binding: OmnigentRuntimeBinding,
     slots: list[str],
+    *,
+    expected_use_owners: dict[str, str] | None = None,
+    expected_issuance_refs: dict[str, str] | None = None,
+    expected_credential_revisions: dict[str, str] | None = None,
+    expected_snapshot_refs: dict[str, str] | None = None,
 ) -> tuple[OmnigentRuntimeBinding, list[str]]:
     """Release actually-acquired, unused repository issuance for `slots`.
 
@@ -228,7 +233,40 @@ def release_unused_repository_issuance(
     Only the named slots' issuance is returned for release: never another
     consumer's model lease or refreshed issuance. Returns the narrowed
     binding plus the released issuance refs.
+
+    The release is fenced: when the caller supplies expected owner /
+    issuance / revision / snapshot identity for a slot, the recorded
+    issuance must still match before it is returned. A stale cleanup or
+    late-completion request that races with refreshed issuance in the same
+    slot fails closed instead of releasing the new owner's authority.
+    Callers that cannot prove the expected identity must not be given a
+    release target for that slot.
     """
+    requested = set(slots)
+    for slot in requested:
+        record = binding.repositoryIssuance.get(slot)
+        if record is None:
+            continue
+        expectations: dict[str, str | None] = {
+            "useOwner": (expected_use_owners or {}).get(slot),
+            "issuanceRef": (expected_issuance_refs or {}).get(slot),
+            "credentialRevision": (expected_credential_revisions or {}).get(slot),
+            "snapshotRef": (expected_snapshot_refs or {}).get(slot),
+        }
+        actual = {
+            "useOwner": record.useOwner,
+            "issuanceRef": record.issuanceRef,
+            "credentialRevision": record.credentialRevision,
+            "snapshotRef": record.snapshotRef,
+        }
+        for field_name, expected in expectations.items():
+            if expected is not None and str(expected) != str(actual[field_name]):
+                raise HarnessPlatformError(
+                    f"repository issuance for slot {slot!r} was refreshed or "
+                    f"belongs to another consumer ({field_name} mismatch); "
+                    "release refused",
+                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                )
     remaining = {
         slot: record for slot, record in binding.repositoryIssuance.items()
         if slot not in set(slots)
