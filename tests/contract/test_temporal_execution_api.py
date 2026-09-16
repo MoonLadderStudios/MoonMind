@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
+from datetime import UTC
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -32,7 +34,9 @@ from moonmind.workflows.temporal import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
+from moonmind.workflows.temporal.client import TemporalClientAdapter
 from moonmind.workflows.temporal.service import TemporalExecutionService
+from temporalio.client import WorkflowExecutionStatus
 
 CURRENT_USER_DEP = get_current_user()
 CURRENT_USER_OPTIONAL_DEP = get_current_user_optional()
@@ -124,6 +128,41 @@ def _walk_openapi_schema(
 
     return []
 
+class _StubCanceledDescription:
+    """Minimal WorkflowExecutionDescription shape for canceled contract rows.
+
+    MoonLadderStudios/MoonMind#4190: contract tests run without live
+    Temporal workers, so graceful cancel cannot be observed as a live
+    CANCELED close. The fake adapter records the accepted cancel below and
+    both describe paths surface it here so the DB projection stays canceled
+    instead of falling back to a stale live state.
+    """
+
+    def __init__(self, workflow_id: str) -> None:
+        now = datetime.now(UTC)
+        self.id = workflow_id
+        self.run_id = "run-contract-stub"
+        self.namespace = "default"
+        self.workflow_type = "MoonMind.UserWorkflow"
+        self.status = WorkflowExecutionStatus.CANCELED
+        self.search_attributes: dict[str, object] = {}
+        self.execution_time = now
+        self.start_time = now
+        self.close_time = now
+        self.previous_run_id = None
+        self.first_execution_run_id = None
+
+    async def memo(self) -> dict[str, object]:
+        return {}
+
+
+_CONTRACT_CANCELED_WORKFLOW_IDS: set[str] = set()
+
+
+def _contract_canceled_description(workflow_id: str) -> _StubCanceledDescription:
+    return _StubCanceledDescription(workflow_id)
+
+
 class _QueryHandle:
     def __init__(self, state: dict[str, dict[str, object]], workflow_id: str) -> None:
         self._state = state
@@ -132,6 +171,19 @@ class _QueryHandle:
     async def query(self, name: str):
         workflow_state = self._state.get(self._workflow_id, {})
         return workflow_state.get(name)
+
+    async def describe(self):
+        # Production fetch_workflow_execution (client.py) calls
+        # handle.describe(). The stub previously implemented only query(),
+        # so every authoritative read logged AttributeError and fell back
+        # to the DB row. Surface canceled rows explicitly; otherwise raise
+        # a controlled fallback so non-canceled rows keep their DB state
+        # instead of being overwritten by a fabricated RUNNING description.
+        if self._workflow_id in _CONTRACT_CANCELED_WORKFLOW_IDS:
+            return _contract_canceled_description(self._workflow_id)
+        raise RuntimeError(
+            "contract stub has no live Temporal description; preserving DB projection"
+        )
 
 class _QueryClient:
     def __init__(self, state: dict[str, dict[str, object]]) -> None:
@@ -155,6 +207,55 @@ def _reset_dependency_overrides():
     app.dependency_overrides.clear()
     yield
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _fake_temporal_cancel_confirmation(monkeypatch):
+    """Confirm graceful cancels without live Temporal workers.
+
+    Production cancel requires Temporal to report CANCELED before the DB
+    projection turns terminal (_require_processable_graceful_cancellation).
+    Contract containers have no workers to observe the request, so the live
+    describe stays RUNNING and the DB stays executing. Record the accepted
+    cancel/terminate request and report it as CANCELED without invoking the
+    live adapter: there is no worker to observe a real cancel, and any live
+    transport failure here would be an environment artifact, not the
+    cancel-under-test. All other adapter behavior (start/update/signal/
+    describe of non-canceled rows) still delegates to the live adapter.
+    """
+    _CONTRACT_CANCELED_WORKFLOW_IDS.clear()
+    original_describe = TemporalClientAdapter.describe_workflow
+
+    async def _fake_cancel(self, workflow_id: str) -> None:
+        # Explicit no-worker stub: acceptance is recorded; no live call is
+        # made because no worker exists to observe it in contract containers.
+        _CONTRACT_CANCELED_WORKFLOW_IDS.add(workflow_id)
+
+    async def _fake_terminate(
+        self, workflow_id: str, *, reason: str, run_id: str | None = None
+    ) -> None:
+        # Same explicit stub as cancel: record acceptance, skip the live
+        # terminate which requires a running worker.
+        _CONTRACT_CANCELED_WORKFLOW_IDS.add(workflow_id)
+
+    async def _fake_describe(
+        self, workflow_id: str, *, run_id: str | None = None
+    ):
+        if workflow_id in _CONTRACT_CANCELED_WORKFLOW_IDS:
+            return _contract_canceled_description(workflow_id)
+        return await original_describe(self, workflow_id, run_id=run_id)
+
+    monkeypatch.setattr(TemporalClientAdapter, "cancel_workflow", _fake_cancel)
+    monkeypatch.setattr(
+        TemporalClientAdapter, "terminate_workflow", _fake_terminate
+    )
+    monkeypatch.setattr(
+        TemporalClientAdapter, "describe_workflow", _fake_describe
+    )
+    try:
+        yield
+    finally:
+        _CONTRACT_CANCELED_WORKFLOW_IDS.clear()
 
 @pytest.fixture
 def query_state():
@@ -707,11 +808,21 @@ async def test_execution_lifecycle_endpoints_report_projection_contract(
             )
             assert resume_response.status_code == 202
             resume_body = resume_response.json()
-            assert resume_body["state"] == "executing"
-            assert resume_body["waitingReason"] is None
-            assert resume_body["attentionRequired"] is False
-            assert resume_body["dashboardStatus"] == "running"
-            assert resume_body["status"] == "running"
+            # The pause/resume overlay preserves the underlying state: the
+            # jules integration is still pending here, so resuming clears
+            # the operator pause but correctly stays awaiting_external until
+            # the integration poll/callback below completes.
+            assert resume_body["state"] == "awaiting_external"
+            # Resume clears the operator pause but restores the still-pending
+            # Jules integration wait: callbackSupported=True records
+            # waitingReason="external_callback" with attention_required=False
+            # at the record level. The detail serializer reports
+            # attentionRequired=True for any awaiting_external dashboard
+            # state, so the API-level assertion is True.
+            assert resume_body["waitingReason"] == "external_callback"
+            assert resume_body["attentionRequired"] is True
+            assert resume_body["dashboardStatus"] == "awaiting_action"
+            assert resume_body["status"] == "awaiting_action"
 
             poll_response = await client.post(
                 f"/api/executions/{workflow_id}/integration/poll",
@@ -827,6 +938,11 @@ async def test_step_execution_api_degraded_manifest_values_fail_closed(
                 json={
                     "workflowType": "MoonMind.UserWorkflow",
                     "title": "Step Execution compatibility",
+                    # MoonLadderStudios/MoonMind#4190: UserWorkflow admission
+                    # requires a plan source (has_user_workflow_plan_source);
+                    # artifact:// refs satisfy the boundary without needing
+                    # a stored artifact row.
+                    "inputArtifactRef": f"artifact://step-execution/{expected_code}",
                     "idempotencyKey": f"step-execution-{expected_code}",
                 },
             )
@@ -1011,7 +1127,11 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
                     "idempotencyKey": "manifest-0",
                 },
             )
-            assert manifest_response.status_code == 201
+            # MoonLadderStudios/MoonMind#4190: native ManifestIngest is retired;
+            # new admissions are rejected actionably while ordinary pagination
+            # below still covers the surviving UserWorkflow surface.
+            assert manifest_response.status_code == 422
+            assert "was retired" in str(manifest_response.json())
 
             await client.post(f"/api/executions/{created_ids[0]}/cancel", json={})
 
@@ -1040,7 +1160,10 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
                 assert item["latestRunView"] is True
                 assert item["ownerType"] == "user"
                 assert item["entry"] == "user_workflow"
-                assert item["artifactRefs"] == []
+                # Compact list rows omit detail-only payloads by contract
+                # (ExecutionListItemModel, extra="forbid"); artifactRefs
+                # remains on the detail endpoint only.
+                assert "artifactRefs" not in item
 
             second_page = await client.get(
                 "/api/executions",
@@ -1101,6 +1224,35 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
             assert run_only_body["count"] == 3
             assert all(item["entry"] == "user_workflow" for item in run_only_body["items"])
 
+            # MoonLadderStudios/MoonMind#4190: native ManifestIngest is
+            # retired, so new admissions above are rejected. Seed one
+            # retained historical row owned by the authorized principal and
+            # verify it stays visible through the authorized list and
+            # detail endpoints (generic authorized readers).
+            from api_service.db.models import (
+                MoonMindWorkflowState,
+                TemporalExecutionOwnerType,
+                TemporalWorkflowType,
+            )
+
+            historical_workflow_id = f"mm:historical-manifest:{uuid4().hex[:8]}"
+            async with db_base.async_session_maker() as seed_session:
+                seed_session.add(
+                    TemporalExecutionCanonicalRecord(
+                        workflow_id=historical_workflow_id,
+                        run_id=uuid4().hex,
+                        namespace="default",
+                        workflow_type=TemporalWorkflowType.MANIFEST_INGEST,
+                        owner_id=str(shared_user_id),
+                        owner_type=TemporalExecutionOwnerType.USER,
+                        state=MoonMindWorkflowState.COMPLETED,
+                        entry="manifest",
+                        manifest_ref="artifact://manifest/historical",
+                        parameters={"task": {"instructions": "historical manifest work"}},
+                    )
+                )
+                await seed_session.commit()
+
             manifest_only = await client.get(
                 "/api/executions",
                 params={"entry": "manifest", "ownerType": "user"},
@@ -1108,7 +1260,17 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
             assert manifest_only.status_code == 200
             manifest_body = manifest_only.json()
             assert manifest_body["count"] == 1
+            assert manifest_body["items"][0]["workflowId"] == historical_workflow_id
             assert manifest_body["items"][0]["entry"] == "manifest"
+
+            historical_detail = await client.get(
+                f"/api/executions/{historical_workflow_id}"
+            )
+            assert historical_detail.status_code == 200
+            assert (
+                historical_detail.json()["workflowId"] == historical_workflow_id
+            )
+            assert historical_detail.json()["entry"] == "manifest"
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
@@ -1144,6 +1306,9 @@ async def test_projection_orphaned_rows_repair_from_canonical_public_routes(tmp_
                 json={
                     "workflowType": "MoonMind.UserWorkflow",
                     "title": "Ghost row candidate",
+                    # MoonLadderStudios/MoonMind#4190: UserWorkflow admission
+                    # requires a plan source (has_user_workflow_plan_source).
+                    "inputArtifactRef": "artifact://input/orphaned-1",
                     "idempotencyKey": "orphaned-create-1",
                 },
             )
@@ -1587,6 +1752,13 @@ async def test_task_shaped_create_preserves_image_input_attachments(tmp_path, mo
 
 @pytest.mark.asyncio
 async def test_manifest_execution_status_and_node_page_contract(tmp_path):
+    """Retirement regression — MoonLadderStudios/MoonMind#4190.
+
+    Native ManifestIngest admission is retired: creation is rejected
+    actionably and no Manifest-only status/node routes remain. Historical
+    rows stay readable through the generic authorized readers covered in
+    tests/unit/config/test_manifest_remediation_4190.py.
+    """
     original_db_url = db_base.DATABASE_URL
     original_engine = db_base.engine
     original_session_maker = db_base.async_session_maker
@@ -1631,46 +1803,14 @@ async def test_manifest_execution_status_and_node_page_contract(tmp_path):
                     "idempotencyKey": "manifest-contract-create-1",
                 },
             )
-            assert create_response.status_code == 201
-            created = create_response.json()
-            workflow_id = created["workflowId"]
-            assert created["workflowType"] == "MoonMind.ManifestIngest"
-            assert manifest_artifact_ref in created["artifactRefs"]
-            assert created["executionPolicy"]["maxConcurrency"] == 6
-            assert created["counts"]["ready"] == 1
-            assert created["counts"]["running"] == 1
-            assert created["counts"]["failed"] == 1
+            assert create_response.status_code == 422
+            assert "was retired" in str(create_response.json())
 
-            update_response = await client.post(
-                f"/api/executions/{workflow_id}/update",
-                json={
-                    "updateName": "SetConcurrency",
-                    "maxConcurrency": 4,
-                    "idempotencyKey": "manifest-set-concurrency-1",
-                },
+            schema = app.openapi()
+            assert not any(
+                "manifest-status" in path or "manifest-nodes" in path
+                for path in schema["paths"]
             )
-            assert update_response.status_code == 200
-            assert update_response.json()["accepted"] is True
-
-            status_response = await client.get(
-                f"/api/executions/{workflow_id}/manifest-status"
-            )
-            assert status_response.status_code == 200
-            status_payload = status_response.json()
-            assert status_payload["workflowId"] == workflow_id
-            assert status_payload["maxConcurrency"] == 4
-            assert status_payload["failurePolicy"] == "best_effort"
-            assert status_payload["counts"]["running"] == 1
-
-            nodes_response = await client.get(
-                f"/api/executions/{workflow_id}/manifest-nodes",
-                params={"state": "running", "limit": 10},
-            )
-            assert nodes_response.status_code == 200
-            nodes_payload = nodes_response.json()
-            assert nodes_payload["count"] == 1
-            assert nodes_payload["items"][0]["nodeId"] == "node-b"
-            assert nodes_payload["items"][0]["workflowType"] == "MoonMind.UserWorkflow"
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
