@@ -1008,6 +1008,72 @@ async def test_historical_snapshot_reuse_preserves_admitted_digest(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_restart_rematerialization_preserves_admitted_snapshot(tmp_path: Path):
+    """Restart re-materialization is deterministic (issue #4275 A9-rest).
+
+    Materialize snapshot S, drop in-memory state (a new materializer instance
+    over the same workspace), re-materialize S, and assert the admitted
+    manifest digest is identical, the helper bytes readable through the alias
+    are unchanged, and a changed source is a new identity rather than a
+    silent re-selection of the admitted run.
+    """
+    payload = _skill_bundle_payload(
+        {"SKILL.md": b"# restart\n", "bin/helper.py": b"# original helper\n"}
+    )
+    changed = _skill_bundle_payload(
+        {"SKILL.md": b"# restart\n", "bin/helper.py": b"# changed helper\n"}
+    )
+    assert _digest(payload) != _digest(changed)
+    artifact_service = _StaticArtifactService({"artifact-restart": payload})
+    skillset = ResolvedSkillSet(
+        snapshot_id="restart_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="restartable",
+                format=AgentSkillFormat.BUNDLE,
+                content_ref="artifact-restart",
+                content_digest=_digest(payload),
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ],
+    )
+
+    first = AgentSkillMaterializer(str(tmp_path), artifact_service=artifact_service)
+    await first.materialize(
+        resolved_skillset=skillset,
+        runtime_id="test_runtime",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+    alias = tmp_path / ".agents" / "skills"
+    manifest_path = tmp_path / "runtime" / "skills_active" / "restart_snap" / "_manifest.json"
+    first_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    first_helper = (alias / "restartable" / "bin" / "helper.py").read_bytes()
+    assert first_helper == b"# original helper\n"
+
+    # Drop in-memory state: a new instance over the same workspace re-admits S.
+    second = AgentSkillMaterializer(str(tmp_path), artifact_service=artifact_service)
+    await second.materialize(
+        resolved_skillset=skillset,
+        runtime_id="test_runtime",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+    second_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    second_helper = (alias / "restartable" / "bin" / "helper.py").read_bytes()
+
+    assert alias.is_symlink()
+    assert second_manifest["skills"][0]["content_digest"] == first_manifest["skills"][0]["content_digest"]
+    assert second_manifest["skills"][0]["content_digest"] == _digest(payload)
+    assert second_helper == first_helper == b"# original helper\n"
+    # A changed source is a new bundle identity; the admitted run was not
+    # silently re-pointed at current source.
+    assert second_manifest["skills"][0]["content_digest"] != _digest(changed)
+    assert second_helper != b"# changed helper\n"
+
+
+@pytest.mark.asyncio
 async def test_materializer_projects_declared_sibling_closure_from_snapshot(
     tmp_path: Path,
 ):
