@@ -2865,7 +2865,10 @@ async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
                 "Document health review",
                 "Document health remediate",
             ]
-            assert [step["skill"]["id"] for step in steps] == ["auto", "auto"]
+            assert [step["skill"]["id"] for step in steps] == [
+                "document-health-review",
+                "document-health-remediate",
+            ]
             assert [
                 step["annotations"]["documentHealthRole"] for step in steps
             ] == ["review", "remediate"]
@@ -2874,7 +2877,14 @@ async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
                 slug="document-health-update",
                 scope="global",
                 scope_ref=None,
-                inputs={"documentation_scope": "docs/Workflows/"},
+                inputs={
+                    "documentation_scope": "docs/Workflows/",
+                    "report_path": "artifacts/document-health-review.json",
+                    "review_output_mode": "full_report",
+                    "allowed_actions": "",
+                    "allow_destructive": False,
+                    "constraints": "",
+                },
                 context={},
             )
 
@@ -2886,17 +2896,13 @@ async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
                 "artifacts/document-health-review.json"
                 in review_step["instructions"]
             )
-            assert "missing metadata" in review_step["instructions"]
-            assert "authority ladder" in review_step["instructions"]
-            assert "docs/tmp/" in review_step["instructions"]
+            assert "remediation owns authorized edits" in review_step["instructions"]
             assert (
                 "artifacts/document-health-review.json"
                 in remediate_step["instructions"]
             )
-            assert "remediate ONLY" in remediate_step["instructions"]
-            assert "missing embedded rationale" in remediate_step["instructions"]
-            assert "unverifiable canonical claims" in remediate_step["instructions"]
-            assert "docs/tmp/" in remediate_step["instructions"]
+            assert "verified no-op" in remediate_step["instructions"]
+            assert "still valid" in remediate_step["instructions"]
 
 
 async def test_seed_catalog_includes_document_author_preset(tmp_path):

@@ -49,8 +49,9 @@ def test_document_health_review_defines_all_eight_questions() -> None:
 def test_document_health_review_is_review_only_by_default() -> None:
     text = _skill_text()
 
-    assert "Review-only by default" in text
+    assert "Review-only, always" in text
     assert "Never commit, push, or open pull requests" in text
+    assert "remediation owns authorized edits" in text
 
 
 def test_document_health_review_declares_disposition_verdicts() -> None:
@@ -63,8 +64,11 @@ def test_document_health_review_declares_disposition_verdicts() -> None:
 def test_document_health_review_split_threshold_rule() -> None:
     text = _skill_text()
 
-    assert "line_count > 2000" in text
-    assert "default recommendation = split" in text
+    # MoonLadderStudios/MoonMind#4271: size is an investigation signal, never an
+    # automatic split requirement.
+    assert "investigation signal" in text
+    assert "large file alone does not force" in text.lower()
+    assert "default recommendation = split" not in text
 
 
 def test_document_health_review_lists_non_goals() -> None:
