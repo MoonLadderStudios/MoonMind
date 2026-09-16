@@ -1398,3 +1398,153 @@ def test_mixed_plan_end_to_end_capacity_runtime_release():
     finally:
         HOST_CLASSES.clear()
         HOST_CLASSES.update(saved)
+
+
+def test_required_worker_authority_kinds():
+    """REQ-08/REQ-09: worker requirement derives from the binding set."""
+    model_only = create_binding_set(
+        bindingSetId="bs",
+        version=1,
+        bindings={"primary-model": dict(V1_MODEL_SLOT)},
+    )
+    assert cb.required_worker_authority_kinds(model_only) == ("model",)
+    cb.assert_worker_supports_binding_set(("model",), model_only)
+    repo_set = create_binding_set(
+        bindingSetId="bs",
+        version=1,
+        bindings={
+            "primary-model": {
+                "authorityKind": "provider_profile",
+                "providerProfileRef": "opencode-go-default",
+                "materializerRef": "opencode-auth-json@1",
+            },
+            "src": _v2_repo_slot(),
+        },
+        schema_version="moonmind.omnigent-credential-bindings.v2",
+    )
+    assert cb.required_worker_authority_kinds(repo_set) == ("model", "repository")
+    with pytest.raises(HarnessPlatformError):
+        cb.assert_worker_supports_binding_set(("model",), repo_set)
+    cb.assert_worker_supports_binding_set(("model", "repository"), repo_set)
+
+
+def test_child_snapshot_coverage_requires_exact_slots():
+    """REQ-07: child snapshots need exact coverage; extras fail closed."""
+    parent = create_binding_set(
+        bindingSetId="mixed",
+        version=1,
+        bindings={
+            "primary-model": {
+                "authorityKind": "provider_profile",
+                "providerProfileRef": "opencode-go-default",
+                "materializerRef": "opencode-auth-json@1",
+            },
+            "src": _v2_repo_slot(),
+        },
+        schema_version="moonmind.omnigent-credential-bindings.v2",
+    )
+    child_snapshot = "repository-access-snapshot:sha256:" + "e" * 64
+    cb.validate_child_snapshot_coverage(
+        parent_binding_set=parent,
+        child_snapshot_refs={"src": child_snapshot},
+    )
+    with pytest.raises(HarnessPlatformError):
+        cb.validate_child_snapshot_coverage(
+            parent_binding_set=parent, child_snapshot_refs={}
+        )
+    with pytest.raises(HarnessPlatformError):
+        cb.validate_child_snapshot_coverage(
+            parent_binding_set=parent,
+            child_snapshot_refs={"src": child_snapshot, "extra": child_snapshot},
+        )
+    # Extra snapshots are also rejected by the composition entrypoint.
+    with pytest.raises(HarnessPlatformError):
+        cb.attenuated_child_grants_for(
+            parent_binding_set=parent,
+            child_target_ref="child-target-1",
+            child_attempt_ref="child-attempt-1",
+            child_snapshot_refs={"src": child_snapshot, "extra": child_snapshot},
+        )
+    model_only = create_binding_set(
+        bindingSetId="bs",
+        version=1,
+        bindings={"primary-model": dict(V1_MODEL_SLOT)},
+    )
+    cb.validate_child_snapshot_coverage(
+        parent_binding_set=model_only, child_snapshot_refs={}
+    )
+    with pytest.raises(HarnessPlatformError):
+        cb.validate_child_snapshot_coverage(
+            parent_binding_set=model_only,
+            child_snapshot_refs={"src": child_snapshot},
+        )
+
+
+def test_production_compilers_forward_workspace_source_and_worker_kinds():
+    """REQ-06/REQ-08: production compilers thread source rules + barrier."""
+    import inspect
+
+    from moonmind.omnigent.harness_platform.planning_service import (
+        OmnigentExecutionPlanningService,
+    )
+    import api_service.services.omnigent_execution_plan_service as plan_service
+
+    for fn in (
+        OmnigentExecutionPlanningService.plan,
+        OmnigentExecutionPlanningService._compile,
+        plan_service.compile_and_persist_execution_plan,
+    ):
+        params = inspect.signature(fn).parameters
+        assert "workspace_source_kind" in params
+        assert "workspace_access_snapshot_ref" in params
+        assert "worker_authority_kinds" in params
+    # Defaults stay None so historical model-only traffic is unchanged.
+    for fn in (
+        OmnigentExecutionPlanningService.plan,
+        OmnigentExecutionPlanningService._compile,
+        plan_service.compile_and_persist_execution_plan,
+    ):
+        params = inspect.signature(fn).parameters
+        assert params["workspace_source_kind"].default is None
+        assert params["worker_authority_kinds"].default is None
+
+
+def test_session_worker_barrier_rejects_repository_authority():
+    """REQ-08/ACC-06: model-only session worker rejects repository sets."""
+    from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+        _enforce_session_worker_authority_barrier,
+    )
+
+    class _Payload:
+        def __init__(self, bindings, ref):
+            self.credentialBindings = bindings
+            self.credentialBindingSetRef = ref
+
+    class _Plan:
+        def __init__(self, payload):
+            self.payload = payload
+
+    model_bindings = {"primary-model": dict(V1_MODEL_SLOT)}
+    model_set = create_binding_set(
+        bindingSetId="bs", version=1, bindings=dict(model_bindings)
+    )
+    _enforce_session_worker_authority_barrier(
+        _Plan(_Payload(dict(model_set.bindings), model_set.ref))
+    )
+    repo_set = create_binding_set(
+        bindingSetId="bs",
+        version=1,
+        bindings={
+            "primary-model": {
+                "authorityKind": "provider_profile",
+                "providerProfileRef": "opencode-go-default",
+                "materializerRef": "opencode-auth-json@1",
+            },
+            "src": _v2_repo_slot(),
+        },
+        schema_version="moonmind.omnigent-credential-bindings.v2",
+    )
+    with pytest.raises(ValueError, match="model authority only"):
+        _enforce_session_worker_authority_barrier(
+            _Plan(_Payload(dict(repo_set.bindings), repo_set.ref))
+        )

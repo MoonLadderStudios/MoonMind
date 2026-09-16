@@ -683,6 +683,9 @@ async def compile_and_persist_execution_plan(
     execution_plan_store: Any | None = None,
     db_session: Any | None = None,
     trusted_repository_declarations: Mapping[str, Mapping[str, Any]] | None = None,
+    workspace_source_kind: str | None = None,
+    workspace_access_snapshot_ref: str | None = None,
+    worker_authority_kinds: tuple[str, ...] | list[str] | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
@@ -1154,6 +1157,9 @@ async def compile_and_persist_execution_plan(
         resolved_skills=resolved_skills,
         credential_binding_set=binding_set,
         repository_slot_requirements=repository_slot_requirements,
+        workspace_source_kind=workspace_source_kind,
+        workspace_access_snapshot_ref=workspace_access_snapshot_ref,
+        worker_authority_kinds=worker_authority_kinds,
         host_class_ref=host_class.ref,
         host_class=host_class,
         launch_policy_ref=launch_policy_ref,

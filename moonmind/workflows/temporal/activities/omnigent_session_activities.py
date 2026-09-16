@@ -20,7 +20,12 @@ from moonmind.omnigent.control_plane.cleanup_authority import (
     CanonicalCleanupAuthority,
 )
 from moonmind.omnigent.harness_platform.credential_bindings import (
+    assert_worker_supports_binding_set,
+    create_binding_set,
+    is_repository_authority,
     model_bindings_of,
+    plan_bindings_have_repository_authority,
+    required_worker_authority_kinds,
 )
 from moonmind.omnigent.harness_platform.harness_registry import (
     canonical_harness_id,
@@ -207,6 +212,65 @@ def _bind_terminal_plan_authority(
     )
 
 
+def _enforce_session_worker_authority_barrier(plan: Any) -> None:
+    """Reject repository authority on the model-only session supervisor.
+
+    MoonLadderStudios/MoonMind#4009 REQ-08/REQ-09: the legacy session
+    supervisor worker advertises model authority only, so a plan carrying
+    repository authority fails closed here without global-credential
+    fallback. The check rebuilds the binding set through the versioned
+    constructor and compares the worker's advertised kinds against the
+    set's required kinds; model-only history passes unchanged.
+    """
+
+    from pydantic import BaseModel
+
+    from moonmind.omnigent.harness_platform.credential_bindings import (
+        SCHEMA_V1,
+        SCHEMA_V2,
+        parse_binding_set_ref,
+    )
+
+    raw_bindings = dict(plan.payload.credentialBindings or {})
+    if not plan_bindings_have_repository_authority(
+        getattr(plan.payload, "credentialBindings", None)
+    ):
+        # Model-only history and minimal test doubles pass unchanged; the
+        # barrier only rebuilds when repository authority is suspected.
+        return
+    normalized: dict[str, Any] = {}
+    for slot, binding in raw_bindings.items():
+        if isinstance(binding, BaseModel):
+            normalized[slot] = binding.model_dump(by_alias=True, mode="json")
+        elif isinstance(binding, Mapping):
+            normalized[slot] = dict(binding)
+        else:
+            normalized[slot] = binding
+    has_repo = any(
+        is_repository_authority(binding) for binding in normalized.values()
+    )
+    try:
+        binding_set_id, version, _digest = parse_binding_set_ref(
+            str(plan.payload.credentialBindingSetRef)
+        )
+    except Exception:
+        binding_set_id, version = "session-admission-bindings", 1
+    binding_set = create_binding_set(
+        bindingSetId=binding_set_id,
+        version=version,
+        bindings=normalized,
+        schema_version=SCHEMA_V2 if has_repo else SCHEMA_V1,
+    )
+    try:
+        assert_worker_supports_binding_set(("model",), binding_set)
+    except Exception as exc:
+        raise ValueError(
+            "session supervisor supports model authority only and cannot "
+            f"consume repository authority (requires "
+            f"{required_worker_authority_kinds(binding_set)}): {exc}"
+        ) from exc
+
+
 async def omnigent_evaluate_session_admission_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -232,6 +296,7 @@ async def omnigent_evaluate_session_admission_activity(
 
         get_default_registry().require(plan.payload.executionRealizerRef)
         _validate_plan_support_authority(plan)
+        _enforce_session_worker_authority_barrier(plan)
         from moonmind.omnigent.session_supervisor_rollback import (
             SessionRollbackContext,
             resolve_rollback_effect,
@@ -3573,7 +3638,31 @@ async def omnigent_ensure_provider_session_activity(
                 workflow_id=str(session.moonmind_workflow_id or ""),
                 state=runtime_binding_state,
             )
-        settled = await _settle_command(request)
+    settled = await _settle_command(request)
+    # REQ-08/ACC-06 observability (MoonLadderStudios/MoonMind#4009): report
+    # the repository issuance that cleanup leaves unused. The narrowed
+    # binding computation is ownership-scoped (only named slots, never
+    # another consumer's model lease); actual issuance release stays with
+    # the issuance owner (#4007), so this step records refs without
+    # mutating the durable binding.
+    if runtime_state is not None:
+        try:
+            from moonmind.omnigent.harness_platform.runtime_binding import (
+                release_unused_repository_issuance,
+            )
+
+            issuance = dict(
+                getattr(runtime_state.binding, "repositoryIssuance", {}) or {}
+            )
+            if issuance:
+                _narrowed, _released = release_unused_repository_issuance(
+                    runtime_state.binding, sorted(issuance.keys())
+                )
+                settled["releasedRepositoryIssuanceRefs"] = list(_released)
+            else:
+                settled["releasedRepositoryIssuanceRefs"] = []
+        except Exception:
+            settled["releasedRepositoryIssuanceRefs"] = []
         settled["revision"] = session.revision
         if runtime_binding is not None and runtime_binding_state is not None:
             settled.update(
