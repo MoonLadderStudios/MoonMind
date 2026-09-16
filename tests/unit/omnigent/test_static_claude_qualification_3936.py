@@ -46,6 +46,7 @@ inferred from these hermetic checks.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 from datetime import UTC, datetime, timedelta
@@ -375,6 +376,21 @@ def _github_token_block() -> str:
     return "\n".join(lines[start : end + 1]) + "\n"
 
 
+def _require_writable_static_host_cache() -> None:
+    """Skip when the static-host home layout is unavailable.
+
+    The packaged entrypoint only admits a GitHub config home under
+    ``/home/app/.cache/*``. Hermetic runners without that writable layout
+    (for example GitHub-hosted CI) cannot execute the token-staging block
+    end to end, so these tests skip there with an explicit reason instead
+    of failing on the environment.
+    """
+
+    cache = Path("/home/app/.cache")
+    if not (cache.is_dir() and os.access(cache, os.W_OK)):
+        pytest.skip("requires writable static-host /home/app/.cache layout")
+
+
 def _run_github_token_block(env: dict[str, str], config_dir: Path) -> subprocess.CompletedProcess[str]:
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".sh", delete=False
@@ -393,9 +409,8 @@ def _run_github_token_block(env: dict[str, str], config_dir: Path) -> subprocess
     )
 
 
-def test_packaged_github_token_block_writes_restart_preserving_and_rejects(
-    tmp_path: Path,
-) -> None:
+def test_packaged_github_token_block_writes_restart_preserving_and_rejects() -> None:
+    _require_writable_static_host_cache()
     block = _github_token_block()
     # No deletion path: a restart without a token cannot clear persisted auth.
     assert "rm " not in block
@@ -408,7 +423,7 @@ def test_packaged_github_token_block_writes_restart_preserving_and_rejects(
         "HOME": "/home/app",
     }
     pid = str(subprocess.os.getpid())
-    config_home = tmp_path / f"mm-gh-token-test-{pid}"
+    config_home = Path(f"/home/app/.cache/mm-gh-token-test-{pid}")
     try:
         # Supplied token is written with the bounded selector charset.
         result = _run_github_token_block(
@@ -1070,13 +1085,14 @@ def test_packaged_startup_rejects_wrong_credential_homes() -> None:
     assert result.returncode == 64
 
 
-def test_packaged_github_token_block_rotates_and_preserves(tmp_path: Path) -> None:
+def test_packaged_github_token_block_rotates_and_preserves() -> None:
+    _require_writable_static_host_cache()
     base_env = {
         "PATH": "/usr/bin:/bin",
         "HOME": "/home/app",
     }
     pid = str(subprocess.os.getpid())
-    config_home = tmp_path / f"mm-gh-token-rotate-test-{pid}"
+    config_home = Path(f"/home/app/.cache/mm-gh-token-rotate-test-{pid}")
     try:
         # A changed connection (new valid token) rotates the persisted config.
         result = _run_github_token_block(
@@ -1494,15 +1510,14 @@ def test_packaged_startup_rejects_opencode_ambient_selectors() -> None:
     assert "ADMITTED" in result.stdout
 
 
-def test_github_token_block_preserves_unrelated_config_contents(
-    tmp_path: Path,
-) -> None:
+def test_github_token_block_preserves_unrelated_config_contents() -> None:
+    _require_writable_static_host_cache()
     base_env = {
         "PATH": "/usr/bin:/bin",
         "HOME": "/home/app",
     }
     pid = str(subprocess.os.getpid())
-    config_home = tmp_path / f"mm-gh-token-preserve-test-{pid}"
+    config_home = Path(f"/home/app/.cache/mm-gh-token-preserve-test-{pid}")
     try:
         gh_dir = config_home / "gh"
         gh_dir.mkdir(parents=True, exist_ok=True)
