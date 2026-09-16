@@ -1,6 +1,6 @@
 """Admit terminal-contract continuation to the closed turn-source vocabulary.
 
-Revision ID: 383_omnigent_turn_source_terminal_contract
+Revision ID: 383_omnigent_turn_continuation
 Revises: 382_issue_claim_ownership_end
 Create Date: 2026-09-15
 
@@ -23,7 +23,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "383_omnigent_turn_source_terminal_contract"
+revision: str = "383_omnigent_turn_continuation"
 down_revision: Union[str, None] = "382_issue_claim_ownership_end"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
