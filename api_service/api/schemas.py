@@ -511,6 +511,8 @@ class SecretMetadataResponse(BaseModel):
 
     slug: str
     status: str
+    credential_revision: int = Field(default=1, alias="credentialRevision")
+    policy_revision: int = Field(default=1, alias="policyRevision")
     details: dict[str, Any]
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
