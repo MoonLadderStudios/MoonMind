@@ -74,7 +74,7 @@ async def test_rotate_activates_replacement_at_new_revision(tmp_path):
             assert created.credential_revision == 1
 
         async with maker() as db:
-            rotated = await SecretsService.rotate_secret(db, "github-pat-main", "new-pat")
+            rotated = await SecretsService.rotate_secret(db, "github-pat-main", "new-pat", validator=lambda _c: True)
             assert rotated is not None
             assert rotated.status == SecretStatus.ACTIVE
             assert rotated.credential_revision == 2
@@ -155,7 +155,7 @@ async def test_changed_validation_policy_fences_activation(tmp_path):
 
         # A concurrent rotation advances authority before activation.
         async with maker() as db:
-            await SecretsService.rotate_secret(db, "api-key", "v2-race")
+            await SecretsService.rotate_secret(db, "api-key", "v2-race", validator=lambda _c: True)
 
         # The stale envelope must not activate or overwrite the winner.
         async with maker() as db:
@@ -180,14 +180,14 @@ async def test_concurrent_rotations_serialize_on_expected_revision(tmp_path):
 
         async with maker() as db:
             first = await SecretsService.rotate_secret(
-                db, "race-key", "v2", expected_credential_revision=1
+                db, "race-key", "v2", expected_credential_revision=1, validator=lambda _c: True
             )
             assert first.credential_revision == 2
 
         async with maker() as db:
             with pytest.raises(SecretFencedError):
                 await SecretsService.rotate_secret(
-                    db, "race-key", "v3", expected_credential_revision=1
+                    db, "race-key", "v3", expected_credential_revision=1, validator=lambda _c: True
                 )
 
         async with maker() as db:
@@ -205,7 +205,7 @@ async def test_transaction_failure_leaves_prior_intact(tmp_path):
 
         async with maker() as db:
             pending = await SecretsService.rotate_secret(
-                db, "fragile", "tentative", commit=False
+                db, "fragile", "tentative", commit=False, validator=lambda _c: True
             )
             assert pending.credential_revision == 2
             await db.rollback()
@@ -229,14 +229,14 @@ async def test_idempotent_retry_advances_once_and_conflict_rejected(tmp_path):
 
         async with maker() as db:
             first = await SecretsService.rotate_secret(
-                db, "idem-key", "v2", request_id="req-123"
+                db, "idem-key", "v2", request_id="req-123", validator=lambda _c: True
             )
             assert first.credential_revision == 2
 
         # Lost acknowledgment: retry reconciles without rotating again.
         async with maker() as db:
             second = await SecretsService.rotate_secret(
-                db, "idem-key", "v2", request_id="req-123"
+                db, "idem-key", "v2", request_id="req-123", validator=lambda _c: True
             )
             assert second.credential_revision == 2
 
@@ -248,7 +248,7 @@ async def test_idempotent_retry_advances_once_and_conflict_rejected(tmp_path):
         async with maker() as db:
             with pytest.raises(SecretConflictError):
                 await SecretsService.rotate_secret(
-                    db, "idem-key", "v3-evil", request_id="req-123"
+                    db, "idem-key", "v3-evil", request_id="req-123", validator=lambda _c: True
                 )
 
         async with maker() as db:
@@ -266,7 +266,7 @@ async def test_fenced_resolution_and_lost_notification_recovery(tmp_path):
     try:
         async with maker() as db:
             await SecretsService.create_secret(db, "fenced", "v1")
-            await SecretsService.rotate_secret(db, "fenced", "v2")
+            await SecretsService.rotate_secret(db, "fenced", "v2", validator=lambda _c: True)
 
         async with maker() as db:
             # Stale expected revision never returns current material as old.
@@ -372,7 +372,7 @@ async def test_caller_owned_transaction_commits_once(tmp_path):
     try:
         async with maker() as db:
             await SecretsService.create_secret(db, "combo", "v1", commit=False)
-            await SecretsService.rotate_secret(db, "combo", "v2", commit=False)
+            await SecretsService.rotate_secret(db, "combo", "v2", commit=False, validator=lambda _c: True)
             await db.commit()
 
         async with maker() as db:
@@ -509,7 +509,7 @@ async def test_repair_path_for_historical_rotated_record(tmp_path):
         # Blind reactivation is refused on every mutation path.
         async with maker() as db:
             with pytest.raises(SecretRepairRequiredError):
-                await SecretsService.rotate_secret(db, "legacy", "nope")
+                await SecretsService.rotate_secret(db, "legacy", "nope", validator=lambda _c: True)
         async with maker() as db:
             with pytest.raises(SecretRepairRequiredError):
                 await SecretsService.update_secret(db, "legacy", "nope")
@@ -556,7 +556,7 @@ async def test_audit_outbox_and_receipts_never_carry_secret_material(tmp_path):
         async with maker() as db:
             await SecretsService.create_secret(db, "quiet", marker)
             await SecretsService.rotate_secret(
-                db, "quiet", marker + "-rot", request_id="req-quiet-1"
+                db, "quiet", marker + "-rot", request_id="req-quiet-1", validator=lambda _c: True
             )
             await SecretsService.set_status(
                 db, "quiet", SecretStatus.DISABLED, request_id="req-quiet-2"
