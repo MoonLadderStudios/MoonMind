@@ -16,7 +16,7 @@ Run `bash .agents/skills/update-moonmind/scripts/run-update-moonmind.sh --repo <
 
 ## Release authority and completion
 
-The entrypoint fetches the selected branch without checking out or resetting local files. It resolves the exact source SHA to its published `sha-<commit>` image, verifies the image's source-revision label, and pins the repository digest. An unpublished image is an actionable unavailable release; never substitute `latest` or rebuild a different source under that identity.
+The entrypoint fetches the selected branch without checking out or resetting local files. It resolves the exact source SHA to its published `sha-<commit>` image, verifies the image's source-revision label, and pins the repository digest. An unpublished image is an actionable unavailable release; never substitute `latest` or rebuild a different source under that identity. A `manifest unknown`-style pull failure waits a bounded interval for the in-flight publish of that exact commit before failing; the wait cannot change which artifact is selected.
 
 The selected image supplies the canonical Compose definition, application code, migrations, portable Skills and release controller. Deployment-owned `.env`, interfaces, authentication and explicit configuration retain their existing authority. The image-owned controller is the portable semantic entrypoint for both this Skill and MoonMind's deployment tool. Docker, durable state storage and Temporal supply the execution substrate.
 

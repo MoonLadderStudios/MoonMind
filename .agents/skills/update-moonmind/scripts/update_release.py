@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -19,10 +20,24 @@ from pathlib import Path
 _MAX_DIAGNOSTIC_CHARS = 4000
 _MAX_COMMAND_CHARS = 1000
 
+# Bounded wait for an in-flight image publish: only `manifest unknown`-style
+# pull failures are retried. The fetched commit is immutable, so waiting cannot
+# change which artifact is selected. ~10 minutes covers normal publish latency.
+_PULL_RETRY_INTERVAL_SECONDS = 30
+_PULL_RETRY_MAX_ATTEMPTS = 20
+
 _URL_USERINFO_RE = re.compile(r"(://)[^/\s:]+:[^/\s@]+@")
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)(password|passwd|token|secret|authorization|cookie)(\s*[:=]\s*)(\S+)"
 )
+
+
+class DockerPullError(RuntimeError):
+    """A `docker pull` failure with a classified cause for retry decisions."""
+
+    def __init__(self, message, category):
+        super().__init__(message)
+        self.category = category
 
 
 def _redact_diagnostics(text):
@@ -31,16 +46,17 @@ def _redact_diagnostics(text):
     return _SECRET_ASSIGNMENT_RE.sub(r"\1\2***", redacted)
 
 
-def _docker_pull_hint(combined_lower):
+def _sleep(seconds):
+    time.sleep(seconds)
+
+
+def _classify_pull_failure(combined_lower):
     if (
         "cannot connect to the docker daemon" in combined_lower
         or "is the docker daemon running" in combined_lower
         or "permission denied while trying to connect" in combined_lower
     ):
-        return (
-            "Hint: the Docker daemon is unreachable; start Docker Desktop "
-            "(or check DOCKER_HOST and socket permissions) and retry."
-        )
+        return "daemon"
     if (
         "unauthorized" in combined_lower
         or "authentication required" in combined_lower
@@ -50,10 +66,7 @@ def _docker_pull_hint(combined_lower):
         or "denied: denied" in combined_lower
         or "access denied" in combined_lower
     ):
-        return (
-            "Hint: registry authentication failed; run `docker login ghcr.io` "
-            "with an account that can read the release repository and retry."
-        )
+        return "auth"
     if (
         "manifest unknown" in combined_lower
         or "manifest for" in combined_lower
@@ -61,13 +74,30 @@ def _docker_pull_hint(combined_lower):
         or "no such image" in combined_lower
         or "not found" in combined_lower
     ):
-        return (
-            "Hint: the fetched commit has no published image yet; check the "
-            "image publish workflow for that SHA, wait for it to publish, then "
-            "retry. Never substitute `latest` for the pinned sha-<commit> image; "
-            "for local development use --local-build instead."
-        )
-    return ""
+        return "unpublished"
+    return "unknown"
+
+
+_PULL_HINTS = {
+    "daemon": (
+        "Hint: the Docker daemon is unreachable; start Docker Desktop "
+        "(or check DOCKER_HOST and socket permissions) and retry."
+    ),
+    "auth": (
+        "Hint: registry authentication failed; run `docker login ghcr.io` "
+        "with an account that can read the release repository and retry."
+    ),
+    "unpublished": (
+        "Hint: the fetched commit has no published image yet; check the "
+        "image publish workflow for that SHA, wait for it to publish, then "
+        "retry. Never substitute `latest` for the pinned sha-<commit> image; "
+        "for local development use --local-build instead."
+    ),
+}
+
+
+def _docker_pull_hint(combined_lower):
+    return _PULL_HINTS.get(_classify_pull_failure(combined_lower), "")
 
 
 def run(args, *, cwd, env=None):
@@ -99,8 +129,43 @@ def run(args, *, cwd, env=None):
             message += f"\n{hint}"
         # Docker/Git diagnostics can contain registry or remote credentials,
         # so only the redacted form above is reported.
+        if len(args) > 1 and args[0] == "docker" and args[1] == "pull":
+            raise DockerPullError(
+                message, _classify_pull_failure(combined.lower())
+            ) from None
         raise RuntimeError(message)
     return (getattr(result, "stdout", "") or "").strip()
+
+
+def _pull_release_image(image, *, repo, branch, revision):
+    """Pull the pinned release image, waiting out an in-flight publish.
+
+    Only unpublished-image failures are retried: the fetched commit is
+    immutable, so waiting cannot change which artifact is selected, pinned,
+    or verified downstream. Auth, daemon, and unknown failures fail fast.
+    """
+    last_error = None
+    for attempt in range(1, _PULL_RETRY_MAX_ATTEMPTS + 1):
+        try:
+            run(["docker", "pull", image], cwd=repo)
+            return
+        except DockerPullError as exc:
+            if exc.category != "unpublished":
+                raise
+            last_error = exc
+        if attempt < _PULL_RETRY_MAX_ATTEMPTS:
+            print(
+                f"Published image {image} not yet available "
+                f"(attempt {attempt}/{_PULL_RETRY_MAX_ATTEMPTS}); "
+                f"waiting {_PULL_RETRY_INTERVAL_SECONDS}s for the image "
+                "publish workflow...",
+                flush=True,
+            )
+            _sleep(_PULL_RETRY_INTERVAL_SECONDS)
+    raise RuntimeError(
+        f"Published image {image} for origin/{branch} revision "
+        f"{revision} is unavailable; {last_error}"
+    ) from last_error
 
 
 def main(argv=None):
@@ -174,13 +239,7 @@ def main(argv=None):
             ["git", "rev-parse", "--verify", "FETCH_HEAD^{commit}"], cwd=repo
         )
         image = f"{args.image_repository}:sha-{revision}"
-        try:
-            run(["docker", "pull", image], cwd=repo)
-        except RuntimeError as exc:
-            raise RuntimeError(
-                f"Published image {image} for origin/{args.branch} revision "
-                f"{revision} is unavailable; {exc}"
-            ) from exc
+        _pull_release_image(image, repo=repo, branch=args.branch, revision=revision)
         observed = json.loads(run(["docker", "image", "inspect", image], cwd=repo))[0]
         if (
             observed.get("Config", {})
