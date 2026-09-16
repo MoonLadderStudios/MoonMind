@@ -12869,6 +12869,16 @@ export interface components {
             slug: string;
             /** Status */
             status: string;
+            /**
+             * Credentialrevision
+             * @default 1
+             */
+            credentialRevision: number;
+            /**
+             * Policyrevision
+             * @default 1
+             */
+            policyRevision: number;
             /** Details */
             details: {
                 [key: string]: unknown;
@@ -12894,6 +12904,11 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "disabled";
+            /**
+             * Requestid
+             * @description Stable mutation request identity for idempotent retries.
+             */
+            requestId?: string | null;
         };
         /**
          * SecretUpdateRequest
@@ -12905,6 +12920,21 @@ export interface components {
              * @description The new raw secret value to be encrypted
              */
             plaintext: string;
+            /**
+             * Expectedcredentialrevision
+             * @description CAS fence: the active credential revision the caller admitted.
+             */
+            expectedCredentialRevision?: number | null;
+            /**
+             * Expectedpolicyrevision
+             * @description Fence against concurrent policy (disable) transitions.
+             */
+            expectedPolicyRevision?: number | null;
+            /**
+             * Requestid
+             * @description Stable mutation request identity for idempotent retries.
+             */
+            requestId?: string | null;
         };
         /**
          * SecretUsageDiagnosticResponse
