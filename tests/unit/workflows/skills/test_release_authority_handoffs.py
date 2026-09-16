@@ -58,20 +58,45 @@ def test_operator_origin_comes_from_preserved_fixed_binding(host, expected):
     assert operator_urls(config) == ["https://moonmind.example.invalid"]
 
 
+@pytest.mark.parametrize(
+    "host,expected",
+    [
+        ("", "http://127.0.0.1:7000"),
+        ("0.0.0.0", "http://127.0.0.1:7000"),
+        ("::", "http://[::1]:7000"),
+    ],
+)
+def test_wildcard_binding_probes_its_own_loopback_listener(host, expected):
+    """A wildcard bind always answers on loopback, so no origin is invented."""
+    config = {
+        "services": {
+            "api": {"ports": [{"host_ip": host, "published": "7000", "target": 8000}]}
+        }
+    }
+    assert operator_urls(config) == [expected]
+
+
 @pytest.mark.parametrize("host", ["", "0.0.0.0", "::"])
-def test_wildcard_never_invents_an_operator_host(host):
-    with pytest.raises(ValueError, match="operator URL"):
-        operator_urls(
-            {
-                "services": {
-                    "api": {
-                        "ports": [
-                            {"host_ip": host, "published": "7000", "target": 8000}
-                        ]
-                    }
-                }
+def test_wildcard_binding_keeps_declared_origins_authoritative(host):
+    """Declared operator origins still replace the derived loopback probe."""
+    config = {
+        "services": {
+            "api": {
+                "environment": {"MOONMIND_PUBLIC_BASE_URL": "https://moonmind.example.invalid"},
+                "ports": [{"host_ip": host, "published": "7000", "target": 8000}],
             }
-        )
+        }
+    }
+    assert operator_urls(config) == ["https://moonmind.example.invalid"]
+    config["services"]["api"]["environment"]["MOONMIND_PUBLIC_BASE_URL"] = ""
+    assert operator_urls(config, declared_urls=["http://vpn.example:7000"]) == [
+        "http://vpn.example:7000"
+    ]
+
+
+def test_operator_verification_still_requires_a_published_binding():
+    with pytest.raises(ValueError, match="published API binding"):
+        operator_urls({"services": {"api": {"ports": []}}})
 
 
 @pytest.mark.asyncio

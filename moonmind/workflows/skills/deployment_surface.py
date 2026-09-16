@@ -56,8 +56,12 @@ def operator_urls(configuration, *, declared_urls=None):
         host = binding.get("host_ip") or "0.0.0.0"
         address = ipaddress.ip_address(host)
         if address.is_unspecified:
-            raise ValueError(
-                "Wildcard API bindings require an existing operator URL via --operator-url or MOONMIND_PUBLIC_BASE_URL before release"
+            # A wildcard bind publishes on every host address, loopback
+            # included, so its own loopback origin is an observed property of
+            # the binding rather than a guessed operator route. Declared
+            # origins above still take precedence when the operator has one.
+            address = ipaddress.ip_address(
+                "::1" if address.version == 6 else "127.0.0.1"
             )
         port = str(binding.get("published") or "")
         if not port.isdecimal() or not 1 <= int(port) <= 65535:

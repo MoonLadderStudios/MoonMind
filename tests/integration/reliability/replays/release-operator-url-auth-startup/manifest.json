@@ -1,8 +1,8 @@
 {
   "schemaVersion": "escaped-failure-replay/v1",
-  "trigger": "An installed wildcard HTTP deployment has no authentication base URL; its updater requires an explicit operator origin.",
+  "trigger": "An installed wildcard HTTP deployment has no authentication base URL, and its updater must still resolve an operator origin to verify.",
   "observedFailure": "Setting MOONMIND_PUBLIC_BASE_URL only for release verification changes authentication configuration and makes candidate API startup reject non-loopback HTTP.",
-  "expected": "The immutable release submission carries explicit operator origins without changing installed API authentication or bindings; every configured authentication origin remains a required probe target.",
+  "expected": "A wildcard binding verifies the loopback origin it already publishes on, so the default update needs no declaration; explicit operator origins in the immutable release submission add routes without changing installed API authentication or bindings, and every configured authentication origin remains a required probe target.",
   "regressionTests": [
     "tests/unit/test_update_moonmind_skill.py",
     "tests/unit/workflows/skills/test_deployment_release.py",

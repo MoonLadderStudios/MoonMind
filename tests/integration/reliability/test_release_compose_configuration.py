@@ -152,6 +152,9 @@ async def test_wildcard_operator_probe_preserves_real_compose_auth_startup(
     )
     assert result["exitCode"] == 0, result
     configuration = json.loads(result["stdout"])
+    # The default invocation declares nothing and still resolves the probe the
+    # wildcard bind itself answers, without touching authentication settings.
+    assert operator_urls(configuration) == ["http://127.0.0.1:7000"]
     assert operator_urls(configuration, declared_urls=["http://vpn.example:7000"]) == ["http://vpn.example:7000"]
     environment = configuration["services"]["api"]["environment"]
     assert environment["MOONMIND_PUBLIC_BASE_URL"] == ""
@@ -165,3 +168,65 @@ async def test_wildcard_operator_probe_preserves_real_compose_auth_startup(
     app = FastAPI()
     await api_main._initialize_oidc_provider(app)
     assert app.state.auth_production_mode == "disabled"
+
+
+@pytest.mark.parametrize(
+    "env,expected",
+    [
+        pytest.param("", ["http://127.0.0.1:7000"], id="fresh-install-defaults"),
+        pytest.param(
+            "MOONMIND_API_PUBLISH_HOST=127.0.0.1\n",
+            ["http://127.0.0.1:7000"],
+            id="documented-loopback",
+        ),
+        pytest.param(
+            "MOONMIND_API_PUBLISH_HOST=192.0.2.10\nMOONMIND_TRUSTED_INGRESS=1\n",
+            ["http://192.0.2.10:7000"],
+            id="documented-lan-interface",
+        ),
+        pytest.param(
+            "MOONMIND_API_PUBLISH_HOST=0.0.0.0\nMOONMIND_TRUSTED_INGRESS=1\n",
+            ["http://127.0.0.1:7000"],
+            id="documented-wildcard",
+        ),
+        pytest.param(
+            "MOONMIND_API_PUBLISH_HOST=0.0.0.0\nMOONMIND_API_HOST_PORT=8800\n"
+            "MOONMIND_TRUSTED_INGRESS=1\n",
+            ["http://127.0.0.1:8800"],
+            id="documented-wildcard-custom-port",
+        ),
+        pytest.param(
+            "MOONMIND_PUBLIC_BASE_URL=https://moonmind.example.invalid\n",
+            ["https://moonmind.example.invalid"],
+            id="documented-public-base-url",
+        ),
+    ],
+)
+async def test_every_documented_binding_resolves_without_a_declared_origin(
+    tmp_path, monkeypatch, env, expected
+):
+    """`./tools/update-moonmind.sh` with no arguments must resolve a probe target.
+
+    Each case is a binding combination documented in README.md and .env-template.
+    Requiring `--operator-url` for any of them is the defect this guards.
+    """
+    from moonmind.workflows.skills.deployment_surface import operator_urls
+
+    (tmp_path / ".env").write_text(env)
+    for variable in (
+        "MOONMIND_API_PUBLISH_HOST",
+        "MOONMIND_API_HOST_PORT",
+        "MOONMIND_TRUSTED_INGRESS",
+        "MOONMIND_PUBLIC_BASE_URL",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file=str(Path(__file__).resolve().parents[3] / "docker-compose.yaml"),
+        project_name="moonmind-test-default-origins",
+    )
+    result = await runner._run_compose_command(
+        ("docker", "compose", "config", "--format", "json"), max_stdout_chars=None
+    )
+    assert result["exitCode"] == 0, result
+    assert operator_urls(json.loads(result["stdout"])) == expected
