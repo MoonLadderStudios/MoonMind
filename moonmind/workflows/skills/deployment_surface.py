@@ -46,6 +46,16 @@ def operator_urls(configuration, *, declared_urls=None):
         return sorted(set([validate_operator_url(declared), *explicit]))
     if explicit:
         return sorted(set(explicit))
+    if (
+        str(api.get("environment", {}).get("AUTH_PROVIDER") or "").strip().lower()
+        == "header"
+    ):
+        raise ValueError(
+            "AUTH_PROVIDER=header requires the trusted ingress origin for operator "
+            "verification; set MOONMIND_PUBLIC_BASE_URL or supply --operator-url "
+            "with that existing origin. Published API bindings and trusted proxy "
+            "peer addresses do not identify the ingress origin."
+        )
     urls = []
     for binding in api.get("ports", []):
         if (
