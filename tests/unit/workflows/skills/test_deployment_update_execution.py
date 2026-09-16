@@ -6,10 +6,12 @@ import os
 import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import pytest
 
+from moonmind.workflows.skills import deployment_execution
 from moonmind.workflows.skills.deployment_execution import (
     ComposeCommandPlan,
     ComposeVerification,
@@ -2244,3 +2246,211 @@ async def test_desktop_rewrite_requires_a_local_checkout_for_daemon_input(
     runner = HostDockerComposeRunner(project_dir="/mnt/d/code/MoonMind")
     assert await runner._use_desktop_host_rewrite() is False
     probe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_desktop_rewrite_defers_to_the_daemon_recorded_checkout_source(
+    tmp_path, monkeypatch
+):
+    """Evidence from the daemon outranks the namespace guess.
+
+    Regression: Docker Desktop serves a WSL ``/mnt/<drive>`` checkout at that
+    same path and leaves ``/run/desktop/mnt/host/<drive>`` empty, so rewriting
+    it launched updater containers whose ``/workspace/deployment_state`` bind
+    was an empty directory and whose request file never existed.
+    """
+
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        deployment_execution, "_daemon_bind_source_cache", {}
+    )
+    monkeypatch.setattr(
+        deployment_execution,
+        "daemon_bind_source",
+        lambda mount: "/mnt/d/code/MoonMind" if mount == str(tmp_path) else None,
+    )
+    desktop = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        deployment_execution, "_probe_docker_desktop_daemon", desktop
+    )
+    runner = HostDockerComposeRunner(
+        project_dir="/mnt/d/code/MoonMind", local_project_dir=str(tmp_path)
+    )
+
+    assert await runner._use_desktop_host_rewrite() is False
+    assert runner._host_dir() == Path("/mnt/d/code/MoonMind")
+    desktop.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_desktop_rewrite_still_guesses_without_daemon_evidence(
+    tmp_path, monkeypatch
+):
+    """Outside a container the path shape remains the only available signal."""
+
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        deployment_execution, "_daemon_bind_source_cache", {}
+    )
+    monkeypatch.setattr(
+        deployment_execution, "daemon_bind_source", lambda mount: None
+    )
+    monkeypatch.setattr(
+        deployment_execution,
+        "_probe_docker_desktop_daemon",
+        AsyncMock(return_value=True),
+    )
+    runner = HostDockerComposeRunner(
+        project_dir="/mnt/d/code/MoonMind", local_project_dir=str(tmp_path)
+    )
+
+    assert await runner._use_desktop_host_rewrite() is True
+    assert runner._host_dir() == Path("/mnt/d/code/MoonMind")
+
+
+@pytest.mark.asyncio
+async def test_compose_uses_the_checkout_source_its_daemon_recorded(
+    tmp_path, monkeypatch
+):
+    """Compose runs against the host path the daemon resolves for this checkout.
+
+    The detached release updater inherits these bind sources, so a project
+    directory the daemon cannot resolve gives it an empty state volume instead
+    of its durable request.
+    """
+
+    local_dir = tmp_path / "checkout"
+    local_dir.mkdir()
+    (local_dir / "docker-compose.yaml").write_text(
+        "services:\n  api:\n    image: example/app:latest\n", encoding="utf-8"
+    )
+    host_dir = tmp_path / "host-checkout"
+    host_dir.symlink_to(local_dir, target_is_directory=True)
+    monkeypatch.setattr(
+        deployment_execution, "_daemon_bind_source_cache", {}
+    )
+    monkeypatch.setattr(
+        deployment_execution,
+        "daemon_bind_source",
+        lambda mount: str(host_dir) if mount == str(local_dir) else None,
+    )
+    calls: list[tuple[str, ...]] = []
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"ok", b""
+
+    async def fake_create_subprocess_exec(
+        *args: str,
+        cwd: str,
+        env: Mapping[str, str],
+        stdout: Any,
+        stderr: Any,
+    ):
+        calls.append(args)
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    runner = HostDockerComposeRunner(
+        project_dir="/mnt/d/code/MoonMind", local_project_dir=str(local_dir)
+    )
+
+    result = await runner._run_compose_command(("docker", "compose", "up", "-d"))
+
+    assert result["exitCode"] == 0
+    # One command: the daemon-visible source needs no rendered rewrite pass.
+    assert len(calls) == 1
+    assert calls[0][calls[0].index("--project-directory") + 1] == str(host_dir)
+    assert calls[0][calls[0].index("-f") + 1] == str(local_dir / "docker-compose.yaml")
+
+
+def test_daemon_bind_source_reads_the_worker_container_mount_table(monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(
+        deployment_execution, "_read_self_container_id", lambda: "abc123"
+    )
+    recorded: list[list[str]] = []
+
+    def _fake_run(args, **kwargs):
+        recorded.append(list(args))
+        mounts = json.dumps(
+            [
+                {"Source": "/other", "Destination": "/workspace/elsewhere"},
+                {"Source": "/mnt/d/code/MoonMind", "Destination": "/workspace/host_project/"},
+            ]
+        )
+        return SimpleNamespace(stdout=mounts, stderr="", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    assert (
+        deployment_execution.daemon_bind_source("/workspace/host_project")
+        == "/mnt/d/code/MoonMind"
+    )
+    assert recorded[0][:2] == ["docker", "inspect"]
+
+
+def test_daemon_bind_source_retries_a_transient_inspect_failure(monkeypatch):
+    import subprocess
+    import time
+
+    monkeypatch.setattr(
+        deployment_execution, "_read_self_container_id", lambda: "abc123"
+    )
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    attempts = {"count": 0}
+
+    def _fake_run(args, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise subprocess.TimeoutExpired(cmd="docker", timeout=10)
+        mounts = json.dumps(
+            [{"Source": "/host/repo", "Destination": "/workspace/host_project"}]
+        )
+        return SimpleNamespace(stdout=mounts, stderr="", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    assert (
+        deployment_execution.daemon_bind_source(
+            "/workspace/host_project", attempts=3, backoff_seconds=0.0
+        )
+        == "/host/repo"
+    )
+    assert attempts["count"] == 2
+
+
+def test_daemon_bind_source_returns_none_after_exhausting_retries(monkeypatch):
+    import subprocess
+    import time
+
+    monkeypatch.setattr(
+        deployment_execution, "_read_self_container_id", lambda: "abc123"
+    )
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    calls = {"count": 0}
+
+    def _always_fail(args, **kwargs):
+        calls["count"] += 1
+        raise FileNotFoundError("docker missing")
+
+    monkeypatch.setattr(subprocess, "run", _always_fail)
+
+    assert (
+        deployment_execution.daemon_bind_source(
+            "/workspace/host_project", attempts=3, backoff_seconds=0.0
+        )
+        is None
+    )
+    assert calls["count"] == 3
+
+
+def test_daemon_bind_source_reports_no_evidence_outside_a_container(monkeypatch):
+    monkeypatch.setattr(deployment_execution, "_read_self_container_id", lambda: None)
+
+    assert deployment_execution.daemon_bind_source("/workspace/host_project") is None
