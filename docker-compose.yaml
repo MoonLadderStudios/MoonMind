@@ -1205,6 +1205,13 @@ services:
       CLAUDE_VOLUME_PATH: /home/app/.claude
       CLAUDE_CONFIG_DIR: /home/app/.claude
       CLAUDE_CREDENTIAL_GENERATION: ${CLAUDE_CREDENTIAL_GENERATION:-1}
+      # Bounded readiness deadlines (MoonLadderStudios/MoonMind#3936 R5): the
+      # packaged entrypoint and the workflow-side enrollment classifier read
+      # the same timeout names, so operator overrides must reach the static
+      # container environment instead of silently using the entrypoint
+      # defaults while the workflow judges different values.
+      MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS: ${MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS:-1800}
+      MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS: ${MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS:-600}
     volumes:
       - omnigent-host-claude-home:/home/app
       - omnigent-host-claude-state:/home/app/.omnigent
@@ -1352,6 +1359,13 @@ services:
       CODEX_VOLUME_PATH: /home/app/.codex
       CODEX_CREDENTIAL_GENERATION: ${CODEX_CREDENTIAL_GENERATION:-1}
       OMNIGENT_SERVER_URL: http://omnigent:8000
+      # Bounded readiness deadlines (MoonLadderStudios/MoonMind#3936 R5): the
+      # packaged entrypoint and the workflow-side enrollment classifier read
+      # the same timeout names, so operator overrides must reach the static
+      # container environment instead of silently using the entrypoint
+      # defaults while the workflow judges different values.
+      MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS: ${MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS:-1800}
+      MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS: ${MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS:-600}
       OMNIGENT_EXECUTION_TIMEOUT_SECONDS: ${OMNIGENT_HOST_TIMEOUT_SECONDS:-5400}
       OMNIGENT_EXECUTION_TIMEOUT_OWNER: temporal_workflow
       OMNIGENT_CAPTURE_OWNER: moonmind_bridge

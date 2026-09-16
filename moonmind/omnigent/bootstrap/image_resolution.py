@@ -788,11 +788,22 @@ async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
         # resolved shared image is their launch authority, so it must be
         # digest-pinned before anything persists or exports it. Mutable or
         # missing resolution fails this reconciliation pass instead of
-        # launching an unqualified static image.
-        require_static_host_image_authority(
+        # persisting an unqualified static image. When only the bounded
+        # legacy alias carries a digest pin, propagate that accepted pin
+        # into the persisted/exported shared ref: the static Compose image
+        # expression resolves the shared ref (not the legacy name), so
+        # leaving it unset would launch the mutable fallback rather than
+        # the digest this gate accepted.
+        accepted_static_ref = require_static_host_image_authority(
             env=operator_image_configuration(),
             shared_ref=state.shared_host_image_ref,
         )
+        if not (state.shared_host_image_ref or "").strip() and (
+            accepted_static_ref or ""
+        ).strip():
+            state = state.model_copy(
+                update={"shared_host_image_ref": accepted_static_ref.strip()}
+            )
     save_resolved_state(state)
     exported = {
         "OMNIGENT_IMAGE_REF": state.server_image_ref,
