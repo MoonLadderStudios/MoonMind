@@ -167,20 +167,37 @@ def _rate_limit_key(request: Request, endpoint: str, login: str = "") -> str:
     host = ""
     try:
         host = (request.client.host if request.client else "") or ""
-    except Exception:
-        host = ""
+    except Exception:  # noqa: BLE001 - rollback best-effort; original error owns response
+        host = ""  # client host best-effort; rate limiting falls back to login below
     who = (login or "").strip().lower() or host or "unknown"
     return f"{endpoint}:{who}"
 
 
+def _rate_limit_ip_key(request: Request, endpoint: str) -> str:
+    """Per-source-IP bucket so rotating logins cannot bypass the login bucket."""
+    host = ""
+    try:
+        host = (request.client.host if request.client else "") or ""
+    except Exception:  # noqa: BLE001 - rollback best-effort; original error owns response
+        host = ""  # client host best-effort; unknown-IP bucket still bounds global abuse
+    return f"{endpoint}:ip:{host or 'unknown'}"
+
+
 def _check_rate_limit(request: Request, endpoint: str, login: str = "") -> JSONResponse | None:
-    if not _accounts_rate_limiter.allow(
-        key=_rate_limit_key(request, endpoint, login),
-        limit=_ACCOUNTS_RATE_LIMIT,
-        window_seconds=_ACCOUNTS_RATE_WINDOW_SECONDS,
+    # Dual buckets: per-login (existing semantics) plus per-source-IP so an
+    # unauthenticated caller rotating login strings cannot bypass the bound
+    # and sustain CPU-intensive hashing. Either bucket exhausting denies.
+    for key in (
+        _rate_limit_key(request, endpoint, login),
+        _rate_limit_ip_key(request, endpoint),
     ):
-        logger.info("auth_event mode=accounts reason=rate_limited endpoint=%s", endpoint)
-        return JSONResponse(status_code=429, content={"code": "rate_limited"})
+        if not _accounts_rate_limiter.allow(
+            key=key,
+            limit=_ACCOUNTS_RATE_LIMIT,
+            window_seconds=_ACCOUNTS_RATE_WINDOW_SECONDS,
+        ):
+            logger.info("auth_event mode=accounts reason=rate_limited endpoint=%s", endpoint)
+            return JSONResponse(status_code=429, content={"code": "rate_limited"})
     return None
 
 
@@ -432,8 +449,19 @@ async def accounts_setup(
         from api_service.services.account_lifecycle_store_4122 import (
             claim_first_owner_with_token,
         )
-        from moonmind.security.account_lifecycle_4122 import redacted_lifecycle_event
+        from moonmind.security.account_lifecycle_4122 import (
+            bootstrap_nonce_for_login,
+            redacted_lifecycle_event,
+        )
 
+        # Validate the signed capability before the expensive Argon2 hash so
+        # unauthenticated callers with bogus tokens cannot sustain CPU
+        # exhaustion by rotating logins (rate limiting is bypassable alone).
+        try:
+            bootstrap_nonce_for_login(body.bootstrap_token, key=key, login=login)
+        except Exception:
+            logger.info("auth_event mode=accounts reason=setup_denied code=auth_invalid")
+            return _error(401, "auth_invalid")
         hashed = await _hash_password(body.password)
         user = await claim_first_owner_with_token(
             session, token=body.bootstrap_token, key=key, login=login, hashed_password=hashed
@@ -447,8 +475,8 @@ async def accounts_setup(
     except Exception as exc:  # noqa: BLE001 - fail closed with stable codes
         try:
             await session.rollback()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 - rollback is best-effort; original error owns response
+            pass  # rollback best-effort; original exception drives the stable error below
         code = getattr(exc, "code", None)
         if code in ("bootstrap_closed", "bootstrap_consumed"):
             logger.info("auth_event mode=accounts reason=setup_denied code=%s", code)
@@ -511,8 +539,8 @@ async def accounts_login(
     except Exception as exc:  # noqa: BLE001 - fail closed with stable codes
         try:
             await session.rollback()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 - rollback is best-effort; original error owns response
+            pass  # rollback best-effort; original exception drives the stable error below
         from moonmind.security import omnigent_auth_qualification as q
 
         if isinstance(exc, q.ForbiddenError):
@@ -568,11 +596,16 @@ async def accounts_logout(
 
         await DbRevocationStore(session).revoke_session_for_user(jti, user_id, reason="logout")
         await session.commit()
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - fail closed with stable codes
         try:
             await session.rollback()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 - rollback is best-effort; original error owns response
+            pass  # rollback best-effort; original exception drives the stable error below
+        # Revocation failure must not report success: copied instances of
+        # the same session would remain valid while the browser believes
+        # logout completed. Fail closed with observable unavailable.
+        logger.warning("auth_event mode=accounts reason=logout_unavailable error=%s", type(exc).__name__)
+        return _error(503, "unavailable")
     logger.info("auth_event mode=accounts reason=logout")
     resp = _auth_json(200, {"ok": True})
     resp.headers["Set-Cookie"] = build_clear_cookie_header(
@@ -642,8 +675,8 @@ async def accounts_password_change(
     except Exception:  # noqa: BLE001 - fail closed with stable codes
         try:
             await session.rollback()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 - rollback is best-effort; original error owns response
+            pass  # rollback best-effort; original exception drives the stable error below
         return _error(401, "auth_invalid")
 
 
@@ -707,7 +740,16 @@ async def accounts_invite_create(
 async def accounts_enroll(
     request: Request, body: EnrollRequest, session: AsyncSession = Depends(get_async_session)
 ):
-    """Redeem an invitation and enroll exactly one member account."""
+    """Redeem an operator invitation and enroll exactly one member account.
+
+    Single-instance scope: there is no open registration, no tenant model,
+    and no new role framework. Invitations are minted only on the
+    admin-only ``POST /invites`` endpoint, confer plain membership (never
+    administrator authority — privilege changes go through the protected
+    member actions), and are expiring, one-use, and login-bound. This is
+    the K3/AuthenticationContracts §7 operator-invited onboarding for one
+    MoonMind instance, reusing the existing ``User.is_superuser`` flag.
+    """
     gated = _require_accounts_mode()
     if gated is not None:
         return gated
@@ -733,8 +775,18 @@ async def accounts_enroll(
         from api_service.services.account_lifecycle_store_4122 import (
             redeem_invite_with_token,
         )
-        from moonmind.security.account_lifecycle_4122 import redacted_lifecycle_event
+        from moonmind.security.account_lifecycle_4122 import (
+            invite_nonce_for_login,
+            redacted_lifecycle_event,
+        )
 
+        # Validate the invitation before hashing (same CPU-exhaustion guard
+        # as setup; enrollment shares the ordering problem).
+        try:
+            invite_nonce_for_login(body.invite_token, key=key, login=login)
+        except Exception:
+            logger.info("auth_event mode=accounts reason=enroll_denied")
+            return _error(401, "auth_invalid")
         hashed = await _hash_password(body.password)
         user = await redeem_invite_with_token(
             session, token=body.invite_token, key=key, login=login, hashed_password=hashed
@@ -748,8 +800,8 @@ async def accounts_enroll(
     except Exception as exc:  # noqa: BLE001 - fail closed with stable codes
         try:
             await session.rollback()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 - rollback is best-effort; original error owns response
+            pass  # rollback best-effort; original exception drives the stable error below
         code = getattr(exc, "code", None)
         if code == "email_taken":
             # Already enrolled (including a lost-acknowledgment retry
@@ -860,21 +912,35 @@ async def accounts_recovery_redeem(
             redacted_lifecycle_event,
         )
 
+        hashed = None
+        # Validate the recovery capability before hashing (same guard as
+        # setup/enroll). The nonce below is verified cheaply first; the
+        # expensive hash runs only for a well-formed capability.
+        try:
+            _pre_nonce = recovery_nonce_for_login(body.recovery_token, key=key, login=login)
+        except Exception:
+            logger.info("auth_event mode=accounts reason=recovery_denied")
+            return _error(401, "auth_invalid")
         hashed = await _hash_password(body.new_password)
-        nonce = recovery_nonce_for_login(body.recovery_token, key=key, login=login)
-        user = await redeem_recovery_for_user(session, login=login, nonce=nonce)
-        user.hashed_password = hashed
-        await session.flush()
-        await DbRevocationStore(session).revoke_all_for_user(user.id)
-        await session.commit()
+        nonce = _pre_nonce
+        # Atomic rotation: nonce consumption, credential rotation, and
+        # session revocation commit together so a database failure cannot
+        # burn the one-use token while leaving the password unchanged.
+        from api_service.services.account_lifecycle_store_4122 import (
+            redeem_recovery_and_rotate_password,
+        )
+
+        user = await redeem_recovery_and_rotate_password(
+            session, login=login, nonce=nonce, hashed_password=hashed
+        )
         redacted_lifecycle_event("recovery", action="redeemed", login=login)
         logger.info("auth_event mode=accounts reason=recovery_ok")
         return _auth_json(200, {"ok": True})
     except Exception:  # noqa: BLE001 - fail closed with stable codes
         try:
             await session.rollback()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 - rollback is best-effort; original error owns response
+            pass  # rollback best-effort; original exception drives the stable error below
         logger.info("auth_event mode=accounts reason=recovery_denied")
         return _error(401, "auth_invalid")
 
@@ -959,8 +1025,8 @@ async def accounts_member_action(
     except Exception as exc:  # noqa: BLE001 - fail closed with stable codes
         try:
             await session.rollback()
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001 - rollback is best-effort; original error owns response
+            pass  # rollback best-effort; original exception drives the stable error below
         from moonmind.security.account_lifecycle_4122 import AdminRefusedError as _Refused
 
         if isinstance(exc, _Refused):

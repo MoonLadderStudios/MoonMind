@@ -299,6 +299,9 @@ jobs:
       - name: Initialize MoonSpec test fixtures
         if: matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
         run: git submodule update --init --depth 1 -- moonspec omnigent
+      - name: Initialize Omnigent bundle for API/component suite
+        if: matrix.suite == 'api-component' && needs.select-test-suites.outputs.api_component == 'true'
+        run: git submodule update --init --depth 1 -- omnigent
       - name: Start isolated reliability dependencies
         if: startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         run: |
