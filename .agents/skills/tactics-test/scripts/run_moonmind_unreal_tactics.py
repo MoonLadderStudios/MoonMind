@@ -119,13 +119,16 @@ def main() -> int:
     results_subdir = _relative_path(args.results_subdir, field="--results-subdir")
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     results_dir = repo / results_subdir / timestamp
-    results_dir.mkdir(parents=True, exist_ok=True)
     gate_path = (
         repo / _relative_path(args.gate_file, field="--gate-file")
         if args.gate_file
         else repo / results_subdir / "latest" / "gate.json"
     )
-    gate_path.parent.mkdir(parents=True, exist_ok=True)
+    if not args.dry_run:
+        # Dry-run is strictly non-mutating: preview only, so directory and
+        # gate writes stay behind the non-dry-run path.
+        results_dir.mkdir(parents=True, exist_ok=True)
+        gate_path.parent.mkdir(parents=True, exist_ok=True)
 
     build_status = "not_run"
     test_status = "not_run"
@@ -212,7 +215,10 @@ def main() -> int:
         "testStatus": "skipped" if args.dry_run else test_status,
         "resultsDir": str(results_dir),
     }
-    gate_path.write_text(json.dumps(gate, indent=2) + "\n", encoding="utf-8")
+    if args.dry_run:
+        print(json.dumps({"dry_run_gate_preview": gate}, indent=2))
+    else:
+        gate_path.write_text(json.dumps(gate, indent=2) + "\n", encoding="utf-8")
     return exit_code
 
 

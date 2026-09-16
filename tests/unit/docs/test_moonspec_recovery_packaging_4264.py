@@ -31,12 +31,14 @@ PRESETS_ROOT = REPO_ROOT / "api_service" / "data" / "presets"
 
 # Named-model version tokens only. Provider names alone (openai, anthropic,
 # gemini without a version, bedrock, vertex) are legitimate service/API
-# identifiers and must not fail this test.
+# identifiers and must not fail this test. Versioned naming grammars
+# (gpt-4o, claude-sonnet-4-6, gemini-3.1-pro) match as well as the bare
+# legacy prefixes, so versioned forms cannot be added as instructions.
 BANNED_MODEL_PATTERNS = [
-    re.compile(r"\bgpt-[2345]\b", re.IGNORECASE),
-    re.compile(r"\bclaude-[234]\b", re.IGNORECASE),
-    re.compile(r"\bgemini-(?:1\.5|1\.0|2\.0|2\.5)\b", re.IGNORECASE),
-    re.compile(r"\bllama-[234]\b", re.IGNORECASE),
+    re.compile(r"\bgpt-[2345](?:[.-]?[a-z0-9]+)*", re.IGNORECASE),
+    re.compile(r"\bclaude(?:-[a-z]+)*-[0-9](?:[.-]?[a-z0-9]+)*", re.IGNORECASE),
+    re.compile(r"\bgemini-[0-9](?:\.[0-9]+)?(?:[.-]?[a-z0-9]+)*", re.IGNORECASE),
+    re.compile(r"\bllama-[234](?:[.-]?[a-z0-9]+)*", re.IGNORECASE),
     re.compile(r"\bmixtral\b", re.IGNORECASE),
     re.compile(r"\bmistral-large\b", re.IGNORECASE),
     re.compile(r"\bper-model\b", re.IGNORECASE),
@@ -131,6 +133,9 @@ def test_specify_preserves_technical_acceptance_criteria():
     assert "keeps its explicit interface names" in text
     assert "Do not rewrite a technical requirement as a business metric" in norm
     assert "do not invent performance, retention, or concurrency numbers" in norm.lower()
+    assert "Source-faithful" in text
+    assert "explicit technical contract, not an invented metric" in norm
+    assert "when no request threshold exists" in text.lower()
 
 
 def test_align_preserves_genuine_authority_boundaries():
@@ -172,6 +177,10 @@ def test_fix_merge_conflicts_preserves_exact_base_and_task_only_changes():
     assert "Never silently substitute a default branch" in text
     assert "git_identity_unavailable" in text
     assert "do not invent an author/email" in text.lower()
+    assert "git config --local --get user.name" not in text
+    assert "git config --get user.name" in text
+    assert "stash push --staged" in text
+    assert "staged_changes_not_restorable" in text
 
 
 def test_jira_verify_posts_comment_before_status_transition():
@@ -180,6 +189,9 @@ def test_jira_verify_posts_comment_before_status_transition():
     assert "before any status transition" in text.lower() or "before any completion transition" in text.lower()
     assert "If posting fails" in text
     assert "do not attempt a completion transition" in text.lower() or "do not claim Jira was updated" in text
+    assert "pending" in text.lower() and "not yet attempted" in text.lower()
+    assert "follow-up comment" in text.lower()
+    assert "only the follow-up comment may state it" in text.lower()
 
 
 def test_jira_issue_creator_distinguishes_draft_from_write_intent():
@@ -202,6 +214,8 @@ def test_code_improvement_proposal_has_no_mandatory_manual_smoke_test():
     assert "Manual smoke test" not in text
     assert "not a mandatory human smoke test" in text.lower() or "executable acceptance" in text.lower()
     assert "no_findings" in text.lower()
+    assert "`no_findings`" in text
+    assert "instead of inventing a ticket to fill a quota" in text.lower()
 
 
 def test_jira_breakdown_presets_use_provider_neutral_issue_creation():
@@ -227,3 +241,33 @@ def test_update_moonmind_defines_receipt_readiness_and_dry_run_outcomes():
     assert "verified installed" in text.lower()
     assert "--dry-run" in text and "strictly non-mutating" in text.lower()
     assert "preserve" in text.lower() and "deployment-owned" in text.lower()
+    assert "sourceRevision" in text
+    assert "releaseReadinessArtifactRef" in text
+
+
+def test_versioned_model_name_grammars_are_banned():
+    cases = {
+        0: ["gpt-4", "gpt-4o", "gpt-4o-mini", "gpt-5"],
+        1: ["claude-3", "claude-3-5-sonnet", "claude-sonnet-4-6", "claude-opus-4-1"],
+        2: ["gemini-1.5", "gemini-2.0", "gemini-2.5-flash", "gemini-3.1-pro"],
+        3: ["llama-2", "llama-3.1", "llama-4-scout"],
+    }
+    for index, names in cases.items():
+        for name in names:
+            assert BANNED_MODEL_PATTERNS[index].search(name), name
+
+
+def test_legitimate_identifiers_are_not_versioned_models():
+    allowed = [
+        "openai",
+        "anthropic",
+        "gemini",
+        "bedrock",
+        "vertex",
+        "agents/openai.yaml",
+        "gpt",
+        "claude",
+        "llama",
+    ]
+    for name in allowed:
+        assert not any(pattern.search(name) for pattern in BANNED_MODEL_PATTERNS), name

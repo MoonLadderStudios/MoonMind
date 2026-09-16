@@ -148,6 +148,10 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
 
 6. Draft and post the Jira verification comment before any status mutation (evidence-first).
    - Draft the comment per section 7, scan for secrets, and post per section 8.
+   - The evidence-first comment must record the status update as pending
+     (not yet attempted). It must never claim an outcome — `already done`,
+     `transitioned`, `blocked`, or `failed` — that only the transition
+     attempt in step 7 can establish.
    - If posting fails, keep the comment body artifact, report the exact trusted-tool blocker, do not claim Jira was updated, and do not attempt a completion transition.
 
 7. Only after a successful comment receipt, and only when `update status` is true, decide whether to update Jira status.
@@ -159,6 +163,13 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
    - If the transition requires fields that were not explicitly provided by the trusted tool input or operator context, do not guess values. Record the status update as blocked and leave the issue unchanged.
    - Execute the selected transition only through `jira.transition_issue`, then record selected transition ID/name, whether the issue was already done, and whether the transition succeeded.
    - If transition execution fails, keep the verification verdict as decided above but report the status update failure separately. Do not claim the issue was moved.
+   - After the transition attempt — or after deciding the update is skipped
+     (`update status` false, verdict not `PASS`) or blocked (no safe
+     transition available) — post a follow-up comment recording the actual
+     status outcome (`already done`, `transitioned` with the selected
+     transition, `skipped` with reason, or `blocked`/`failed` with sanitized
+     reason). The evidence-first comment from step 6 cannot carry this
+     outcome; only the follow-up comment may state it.
 
 7. Draft the Jira comment (posted in step 6 before any transition).
    - Start with the verdict, issue key, the verification mode used (`branch` or `main/trunk`), branch name, commit SHA, and comparison ref (or "verified against current state of default branch" for main/trunk mode).
@@ -166,8 +177,22 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
    - Include blockers or gaps first for `PARTIAL`, `FAIL`, or `BLOCKED`.
    - Include a compact coverage table and evidence references.
    - Include validation observed, clearly separating passing tests from tests not run.
-   - Include status update outcome when `update status` is true: skipped because verdict was not `PASS`, already done, transitioned with selected transition, or blocked/failed with sanitized reason.
+   - Include status update as pending when `update status` is true
+     (`pending — transition not yet attempted`); omit the line when
+     `update status` is false. Never state `already done`, `transitioned`,
+     `blocked`, or `failed` in this comment: the actual outcome is published
+     only in the step 7 follow-up comment after the transition attempt.
    - Do not paste long private Jira text, raw command dumps, credentials, auth headers, cookies, or full environment/config dumps.
+
+   Suggested follow-up comment shape (posted after the step 7 transition attempt):
+
+```markdown
+Status update for `<ISSUE>`: **<already done | transitioned | skipped | blocked | failed>**
+
+Verification: `<PASS|PARTIAL|FAIL|BLOCKED>` on `<branch>` at `<short-sha>`
+Transition: `<selected transition ID/name, or reason no transition was attempted>`
+Detail: `<sanitized outcome, e.g. transition receipt, already-done status, or blocker>`
+```
 
 Suggested comment shape (branch mode):
 
@@ -217,7 +242,7 @@ Status update:
 - <omitted when `update status` is false; otherwise already done / transitioned / skipped / blocked>
 ```
 
-8. Scan and post to Jira (executed as part of step 6, before any status transition).
+8. Scan and post to Jira (executed as part of step 6, before any status transition; the step 7 follow-up comment reuses the same scan and post path).
    - Before posting, scan the outgoing comment for secret-like patterns such as `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
    - If any secret-like content appears, do not post. Redact and re-scan.
    - If the bundled helper is materialized, post with:

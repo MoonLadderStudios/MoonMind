@@ -263,6 +263,12 @@ async def successful_release_image(root, version):
         outputs = receipt["result"].get("outputs", {})
         if not digest.startswith("sha256:") or outputs.get("resolvedDigest") != digest:
             raise ValueError("Successful release receipt image differs")
+        expected_source = request["authored"]["inputs"].get("sourceRevision")
+        if "sourceRevision" in outputs and outputs.get("sourceRevision") != expected_source:
+            raise ValueError("Successful release receipt source differs")
+        # Receipts predating the bound source stamp carry no sourceRevision
+        # output; their source authority still binds through the live image
+        # manifest check below, so absence alone is not rejection evidence.
         image_ids = set((await docker("image", "ls", "-q", "--no-trunc")).split())
         if request["imageId"] not in image_ids:
             await docker("pull", request["image"])
@@ -990,13 +996,13 @@ async def _run_job_body(request_file):
                     readiness_ref = await executor.evidence_writer.write(
                         "installed-release-readiness", readiness
                     )
-                    result = replace(
-                        result,
-                        outputs={
-                            **result.outputs,
-                            "releaseReadinessArtifactRef": readiness_ref,
-                        },
-                    )
+                    readiness_outputs = {
+                        **result.outputs,
+                        "releaseReadinessArtifactRef": readiness_ref,
+                    }
+                    if expected_revision:
+                        readiness_outputs["sourceRevision"] = expected_revision
+                    result = replace(result, outputs=readiness_outputs)
             write_record(primary_file, {"owner": owner, "result": result.to_payload()})
         if result.status == "COMPLETED":
             # Cleanup is auxiliary to the verified deployment. Preserve primary
@@ -1022,6 +1028,17 @@ async def _run_job_body(request_file):
                         "cleanupReason": redact_sensitive_text(cleanup_error)[:300],
                     },
                 )
+        if result.status == "COMPLETED" and expected_revision:
+            # The terminal receipt is self-sufficient: it carries the verified
+            # source revision alongside the digest and readiness evidence, so
+            # recovery never depends on an unbound second record.
+            result = replace(
+                result,
+                outputs={
+                    **result.outputs,
+                    "sourceRevision": expected_revision,
+                },
+            )
         write_record(result_file, {"owner": owner, "result": result.to_payload()})
     except Exception:
         raise

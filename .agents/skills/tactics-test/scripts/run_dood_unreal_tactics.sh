@@ -147,6 +147,9 @@ GATE_SOURCE="run_dood_unreal_tactics.sh"
 GATE_TIMESTAMP=""
 
 write_gate_result() {
+  # Dry-run is strictly non-mutating: the EXIT trap still fires on the
+  # preview exit, but it must never create directories or write gate output.
+  [[ "$DRY_RUN" -eq 1 ]] && return 0
   [[ -n "${GATE_FILE:-}" ]] || return 0
   mkdir -p "$(dirname "$GATE_FILE")"
   GATE_TIMESTAMP="${GATE_TIMESTAMP:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
@@ -323,6 +326,10 @@ fi
 
 if [[ -n "$CCACHE_VOLUME" ]]; then
   CCACHE_MOUNT="type=volume,src=$CCACHE_VOLUME,dst=/home/ue4/.ccache"
+elif [[ "$DRY_RUN" -eq 1 ]]; then
+  # Dry-run is strictly non-mutating: preview only, so never create host
+  # cache directories while resolving bind-mount sources.
+  CCACHE_MOUNT="type=bind,src=$CCACHE_DIR,dst=/home/ue4/.ccache"
 else
   mkdir -p "$CCACHE_DIR"
   CCACHE_DIR="$(realpath "$CCACHE_DIR")"
@@ -331,6 +338,10 @@ fi
 
 if [[ -n "$UBT_VOLUME" ]]; then
   UBT_MOUNT="type=volume,src=$UBT_VOLUME,dst=/home/ue4/.config/Epic/UnrealBuildTool"
+elif [[ "$DRY_RUN" -eq 1 ]]; then
+  # Dry-run is strictly non-mutating: preview only, so never create host
+  # metadata directories while resolving bind-mount sources.
+  UBT_MOUNT="type=bind,src=$UBT_DIR,dst=/home/ue4/.config/Epic/UnrealBuildTool"
 else
   mkdir -p "$UBT_DIR"
   UBT_DIR="$(realpath "$UBT_DIR")"

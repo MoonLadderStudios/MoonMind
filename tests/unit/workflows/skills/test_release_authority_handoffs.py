@@ -344,7 +344,20 @@ async def test_verified_primary_resume_does_not_repeat_operator_admission(
     await release._run_job_body(request)
     preflight.assert_not_awaited()
     cleanup.assert_awaited_once()
-    assert json.loads((tmp_path / "result.json").read_text()) == primary
+    # The terminal result carries the verified source revision alongside the
+    # readiness evidence even when resuming from a pre-stamp primary.
+    expected = {
+        "owner": "owner",
+        "result": {
+            "status": "COMPLETED",
+            "outputs": {
+                "releaseReadinessArtifactRef": "artifact://verified",
+                "sourceRevision": "source",
+            },
+            "progress": {},
+        },
+    }
+    assert json.loads((tmp_path / "result.json").read_text()) == expected
 
 
 @pytest.mark.parametrize(

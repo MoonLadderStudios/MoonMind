@@ -417,3 +417,64 @@ async def test_recording_serving_image_requires_coherent_installed_fleets(
         assert not (tmp_path / "retained.json").exists()
     assert not cohort.names
     assert all(call.args[0] == "inspect" for call in docker.await_args_list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("receipt_source", ["rev-1", "rev-2", None])
+async def test_terminal_receipt_source_revision_binds_image_authority(
+    tmp_path, monkeypatch, receipt_source
+):
+    from unittest.mock import AsyncMock
+
+    deployment = "release-test"
+    digest = "sha256:" + "c" * 64
+    image_id = "sha256:" + "d" * 64
+    version = deployment + "." + digest
+    directory = tmp_path / "job1"
+    directory.mkdir()
+    release.write_record(
+        directory / "routing.json",
+        {"deployment": deployment, "candidate": digest},
+    )
+    release.write_record(
+        directory / "request.json",
+        {
+            "authored": {
+                "owner": "owner",
+                "inputs": {"sourceRevision": "rev-1"},
+            },
+            "image": "example/image@" + digest,
+            "imageId": image_id,
+        },
+    )
+    outputs = {
+        "resolvedDigest": digest,
+        "releaseReadinessArtifactRef": "artifact://readiness",
+    }
+    if receipt_source is not None:
+        outputs["sourceRevision"] = receipt_source
+    release.write_record(
+        directory / "deployment-result.json",
+        {"owner": "owner", "result": {"status": "COMPLETED", "outputs": outputs}},
+    )
+    docker = AsyncMock(
+        side_effect=[
+            image_id,
+            json.dumps([{"Id": image_id}]),
+            json.dumps({"digest": digest, "sourceRevision": "rev-1"}),
+        ]
+    )
+    monkeypatch.setattr(release, "docker", docker)
+    if receipt_source == "rev-2":
+        with pytest.raises(ValueError, match="receipt source differs"):
+            await release.successful_release_image(tmp_path, version)
+        docker.assert_not_awaited()
+        return
+    # A matching stamp grants authority; a pre-stamp legacy receipt without
+    # the key still recovers through the live manifest source binding.
+    assert await release.successful_release_image(tmp_path, version) == {
+        "image": image_id,
+        "sourceReceipt": "job1",
+        "sourceRevision": "rev-1",
+    }
+    assert docker.await_count == 3
