@@ -20,6 +20,15 @@ from temporalio.service import RPCError, RPCStatusCode
 logger = logging.getLogger(__name__)
 
 
+# Module-scoped time indirection for the routing-aging waits below
+# (MoonLadderStudios/MoonMind#4374). Production resolves these to the real
+# asyncio.sleep/time.monotonic; tests replace them with a fake clock through
+# narrowly scoped monkeypatching of this module only -- never a global
+# asyncio.sleep or clock patch that would also affect Temporal machinery.
+_routing_sleep = asyncio.sleep
+_routing_monotonic = time.monotonic
+
+
 async def routing_snapshot(client, deployment: str):
     return await client.workflow_service.describe_worker_deployment(
         DescribeWorkerDeploymentRequest(
