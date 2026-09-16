@@ -526,6 +526,16 @@ class ToolFailure(Exception):
         _ensure_non_empty(self.error_code, field_name="error_code")
         _ensure_non_empty(self.message, field_name="message")
 
+    def __str__(self) -> str:
+        # Dataclass exceptions carry no ``args``, so an uncaught ToolFailure
+        # would otherwise print a bare class name and lose its diagnosis.
+        rendered = f"{self.error_code}: {self.message}"
+        if self.details:
+            rendered += f" ({self.details})"
+        if self.cause is not None:
+            rendered += f" [caused by {self.cause}]"
+        return rendered
+
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "error_code": self.error_code,
