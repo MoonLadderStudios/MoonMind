@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -11,6 +10,52 @@ from temporalio.api.enums.v1 import TaskQueueType
 from temporalio.service import RPCError, RPCStatusCode
 
 from moonmind.workflows.temporal.release_routing import bootstrap_version_routing
+
+
+def _install_controlled_routing_clock(monkeypatch, *, timeout_seconds, poll_seconds):
+    """Narrowly scoped controlled time for stewardship re-verification.
+
+    Production ``_await_no_live_pollers`` waits on ``time.monotonic()`` plus
+    ``asyncio.sleep(_ROUTE_DEATH_POLL_SECONDS)`` with 120s/10s windows
+    (MoonLadderStudios/MoonMind#4374). Tests must neither repeat that real
+    wait nor busy-spin on a real monotonic deadline behind a global no-op
+    sleep. This helper shortens the window for the test and drives a fake
+    clock forward on each sleep, so the loop terminates in milliseconds
+    with no real-time wait and no busy loop. Scoped to the test via
+    monkeypatch; production poller-freshness/recovery windows are untouched.
+    """
+    from moonmind.workflows.temporal import release_routing
+
+    clock = {"now": 1000.0}
+
+    async def _advancing_sleep(delay=None):
+        clock["now"] += float(delay) if delay else float(poll_seconds)
+        return None
+
+    monkeypatch.setattr(
+        release_routing, "_ROUTE_DEATH_TIMEOUT_SECONDS", timeout_seconds
+    )
+    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_POLL_SECONDS", poll_seconds)
+    monkeypatch.setattr(release_routing.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(release_routing.asyncio, "sleep", _advancing_sleep)
+
+
+def _install_bounded_routing_sleep(monkeypatch):
+    """Module-scoped no-op sleep for bounded bootstrap retry loops.
+
+    These paths retry a fixed number of in-memory fake-server observations
+    (no ``time.monotonic()`` deadline), so a non-advancing sleep completes
+    in milliseconds without a busy loop. Patched on the routing module's
+    ``asyncio`` reference and reverted by monkeypatch; production code is
+    untouched.
+    """
+    from moonmind.workflows.temporal import release_routing
+
+    async def _no_sleep(delay=None):
+        return None
+
+    monkeypatch.setattr(release_routing.asyncio, "sleep", _no_sleep)
+
 
 
 def _not_found():
@@ -248,16 +293,12 @@ async def test_steward_preserves_live_current_route(monkeypatch):
     displaced by a newer restarted image; qualification and promotion stay
     with the authorized release controller.
     """
-    from moonmind.workflows.temporal import release_routing
-
-    async def _no_sleep(delay):
-        return None
-
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
-    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
-    # Shorten the re-verification window; the fake pollers below never expire.
-    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_TIMEOUT_SECONDS", 3)
-    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_POLL_SECONDS", 1)
+    # Controlled time: the fake pollers below never expire, so drive the
+    # fake clock past the shortened window instead of busy-spinning.
+    _install_controlled_routing_clock(
+        monkeypatch, timeout_seconds=3, poll_seconds=1
+    )
     server, old, new = _server_with_current_old_new()
     queue = "mm.workflow.user.v2"
     server.add_poller("old", queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW)
@@ -278,19 +319,14 @@ async def test_steward_preserves_live_current_route(monkeypatch):
 async def test_steward_promotes_after_restart_in_flight_dies(monkeypatch):
     """Fresh pollers from a stopping fleet must not park startup forever.
 
-    The previous fleet's last polls look live for a bounded window after a
+    The previous fleet's last polls look live for a bounded     window after a
     rolling restart. Once they expire with no replacement, the deployed
     release is promoted instead of waiting indefinitely.
     """
-    from moonmind.workflows.temporal import release_routing
-
-    async def _no_sleep(delay):
-        return None
-
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
-    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
-    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_TIMEOUT_SECONDS", 30)
-    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_POLL_SECONDS", 1)
+    _install_controlled_routing_clock(
+        monkeypatch, timeout_seconds=30, poll_seconds=1
+    )
     server, _old, new = _server_with_current_old_new()
     queue = "mm.workflow.user.v2"
     server.add_poller(
@@ -313,12 +349,8 @@ async def test_steward_fails_loud_when_own_version_never_registers(monkeypatch):
     cannot be qualified; a loud startup error retries the process instead of
     caching a parked result that nobody will revisit.
     """
-
-    async def _no_sleep(delay):
-        return None
-
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
-    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    _install_bounded_routing_sleep(monkeypatch)
     server, old, new = _server_with_current_old_new()
     del server.versions[new]
     with pytest.raises(RuntimeError, match="did not register"):
@@ -389,15 +421,10 @@ async def test_steward_parks_on_partial_outage(monkeypatch):
     others went quiet, startup must preserve the route for the authorized
     release controller instead of promoting over the surviving workers.
     """
-    from moonmind.workflows.temporal import release_routing
-
-    async def _no_sleep(delay):
-        return None
-
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
-    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
-    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_TIMEOUT_SECONDS", 3)
-    monkeypatch.setattr(release_routing, "_ROUTE_DEATH_POLL_SECONDS", 1)
+    _install_controlled_routing_clock(
+        monkeypatch, timeout_seconds=3, poll_seconds=1
+    )
     server, old, new = _server_with_current_old_new()
     queue = "mm.workflow.user.v2"
     server.add_poller("old", queue, TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW)
@@ -421,12 +448,8 @@ async def test_steward_requires_every_served_queue(monkeypatch):
     not registered -- a missing or late fleet -- stewardship must fail
     loudly instead of promoting a release ordinary workflows cannot use.
     """
-
-    async def _no_sleep(delay):
-        return None
-
     monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
-    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    _install_bounded_routing_sleep(monkeypatch)
     server = _FakeServer()
     queue = "mm.workflow.user.v2"
     other = "mm.activity.agent_runtime"
