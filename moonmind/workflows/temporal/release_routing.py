@@ -386,25 +386,6 @@ _ROUTE_DEATH_TIMEOUT_SECONDS = 120
 _ROUTE_DEATH_POLL_SECONDS = 10
 
 
-async def _routing_sleep(delay: float) -> None:
-    """Narrowly scoped sleep indirection for routing-aging waits.
-
-    Production behavior delegates to ``asyncio.sleep``. Tests replace this
-    single module symbol (together with :func:`_routing_monotonic`) instead
-    of globally patching ``asyncio.sleep`` or spinning real-time busy loops
-    (MoonLadderStudios/MoonMind#4374). Production recovery windows above are
-    unchanged.
-    """
-
-    await asyncio.sleep(delay)
-
-
-def _routing_monotonic() -> float:
-    """Narrowly scoped monotonic-clock indirection for routing-aging waits."""
-
-    return time.monotonic()
-
-
 def _has_live_pollers(observation) -> bool:
     """Any live poller on any queue means a route remains to preserve.
 
