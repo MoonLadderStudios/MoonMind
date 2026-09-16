@@ -46,7 +46,7 @@ If no constraints are provided, default to addressing all applicable feedback.
   variables required). A missing selected helper is a materialization/packaging
   error: stop as blocked instead of substituting stale repository code.
 2. Resolve PR and collect all comments.
-- Resolve the comments helper as `$FIX_COMMENTS_SKILL_DIR/tools/get_branch_pr_comments.py` before reading any existing comments artifact:
+- Resolve the comments helper as `$FIX_COMMENTS_SKILL_DIR/tools/get_branch_pr_comments.py` before reading any existing comments artifact; its repository-default path is `.agents/skills/fix-comments/tools/get_branch_pr_comments.py`:
   - If the bundled helper is missing, stop as blocked with reason `comments_helper_missing`; do not use a stale `var/pr_comments/current-branch-comments.json` and do not substitute repository-mirrored code.
 - Run the resolved helper with `python3 <helper> --output var/pr_comments/current-branch-comments.json`.
 - If PR resolution or comment retrieval fails, stop and ask the user for a PR number/URL or GitHub credential fix. Do not continue from pre-fetched or stale comments unless the helper successfully refreshed `var/pr_comments/current-branch-comments.json` in this run.
