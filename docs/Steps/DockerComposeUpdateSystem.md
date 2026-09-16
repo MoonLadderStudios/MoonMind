@@ -1014,10 +1014,14 @@ and verifies those same origins again before recording release success. The port
 updater accepts repeatable `--operator-url <existing-origin>` declarations, recorded
 as `deployment_operator_urls` in the immutable submission context. These supply
 verification targets without changing API authentication or published bindings.
-A configured `MOONMIND_PUBLIC_BASE_URL` remains a required target. Otherwise, fixed published
+A configured `MOONMIND_PUBLIC_BASE_URL` remains a required target. Otherwise, published
 API bindings supply the origins; omitted and explicitly empty public URL values
-use this same path when no operator origins were declared. Wildcard bindings require a declared operator origin because
-an unspecified address cannot identify the client's route. Missing targets or an
+use this same path when no operator origins were declared. A fixed binding supplies its
+own address. A wildcard binding (`MOONMIND_API_PUBLISH_HOST=0.0.0.0` or `::`) publishes on
+every host address, so its own loopback origin on the published port is the derived target:
+that origin is an observed property of the binding, not a guessed client route, and it needs
+no declaration, `.env` edit, or authentication change. Declare the LAN or VPN address with
+`--operator-url` to verify that route as well. Missing targets or an
 unreachable route leave the existing release in place before replacement; a
 post-replacement failure retains the durable updater and recovery evidence.
 

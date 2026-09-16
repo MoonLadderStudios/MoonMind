@@ -79,3 +79,32 @@ def test_step_skills_rejects_invalid_values() -> None:
             "id": "node-1", "tool": {"name": "foo"}, "inputs": {},
             "skills": {"include": [{"name": "test-skill:1.0.0"}]},
         })
+
+
+def test_tool_failure_renders_its_code_and_message() -> None:
+    """An uncaught ToolFailure must carry its diagnosis into the traceback."""
+    from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
+
+    failure = ToolFailure(
+        error_code="DEPLOYMENT_RELEASE_FAILED",
+        message="Wildcard API bindings require an existing operator URL",
+        retryable=False,
+        details={"releaseJob": "abc123"},
+    )
+    rendered = str(failure)
+    assert "DEPLOYMENT_RELEASE_FAILED" in rendered
+    assert "Wildcard API bindings require an existing operator URL" in rendered
+
+
+def test_tool_failure_rendering_includes_its_cause() -> None:
+    from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
+
+    failure = ToolFailure(
+        error_code="OUTER",
+        message="outer failed",
+        retryable=False,
+        cause=ToolFailure(error_code="INNER", message="inner failed", retryable=True),
+    )
+    rendered = str(failure)
+    assert "outer failed" in rendered
+    assert "inner failed" in rendered
