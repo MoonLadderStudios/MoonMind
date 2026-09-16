@@ -4,10 +4,8 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from moonmind.omnigent.control_plane.turn_sources import TurnSource
-from tests.unit.omnigent.test_control_plane_aggregates import (  # noqa: F401
-    session_factory,
-    store,
-)
+
+pytest_plugins = ("tests.unit.omnigent.test_control_plane_aggregates",)
 
 
 @pytest.mark.asyncio
