@@ -194,6 +194,14 @@ The selected route and policy are persisted before repository access. Exact prov
 
 A simple same-repository workflow normally uses one connection for its declared operations. Separate source, collaboration, and destination identities require explicit role policy. Batch children resolve their own permitted repository authority or inherit a verified compatible binding, never a parent's raw PAT. They cannot choose another repository/connection to escape the frozen publication scope. Target-derived PR branches remain validated target roles, not user-authored per-child overrides.
 
+### CONTRACT-007a Isolated multi-repository fan-out is the first cross-repository journey
+
+One user-visible operation may apply a bounded task to an explicit set of repositories (MoonLadderStudios/MoonMind#1657). The batch authoring path carries an explicit bounded repository-target list or an immutable target-manifest artifact: stable provider/instance/repository identity, revision intent, permitted operation, and selected connection resolved independently per member through the shared repository contract, with duplicates normalized without conflating identical names on different hosts and no wildcard discovery of token-accessible repositories. The selected set is preflighted before launch with fail-before-dispatch semantics unless the operator explicitly requests partial-batch behavior; the operator approval covers the exact target set, task/Skill snapshot, publication modes, limits, and maximum child/model spend.
+
+Each target receives a stable child request identity, immutable source/Skill/runtime intent, a separate workspace, an artifact namespace, and a cleanup owner through the normal execution API/Temporal substrate. The parent does not publish source changes and forwards no multi-repository credential bundle. Child admission rechecks permission and revocation per target; a parent-owned capability never authorizes repositories, operations, or spend beyond the admitted batch. Concurrency and total work stay bounded through existing admission with persisted target-to-child mapping, restart reconciliation, and truthful queued/running/succeeded/failed/blocked/canceled evidence per target. An optional dependent-repository phase uses explicit DAG edges with immutable upstream result references; a bare PR reference never satisfies a merged-code dependency.
+
+Explicitly deferred: a single agent editing several repositories in one workspace, cross-repository retrieval, atomic coordinated release or rollback, and a replacement batch execution engine. The single-workspace contract (CONTRACT-002) is unchanged.
+
 ### QUALITY-001 Validation evidence is not an authorization grant
 
 | Dimension | Meaning |

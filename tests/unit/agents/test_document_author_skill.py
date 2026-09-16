@@ -43,7 +43,7 @@ def test_document_author_chooses_docs_architecture_fields() -> None:
 def test_document_author_routes_broad_work_to_docs_tmp() -> None:
     text = _read_skill()
 
-    assert "If the request is broad" in text
+    assert "genuinely spans multiple documents" in text
     assert "docs/tmp/" in text
     assert "improvement plan" in text
 

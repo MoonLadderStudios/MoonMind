@@ -969,6 +969,12 @@ services:
       - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
       - MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=${MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES:-}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
+      # Omnigent release migration runs in this worker: it needs the same
+      # effective defaults as the runtime-facing services, otherwise the
+      # gate always reports `skipped` in a `.env`-less Compose deployment
+      # and the singular release record is never created.
+      - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
+      - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
     env_file:
       - path: .env
         required: false
