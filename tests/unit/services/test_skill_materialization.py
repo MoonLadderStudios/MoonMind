@@ -810,3 +810,258 @@ class _StaticArtifactService:
     ) -> tuple[object, bytes]:
         del principal, allow_restricted_raw
         return object(), self._payloads[artifact_id]
+
+
+@pytest.mark.asyncio
+async def test_real_bundle_builder_nested_change_alters_digest_and_materializes(
+    tmp_path: Path,
+):
+    """Nested refs/schemas/templates/shared files are inside bundle identity (issue #4275 R3/A3/A4).
+
+    Uses the real snapshot packaging builder
+    (AgentSkillsActivities._build_skill_bundle_payload) rather than a
+    test-local tar helper: every declared nested asset must be present in the
+    payload, a nested-asset change must alter the bundle digest, and each
+    nested asset must be readable from the actual materialized snapshot.
+    """
+    from moonmind.workflows.agent_skills.agent_skills_activities import (
+        AgentSkillsActivities,
+    )
+
+    def _make_skill_dir(root: Path, *, helper_body: bytes) -> Path:
+        skill_dir = root / "moonspec-verify"
+        (skill_dir / "references").mkdir(parents=True)
+        (skill_dir / "schemas").mkdir(parents=True)
+        (skill_dir / "templates").mkdir(parents=True)
+        (skill_dir / "_shared").mkdir(parents=True)
+        (skill_dir / "bin").mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_bytes(b"---\nname: moonspec-verify\n---\n")
+        (skill_dir / "references" / "acceptance-policy.md").write_bytes(b"# policy\n")
+        (skill_dir / "schemas" / "contract.json").write_bytes(b'{"type": "object"}\n')
+        (skill_dir / "templates" / "report.md").write_bytes(b"# report\n")
+        (skill_dir / "_shared" / "util.py").write_bytes(b"# shared\n")
+        (skill_dir / "bin" / "run.py").write_bytes(helper_body)
+        return skill_dir
+
+    before_dir = tmp_path / "before_src"
+    after_dir = tmp_path / "after_src"
+    before_skill = _make_skill_dir(before_dir, helper_body=b"print('before')\n")
+    after_skill = _make_skill_dir(after_dir, helper_body=b"print('after')\n")
+
+    before_payload = AgentSkillsActivities._build_skill_bundle_payload(before_skill)
+    after_payload = AgentSkillsActivities._build_skill_bundle_payload(after_skill)
+    assert _digest(before_payload) != _digest(after_payload)
+
+    materializer = AgentSkillMaterializer(
+        str(tmp_path / "ws"),
+        artifact_service=_StaticArtifactService({"artifact-verify": before_payload}),
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="nested_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="moonspec-verify",
+                format=AgentSkillFormat.BUNDLE,
+                content_ref="artifact-verify",
+                content_digest=_digest(before_payload),
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ],
+    )
+    await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="test_runtime",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+    visible = tmp_path / "ws" / ".agents" / "skills" / "moonspec-verify"
+    assert (visible / "SKILL.md").is_file()
+    assert (visible / "references" / "acceptance-policy.md").read_text(
+        encoding="utf-8"
+    ) == "# policy\n"
+    assert (visible / "schemas" / "contract.json").is_file()
+    assert (visible / "templates" / "report.md").is_file()
+    assert (visible / "_shared" / "util.py").is_file()
+    assert (visible / "bin" / "run.py").read_bytes() == b"print('before')\n"
+
+
+@pytest.mark.asyncio
+async def test_admitted_run_immutability_rejects_tampered_payload(tmp_path: Path):
+    """An admitted run keeps its original immutable assets (issue #4275 A4).
+
+    A tampered payload under the same content_ref must fail digest
+    verification before any projection switch, and the admitted manifest must
+    retain the original digest (no silent re-selection of current source).
+    """
+    payload = _skill_bundle_payload({"SKILL.md": b"# original\n"})
+    tampered = _skill_bundle_payload({"SKILL.md": b"# tampered\n"})
+    assert _digest(payload) != _digest(tampered)
+    materializer = AgentSkillMaterializer(
+        str(tmp_path), artifact_service=_StaticArtifactService({"artifact-x": tampered})
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="admitted_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="guarded",
+                content_ref="artifact-x",
+                content_digest=_digest(payload),
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ],
+    )
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        await materializer.materialize(
+            resolved_skillset=skillset,
+            runtime_id="test_runtime",
+            mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+        )
+    # No projection was switched and no manifest was admitted for the tampered bytes.
+    assert not (tmp_path / ".agents" / "skills").exists()
+
+
+@pytest.mark.asyncio
+async def test_resolved_selected_bundle_executes_despite_same_name_builtin_source(
+    tmp_path: Path,
+):
+    """The resolved bundle executes even with a same-name built-in present (issue #4275 R8/A8).
+
+    A stale built-in source file must not substitute the selected payload:
+    the materialized helper readable through the alias is the selected
+    snapshot's bytes and the repo/built-in source is left unchanged.
+    """
+    builtin_source = tmp_path / "builtin_source" / "fix-comments" / "SKILL.md"
+    builtin_source.parent.mkdir(parents=True)
+    builtin_source.write_text("stale built-in implementation\n", encoding="utf-8")
+    selected_payload = b"---\nname: fix-comments\ndescription: selected\n---\n"
+    assert b"stale" not in selected_payload
+    materializer = AgentSkillMaterializer(
+        str(tmp_path / "ws"),
+        artifact_service=_StaticArtifactService({"artifact-selected": selected_payload}),
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="selected_snap_r8",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="fix-comments",
+                content_ref="artifact-selected",
+                content_digest=_digest(selected_payload),
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ],
+    )
+    await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="test_runtime",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+    alias = tmp_path / "ws" / ".agents" / "skills"
+    assert (alias / "fix-comments" / "SKILL.md").read_bytes() == selected_payload
+    assert (
+        builtin_source.read_text(encoding="utf-8") == "stale built-in implementation\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_historical_snapshot_reuse_preserves_admitted_digest(tmp_path: Path):
+    """Re-materializing an admitted snapshot keeps its digest (issue #4275 A9/R2-rest).
+
+    A later source change produces a new digest (new snapshot identity), but
+    the admitted manifest for the original snapshot_id still records the
+    original digest: history is not silently re-pointed at current source.
+    """
+    original = _skill_bundle_payload({"SKILL.md": b"# v1\n"})
+    changed = _skill_bundle_payload({"SKILL.md": b"# v2\n"})
+    assert _digest(original) != _digest(changed)
+    materializer = AgentSkillMaterializer(
+        str(tmp_path), artifact_service=_StaticArtifactService({"artifact-v1": original})
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="reuse_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[_skill("alpha", "artifact-v1")],
+    )
+    # Give the v1 entry its real digest for the admitted manifest.
+    skillset.skills[0] = skillset.skills[0].model_copy(
+        update={"content_digest": _digest(original)}
+    )
+    await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="test_runtime",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+    manifest = json.loads(
+        (tmp_path / "runtime" / "skills_active" / "reuse_snap" / "_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["skills"][0]["content_digest"] == _digest(original)
+    assert manifest["skills"][0]["content_digest"] != _digest(changed)
+
+
+@pytest.mark.asyncio
+async def test_materializer_projects_declared_sibling_closure_from_snapshot(
+    tmp_path: Path,
+):
+    """Declared sibling dependencies are readable from the packaged snapshot (issue #4275 A3/R4).
+
+    An orchestrator closure (selected + required sibling) materializes every
+    member from its own bundle artifact; no sibling is silently dropped.
+    """
+    orchestrator_payload = _skill_bundle_payload({"SKILL.md": b"# orchestrator\n"})
+    sibling_payload = _skill_bundle_payload(
+        {"SKILL.md": b"# sibling\n", "bin/helper.py": b"# helper\n"}
+    )
+    materializer = AgentSkillMaterializer(
+        str(tmp_path),
+        artifact_service=_StaticArtifactService(
+            {
+                "artifact-orchestrator": orchestrator_payload,
+                "artifact-sibling": sibling_payload,
+            }
+        ),
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="sibling_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="orchestrator",
+                format=AgentSkillFormat.BUNDLE,
+                content_ref="artifact-orchestrator",
+                content_digest=_digest(orchestrator_payload),
+                selection_reason="selected",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            ),
+            ResolvedSkillEntry(
+                skill_name="sibling",
+                format=AgentSkillFormat.BUNDLE,
+                content_ref="artifact-sibling",
+                content_digest=_digest(sibling_payload),
+                selection_reason="required",
+                required_by=["orchestrator"],
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            ),
+        ],
+    )
+    await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="test_runtime",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+    visible = tmp_path / ".agents" / "skills"
+    assert (visible / "orchestrator" / "SKILL.md").is_file()
+    assert (visible / "sibling" / "SKILL.md").is_file()
+    assert (visible / "sibling" / "bin" / "helper.py").is_file()

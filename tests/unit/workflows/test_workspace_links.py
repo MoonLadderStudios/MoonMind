@@ -314,3 +314,71 @@ def test_cleanup_moonmind_skill_projections_preserves_repo_authored_agents_skill
     assert result.removed_paths == ()
     assert result.skipped_paths == (run_root / ".agents" / "skills",)
     assert repo_skill.is_dir()
+
+
+def test_admitted_alias_passes_while_escaping_link_blocked(tmp_path):
+    """Containment validates traversal/untrusted links but keeps admitted aliases (issue #4275 R7)."""
+    from moonmind.workflows.skills.workspace_links import (
+        _replace_link,
+        is_moonmind_owned_projection,
+    )
+
+    run_root = tmp_path / "runs" / "run-contained"
+    skills_active = run_root / "skills_active"
+    skills_active.mkdir(parents=True)
+    admitted = run_root / ".agents" / "skills"
+    admitted.parent.mkdir(parents=True)
+    admitted.symlink_to(skills_active)
+    assert is_moonmind_owned_projection(
+        admitted, target=skills_active, owned_roots=(skills_active,)
+    ) is True
+    reused = _replace_link(
+        admitted, target=skills_active, owned_roots=(skills_active,)
+    )
+    assert reused.available is True
+
+    escaping = tmp_path / "runs" / "run-escape" / ".agents" / "skills"
+    escaping.parent.mkdir(parents=True)
+    escaping.symlink_to(tmp_path / "outside-root")
+    assert (
+        is_moonmind_owned_projection(
+            escaping, target=skills_active, owned_roots=(skills_active,)
+        )
+        is False
+    )
+    blocked = _replace_link(
+        escaping,
+        target=skills_active,
+        owned_roots=(skills_active,),
+        optional=True,
+    )
+    assert blocked.available is False
+    assert escaping.is_symlink()
+
+
+def test_dirty_workspace_preserved_on_conflicting_alias(tmp_path):
+    """Recovery preserves dirty cumulative work on alias conflict (issue #4275 A6/R6)."""
+    from moonmind.workflows.skills.workspace_links import _replace_link
+
+    run_root = tmp_path / "runs" / "run-dirty"
+    skills_active = run_root / "skills_active"
+    skills_active.mkdir(parents=True)
+    external = tmp_path / "external-skills"
+    external.mkdir()
+    agents = run_root / ".agents" / "skills"
+    agents.parent.mkdir(parents=True)
+    agents.symlink_to(external)
+    dirty = run_root / "draft-output.md"
+    dirty.write_text("cumulative work\n", encoding="utf-8")
+
+    result = _replace_link(
+        agents,
+        target=skills_active,
+        owned_roots=(skills_active,),
+        optional=True,
+    )
+
+    assert result.available is False
+    assert agents.is_symlink()
+    assert agents.resolve() == external.resolve()
+    assert dirty.read_text(encoding="utf-8") == "cumulative work\n"
