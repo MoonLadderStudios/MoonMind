@@ -133,18 +133,16 @@ Catchup, manual triggers, and backfills use the approved definition and fresh oc
 
 The schedule stores a Temporal workflow-start target with workflowType, initialParameters, and artifact refs where needed. UserWorkflow uses its normal input contract. (`MoonMind.ManifestIngest` recurring targets were retired by MoonLadderStudios/MoonMind#4192: new targets are rejected; old definitions stay readable as replay/drain evidence.) Queue dispatch is not a separate scheduling authority; any supported legacy transport is normalized at the versioned ingress before use.
 
-For generic Omnigent schedules, deployment maintenance advances the Agent Profile
-snapshot, selected launch-policy version, and execution plan together. It verifies
-the previous durable profile usage and permits only deployment binding changes:
-catalog observation, upstream version metadata for the same source identity, and
-server/host image digests within the same image repository and launch-policy identity. Profile
-semantics and all other policy boundaries must match. Provider selection, model,
-effort, authored overrides (including nulls), task inputs, and the pinned
-runtime-provider target remain authoritative. A semantic or boundary change
-requires an explicit schedule revision. The normal compiler qualifies the new
-image combination, then rechecks the active profile, launch policy, and deployed
-images under the publication fence before the schedule action and definition revision advance;
-already-started occurrences retain their immutable inputs.
+For generic Omnigent schedules, every occurrence resolves the current promoted default —
+Agent Profile snapshot, launch-policy version, and execution plan — exactly like ad-hoc
+work. There is no pinned runtime-provider target on a schedule: the schedule carries no
+launch-policy version or image of its own, so deployment maintenance never has to reconcile
+a schedule-pinned digest against the current Host Class. The occurrence verifies the
+previous durable profile usage and the normal compiler qualifies the resolved combination
+under the publication fence before dispatch; already-started occurrences retain their
+immutable inputs. Provider selection, model, effort, authored overrides (including nulls),
+and task inputs remain authoritative per occurrence. A change to those authored inputs
+requires an explicit schedule revision.
 
 #### Authored policy and Auto
 

@@ -6647,18 +6647,31 @@ async def _prepare_github_issue_claim(*, inputs, context, repository, issue_numb
     # not block a new consumer that sees the same expired comment remotely.
     store = IssueClaimStore()
     prior = await store.active_for_issue(repository, issue_number)
-    if prior is not None and not blocks_new_work(
-        reservation_status(parse_attempt_comment(prior.comment_body))
-    ):
-        # Ownership ended; its bookkeeping may still be outstanding and is
-        # deliberately left intact for the owner or the reconciler to finish.
-        async with store.locked(prior.owner) as row:
-            if not blocks_new_work(
-                reservation_status(parse_attempt_comment(row.comment_body))
+    if prior is not None:
+        # A migration or another authorized owner can retire the GitHub
+        # reservation without updating this deployment's cached comment.
+        # Bind the fresh remote evidence to the cached attempt and poster;
+        # a missing comment or changed identity grants no release authority.
+        observed = [
+            (comment, parsed.handoff)
+            for comment, parsed in prior_attempts
+            if parsed.handoff is not None and parsed.attempt_id == prior.attempt_id
+        ]
+        if len(observed) == 1:
+            comment, remote = observed[0]
+            if (
+                remote.repository.casefold() == prior.repository
+                and remote.issue_number == prior.issue_number
+                and str((comment.get("user") or {}).get("id")) == prior.actor_id
+                and (not prior.comment_id or str(comment.get("id")) == prior.comment_id)
+                and not blocks_new_work(
+                    reservation_status(parse_attempt_comment(comment.get("body")), comment)
+                )
             ):
-                row.ownership_ended = True
-                row.ownership_ended_reason = (
-                    row.ownership_ended_reason or "reservation_expired"
+                # Preserve the receipt and pending bookkeeping; end only the
+                # reservation whose retirement GitHub has confirmed.
+                await store.end_ownership(
+                    prior.owner, prior.attempt_id, reason="reservation_expired"
                 )
     return await IssueClaimStore().prepare(**values)
 

@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.github_issue_claim_lease import (
     RESERVATION_LIVE,
     RESERVATION_OPERATOR_HOLD,
     RESERVATION_UNREADABLE,
+    classified_attempts,
     parse_time,
     reservation_status,
 )
@@ -197,39 +198,96 @@ def plan_issue_recovery(
 async def apply_issue_recovery(
     *, service, plan: Mapping[str, Any], cutover: datetime
 ) -> dict[str, Any]:
-    """Rewrite exactly the planned comments; one bounded write per attempt."""
+    """Revalidate the whole issue before each write and verify its remote body."""
+    from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import (
+        _fetch_issue,
+        _trusted_posters,
+    )
+
     repository = str(plan["repository"])
     issue_number = int(plan["issueNumber"])
-    listed = await service.list_issue_comments(
-        repo=repository, issue_number=issue_number
-    )
-    if not listed.get("ok") or not isinstance(listed.get("comments"), list):
-        return {"applied": 0, "reasonCode": "claim_read_failure"}
-    observed = {str(item.get("id")): item for item in listed["comments"]}
+    actor = await service.issue_claim_actor(repo=repository)
+    if not actor.get("ok"):
+        return {"applied": 0, "reasonCode": "claim_actor_unavailable"}
     applied: list[str] = []
+    reason = "verified"
     for attempt in plan["attempts"]:
         if attempt["action"] not in WRITE_ACTIONS:
             continue
+        issue = await _fetch_issue(
+            service=service, repository=repository, issue_number=issue_number
+        )
+        listed = await service.list_issue_comments(
+            repo=repository, issue_number=issue_number
+        )
+        if (
+            not issue.get("ok")
+            or not listed.get("ok")
+            or not isinstance(listed.get("comments"), list)
+        ):
+            reason = "claim_read_failure"
+            break
+        if issue["issue"].get("state") != "open":
+            reason = "issue_closed"
+            break
+        # The target comment alone cannot rule out an intervening successor,
+        # hold, conflicting copy, or evidence bound to a different issue.
+        try:
+            active, _, _ = classified_attempts(
+                listed["comments"],
+                repository=repository,
+                issue_number=issue_number,
+                legacy_cutover=cutover,
+            )
+        except ValueError as exc:
+            reason = str(exc)
+            break
+        if active:
+            reason = "live_or_legacy_owner"
+            break
+        fresh = plan_issue_recovery(
+            repository=repository,
+            issue=issue["issue"],
+            comments=listed["comments"],
+            cutover=cutover,
+            actor_id=actor["actorId"],
+            trusted=_trusted_posters(service=service),
+        )
+        if not any(
+            item["commentId"] == attempt["commentId"]
+            and item["attemptId"] == attempt["attemptId"]
+            and item["action"] in WRITE_ACTIONS
+            for item in fresh["attempts"]
+        ):
+            reason = "claim_changed"
+            break
+        observed = {str(item.get("id")): item for item in listed["comments"]}
         comment = observed.get(attempt["commentId"]) or {}
         parsed = parse_attempt_comment(comment.get("body"))
-        if parsed.attempt_id != attempt["attemptId"] or parsed.handoff is None:
-            # The comment changed between planning and application.
-            continue
-        # Re-read GitHub's own announcement timestamp; never a local clock.
-        status = reservation_status(parsed, comment, legacy_cutover=cutover)
-        if status != RESERVATION_LEGACY_RETIRED:
-            continue
         body = retired_comment_body(
             parsed.handoff,
             cutover=cutover,
             note=recovery_note(parsed.handoff, cutover=cutover),
         )
-        result = await service.update_issue_comment(
+        await service.update_issue_comment(
             repo=repository, comment_id=int(attempt["commentId"]), body=body
         )
-        if result.get("ok"):
-            applied.append(attempt["attemptId"])
-    return {"applied": len(applied), "attemptIds": applied}
+        # PATCH acknowledgement can be lost after GitHub commits the write.
+        # The readback, not the transport outcome, establishes retirement.
+        verified = await service.list_issue_comments(
+            repo=repository, issue_number=issue_number
+        )
+        if not verified.get("ok") or not isinstance(verified.get("comments"), list):
+            reason = "claim_read_failure"
+            break
+        if not any(
+            str(item.get("id")) == attempt["commentId"] and item.get("body") == body
+            for item in verified["comments"]
+        ):
+            reason = "claim_write_unconfirmed"
+            break
+        applied.append(attempt["attemptId"])
+    return {"applied": len(applied), "attemptIds": applied, "reasonCode": reason}
 
 
 def parse_cutover(value: str) -> datetime:
