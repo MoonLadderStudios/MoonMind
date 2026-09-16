@@ -66,29 +66,36 @@ test -n "$FIX_MERGE_CONFLICTS_SKILL_DIR" && test -f "$FIX_MERGE_CONFLICTS_SKILL_
   helper is a materialization/packaging error: stop as blocked instead of
   substituting stale repository code.
 
-1. Ensure git identity is available locally before merge/commit:
-- Resolve required identity from env (repository-local > env-provided) and write it into local git config if missing.
-```bash
-git_local_name="$(git config --local --get user.name || true)"
-git_local_email="$(git config --local --get user.email || true)"
-git_env_name="${GIT_AUTHOR_NAME:-${GIT_COMMITTER_NAME:-${MOONMIND_GIT_USER_NAME:-MoonMind}}}"
-git_env_email="${GIT_AUTHOR_EMAIL:-${GIT_COMMITTER_EMAIL:-${MOONMIND_GIT_USER_EMAIL:-noreply@moonmind.local}}}"
-
-if [ -z "$git_local_name" ] || [ -z "$git_local_email" ]; then
-  if [ -z "$git_env_name" ] || [ -z "$git_env_email" ]; then
-    echo "git user.name and user.email are required for merge/commit; set them in environment or local config."
-    exit 1
-  fi
-  git config user.name "$git_env_name"
-  git config user.email "$git_env_email"
-fi
-```
+1. Ensure git identity is available from existing authorized configuration
+before any merge/commit, and revalidate it before each write:
+- Read only the already-configured identity (`git config --get user.name`
+  and `git config --get user.email`, honoring repository-local configuration
+  first). Do not invent, default, or export a fallback author/email and do
+  not write identity from unvalidated inputs or environment defaults.
+- If either value is missing, stop as blocked without merging, committing,
+  or pushing: report the missing identity and the supported setup
+  (`git config user.name "<name>"` / `git config user.email "<email>"`)
+  so the operator can provide authorized configuration.
+- If identity configuration changes mid-task, re-read and revalidate both
+  values before the next write; never carry a stale identity across writes.
+- Preserve source authority: resolve the exact repository, head, base, and
+  allowed finish mode from authoritative task inputs before any mutation. If
+  the PR head lives in a fork or another combination the authorized boundary
+  cannot safely mutate, stop before mutation as blocked with reason
+  `unsupported_source` instead of pushing across authority boundaries.
 
 2. Sync remote refs for the PR base branch.
-- Resolve the base branch name from `inputs.base` (required). If it is
+- Resolve the exact repository, head branch, base branch name, and allowed
+  finish mode from authoritative task inputs (required). If the base is
   missing or empty, stop as blocked with reason `base_unavailable`.
+- Record the resolved `origin/<base>` at task start. Before merging,
+  re-read the authoritative base and head; if the base changed or does not
+  match the recorded target, stop as blocked instead of merging a
+  changed/wrong base.
 - Run `git fetch origin <base> --prune`.
-- Confirm branch state with `git status`.
+- Confirm branch state with `git status`. Preserve pre-existing staged,
+  unstaged, and untracked work, local branch state, and configured Git
+  identity; take no mutation that would discard or absorb unrelated changes.
 
 3. Merge the latest PR base ref into the current branch.
 - Run `git merge origin/<base>`.
@@ -100,23 +107,41 @@ fi
 - Remove `<<<<<<<`, `=======`, and `>>>>>>>` blocks.
 - Keep the correct merged content.
 - Preserve project conventions and existing architecture.
-- Stage resolved files with `git add <file>` or `git add -A`.
+- Resolve conflicts semantically: the merged content must preserve the
+  intended behavior of both sides, not merely contain no marker strings.
+- Stage only intentional task files with explicit paths
+  (`git add <intentional-file> [...]`). Never use `git add -A`, `git add .`,
+  or any unconditional/broad staging, and never stage or commit unrelated
+  pre-existing staged, unstaged, or untracked files.
 - Complete the merge commit with `git commit` (or `git commit -m "Merge origin/<base> and resolve conflicts"`).
 
 5. Validate resolution completeness.
 - Confirm `git diff --name-only --diff-filter=U` returns nothing.
 - Confirm no conflict markers remain with:
   - `rg '^(<<<<<<<|=======|>>>>>>>)'`
+- Validate the resulting behavior, not just the absence of markers: review
+  the semantic merge result and run the targeted checks from step 6. A
+  marker-free tree with broken or regressed behavior is not resolved.
 
 6. Run quick verification.
 - Run targeted checks or tests that are reasonable for the changed files.
 - If checks cannot run locally, record that clearly.
 
-7. Commit and push.
-- If the merge was a fast-forward, no merge commit is created. Commit any other local changes before pushing.
+7. Commit and push only intentional task changes.
+- If the merge was a fast-forward, no merge commit is created. Do not commit
+  unrelated local changes: leave pre-existing staged, unstaged, and untracked
+  files unmodified and uncommitted in clean-merge, conflict, fast-forward,
+  and no-op paths, and do not alter local branch state beyond the task's own
+  commits.
 - Push current branch: `git push`
 - After push, record local `HEAD` with `git rev-parse HEAD` and verify the exact same SHA is visible on the remote branch with `git ls-remote origin refs/heads/<current-branch>` or an equivalent trusted GitHub path.
 - If there was nothing to commit, still verify the current local `HEAD` exactly matches the remote branch head.
+- Before repeating a push/merge whose outcome is uncertain (timeout,
+  dropped connection, ambiguous tool output), reconcile first: re-read the
+  remote branch head and PR state and continue from the reconciled state
+  instead of pushing or merging again blindly.
+- Auxiliary output failures (for example evidence-writer errors) never erase
+  a verified primary effect and never cause another push/merge on their own.
 - On successful push, write canonical evidence:
   ```bash
   python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" write-pushed \
