@@ -105,5 +105,5 @@ Report:
 - The correct owner document already exists: update or link to it instead of creating a duplicate.
 - The request is too broad for one canonical document: write a bounded `docs/tmp/` improvement plan and stop there.
 - The authority owner is unclear: report the ambiguity and propose the narrowest `docs/tmp/` investigation plan rather than creating canonical claims.
-- Implementation evidence is missing: keep the claim out of canonical docs, record the gap, and ask the caller to supply evidence or authorize an implementation investigation.
+- Implementation evidence is missing for a factual implementation reference: keep the claim out of canonical docs, record the gap, and ask the caller to supply evidence or authorize an implementation investigation. This failure mode never applies to an authorized desired-state design, which needs authorization — not pre-existing implementation — as its basis.
 - Required verification cannot run: report the exact command and blocker.

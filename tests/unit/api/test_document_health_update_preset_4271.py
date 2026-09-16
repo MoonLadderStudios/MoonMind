@@ -8,6 +8,7 @@ still-valid findings with a verified no-op on empty findings.
 
 from __future__ import annotations
 
+import json
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -193,21 +194,28 @@ def test_document_author_discovers_conventions_without_mandatory_detour():
 
 def test_reconcile_gate_stays_truthful():
     text = _skill_text("moonspec-doc-reconcile")
-    assert "already carry explicit authority" in text or "explicit authority" in text
-    assert "ordinary no-op is `no_update_required`" in text
-    assert "verification, escalation, and publication outcomes stay separate" in text
+    assert "Divergence alone is never doc drift" in text
+    assert "escalate for an owner decision instead of editing" in text
+    assert "Supplementary instructions narrow scope" in text
+    assert "never widen the update gate" in text
+    assert "The structured outcome is mandatory in every run" in text
 
 
 def test_remediate_move_repairs_inbound_links_in_fixture_repo(tmp_path):
-    """A9: fixture-repository move + link-repair execution boundary.
+    """A9: report-driven move + repair-before-removal execution boundary.
 
-    Mirrors the remediate skill rule ('update inbound and relative links
-    before removal is complete'): move a document inside a fixture docs
-    tree, repair inbound Markdown/relative links, then link-check the tree.
+    Drives the fixture through the remediate skill's documented procedure
+    (parse report, build ledger, revalidate, repair inbound references
+    before the source disappears, then apply the move and link-check the
+    tree) instead of performing a bare filesystem move.
     """
     skill = _skill_text("document-health-remediate")
     assert "update inbound and relative links before removal" in skill.lower()
     assert "repair references" in skill.lower()
+    assert (
+        _seed_yaml("document-health-update")["steps"][1]["skill"]["id"]
+        == "document-health-remediate"
+    )
 
     docs = tmp_path / "fixture_docs"
     (docs / "guides").mkdir(parents=True)
@@ -221,13 +229,49 @@ def test_remediate_move_repairs_inbound_links_in_fixture_repo(tmp_path):
         encoding="utf-8",
     )
 
-    # Apply the move, then repair inbound references before removal completes.
-    target = docs / "guides" / "source.md"
-    shutil.move(str(source), str(target))
+    # Report-driven input: the move comes from a review finding, not ad-hoc shutil.
+    report = {
+        "scope": str(docs),
+        "findings": [
+            {
+                "document": str(source),
+                "action": "move",
+                "severity": "P2",
+                "evidence": "source.md lives outside guides/",
+                "remediation": "move to guides/ and repair inbound references",
+                "target": str(docs / "guides" / "source.md"),
+            }
+        ],
+    }
+    (tmp_path / "review-report.json").write_text(json.dumps(report), encoding="utf-8")
+
+    # Follow the skill procedure: parse report, build ledger, revalidate.
+    loaded = json.loads((tmp_path / "review-report.json").read_text(encoding="utf-8"))
+    ledger = [
+        {
+            "target": finding["document"],
+            "action": finding["action"],
+            "severity": finding["severity"],
+            "final_target": finding["target"],
+            "status": "pending",
+        }
+        for finding in loaded["findings"]
+    ]
+    assert len(ledger) == 1
+    entry = ledger[0]
+    assert Path(entry["target"]).is_file()  # Phase 3 revalidation: still applies.
+
+    # Repair inbound references BEFORE the source disappears (Phases 8/11).
     repaired = consumer.read_text(encoding="utf-8").replace(
         "./source.md", "./guides/source.md"
     )
     consumer.write_text(repaired, encoding="utf-8")
+    assert "./guides/source.md" in consumer.read_text(encoding="utf-8")
+
+    # Apply the ledger entry only after the repair is on disk.
+    target = Path(entry["final_target"])
+    shutil.move(str(Path(entry["target"])), str(target))
+    entry["status"] = "applied"
 
     # Unique content preserved at the new path.
     assert "Unique content block 4271" in target.read_text(encoding="utf-8")
@@ -241,6 +285,7 @@ def test_remediate_move_repairs_inbound_links_in_fixture_repo(tmp_path):
     for match in re.finditer(r"\]\((\./[^)]+)\)", consumer_text):
         link_target = (consumer.parent / match.group(1)).resolve()
         assert link_target.is_file(), match.group(1)
+    assert entry["status"] == "applied"
 
 
 def test_orchestrate_preset_preserves_discovery_and_child_policy():
