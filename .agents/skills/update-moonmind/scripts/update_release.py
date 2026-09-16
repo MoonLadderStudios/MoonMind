@@ -43,10 +43,24 @@ def main(argv=None):
         "--resume", help="Resume the printed submission ID using its original inputs"
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--local-build", action="store_true",
+        help="Development-only working-tree overlay update (bind-mounts live "
+        "source via docker-compose.development.yaml). Never an immutable "
+        "release: no image is pulled, published, or digest-pinned and no "
+        "release submission is recorded. The default immutable path is "
+        "unchanged when this flag is absent.",
+    )
     args = parser.parse_args(argv)
     if args.resume and args.operator_url:
         raise ValueError("Resume preserves the original operator URLs; omit --operator-url")
+    if args.local_build and args.resume:
+        raise ValueError("Resume replays a recorded release submission; omit --local-build")
+    if args.local_build and args.image_repository != parser.get_default("image_repository"):
+        raise ValueError("A local working-tree update uses no registry image; omit --image-repository")
     repo = args.repo.resolve(strict=True)
+    if args.local_build:
+        return _local_build_update(args, repo)
     submissions = repo / "deploy" / "state" / "release-submissions"
     if args.resume:
         submission_id = str(uuid.UUID(args.resume))
@@ -198,6 +212,148 @@ def main(argv=None):
             env={**os.environ, "MOONMIND_IMAGE": record["image"]},
             check=False,
         ).returncode
+
+
+def _compose_ps_state(*, repo, project):
+    """Return {service name: sorted port bindings} for the Compose project."""
+    output = run(
+        ["docker", "compose", "--project-name", project, "ps", "--format", "json"],
+        cwd=repo,
+    )
+    try:
+        records = json.loads(output or "[]")
+    except ValueError:
+        records = []
+        for line in (output or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except ValueError:
+                continue
+    if isinstance(records, dict):
+        records = [records]
+    state = {}
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("Name") or item.get("Service") or "")
+        bindings = sorted(
+            "{url}:{published}->{target}/{proto}".format(
+                url=pub.get("URL") or "",
+                published=pub.get("PublishedPort") or "",
+                target=pub.get("TargetPort") or "",
+                proto=pub.get("Protocol") or "",
+            )
+            for pub in (item.get("Publishers") or [])
+            if isinstance(pub, dict)
+        )
+        if name:
+            state[name] = bindings
+    return state
+
+
+def _check_operator_url(url, *, timeout_seconds=30):
+    import urllib.request
+
+    target = url.rstrip("/") + "/healthz"
+    request = urllib.request.Request(target, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            status = response.getcode()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Operator URL {url} failed its health check; deployment update did not verify"
+        ) from exc
+    if status != 200:
+        raise RuntimeError(
+            f"Operator URL {url} returned HTTP {status} from /healthz; deployment update did not verify"
+        )
+
+
+def _local_build_update(args, repo):
+    """Recreate the stack on the live-source development overlay.
+
+    Development-only: exercises the working tree without building,
+    publishing, or pinning any image. Writes no release submission and
+    claims no digest. Deployment-owned `.env` is never modified.
+    """
+    head = run(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=repo)
+    dirty = bool(
+        run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=no"], cwd=repo
+        ).strip()
+    )
+    overlay = repo / "docker-compose.development.yaml"
+    if not overlay.exists():
+        overlay = repo / "docker-compose.development.yml"
+    if args.dry_run:
+        print(
+            json.dumps(
+                {
+                    "action": "local_source_overlay_update",
+                    "repository": str(repo),
+                    "source": "working-tree",
+                    "head": head,
+                    "dirty": dirty,
+                    "overlay": overlay.name if overlay.exists() else None,
+                    "operatorUrls": list(args.operator_url),
+                    "checkoutMutation": False,
+                    "releaseSubmission": "none (development-only; not an immutable release)",
+                }
+            )
+        )
+        return 0
+    if not overlay.exists():
+        raise RuntimeError(
+            "The repository has no live-source development overlay; refusing a local working-tree update"
+        )
+    rendered = json.loads(
+        run(["docker", "compose", "config", "--format", "json"], cwd=repo)
+    )
+    project = args.compose_project or rendered["name"]
+    before = _compose_ps_state(repo=repo, project=project)
+    if not before:
+        raise RuntimeError(
+            "Could not read pre-update Compose state; refusing a local working-tree update without a binding baseline"
+        )
+    command = [
+        "docker",
+        "compose",
+        "--project-name",
+        project,
+        "--project-directory",
+        str(repo),
+        "-f",
+        "docker-compose.yaml",
+        "-f",
+        overlay.name,
+        "up",
+        "-d",
+        "--wait",
+        "--wait-timeout",
+        "600",
+    ]
+    result = subprocess.run(command, cwd=repo, capture_output=True, text=True, timeout=900)
+    if result.returncode:
+        raise RuntimeError(
+            f"docker compose up failed (exit {result.returncode}); deployment remains on its previous containers"
+        )
+    after = _compose_ps_state(repo=repo, project=project)
+    for name, bindings in before.items():
+        if after.get(name) != bindings:
+            raise RuntimeError(
+                f"Published bindings changed for {name}; expected the overlay update to preserve operator access"
+            )
+    for url in args.operator_url:
+        _check_operator_url(url)
+    print(
+        "Local working-tree overlay update verified (development-only; not an "
+        f"immutable release; head {head[:12]}{' dirty' if dirty else ''})",
+        flush=True,
+    )
+    return 0
 
 
 if __name__ == "__main__":

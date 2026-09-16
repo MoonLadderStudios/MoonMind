@@ -111,12 +111,16 @@ function resolvePayload(branch: string) {
 describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
   let fetchSpy: MockInstance;
   let branchRequestUrls: string[];
+  let resolveRequestUrls: string[];
+  let metadataRequestUrls: string[];
 
   beforeEach(() => {
     window.history.pushState({}, "Task Create", "/workflows/new");
     window.sessionStorage.clear();
     window.localStorage.clear();
     branchRequestUrls = [];
+    resolveRequestUrls = [];
+    metadataRequestUrls = [];
     fetchSpy = vi
       .spyOn(window, "fetch")
       .mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
@@ -128,6 +132,7 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
           } as Response);
         }
         if (url.startsWith("/api/github/branches/resolve")) {
+          resolveRequestUrls.push(url);
           const parsed = new URL(url, "http://localhost");
           const branch = String(parsed.searchParams.get("branch") || "");
           return Promise.resolve({
@@ -136,6 +141,7 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
           } as Response);
         }
         if (url.startsWith("/api/github/branches/metadata")) {
+          metadataRequestUrls.push(url);
           return Promise.resolve({
             ok: true,
             json: async () => ({ defaultBranch: "main", error: null }),
@@ -165,7 +171,22 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
     fetchSpy.mockRestore();
   });
 
-  it("preserves pasted text and never reports a stale-list error for an exact branch outside the first page", async () => {
+  it("opens the form with metadata only and never enumerates branches", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    await screen.findByLabelText("Branch", { selector: "input" });
+    await waitFor(
+      () => {
+        expect(metadataRequestUrls.length).toBeGreaterThan(0);
+      },
+      { timeout: 5000 },
+    );
+    // Opening Create (or changing repository) fetches only default-branch
+    // metadata. Suggestion enumeration requires an explicit user action.
+    expect(branchRequestUrls.length).toBe(0);
+  });
+
+  it("preserves pasted text with at most one resolve and zero suggestion fetches", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const branchInput = (await screen.findByLabelText("Branch", {
@@ -179,20 +200,63 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
       screen.queryByText(/not in the latest list for this repository/),
     ).toBeNull();
 
-    // The older branch resolves directly even though it is absent from the
-    // first bounded suggestion page: no false stale warning appears.
-    await waitFor(() => {
-      expect(
-        screen.queryByText(/not in the latest list for this repository/),
-      ).toBeNull();
-    });
+    // One settled paste schedules at most one exact lookup and never a
+    // suggestion search alongside it.
     await waitFor(
       () => {
-        expect(branchRequestUrls.length).toBeGreaterThan(0);
+        expect(resolveRequestUrls.length).toBe(1);
       },
       { timeout: 5000 },
     );
+    expect(branchRequestUrls.length).toBe(0);
     expect(branchInput.value).toBe("feature/old-branch");
+    expect(branchInput.disabled).toBe(false);
+    expect(
+      screen.queryByText(/not in the latest list for this repository/),
+    ).toBeNull();
+  });
+
+  it("stays responsive while branch endpoints hang and keeps the latest text", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (
+        url.startsWith("/api/github/branches/resolve") ||
+        url.startsWith("/api/github/branches/metadata") ||
+        (url.startsWith("/api/github/branches") && !url.startsWith("/api/workflows"))
+      ) {
+        return new Promise(() => {});
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: ["moonspec-orchestrate"] } }),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      if (url.startsWith("/api/presets")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [] }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const branchInput = (await screen.findByLabelText("Branch", {
+      selector: "input",
+    })) as HTMLInputElement;
+    // Paste, replace selected text, and type again while lookups hang: every
+    // edit must appear synchronously without waiting for the network.
+    fireEvent.change(branchInput, { target: { value: "feature/pasted-name" } });
+    expect(branchInput.value).toBe("feature/pasted-name");
+    fireEvent.change(branchInput, { target: { value: "feature/replaced" } });
+    expect(branchInput.value).toBe("feature/replaced");
+    fireEvent.change(branchInput, { target: { value: "feature/replaced-2" } });
+    expect(branchInput.value).toBe("feature/replaced-2");
     expect(branchInput.disabled).toBe(false);
   });
 
@@ -203,6 +267,11 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
       selector: "input",
     })) as HTMLInputElement;
     fireEvent.change(branchInput, { target: { value: "feature" } });
+    // Local typing alone never fetches suggestions.
+    expect(branchInput.value).toBe("feature");
+
+    // Broader discovery is explicit: one bounded request on demand.
+    fireEvent.click(screen.getByRole("button", { name: /Search other branches/i }));
 
     await waitFor(
       () => {
@@ -218,11 +287,11 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
     expect(options.length).toBeLessThanOrEqual(
       BRANCH_TEXT_FIRST_LIMITS.suggestionLimit,
     );
-    // One bounded page per search: the client never drains remaining pages.
+    // One bounded page per explicit search: the client never drains pages.
     const suggestionCalls = branchRequestUrls.filter((url) =>
       url.startsWith("/api/github/branches?"),
     );
-    expect(suggestionCalls.length).toBeGreaterThan(0);
+    expect(suggestionCalls).toHaveLength(1);
     for (const url of suggestionCalls) {
       const parsed = new URL(url, "http://localhost");
       expect(Number(parsed.searchParams.get("limit"))).toBeLessThanOrEqual(50);
@@ -233,6 +302,7 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.startsWith("/api/github/branches/metadata")) {
+        metadataRequestUrls.push(url);
         return Promise.resolve({
           ok: true,
           json: async () => ({ defaultBranch: "main", error: null }),
@@ -255,6 +325,7 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
         } as Response);
       }
       if (url.startsWith("/api/github/branches")) {
+        branchRequestUrls.push(url);
         return Promise.resolve({
           ok: false,
           status: 500,
@@ -271,6 +342,14 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
     })) as HTMLInputElement;
     fireEvent.change(branchInput, { target: { value: "feature/typed-during-outage" } });
 
+    // Typing alone never triggers a remote search, so no suggestion error
+    // appears before the user explicitly requests broader discovery.
+    expect(branchInput.value).toBe("feature/typed-during-outage");
+    expect(
+      screen.queryByText(/Branch suggestions are unavailable/),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Search other branches/i }));
     await waitFor(
       () => {
         expect(
@@ -306,6 +385,91 @@ describe("MoonLadderStudios/MoonMind#4054 text-first branch picker", () => {
     );
     expect(branchInput.value).toBe("missing-nope");
     expect(branchInput.disabled).toBe(false);
+    // A full-name paste needs exact resolution only, never suggestions.
+    expect(branchRequestUrls.length).toBe(0);
+  });
+
+  it("submits the live branch draft when Start is pressed within the settle debounce", async () => {
+    // P1: typing then immediately submitting must use the live draft ref, not
+    // the render-time settled value. Clearing then submitting must not reuse
+    // the prior settled branch.
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ workflowId: "mm:live-branch" }),
+        } as Response);
+      }
+      if (url.startsWith("/api/workflows/skills")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: { worker: ["moonspec-orchestrate"] } }),
+        } as Response);
+      }
+      if (url.startsWith("/api/github/branches/resolve")) {
+        resolveRequestUrls.push(url);
+        const parsed = new URL(url, "http://localhost");
+        const branch = String(parsed.searchParams.get("branch") || "");
+        return Promise.resolve({
+          ok: true,
+          json: async () => resolvePayload(branch),
+        } as Response);
+      }
+      if (url.startsWith("/api/github/branches/metadata")) {
+        metadataRequestUrls.push(url);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ defaultBranch: "main", error: null }),
+        } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        branchRequestUrls.push(url);
+        return Promise.resolve({
+          ok: true,
+          json: async () => branchListPayload(),
+        } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [] } as Response);
+      }
+      if (url.startsWith("/api/presets")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [] }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const branchInput = (await screen.findByLabelText("Branch", {
+      selector: "input",
+    })) as HTMLInputElement;
+    const instructions = (await screen.findByLabelText("Instructions")) as HTMLTextAreaElement;
+    fireEvent.change(instructions, { target: { value: "Verify live branch submission." } });
+    // Type a new branch and submit immediately, before the 600ms settled
+    // commit fires. The request must carry the typed value.
+    fireEvent.change(branchInput, { target: { value: "feature/live-draft-branch" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(
+      () => {
+        const call = fetchSpy.mock.calls.find(
+          ([url, init]) =>
+            String(url) === "/api/executions" && (init as RequestInit)?.method === "POST",
+        );
+        expect(call).toBeTruthy();
+      },
+      { timeout: 5000 },
+    );
+    const createCall = fetchSpy.mock.calls.find(
+      ([url, init]) =>
+        String(url) === "/api/executions" && (init as RequestInit)?.method === "POST",
+    );
+    const request = JSON.parse(String((createCall?.[1] as RequestInit)?.body));
+    expect(request.payload.repository.branch.name).toBe("feature/live-draft-branch");
   });
 });
 

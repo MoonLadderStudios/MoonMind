@@ -106,7 +106,7 @@ A preset with an established merge-automation default retains that default and e
 
 Changing a controlling input such as Batch Jira's Run selection recomputes the recommendation only while Auto is selected. An explicit None, Branch, or PR choice survives a Run change and is validated against the new composition. Unknown or incompatible publication requirements produce an actionable error, not a most-permissive, last-step-wins, silent-None, or retired-workspace-default fallback.
 
-A resolved scope default is pinned before child creation. Children do not independently consult the latest catalog to reinterpret the ancestor's Auto. A new schedule occurrence may resolve a newly selected definition only through the schedule's declared definition-update policy; an in-flight occurrence and its retries remain pinned.
+A resolved scope default is pinned before child creation. Children do not independently consult the latest catalog to reinterpret the ancestor's Auto. A new schedule occurrence resolves current defaults like any new work; an in-flight occurrence and its retries remain pinned.
 
 ### Meaningful Task Options Are Not Duplicate Publishing Controls
 

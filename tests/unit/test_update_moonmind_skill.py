@@ -83,3 +83,36 @@ def test_dry_run_never_fetches_or_launches(tmp_path, monkeypatch):
     monkeypatch.setattr(update, "run", inspect)
     assert update.main(["--repo", str(tmp_path), "--dry-run"]) == 0
     assert calls == [["git", "check-ref-format", "--branch", "main"]]
+
+
+def _init_repo(path):
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(path), *args], text=True).strip()
+    git("init", "-b", "main")
+    git("config", "user.email", "qualification@example.invalid")
+    git("config", "user.name", "Qualification")
+    (path / "source.txt").write_text("working tree source")
+    git("add", ".")
+    git("commit", "-m", "source")
+    return git
+
+
+def test_local_build_dry_run_never_builds_or_launches(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    _init_repo(repo)
+    calls = []
+    def inspect(args, **kwargs):
+        calls.append(args)
+        return ""
+    monkeypatch.setattr(update, "run", inspect)
+    assert update.main(["--repo", str(repo), "--local-build", "--dry-run"]) == 0
+    assert calls, "local dry-run must inspect the working tree"
+    assert all(args[0] == "git" for args in calls)
+    assert "local_source_overlay_update" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("extra", [["--resume", "00000000-0000-0000-0000-000000000000"], ["--image-repository", "example.invalid/custom"]])
+def test_local_build_rejects_release_inputs(tmp_path, extra):
+    with pytest.raises(ValueError):
+        update.main(["--repo", str(tmp_path), "--local-build", *extra])

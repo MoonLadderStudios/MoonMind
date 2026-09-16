@@ -102,6 +102,9 @@ async def journey(tmp_path, monkeypatch, request):
                     page = int(query.get("page", [1])[0])
                     self.respond(state["scan_entries"][(page - 1) * per_page : page * per_page])
                     return
+                if int(parse_qs(urlsplit(self.path).query).get("page", [1])[0]) > 1:
+                    self.respond([])
+                    return
                 self.respond(
                     ([self.issue()] if state.get("state", "open") == "open" else [])
                     + ([self.issue(3971)] if "extra_state" in state else [])
