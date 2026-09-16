@@ -3228,6 +3228,31 @@ class TemporalExecutionService:
                     self._update_summary(record, "Clarification reply sent to agent.")
                 else:
                     self._update_summary(record, "Execution resumed.")
+                # A pending integration wait survives the operator-pause
+                # overlay: resuming clears operator_paused but must restore
+                # the underlying integration wait reason (e.g.
+                # external_callback with attention_required=False) so the
+                # execution stays visibly awaiting_external until the
+                # provider poll/callback completes.
+                integration_state = self._integration_state(record)
+                try:
+                    integration_pending = integration_state is not None and (
+                        self._parse_integration_status(
+                            str(integration_state.get("normalized_status") or "")
+                        )
+                        not in TERMINAL_INTEGRATION_STATUSES
+                    )
+                except TemporalExecutionValidationError:
+                    integration_pending = False
+                if integration_pending and integration_state is not None:
+                    self._set_waiting_metadata(
+                        record,
+                        waiting_reason=self._integration_waiting_reason(
+                            integration_state
+                        ),
+                        attention_required=False,
+                    )
+                    self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
             elif signal_name == "SkipDependencyWait":
                 record.paused = False
                 self._clear_waiting_metadata(record)
