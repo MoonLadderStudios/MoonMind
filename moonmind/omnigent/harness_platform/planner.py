@@ -35,11 +35,13 @@ from moonmind.omnigent.harness_platform.catalog import (
 )
 from moonmind.omnigent.harness_platform.credential_bindings import (
     CredentialBindingSet,
+    assert_worker_supports_binding_set,
     is_repository_authority,
     model_authority_bindings,
     model_bindings_of,
     model_materializer_refs,
     validate_binding_set_for_plan,
+    validate_workspace_source_bindings,
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
@@ -611,6 +613,22 @@ def compile_execution_plan(
     # "allowedMaterializers": ...}. Repository bindings without a declaration
     # are rejected; agent-supplied keys never create declarations.
     repository_slot_requirements: dict[str, dict[str, Any]] | None = None,
+    # Workspace-source enforcement (REQ-06): admitted source kind for this
+    # plan ("scratch" | "anonymous" | "save_only"). None preserves the
+    # historical behavior (no source-kind enforcement). When supplied, the
+    # existing validate_workspace_source_bindings helper runs before any
+    # acquisition side effect.
+    workspace_source_kind: str | None = None,
+    # Permitted access snapshot for anonymous work. Carried alongside the
+    # workspace intent; repositoryAuthorityRefs still carries only admitted
+    # repository bindings, so anonymous work (no secret slot) validates with
+    # no repo bindings plus this explicit snapshot.
+    workspace_access_snapshot_ref: str | None = None,
+    # Worker capability barrier (REQ-08/REQ-09): advertised worker authority
+    # kinds (e.g. ("model",) vs ("model", "repository")). None preserves the
+    # historical behavior; when supplied, the existing
+    # assert_worker_supports_binding_set barrier runs at plan admission.
+    worker_authority_kinds: tuple[str, ...] | list[str] | None = None,
 ) -> OmnigentExecutionPlanEnvelope:
     # 1. Validate agent profile (resolve snapshot)
     profile = validate_agent_profile(agent_profile)
@@ -703,6 +721,16 @@ def compile_execution_plan(
         declared_slots=declared_slots,
         declared_repository_slots=repository_decls,
     )
+    if workspace_source_kind is not None:
+        validate_workspace_source_bindings(
+            workspace_source_kind,
+            credential_binding_set,
+            access_snapshot_ref=workspace_access_snapshot_ref,
+        )
+    if worker_authority_kinds is not None:
+        assert_worker_supports_binding_set(
+            tuple(worker_authority_kinds), credential_binding_set
+        )
     # Validate each binding's materializer exists and is compatible with host class later
 
     # 8. Materializers + 9. Host Class + launch policy class-level admission

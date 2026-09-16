@@ -682,6 +682,7 @@ async def compile_and_persist_execution_plan(
     task_input_snapshot_digest: str,
     execution_plan_store: Any | None = None,
     db_session: Any | None = None,
+    trusted_repository_declarations: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
@@ -1130,11 +1131,13 @@ async def compile_and_persist_execution_plan(
     model = document.get("model")
     model_mapping = dict(model) if isinstance(model, Mapping) else {}
     # MoonLadderStudios/MoonMind#4009: repository slot declarations derive
-    # from admitted profile authority only; agent-supplied binding keys
-    # never create declarations. Fail-closed ({}) until delivery #4011 /
-    # publication #1090 supply trusted declarations (issuance is #4007).
+    # from admitted profile authority plus trusted delivery / publication
+    # declarations when those owners supply them (#4011/#1090; issuance is
+    # #4007). Agent-supplied binding keys never create declarations.
+    # Fail-closed ({}) without trusted input.
     repository_slot_requirements = derive_repository_slot_requirements(
         profile_document=dict(document),
+        trusted_repository_declarations=trusted_repository_declarations,
     )
     plan = compile_execution_plan(
         agent_profile=_build_v2_profile(
