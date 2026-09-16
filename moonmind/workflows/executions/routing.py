@@ -39,7 +39,6 @@ def _coerce_bool(value: object, *, default: bool) -> bool:
 
 def get_routing_target_for_workflow(
     *,
-    is_manifest: bool = False,
     is_run: bool = False,
     task_payload: object | None = None,
 ) -> WorkflowTarget:
