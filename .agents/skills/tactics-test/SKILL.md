@@ -94,8 +94,9 @@ scripts/run_dood_unreal_tactics.sh --dry-run
 
 ## Terminal outcomes
 
-- A `--dry-run` preview writes `status="SKIPPED"` and never satisfies publish
-  gating. It submits no build or test work and proves nothing about the target.
+- A `--dry-run` preview reports `status="SKIPPED"` on stdout and never satisfies publish
+  gating. It submits no build or test work, writes no gate artifact, and
+  preserves any prior verified gate result. It proves nothing about the target.
 - Completion requires the current run's gate artifact with `status="PASS"`,
   its recorded `resultsDir` timestamped artifact folder, and the build/test
   log paths it names. A process exit, a submitted job identifier, or a

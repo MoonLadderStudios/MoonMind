@@ -147,6 +147,13 @@ GATE_SOURCE="run_dood_unreal_tactics.sh"
 GATE_TIMESTAMP=""
 
 write_gate_result() {
+  # A dry-run preview is explicitly non-mutating: it must never create,
+  # overwrite, or erase the gate artifact (MoonLadderStudios/MoonMind#4277).
+  # The preview reports SKIPPED on stdout only so a prior verified PASS
+  # result survives the preview.
+  if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+    return 0
+  fi
   [[ -n "${GATE_FILE:-}" ]] || return 0
   mkdir -p "$(dirname "$GATE_FILE")"
   GATE_TIMESTAMP="${GATE_TIMESTAMP:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
@@ -443,6 +450,8 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "Test command:"
     print_cmd "${test_cmd[@]}"
   fi
+  echo
+  echo 'Gate preview: status="SKIPPED" (dry-run; no gate artifact written)'
   exit 0
 fi
 
