@@ -213,6 +213,44 @@ plus reactivation/promotion for a stranded administrator), and
 last-admin protection; deactivation also revokes sessions). Member rows are
 deactivated, never deleted: UUIDs and ownership records are preserved.
 
+Request surface (`api_service/api/routers/accounts_4122.py`, prefix
+`/api/v1/accounts`, only when the classified production mode is
+`accounts`): `POST /setup` (operator-held bootstrap capability),
+`POST /login` (password verify off the event loop, login resolved to
+the existing `User` UUID, session minted through the shared #4121
+authority), `POST /logout` (browser authority only — never cancels
+admitted work or machine credentials), `GET /me`,
+`POST /password/change` (bumps the durable revocation generation, caller
+receives a fresh session), `POST /invites` (admin-only; membership
+only, never administrator authority), `POST /enroll`,
+`POST /recovery/request` (admin-only) and `POST /recovery/redeem`
+(capability-gated, preserves active/admin flags, rotates credentials,
+invalidates prior sessions, mints no session), `GET /members` and
+`POST /members/action` (admin-only, last-admin safe). Unknown logins
+fail exactly like wrong passwords (`401 auth_invalid`); incompatible
+or missing hashes take the explicit reset path (`403
+enrollment_required`), never silent hash conversion. Login, setup,
+enrollment, and recovery redemption are rate-limited (`429
+rate_limited`); JSON responses never carry session/refresh material
+(sessions travel only as `HttpOnly` cookies) and refresh-shaped
+request fields are rejected. A lost-acknowledgment enrollment retry
+observes `409 email_taken` and continues via login — never a duplicate
+profile.
+
+Local operator recovery (`moonmind accounts mint-bootstrap |
+mint-recovery | restore-access`): the tested path the last-admin
+refusal points at. Capabilities are operator-held, expiring, one-use,
+and login-bound; `restore-access` consumes the nonce and reactivates /
+promotes the existing login in one transaction, preserving the UUID
+and emitting only a redacted audit event.
+
+Mode-specific limitations: accounts mode does not preserve an
+existing deployment's MFA or federation features — such deployments
+require a qualified replacement (typically their advanced IdP mode)
+before cutover. There is no mandatory email service: invitation and
+recovery capabilities travel over the authenticated operator channel,
+never SMTP.
+
 ## 8. API error semantics
 
 | Situation | Status | Code |

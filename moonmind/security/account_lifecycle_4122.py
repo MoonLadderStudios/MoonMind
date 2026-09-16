@@ -80,6 +80,7 @@ __all__ = [
     "TOKEN_TTL_INVITE_SECONDS",
     "TOKEN_TTL_RECOVERY_SECONDS",
     "MIN_KEY_BYTES",
+    "derive_lifecycle_key",
 ]
 
 MIN_KEY_BYTES = 32
@@ -286,6 +287,31 @@ def _require_key(key: bytes) -> bytes:
             "auth_invalid", "lifecycle key material must be at least 32 bytes"
         )
     return bytes(key)
+
+
+def derive_lifecycle_key(session_secret: bytes) -> bytes:
+    """Derive the capability HMAC key from the durable session secret.
+
+    Single owner for the deployment default shared by the API boundary
+    (``api_service/api/routers/accounts_4122.py``) and the local
+    operator commands (``moonmind accounts ...``): HKDF-SHA256 with a
+    fixed salt and a lifecycle-specific info string, so the derived key
+    is domain-separated from session signing material. An explicit
+    operator-held ``MOONMIND_ACCOUNTS_KEY`` (at least 32 bytes) always
+    takes precedence where the callers support it; this derivation is
+    the no-new-setup default, not a second stored secret.
+    """
+    secret = _require_key(session_secret)
+    info = b"moonmind-accounts-lifecycle-v1"
+    prk = hmac.new(b"moonmind-accounts-lifecycle-salt-v1", secret, hashlib.sha256).digest()
+    out = b""
+    block = b""
+    counter = 1
+    while len(out) < MIN_KEY_BYTES:
+        block = hmac.new(prk, block + info + bytes([counter]), hashlib.sha256).digest()
+        out += block
+        counter += 1
+    return out[:MIN_KEY_BYTES]
 
 
 def _b64encode(raw: bytes) -> str:
