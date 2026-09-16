@@ -819,3 +819,59 @@ def test_v2_authority_rejected_by_retained_v1_plan_reader_without_fallback():
         )
     finally:
         sys.modules.pop(spec.name, None)
+
+
+def test_derive_repository_slot_requirements_is_fail_closed_and_agent_blind():
+    """REQ-03: production derivation never mints declarations from agent keys.
+
+    The admitted profile carries no repository declarations yet (delivery
+    #4011 / publication #1090 own that lifecycle; issuance is #4007), so
+    the producer returns {} and every repository slot stays rejected as
+    undeclared. Supplying binding-set slot names cannot change that.
+    """
+    assert cb.derive_repository_slot_requirements(profile_document={}) == {}
+    assert cb.derive_repository_slot_requirements(
+        profile_document={"workspace": {"mutation": "allowed"}},
+    ) == {}
+    # Even if a caller passes agent-flavoured slot names, they are not an
+    # input to derivation: only trusted delivery declarations create slots.
+    assert cb.derive_repository_slot_requirements(
+        profile_document={"workspace": {}},
+        trusted_repository_declarations=None,
+    ) == {}
+    assert cb.REPOSITORY_DECLARATION_OWNER.startswith("delivery:#4011")
+    assert cb.REPOSITORY_ISSUANCE_OWNER == "issuance:#4007"
+
+
+def test_derive_repository_slot_requirements_validates_trusted_declarations():
+    """REQ-03: trusted delivery declarations are checked against closed sets."""
+    derived = cb.derive_repository_slot_requirements(
+        profile_document={},
+        trusted_repository_declarations={
+            "src": {
+                "allowedRoles": ("source_read",),
+                "allowedMaterializers": ("repository-broker@1",),
+            }
+        },
+    )
+    assert derived["src"]["allowedRoles"] == ("source_read",)
+    with pytest.raises(HarnessPlatformError):
+        cb.derive_repository_slot_requirements(
+            profile_document={},
+            trusted_repository_declarations={
+                "src": {
+                    "allowedRoles": ("destination_write", "bogus-role"),
+                    "allowedMaterializers": ("repository-broker@1",),
+                }
+            },
+        )
+    with pytest.raises(HarnessPlatformError):
+        cb.derive_repository_slot_requirements(
+            profile_document={},
+            trusted_repository_declarations={
+                "src": {
+                    "allowedRoles": ("source_read",),
+                    "allowedMaterializers": ("opencode-auth-json@1",),
+                }
+            },
+        )

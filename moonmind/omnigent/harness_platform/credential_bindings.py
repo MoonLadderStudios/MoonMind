@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -755,6 +756,79 @@ def assert_worker_supports_binding_set(
         raise _binding_conflict(
             "worker supports model authority only and cannot consume repository authority"
         )
+
+
+#: Explicit scope boundary for MoonLadderStudios/MoonMind#4009 plan slice 2.
+#:
+#: #4009 owns the versioned binding envelope only (closed union, frozen v1
+#: digest, domain-separated v2 digest, per-slot kind/materializer/role
+#: checks, workspace-source rules, child attenuation helper, worker
+#: barrier, ownership-scoped release helper). Declaration production
+#: (deriving admitted repository slots from workspace/tool/Skill/
+#: publication requirements) and the production lifecycle that consumes
+#: those declarations (anonymous-snapshot carriage, child re-admission at
+#: fan-out/continuation/remediation, worker gating, partial-acquisition
+#: cleanup) belong to the delivery/publication owners (#4011/#1090), and
+#: repository issuance/acquisition belongs to #4007. This keeps the
+#: envelope fail-closed until those owners supply trusted declarations
+#: and issuance; agent-supplied slot keys never create declarations.
+REPOSITORY_DECLARATION_OWNER = "delivery:#4011/publication:#1090"
+REPOSITORY_ISSUANCE_OWNER = "issuance:#4007"
+
+
+def derive_repository_slot_requirements(
+    *,
+    profile_document: Mapping[str, Any] | None = None,
+    trusted_repository_declarations: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Derive admitted repository slot declarations for the planner.
+
+    The derivation source is the admitted Agent Profile document (and, once
+    supplied by the delivery owner, its trusted repository declarations).
+    Binding-set slot keys -- which may carry agent-supplied names -- are
+    never inspected here and can never create a declaration.
+
+    Today no admitted profile field carries repository declarations, so the
+    fail-closed default is ``{}``: every repository slot is rejected as
+    undeclared until #4011/#1090 supply trusted declarations through
+    ``trusted_repository_declarations``. Supplied declarations are checked
+    against the closed role/materializer sets before they reach the
+    planner.
+    """
+    _ = profile_document
+    if not trusted_repository_declarations:
+        return {}
+    derived: dict[str, dict[str, Any]] = {}
+    for slot, decl in dict(trusted_repository_declarations).items():
+        slot_name = str(slot or "").strip()
+        if not slot_name:
+            raise _slot_unbound("repository slot declaration requires a slot name")
+        decl_map = dict(decl) if isinstance(decl, Mapping) else {}
+        allowed_roles = decl_map.get("allowedRoles")
+        if allowed_roles is not None:
+            roles = tuple(allowed_roles)
+            for role in roles:
+                if str(role) not in REPOSITORY_ROLES:
+                    raise _slot_unbound(
+                        f"credential slot {slot_name} role {role} not admitted"
+                    )
+        allowed_materializers = decl_map.get("allowedMaterializers")
+        if allowed_materializers is not None:
+            materializers = tuple(allowed_materializers)
+            for materializer in materializers:
+                if str(materializer) not in REPOSITORY_DELIVERY_REFS:
+                    raise _slot_unbound(
+                        f"credential slot {slot_name} materializer {materializer} not admitted"
+                    )
+        derived[slot_name] = {
+            "allowedRoles": tuple(allowed_roles) if allowed_roles is not None else None,
+            "allowedMaterializers": (
+                tuple(allowed_materializers)
+                if allowed_materializers is not None
+                else None
+            ),
+        }
+    return derived
 
 
 # Generation ownership helpers
