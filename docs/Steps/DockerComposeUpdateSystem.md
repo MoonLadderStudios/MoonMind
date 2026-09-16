@@ -1014,10 +1014,20 @@ and verifies those same origins again before recording release success. The port
 updater accepts repeatable `--operator-url <existing-origin>` declarations, recorded
 as `deployment_operator_urls` in the immutable submission context. These supply
 verification targets without changing API authentication or published bindings.
-A configured `MOONMIND_PUBLIC_BASE_URL` remains a required target. Otherwise, fixed published
-API bindings supply the origins; omitted and explicitly empty public URL values
-use this same path when no operator origins were declared. Wildcard bindings require a declared operator origin because
-an unspecified address cannot identify the client's route. Missing targets or an
+A configured `MOONMIND_PUBLIC_BASE_URL` remains a required target. For
+`AUTH_PROVIDER=header`, verification must use the trusted ingress origin, supplied by
+that public URL or `--operator-url`. Published API bindings bypass the proxy, and the
+trusted-proxy peer allowlist does not identify its public scheme, host, and port. If
+neither origin is supplied, preflight stops with actionable ingress configuration
+guidance before recording a target or replacing the API; it never substitutes a
+direct API probe or a fabricated identity header.
+For other authentication modes, published API bindings supply the origins when no
+public URL or operator origins were declared; omitted and explicitly empty public URL
+values use the same path. A fixed binding supplies its own address. A wildcard binding
+(`MOONMIND_API_PUBLISH_HOST=0.0.0.0` or `::`) publishes on every host address, so its own
+loopback origin on the published port is the derived target without a declaration,
+`.env` edit, or authentication change. Declare the LAN or VPN address with
+`--operator-url` to verify that route instead. Missing targets or an
 unreachable route leave the existing release in place before replacement; a
 post-replacement failure retains the durable updater and recovery evidence.
 
