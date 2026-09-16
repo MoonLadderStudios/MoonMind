@@ -90,31 +90,19 @@ def test_dry_run_never_fetches_or_launches(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "rendered,expected",
+    "rendered",
     [
-        (
-            {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "0.0.0.0", "published": "7000", "target": 8000}]}}},
-            ["http://127.0.0.1:7000"],
-        ),
-        (
-            {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "", "published": "7000", "target": 8000}]}}},
-            ["http://127.0.0.1:7000"],
-        ),
-        (
-            {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "::", "published": "7000", "target": 8000}]}}},
-            ["http://[::1]:7000"],
-        ),
-        (
-            {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "192.0.2.4", "published": "7000", "target": 8000}]}}},
-            ["http://192.0.2.4:7000"],
-        ),
-        (
-            {"name": "existing-project", "services": {"api": {"environment": {"MOONMIND_PUBLIC_BASE_URL": "https://auth.example"}, "ports": [{"host_ip": "0.0.0.0", "published": "7000", "target": 8000}]}}},
-            None,
-        ),
+        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "0.0.0.0", "published": "7000", "target": 8000}]}}},
+        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "", "published": "7000", "target": 8000}]}}},
+        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "::", "published": "7000", "target": 8000}]}}},
+        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "192.0.2.4", "published": "7000", "target": 8000}]}}},
+        {"name": "existing-project", "services": {"api": {"environment": {"MOONMIND_PUBLIC_BASE_URL": "https://auth.example"}, "ports": [{"host_ip": "0.0.0.0", "published": "7000", "target": 8000}]}}},
     ],
 )
-def test_bare_invocation_supplies_loopback_default(tmp_path, monkeypatch, rendered, expected):
+def test_bare_invocation_never_invents_operator_urls(tmp_path, monkeypatch, rendered):
+    """A bare invocation records no operator URLs: wildcard bindings require
+    an explicit --operator-url (or MOONMIND_PUBLIC_BASE_URL) so release
+    probes validate the actual operator route instead of loopback."""
     repo = tmp_path / "installed"
     repo.mkdir()
     def git(*args):
@@ -148,7 +136,7 @@ def test_bare_invocation_supplies_loopback_default(tmp_path, monkeypatch, render
     assert update.main(["--repo", str(repo)]) == 0
     submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
     payload = json.loads(submission.read_text())
-    assert payload["context"].get("deployment_operator_urls") == expected
+    assert "deployment_operator_urls" not in payload["context"]
 def _init_repo(path):
     def git(*args):
         return subprocess.check_output(["git", "-C", str(path), *args], text=True).strip()
