@@ -99,7 +99,9 @@ scripts/run_dood_unreal_tactics.sh --dry-run
   preserves any prior verified gate result. It proves nothing about the target.
 - Completion requires the current run's gate artifact with `status="PASS"`,
   its recorded `resultsDir` timestamped artifact folder, and the build/test
-  log paths it names. A process exit, a submitted job identifier, or a
+  log paths it names. Only logs for phases marked `pass` are required: a
+  `--phase build` gate omits `testLog` and a `--phase test` gate omits
+  `buildLog`. A process exit, a submitted job identifier, or a
   successful container start alone does not establish completion.
 - A stale `latest/gate.json` from an earlier run must not be reused: always
   read the gate written by the current run and confirm its `resultsDir`

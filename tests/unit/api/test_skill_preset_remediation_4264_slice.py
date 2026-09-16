@@ -1,65 +1,119 @@
-"""Bounded remediation slice for MoonLadderStudios/MoonMind#4264.
+"""Executable remediation slice for MoonLadderStudios/MoonMind#4264.
 
-Covers two safe, immediately-testable sub-slices without claiming the full
-epic or any single child issue:
+Executable regression coverage for the trustworthy terminal outcomes
+sub-slice (#4277) without asserting documentation wording, headings,
+structure, counts, or required phrases (prohibited by AGENTS.md):
 
-- #4265 (candidate vs landed): locks the existing sequencing rule that an
-  unmerged candidate / absent PR / open issue are expected verification
-  inputs, not implementation gaps, and that candidate-only success never
-  proves landing. This is a regression lock on wording already present in
-  moonspec-verify / moonspec-assess, not a full acceptance-rules rewrite.
-- #4277 (trustworthy terminal outcomes): requires tactics-test and
-  update-moonmind entrypoints to state terminal evidence explicitly in
-  task-neutral wording: dry-run output never establishes completion,
-  gating consumes only the current run's gate artifact, and stale artifacts
-  must not be reused.
+- the managed Tactics runner ``--dry-run`` preview is non-mutating: it
+  reports ``status="SKIPPED"`` on stdout only, preserves any prior verified
+  gate artifact, and creates no timestamped results directory (covers the
+  default managed path where the shell entrypoint execs the managed runner);
+- the managed gate artifact is phase-aware: a ``--phase build`` PASS gate
+  names only ``buildLog`` and a ``--phase test`` PASS gate names only
+  ``testLog``, so a verifier never rejects a successful single-phase run
+  for a skipped phase's absent log file.
 
-All assertions are model-neutral: they describe task intent, authorized
-capabilities, constraints, and completion evidence without naming models,
-model families, or per-model procedures. Opaque runtime/account/model
-selections and legitimate service identifiers elsewhere are out of scope.
+Documentation wording itself is reviewed, not unit tested.
 """
 
 from __future__ import annotations
 
+import importlib.util
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SKILLS_DIR = REPO_ROOT / ".agents" / "skills"
+TACTICS_SCRIPT_DIR = (
+    REPO_ROOT / ".agents" / "skills" / "tactics-test" / "scripts"
+)
+MANAGED_RUNNER = TACTICS_SCRIPT_DIR / "run_moonmind_unreal_tactics.py"
 
 
-def _skill_text(skill: str) -> str:
-    return (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
-
-
-def test_candidate_completion_is_distinguished_from_landed_work():
-    verify = _skill_text("moonspec-verify")
-    assert "unmerged candidate" in verify
-    assert "Do not require downstream commit" in verify or (
-        "downstream commit" in verify and "not" in verify
+def _load_managed_runner():
+    spec = importlib.util.spec_from_file_location(
+        "run_moonmind_unreal_tactics_under_test", MANAGED_RUNNER
     )
-    # Candidate success alone cannot close/transition: assessment wording lock.
-    assess = _skill_text("moonspec-assess")
-    assert "cannot replace objective verification or prove landing" in assess
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def test_tactics_test_defines_trustworthy_terminal_outcome():
-    text = _skill_text("tactics-test")
-    # Dry-run must never satisfy publish gating.
-    assert "SKIPPED" in text, "tactics-test must name the dry-run SKIPPED outcome"
-    assert "never satisfies" in text or "never establishes" in text or (
-        "dry-run" in text.lower() and "must not" in text.lower()
+def _init_repo(tmp_path: Path, *, subdir: str) -> tuple[Path, Path, str]:
+    repo = tmp_path / "tactics-repo"
+    latest = repo / ".artifacts" / subdir / "latest"
+    latest.mkdir(parents=True)
+    (repo / "Tactics.uproject").write_text("{}\n", encoding="utf-8")
+    gate = latest / "gate.json"
+    prior_gate = '{"status":"PASS","resultsDir":"prior-verified-run"}\n'
+    gate.write_text(prior_gate, encoding="utf-8")
+    return repo, gate, prior_gate
+
+
+def test_managed_dry_run_is_non_mutating_and_reports_skipped_preview(
+    tmp_path: Path,
+) -> None:
+    assert MANAGED_RUNNER.is_file(), f"missing runner: {MANAGED_RUNNER}"
+    repo, gate, prior_gate = _init_repo(
+        tmp_path, subdir="moonmind-unreal-tactics"
     )
-    # Gating consumes the current run's gate artifact, not a stale file.
-    assert "resultsDir" in text or "results_dir" in text or "timestamped" in text
-    assert "stale" in text.lower()
+    before = sorted(p.relative_to(repo) for p in repo.rglob("*"))
+
+    completed = subprocess.run(
+        [sys.executable, str(MANAGED_RUNNER), "--repo", str(repo), "--dry-run"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert 'status="SKIPPED"' in completed.stdout
+    assert "no gate artifact written" in completed.stdout
+    assert gate.read_text(encoding="utf-8") == prior_gate
+    after = sorted(p.relative_to(repo) for p in repo.rglob("*"))
+    assert after == before
 
 
-def test_update_moonmind_defines_trustworthy_terminal_outcome():
-    text = _skill_text("update-moonmind")
-    assert "terminal release receipt" in text
-    assert "verified installed readiness" in text
-    # Dry-run explicitly proves nothing and process/container start alone
-    # does not establish completion.
-    assert "dry-run" in text.lower()
-    assert "alone does not" in text or "never" in text.lower()
+def test_managed_gate_omits_skipped_phase_logs(tmp_path: Path) -> None:
+    module = _load_managed_runner()
+
+    for phase, expected_log, absent_log in (
+        ("build", "buildLog", "testLog"),
+        ("test", "testLog", "buildLog"),
+    ):
+        repo = tmp_path / f"repo-{phase}"
+        repo.mkdir(parents=True)
+        (repo / "Tactics.uproject").write_text("{}\n", encoding="utf-8")
+
+        def _fake_run_job(
+            spec, *, request_id, log_path, dry_run=False
+        ):  # noqa: ANN001, ANN202
+            assert not dry_run
+            Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(log_path).write_text("ok\n", encoding="utf-8")
+            return 0
+
+        module._run_job = _fake_run_job  # type: ignore[attr-defined]
+        argv = [
+            "run_moonmind_unreal_tactics.py",
+            "--repo",
+            str(repo),
+            "--phase",
+            phase,
+        ]
+        old_argv = sys.argv
+        sys.argv = argv
+        try:
+            assert module.main() == 0
+        finally:
+            sys.argv = old_argv
+
+        gate_path = repo / ".artifacts" / "moonmind-unreal-tactics" / "latest" / "gate.json"
+        gate = json.loads(gate_path.read_text(encoding="utf-8"))
+        assert gate["status"] == "PASS"
+        assert gate["phase"] == phase
+        assert expected_log in gate, f"{phase}: missing {expected_log}"
+        assert absent_log not in gate, f"{phase}: must omit {absent_log}"
+        assert Path(gate[expected_log]).is_file()
