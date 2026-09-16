@@ -18,6 +18,7 @@ from pathlib import Path
 
 _MAX_DIAGNOSTIC_CHARS = 4000
 _MAX_COMMAND_CHARS = 1000
+_MAX_PUBLISHED_ANCESTOR_SEARCH = 20
 
 _URL_USERINFO_RE = re.compile(r"(://)[^/\s:]+:[^/\s@]+@")
 _SECRET_ASSIGNMENT_RE = re.compile(
@@ -170,17 +171,62 @@ def main(argv=None):
             )
             return 0
         run(["git", "fetch", "origin", args.branch], cwd=repo)
-        revision = run(
+        tip_revision = run(
             ["git", "rev-parse", "--verify", "FETCH_HEAD^{commit}"], cwd=repo
         )
-        image = f"{args.image_repository}:sha-{revision}"
         try:
-            run(["docker", "pull", image], cwd=repo)
-        except RuntimeError as exc:
+            candidates = run(
+                [
+                    "git",
+                    "rev-list",
+                    "--first-parent",
+                    "-n",
+                    str(_MAX_PUBLISHED_ANCESTOR_SEARCH),
+                    "FETCH_HEAD^{commit}",
+                ],
+                cwd=repo,
+            ).split()
+        except RuntimeError:
+            candidates = []
+        if tip_revision not in candidates:
+            candidates = [tip_revision, *candidates]
+        if not candidates:
+            candidates = [tip_revision]
+        revision = None
+        image = None
+        skipped_unpublished = []
+        last_missing_error = None
+        for candidate in candidates:
+            candidate_image = f"{args.image_repository}:sha-{candidate}"
+            try:
+                run(["docker", "pull", candidate_image], cwd=repo)
+            except RuntimeError as exc:
+                if "has no published image yet" in str(exc):
+                    skipped_unpublished.append(candidate)
+                    last_missing_error = exc
+                    continue
+                raise RuntimeError(
+                    f"Published image {candidate_image} for origin/{args.branch} revision "
+                    f"{candidate} is unavailable; {exc}"
+                ) from exc
+            revision = candidate
+            image = candidate_image
+            break
+        if revision is None:
+            tip_image = f"{args.image_repository}:sha-{tip_revision}"
+            checked = ", ".join(skipped_unpublished) if skipped_unpublished else tip_revision
             raise RuntimeError(
-                f"Published image {image} for origin/{args.branch} revision "
-                f"{revision} is unavailable; {exc}"
-            ) from exc
+                f"Published image {tip_image} for origin/{args.branch} revision "
+                f"{tip_revision} is unavailable; checked {len(candidates)} commit(s) "
+                f"({checked}) with no published image; {last_missing_error}"
+            ) from last_missing_error
+        if revision != tip_revision:
+            print(
+                f"Tip revision {tip_revision[:12]} has no published image yet; "
+                f"using newest published ancestor {revision[:12]} "
+                f"(skipped {len(skipped_unpublished)} unpublished commit(s))",
+                flush=True,
+            )
         observed = json.loads(run(["docker", "image", "inspect", image], cwd=repo))[0]
         if (
             observed.get("Config", {})
@@ -205,19 +251,23 @@ def main(argv=None):
         )
         project = args.compose_project or rendered["name"]
         submission_id = str(uuid.uuid4())
+        inputs = {
+            "stack": "moonmind",
+            "image": {
+                "repository": args.image_repository,
+                "reference": digests[0].split("@", 1)[1],
+            },
+            "sourceRevision": revision,
+            "reason": "Update to selected branch snapshot",
+        }
+        if revision != tip_revision:
+            inputs["requestedTipRevision"] = tip_revision
+            inputs["skippedUnpublishedRevisions"] = list(skipped_unpublished)
         record = {
             "repo": str(repo),
             "project": project,
             "image": digests[0],
-            "inputs": {
-                "stack": "moonmind",
-                "image": {
-                    "repository": args.image_repository,
-                    "reference": digests[0].split("@", 1)[1],
-                },
-                "sourceRevision": revision,
-                "reason": "Update to selected branch snapshot",
-            },
+            "inputs": inputs,
             "context": {
                 "idempotency_key": f"host-update:{submission_id}",
                 "operator": "local-operator",
