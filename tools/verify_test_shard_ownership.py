@@ -11,20 +11,32 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+import sys
+
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 PROVIDER_MARKERS = {"provider_verification", "requires_credentials"}
 
-# Deterministic reliability sharding (MoonLadderStudios/MoonMind#4377): the
-# backend matrix runs four isolated reliability shards. Files under
-# tests/integration/reliability/test_*.py are sorted lexicographically and
-# assigned round-robin (index % 4). This matches the CI workflow's
-# `ls ... | sort | awk 'NR % 4 == ...'` selection so local ownership and CI
-# execute the same file in the same shard.
-RELIABILITY_SHARD_COUNT = 4
-RELIABILITY_SHARD_NAMES = tuple(
-    f"reliability-shard-{index + 1}" for index in range(RELIABILITY_SHARD_COUNT)
+# Deterministic duration-balanced reliability sharding
+# (MoonLadderStudios/MoonMind#4367): the backend matrix runs four isolated
+# reliability shards. The single partition authority is
+# tools/ci/reliability_shard_partition.py (greedy longest-processing-time
+# over advisory duration hints); this verifier imports it so local ownership
+# and CI execute the same file in the same shard. Timing history is an
+# optimization hint only: files absent from the weights file receive the
+# default weight and are always selected, never skipped.
+from tools.ci.reliability_shard_partition import (
+    SHARD_COUNT as RELIABILITY_SHARD_COUNT,
+)
+from tools.ci.reliability_shard_partition import (
+    SHARD_NAMES as RELIABILITY_SHARD_NAMES,
+)
+from tools.ci.reliability_shard_partition import (
+    reliability_shard_for_file as _authority_shard_for_file,
 )
 
 
@@ -34,16 +46,10 @@ def reliability_shard_for_path(path: str) -> str:
 
     filename = path.rsplit("/", 1)[-1]
     try:
-        candidates = sorted(
-            p.name
-            for p in (REPO_ROOT / "tests" / "integration" / "reliability").glob(
-                "test_*.py"
-            )
-        )
-        if filename in candidates:
-            return RELIABILITY_SHARD_NAMES[candidates.index(filename) % RELIABILITY_SHARD_COUNT]
-    except OSError:
-        # Reliability directory unreadable; fall through to hash-based sharding.
+        return _authority_shard_for_file(filename)
+    except (OSError, ValueError):
+        # Partition authority unavailable for this path; fall through to
+        # hash-based sharding so every path still maps to exactly one shard.
         pass
     digest = int(hashlib.md5(path.encode("utf-8")).hexdigest(), 16)
     return RELIABILITY_SHARD_NAMES[digest % RELIABILITY_SHARD_COUNT]

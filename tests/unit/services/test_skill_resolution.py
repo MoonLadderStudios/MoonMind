@@ -425,6 +425,48 @@ async def test_resolver_resolves_repo_skills_when_allowed(tmp_path):
     assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.REPO
     assert result.policy_summary["repo_skills_allowed"] is True
 
+async def test_repo_override_is_recorded_explicitly_not_silent_shadow(tmp_path):
+    """A repo override wins by documented precedence but is recorded (issue #4275).
+
+    Existing resolution order is preserved (SkillSystem section 7): a later
+    repo source may override deployment by canonical name. The snapshot must
+    record the winning source explicitly so the run executes selected content
+    instead of silently falling back to stale repository code.
+    """
+    skills_dir = tmp_path / ".agents" / "skills"
+    skill_dir = skills_dir / "shared_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Stale repo Skill\n", encoding="utf-8")
+
+    deployment = DeploymentSkillLoader()
+    deployment.load_skills = AsyncMock(
+        return_value=[
+            ResolvedSkillEntry(
+                skill_name="shared_skill",
+                content_ref="artifact-selected",
+                content_digest="sha256:selected",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ]
+    )
+
+    resolver = AgentSkillResolver(loaders=[deployment, RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-selected",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "shared_skill"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert len(result.skills) == 1
+    assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.REPO
+    assert result.skills[0].provenance.source_path is not None
+    assert result.skills[0].content_ref != "artifact-selected"
+
 async def test_resolver_policy_summary_reports_repo_and_local_policy():
     resolver = AgentSkillResolver(loaders=[])
     context = SkillResolutionContext(
@@ -979,3 +1021,114 @@ async def test_resolver_rejects_invalid_required_capabilities_metadata(tmp_path)
         match="metadata.required-capabilities must be a list of strings",
     ):
         await resolver.resolve(selector, context)
+
+
+async def test_selected_snapshot_wins_over_same_name_builtin(tmp_path):
+    """Portable authority: the resolved bundle wins over a same-name built-in (issue #4275 R8).
+
+    Resolution order is preserved (deployment/selected beats built-in by
+    canonical name) and no display-name matching or fallback substitution is
+    involved: the snapshot records the winning selected source explicitly.
+    """
+    from unittest.mock import AsyncMock
+
+    builtin = BuiltInSkillLoader()
+    builtin.load_skills = AsyncMock(
+        return_value=[
+            ResolvedSkillEntry(
+                skill_name="fix-comments",
+                content_ref="artifact-builtin-stale",
+                content_digest="sha256:stale",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.BUILT_IN
+                ),
+            )
+        ]
+    )
+    deployment = DeploymentSkillLoader()
+    deployment.load_skills = AsyncMock(
+        return_value=[
+            ResolvedSkillEntry(
+                skill_name="fix-comments",
+                content_ref="artifact-selected",
+                content_digest="sha256:selected",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ]
+    )
+    resolver = AgentSkillResolver(loaders=[builtin, deployment])
+    context = SkillResolutionContext(snapshot_id="snap-r8")
+    selector = SkillSelector(include=[{"name": "fix-comments"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert len(result.skills) == 1
+    assert result.skills[0].content_ref == "artifact-selected"
+    assert (
+        result.skills[0].provenance.source_kind == AgentSkillSourceKind.DEPLOYMENT
+    )
+
+
+async def test_standalone_installed_dir_resolves_without_managed_env(
+    tmp_path, monkeypatch
+):
+    """Standalone explicit-dir resolution needs no MoonMind-only env vars (issue #4275 A2/R1)."""
+    monkeypatch.delenv("MOONMIND_ACTIVE_SKILLS_DIR", raising=False)
+    installed = tmp_path / "installed-skills" / "fix-ci"
+    installed.mkdir(parents=True)
+    (installed / "SKILL.md").write_text(
+        "---\nname: fix-ci\ndescription: standalone\n---\n", encoding="utf-8"
+    )
+    loader = BuiltInSkillLoader(skills_root=tmp_path / "installed-skills")
+    resolver = AgentSkillResolver(loaders=[loader])
+    context = SkillResolutionContext(snapshot_id="snap-standalone")
+    selector = SkillSelector(include=[{"name": "fix-ci"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert [entry.skill_name for entry in result.skills] == ["fix-ci"]
+    assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
+
+
+async def test_missing_required_sibling_fails_before_work_as_packaging_error(tmp_path):
+    """A missing required sibling is a pre-work packaging error, not a silent run (issue #4275 R2/R4)."""
+    skill_dir = tmp_path / ".agents" / "skills" / "orchestrator"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: orchestrator\nmetadata:\n  required-skills: missing-sibling\n---\n# Orchestrator\n",
+        encoding="utf-8",
+    )
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-missing-sibling",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "orchestrator"}])
+
+    with pytest.raises(ValueError, match="missing skill 'missing-sibling'"):
+        await resolver.resolve(selector, context)
+
+
+async def test_required_capabilities_recorded_for_prework_gating(tmp_path):
+    """Required capabilities are resolved before work for gating (issue #4275 R4/A7)."""
+    skill_dir = tmp_path / ".agents" / "skills" / "gated-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: gated-skill\nmetadata:\n  required-capabilities:\n    - git\n    - gh\n---\n# Gated\n",
+        encoding="utf-8",
+    )
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-gating",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "gated-skill"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert len(result.skills) == 1
+    assert sorted(result.skills[0].required_capabilities) == ["gh", "git"]
