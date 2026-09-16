@@ -217,10 +217,14 @@ jobs:
     # Per-test (--timeout 600 on fast rows, 300 on reliability shards),
     # step (timeout 480s around each reliability pytest invocation: the
     # 8-minute hard step ceiling from MoonLadderStudios/MoonMind#4369) and
-    # job (timeout-minutes: 12, the 12-minute hard job ceiling from
-    # MoonLadderStudios/MoonMind#4369 covering setup, test step, bounded
+    # job (timeout-minutes: 20 covering setup, test step, bounded
     # diagnostics and cleanup per shard) bounds are enforced; each row writes a
     # uniquely named junit report and attempted cancellation diagnostics.
+    # Budget (worst case per reliability row): 180s dependency startup +
+    # 480s test step + 100s compose-logs + 60s manifest copy + 100s compose
+    # down = 920s, leaving ~280s of the 1200s job budget for the evidence
+    # summary, uploads, and runner variance so GitHub never kills the job
+    # before the always() cleanup runs.
     needs: select-test-suites
     if: >-
       needs.select-test-suites.outputs.unit_fast == 'true' ||
@@ -228,7 +232,7 @@ jobs:
       needs.select-test-suites.outputs.temporal_boundary == 'true' ||
       needs.select-test-suites.outputs.reliability_journey == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
       matrix:
