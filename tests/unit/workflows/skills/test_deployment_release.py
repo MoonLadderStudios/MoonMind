@@ -480,6 +480,8 @@ async def test_terminal_receipt_source_revision_binds_image_authority(
     }
     assert docker.await_count == 3
 
+
+@pytest.mark.asyncio
 async def test_legacy_receipt_without_source_revision_cannot_block_promotion_scan(
     tmp_path, monkeypatch
 ):
