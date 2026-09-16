@@ -261,9 +261,10 @@ gh issue comment <issue> --repo <owner/repo> --body-file <comment_file>
 ```
 
    - Otherwise use the trusted GitHub connector's issue-comment operation.
-   - If posting fails, keep the comment body artifact and report the exact sanitized blocker. Do not claim GitHub was updated. When posting fails, also do not close the issue: report completion as `blocked`.
-   - Only after the comment posts successfully, perform any completion planned in step 6: close the issue with the `completed` reason through the authenticated GitHub path (`gh issue close <issue> --repo <owner/repo> --reason completed`, or update the issue to `state: closed` with `state_reason: completed` through a trusted connector). Posting the verification comment first keeps it as durable audit evidence for the completion.
-   - If the close fails after a successful post, leave the verification verdict and posted comment unchanged and report the completion failure separately. Do not claim the issue was completed.
+    - If posting fails, keep the comment body artifact and report the exact sanitized blocker. Do not claim GitHub was updated. When posting fails, also do not close the issue: report completion as `blocked`.
+    - Bind the post to the exact issue, comment content, verification subject, and operation identity through the returned receipt (comment ID/URL). If the post outcome is unknown (timeout or ambiguous response), reconcile it first — re-fetch recent issue comments and check for the receipt — before posting again. An incomplete search is not proof no prior comment exists.
+    - Only after the comment posts successfully, perform any completion planned in step 6: close the issue with the `completed` reason through the authenticated GitHub path (`gh issue close <issue> --repo <owner/repo> --reason completed`, or update the issue to `state: closed` with `state_reason: completed` through a trusted connector). Posting the verification comment first keeps it as durable audit evidence for the completion.
+    - If the close fails after a successful post, leave the verification verdict and posted comment unchanged and report the completion failure separately. Do not claim the issue was completed. If the close outcome is unknown, reconcile it first (re-read the issue state) before retrying the close. Resume only the unfinished side effect.
 
 ## Outputs
 
