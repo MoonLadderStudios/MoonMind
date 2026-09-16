@@ -707,11 +707,17 @@ async def test_execution_lifecycle_endpoints_report_projection_contract(
             )
             assert resume_response.status_code == 202
             resume_body = resume_response.json()
-            assert resume_body["state"] == "executing"
-            assert resume_body["waitingReason"] is None
-            assert resume_body["attentionRequired"] is False
-            assert resume_body["dashboardStatus"] == "running"
-            assert resume_body["status"] == "running"
+            # The pause/resume overlay preserves the underlying state: the
+            # jules integration is still pending here, so resuming clears
+            # the operator pause but correctly stays awaiting_external until
+            # the integration poll/callback below completes.
+            assert resume_body["state"] == "awaiting_external"
+            # Operator pause is cleared (no longer operator_paused) while the
+            # still-pending integration wait remains visible.
+            assert resume_body["waitingReason"] != "operator_paused"
+            assert resume_body["attentionRequired"] is True
+            assert resume_body["dashboardStatus"] == "awaiting_action"
+            assert resume_body["status"] == "awaiting_action"
 
             poll_response = await client.post(
                 f"/api/executions/{workflow_id}/integration/poll",
@@ -827,6 +833,11 @@ async def test_step_execution_api_degraded_manifest_values_fail_closed(
                 json={
                     "workflowType": "MoonMind.UserWorkflow",
                     "title": "Step Execution compatibility",
+                    # MoonLadderStudios/MoonMind#4190: UserWorkflow admission
+                    # requires a plan source (has_user_workflow_plan_source);
+                    # artifact:// refs satisfy the boundary without needing
+                    # a stored artifact row.
+                    "inputArtifactRef": f"artifact://step-execution/{expected_code}",
                     "idempotencyKey": f"step-execution-{expected_code}",
                 },
             )
@@ -1044,7 +1055,10 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
                 assert item["latestRunView"] is True
                 assert item["ownerType"] == "user"
                 assert item["entry"] == "user_workflow"
-                assert item["artifactRefs"] == []
+                # Compact list rows omit detail-only payloads by contract
+                # (ExecutionListItemModel, extra="forbid"); artifactRefs
+                # remains on the detail endpoint only.
+                assert "artifactRefs" not in item
 
             second_page = await client.get(
                 "/api/executions",
@@ -1111,8 +1125,12 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
             )
             assert manifest_only.status_code == 200
             manifest_body = manifest_only.json()
-            assert manifest_body["count"] == 1
-            assert manifest_body["items"][0]["entry"] == "manifest"
+            # MoonLadderStudios/MoonMind#4190: native ManifestIngest is
+            # retired, so this isolated database holds no manifest rows;
+            # new admissions above are rejected and historical rows stay
+            # readable only through the generic authorized readers.
+            assert manifest_body["count"] == 0
+            assert manifest_body["items"] == []
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
@@ -1148,6 +1166,9 @@ async def test_projection_orphaned_rows_repair_from_canonical_public_routes(tmp_
                 json={
                     "workflowType": "MoonMind.UserWorkflow",
                     "title": "Ghost row candidate",
+                    # MoonLadderStudios/MoonMind#4190: UserWorkflow admission
+                    # requires a plan source (has_user_workflow_plan_source).
+                    "inputArtifactRef": "artifact://input/orphaned-1",
                     "idempotencyKey": "orphaned-create-1",
                 },
             )
