@@ -156,16 +156,13 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   `MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-<suite>_default` so
   fixture tests attach to their row's isolated Compose network instead of
   the retired single-job `moonmind-reliability-qualification_default`.
-- Per-test (`--timeout 600` on fast rows, `--timeout 300` on reliability
-  shards), step (`timeout 480s` around each reliability pytest invocation:
-  the 8-minute hard step ceiling from MoonLadderStudios/MoonMind#4369), job
-  (`timeout-minutes: 20` covering setup, test step, bounded
-  diagnostics and cleanup per shard), and cleanup (`always()` compose `down -v`,
-  wrapped in `timeout 100s`) bounds are preserved on every row. The 20-minute
-  job budget reserves teardown time: worst-case 180s dependency startup +
-  480s test step + 100s compose-logs + 60s manifest copy + 100s compose down
-  = 920s, leaving ~280s for the evidence summary, uploads, and runner
-  variance. Reliability collection steps are additionally
+- Fast rows keep the pre-existing per-test (`--timeout 600`), job
+  (`timeout-minutes: 30`), and cleanup (`always()` compose `down -v`,
+  wrapped in `timeout 100s`) bounds. Reliability shards use short budgets
+  (MoonLadderStudios/MoonMind#4369, #4384): 150s per-test timeout and a ~10-min
+  step ceiling on PRs (`timeout 600s`, above the ~500s heaviest partition
+  load), 300s per-test under a 12-min step
+  ceiling on schedules. Reliability collection steps are additionally
   wrapped in `timeout 100s`/`timeout 60s` so one slow diagnostic command
   cannot stall the row; each command records its own failure to
   `collection-status.txt` without stopping the remaining bounded collection
@@ -212,26 +209,24 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   backend selection skips the matrix intentionally without instantiating
   tests or hiding selector errors.
 
-Reliability sharding is deterministic: files matching
-`tests/integration/reliability/test_*.py` are sorted lexicographically and
-assigned round-robin (`index % 4`). The CI workflow implements this with
-`ls ... | sort | awk 'NR % 4 == ...'`; `tools/verify_test_shard_ownership.py`
-implements the same rule in `reliability_shard_for_path()` so local
-ownership checks and CI execute each file in the same shard.
-
-File counts stay balanced within one (pinned by
-`test_reliability_shard_file_counts_are_balanced`). Parameterized expansions
-stay on their file's shard by construction, so exact-once ownership holds
-even when node counts differ across shards. No file reassignment is made on
-node counts alone: node count is not wall-time. Wall-time rebalancing, if
-needed, uses the per-shard `pytest-backend-<suite>-durations.json`
-snapshots and slowest reports from CI runs under the enforced 8-minute step
-/ 20-minute job ceilings.
+Reliability sharding is deterministic and duration-balanced
+(MoonLadderStudios/MoonMind#4367): files matching
+`tests/integration/reliability/test_*.py` are assigned by greedy
+longest-processing-time balancing over advisory duration hints in
+`tools/ci/reliability_shard_weights.json`. The single partition authority
+is `tools/ci/reliability_shard_partition.py`, called by the CI workflow as
+`python3 tools/ci/reliability_shard_partition.py --shard N` and imported by
+`tools/verify_test_shard_ownership.py` in `reliability_shard_for_path()`,
+so local ownership checks and CI execute each file in the same shard.
+Timing history is an optimization hint only: new or unweighted files run
+via `DEFAULT_WEIGHT_SECONDS` and are never skipped.
 
 ### Reliability Docker Fixture Layers (MoonLadderStudios/MoonMind#4376)
 
-No additional GHA cache is added for reliability shards. Measured-gap
-analysis: `tests/integration/reliability/compose.yaml` declares only
+No additional Dockerfile-layer GHA cache is added for reliability shards.
+Content-addressed pip/uv package caches are shared across shards and runs
+(MoonLadderStudios/MoonMind#4376); no mutable release state lives there.
+Measured-gap analysis: `tests/integration/reliability/compose.yaml` declares only
 registry images (`minio`, `postgres`, `temporalio/auto-setup`) with no
 `build` section, and its sole volume mount is the read-only Temporal
 dynamic config (`:ro`). There are therefore no local Dockerfile layers to
@@ -266,12 +261,12 @@ success-path text log/JUnit upload, `-q` reliability verbosity):
 1. Fix the selected universe: run with the same selector outputs (same
    `unit_fast`/`api_component`/`temporal_boundary`/`reliability_journey`
    selection, same reliability file set from
-   `ls tests/integration/reliability/test_*.py | sort`).
+   `python3 tools/ci/reliability_shard_partition.py --shard N`).
 2. Fix the revision/configuration: compare runs on the same commit (or
    adjacent commits with no test/workflow changes), same workflow file,
-    same fast-row (`--timeout 600`) and reliability-shard (`--timeout 300`
-    with a `timeout 480s` step cap) bounds, same `timeout-minutes: 20`
-    job ceiling, same runner class (`ubuntu-latest`).
+   same reliability budgets (150s PR / 300s schedule per-test timeout,
+   10-min PR / 12-min schedule step ceilings), same runner class
+   (`ubuntu-latest`).
 3. Repeat each side at least twice to separate ordinary timing noise from a
    real shift; do not add a performance gate on the result.
 4. Separate cold and warm setup: record dependency-install/Compose-pull
@@ -451,16 +446,16 @@ MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability \
 ```
 
 Run one deterministic reliability shard locally (mirrors the CI matrix
-`ls | sort | awk 'NR % 4 == ...'` selection; shard 0 runs files 1, 5, 9, ...):
+`tools/ci/reliability_shard_partition.py --shard N` selection):
 
 ```bash
-mapfile -t shard_files < <(ls tests/integration/reliability/test_*.py | sort | awk 'NR % 4 == 1')
+mapfile -t shard_files < <(python3 tools/ci/reliability_shard_partition.py --shard 0)
 MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest "${shard_files[@]}" \
   -m reliability_journey -q --durations=25
 ```
 
-Shard 2 uses `NR % 4 == 2`, shard 3 uses `NR % 4 == 3`, and shard 4 uses
-`NR % 4 == 0`. `tools/verify_test_shard_ownership.py` assigns each file to
+Shards 1-3 use `--shard 1` through `--shard 3`.
+`tools/verify_test_shard_ownership.py` assigns each file to
 the same shard via `reliability_shard_for_path()`.
 
 Run the checkpoint archive cold-resume replay directly:
@@ -482,11 +477,7 @@ The archive replay deliberately destroys the source workspace before using
 durable artifact evidence to restore a distinct destination and retries the
 restore idempotently. It exercises production capture/restore engines and the
 artifact boundary, but does not substitute for the Temporal-to-managed-AgentRun
-journey. Each reliability pytest invocation is capped by an 8-minute step
-timeout with a 300-second per-test bound inside a 20-minute job
-ceiling; per-shard Compose pull/setup variance must fit the remaining
-job budget after the step cap, bounded diagnostics (`timeout 100s` /
-`timeout 60s`) and bounded cleanup (`timeout 100s`).
+journey. The required CI reliability job has a 30-minute budget.
 
 Verify that every eligible provider-free node has exactly one owner:
 

@@ -37,6 +37,12 @@ def test_each_backend_shard_has_one_owner() -> None:
 def test_reliability_shards_are_deterministic_and_cover_all_files() -> None:
     from pathlib import Path
 
+    from tools.ci.reliability_shard_partition import (
+        SHARD_NAMES,
+        files_for_shard,
+        partition,
+    )
+
     repo_root = Path(__file__).resolve().parents[3]
     files = sorted(
         p.name
@@ -50,45 +56,25 @@ def test_reliability_shards_are_deterministic_and_cover_all_files() -> None:
         for name in files
     }
     assert shards == set(RELIABILITY_SHARD_NAMES)
-    # Round-robin stability: the first four sorted files own distinct shards.
-    first_four = {
-        reliability_shard_for_path(f"tests/integration/reliability/{name}")
-        for name in files[:4]
-    }
-    assert len(first_four) == 4
-
-
-def test_reliability_shard_file_counts_are_balanced() -> None:
-    """MoonLadderStudios/MoonMind#4365 R1: file-level balance measurement.
-
-    Real collection 2026-09-15 over tests/integration/reliability
-    (container-job:2ef0af441b3342abbd67d58e19e572a1, 57 files, 616 nodes):
-    shard-1 15 files / 99 nodes, shard-2 14 / 102, shard-3 14 / 301,
-    shard-4 14 / 114. File counts stay within one; node counts do not
-    (test_escaped_failure_journeys.py contributes 206 nodes to shard-3),
-    so wall-time rebalancing awaits per-shard durations.json from CI runs.
-    """
-    from pathlib import Path
-
-    repo_root = Path(__file__).resolve().parents[3]
-    files = sorted(
-        p.name
-        for p in (repo_root / "tests" / "integration" / "reliability").glob(
-            "test_*.py"
-        )
-    )
-    assert len(files) >= 4
-    counts: dict[str, int] = {name: 0 for name in RELIABILITY_SHARD_NAMES}
+    # Single-authority exact-once assignment: the verifier agrees with the
+    # partition module on every file, and every file is owned exactly once.
+    assignment = partition()
+    assert sorted(sum((sorted(m) for m in assignment.values()), [])) == files
+    assert set(assignment) == set(SHARD_NAMES)
+    for index in range(len(SHARD_NAMES)):
+        for name in files_for_shard(index):
+            assert (
+                reliability_shard_for_path(f"tests/integration/reliability/{name}")
+                == SHARD_NAMES[index]
+            )
+    # Determinism: repeated resolution is stable.
     for name in files:
-        counts[reliability_shard_for_path(f"tests/integration/reliability/{name}")] += 1
-    # File counts stay within one of each other (measured 15/14/14/14 on
-    # 2026-09-15); no exact total is pinned so new files keep selection.
-    assert max(counts.values()) - min(counts.values()) <= 1
-    assert min(counts.values()) >= 1
-    # The 206-node escaped-failure corpus stays on its deterministic shard;
-    # parameterized expansions never split across shards.
+        path = f"tests/integration/reliability/{name}"
+        assert reliability_shard_for_path(path) == reliability_shard_for_path(path)
+    # New files absent from the weights file are still selected (default
+    # weight), never skipped.
     assert reliability_shard_for_path(
-        "tests/integration/reliability/test_escaped_failure_journeys.py"
+        "tests/integration/reliability/test_brand_new_unweighted_case.py"
     ) in set(RELIABILITY_SHARD_NAMES)
 
 
@@ -112,10 +98,11 @@ def test_verifier_reports_missing_duplicate_and_marker_conflicts() -> None:
 
 
 def test_parameterized_and_new_reliability_cases_keep_exactly_one_owner() -> None:
-    """Shard ownership derives from the file path only, so parameterized
-    expansions of one file stay on that file's shard and newly added files
-    still land on exactly one shard (round-robin when listed, hash fallback
-    otherwise). No case is silently moved or skipped to meet a budget."""
+    """Shard ownership derives from the single partition authority, so
+    parameterized expansions of one file stay on that file's shard and newly
+    added files still land on exactly one shard (duration-balanced LPT over
+    advisory weights, default weight when unlisted). No case is silently
+    moved or skipped to meet a budget."""
     first = CollectedNode(
         nodeid="tests/integration/reliability/test_a.py::test_x[param-1]",
         path="tests/integration/reliability/test_a.py",

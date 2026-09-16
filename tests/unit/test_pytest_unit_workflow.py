@@ -293,15 +293,16 @@ def test_parallel_shards_bound_hung_tests_and_spread_large_modules() -> None:
     assert "--dist loadfile" not in api_command
     assert "--dist loadfile" in temporal_command
     # Reliability shards run serially with their own short per-test bound
-    # (MoonLadderStudios/MoonMind#4369): a hung journey fails in 300s
-    # instead of holding a shard for the serial-era 600s.
+    # (MoonLadderStudios/MoonMind#4369, #4384): 150s PR / 300s schedule, never the
+    # fast-lane 600s. Step ceilings: ~10-min PR via `timeout 600s` (above the
+    # ~500s heaviest partition load), 12-min schedule via step timeout-minutes.
     assert "-n auto" not in reliability_command
-    assert "--timeout 300" in reliability_command
     assert "--timeout 600" not in reliability_command
-    # ... under an 8-minute hard step ceiling that preserves the original
-    # pytest outcome for the evidence hook.
-    assert "timeout 480s python -m pytest" in reliability_command
-    assert "status=${PIPESTATUS[0]}" in reliability_command
+    assert "pytest_timeout=150" in reliability_command
+    assert "pytest_timeout=300" in reliability_command
+    assert "step_budget=600" in reliability_command
+    assert "step_budget=480" not in reliability_command
+    assert "--timeout \"$pytest_timeout\"" in reliability_command
 
 
 def test_deterministic_conformance_is_selection_gated() -> None:
@@ -617,7 +618,7 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     assert "needs.select-test-suites.outputs.api_component" in job_if
     assert "needs.select-test-suites.outputs.temporal_boundary" in job_if
     assert "needs.select-test-suites.outputs.reliability_journey" in job_if
-    assert job["timeout-minutes"] == 20
+    assert job["timeout-minutes"] == 30
     strategy = job["strategy"]
     # Native matrix fail-fast for PR/merge-group validation, disabled for
     # scheduled diagnostics.
@@ -682,9 +683,13 @@ def test_backend_matrix_reports_are_uniquely_named() -> None:
     )
     reliability_run = steps["Run hermetic reliability shard"]["run"]
     assert "artifacts/pytest-backend-${{ matrix.suite }}.xml" in reliability_run
-    # Deterministic sharding matches the ownership tool's round-robin rule.
-    assert "ls tests/integration/reliability/test_*.py | sort" in reliability_run
-    assert "NR % 4" in reliability_run
+    # Duration-balanced sharding uses the single partition authority shared
+    # with the ownership verifier (MoonLadderStudios/MoonMind#4367).
+    assert "tools/ci/reliability_shard_partition.py --shard" in reliability_run
+    assert "NR % 4" not in reliability_run
+    # Short reliability budgets with PR-vs-schedule differentiation
+    # (MoonLadderStudios/MoonMind#4369).
+    assert steps["Run hermetic reliability shard"].get("timeout-minutes") == 12
     upload = steps["Upload reliability shard diagnostics"]
     assert upload["with"]["name"] == "pytest-${{ matrix.suite }}-diagnostics-attempt-${{ github.run_attempt }}"
     assert upload["with"]["path"] == "/tmp/pytest-${{ matrix.suite }}"
@@ -705,11 +710,13 @@ def test_backend_matrix_records_attempted_cancellation_diagnostics() -> None:
     # a slow but passing shard stays diagnosable; cancellation-only
     # bookkeeping above is unchanged.
     collect = steps["Collect reliability shard diagnostics"]
+    # Every-run retention (MoonLadderStudios/MoonMind#4371): reliability
+    # dependency logs/replays/manifests upload on every run via always(),
+    # while cancellation diagnostics stay failure()/cancelled()-gated.
     assert collect["if"].startswith("always()")
-    assert "needs.select-test-suites.outputs.reliability_journey" in collect["if"]
-    shard_upload = steps["Upload reliability shard diagnostics"]
-    assert shard_upload["if"].startswith("always()")
-    assert "needs.select-test-suites.outputs.reliability_journey" in shard_upload["if"]
+    assert "startsWith(matrix.suite, 'reliability-')" in collect["if"]
+    upload_reliability = steps["Upload reliability shard diagnostics"]
+    assert upload_reliability["if"].startswith("always()")
 
 
 def test_backend_matrix_rows_are_selection_gated() -> None:
@@ -758,23 +765,26 @@ def test_ci_required_consumes_backend_matrix_aggregate() -> None:
 
 
 def test_reliability_shards_enforce_short_step_and_test_deadlines() -> None:
-    """MoonLadderStudios/MoonMind#4369: short reliability budgets.
+    """MoonLadderStudios/MoonMind#4369, #4384: short reliability budgets.
 
-    Each reliability shard bounds a hung test at 300s (down from the
-    serial-era 600s) and caps the whole pytest invocation at 8 minutes via
-    ``timeout 480s``. The 124 exit from ``timeout`` flows through
-    ``PIPESTATUS`` so the evidence hook reports an interrupted run instead
-    of masking it, and the 20-minute job timeout reserves teardown time
-    (setup, 8-minute test step, bounded diagnostics and cleanup per shard
-    plus evidence/upload margin).
+    Each reliability shard uses a short per-test timeout (150s PR / 300s
+    schedule, never the fast-lane 600s) under a ~10-min PR step ceiling
+    (``timeout 600s``, above the ~500s heaviest duration-balanced partition
+    load) and a 12-min schedule step ceiling. The 124 exit from ``timeout``
+    flows through ``PIPESTATUS`` so the evidence hook reports an interrupted
+    run instead of masking it, and the 30-minute job timeout reserves setup,
+    diagnostics, cleanup, and evidence/upload margin.
     """
     workflow = _load_workflow()
     job = workflow["jobs"]["backend-matrix"]
-    assert job["timeout-minutes"] == 20
+    assert job["timeout-minutes"] == 30
     steps = {step["name"]: step for step in job["steps"]}
+    assert steps["Run hermetic reliability shard"].get("timeout-minutes") == 12
     command = steps["Run hermetic reliability shard"]["run"]
-    assert "timeout 480s python -m pytest" in command
-    assert "--timeout 300" in command
+    assert "pytest_timeout=150" in command
+    assert "pytest_timeout=300" in command
+    assert "step_budget=600" in command
+    assert "--timeout \"$pytest_timeout\"" in command
     assert "status=${PIPESTATUS[0]}" in command
     # The step cap must wrap the test process itself, not the log pipe, and
     # the per-shard JUnit report keeps its unique name.
@@ -783,8 +793,8 @@ def test_reliability_shards_enforce_short_step_and_test_deadlines() -> None:
 
 
 def test_step_timeout_wrapper_fails_fast_on_a_hung_process() -> None:
-    """Disposable probe: the ``timeout`` mechanism used for the 8-minute
-    reliability step ceiling terminates a non-returning process quickly with
+    """Disposable probe: the ``timeout`` mechanism used for the reliability
+    step ceiling terminates a non-returning process quickly with
     a non-success exit instead of waiting out a production budget."""
     import shutil
     import subprocess
@@ -805,7 +815,7 @@ def test_step_timeout_wrapper_fails_fast_on_a_hung_process() -> None:
 
 def test_pytest_timeout_fails_a_hanging_test_fast(tmp_path) -> None:
     """Disposable probe (MoonLadderStudios/MoonMind#4365 R11): the per-test
-    ``--timeout 300`` bound used on reliability shards fails a hanging test
+    ``--timeout`` bound used on reliability shards fails a hanging test
     with non-success instead of holding the shard."""
     import subprocess
     import sys
