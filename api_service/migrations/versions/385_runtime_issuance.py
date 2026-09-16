@@ -19,8 +19,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "384_runtime_issuance"
-down_revision: Union[str, None] = "383_terminal_contract_source"
+revision: str = "385_runtime_issuance"
+down_revision: Union[str, None] = "384_secret_rotation_4006"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
