@@ -1089,6 +1089,42 @@ async def mutate_execution_projection(
     return projection
 
 
+async def mark_projection_repair_status(
+    session: AsyncSession,
+    *,
+    workflow_id: str,
+    sync_state: Any,
+    sync_error: str | None = None,
+    source_mode: Any | None = None,
+) -> TemporalExecutionRecord | None:
+    """Apply a narrow repair-status patch through the shared mutation boundary.
+
+    Issue #3946 R8: repair-status bookkeeping (``sync_state``/``sync_error``,
+    plus ``source_mode`` only when the caller passes it) is the one justified
+    writer outside :func:`mutate_execution_projection`. Centralizing it here
+    keeps one cohesive service: lifecycle, identity, parameters, memo,
+    artifact refs, and ``last_synced_at`` are never touched, and ``FRESH``
+    stays reachable only through the full mutator so a status patch can never
+    claim the projection is current. The caller owns commit/rollback of the
+    transaction.
+    """
+    allowed = {
+        TemporalExecutionProjectionSyncState.STALE,
+        TemporalExecutionProjectionSyncState.REPAIR_PENDING,
+        TemporalExecutionProjectionSyncState.ORPHANED,
+    }
+    if sync_state not in allowed:
+        raise ValueError("repair-status patch supports STALE/REPAIR_PENDING/ORPHANED only")
+    projection = await _locked_get(session, TemporalExecutionRecord, workflow_id)
+    if projection is None:
+        return None
+    projection.sync_state = sync_state
+    projection.sync_error = (sync_error or "").strip() or None
+    if source_mode is not None:
+        projection.source_mode = source_mode
+    return projection
+
+
 async def sync_execution_projection(
     session: AsyncSession,
     desc: WorkflowExecutionDescription,
