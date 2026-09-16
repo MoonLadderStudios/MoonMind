@@ -51,7 +51,22 @@ Fetch the latest PR base branch from origin for `inputs.base`, merge `origin/<ba
 
 ## Workflow
 
-0. Ensure git identity is available locally before merge/commit:
+0. Resolve helpers exclusively from the run's immutable active bundle.
+- Establish the portable paths before running any helper:
+```bash
+FIX_MERGE_CONFLICTS_SKILL_DIR="${FIX_MERGE_CONFLICTS_SKILL_DIR:-${MOONMIND_ACTIVE_SKILLS_DIR:+$MOONMIND_ACTIVE_SKILLS_DIR/fix-merge-conflicts}}"
+ACTIVE_SKILLS_DIR="${MOONMIND_ACTIVE_SKILLS_DIR:-$(dirname "$FIX_MERGE_CONFLICTS_SKILL_DIR")}"
+test -n "$FIX_MERGE_CONFLICTS_SKILL_DIR" && test -f "$FIX_MERGE_CONFLICTS_SKILL_DIR/SKILL.md"
+```
+- Inside MoonMind, `MOONMIND_ACTIVE_SKILLS_DIR` is always set and the shared
+  helper below resolves from it; a checked-in `.agents/skills` directory must
+  never shadow the selected snapshot. Outside MoonMind, set
+  `FIX_MERGE_CONFLICTS_SKILL_DIR` to the directory containing this `SKILL.md`
+  (no MoonMind-only environment variables required). A missing selected
+  helper is a materialization/packaging error: stop as blocked instead of
+  substituting stale repository code.
+
+1. Ensure git identity is available locally before merge/commit:
 - Resolve required identity from env (repository-local > env-provided) and write it into local git config if missing.
 ```bash
 git_local_name="$(git config --local --get user.name || true)"
@@ -69,18 +84,18 @@ if [ -z "$git_local_name" ] || [ -z "$git_local_email" ]; then
 fi
 ```
 
-1. Sync remote refs for the PR base branch.
+2. Sync remote refs for the PR base branch.
 - Resolve the base branch name from `inputs.base` (required). If it is
   missing or empty, stop as blocked with reason `base_unavailable`.
 - Run `git fetch origin <base> --prune`.
 - Confirm branch state with `git status`.
 
-2. Merge the latest PR base ref into the current branch.
+3. Merge the latest PR base ref into the current branch.
 - Run `git merge origin/<base>`.
 - If merge completes cleanly, continue to step 4.
 - If git reports conflicts, continue to step 3.
 
-3. Resolve conflicts in each unmerged file.
+4. Resolve conflicts in each unmerged file.
 - List conflicted files with `git diff --name-only --diff-filter=U`.
 - Remove `<<<<<<<`, `=======`, and `>>>>>>>` blocks.
 - Keep the correct merged content.
@@ -88,37 +103,37 @@ fi
 - Stage resolved files with `git add <file>` or `git add -A`.
 - Complete the merge commit with `git commit` (or `git commit -m "Merge origin/<base> and resolve conflicts"`).
 
-4. Validate resolution completeness.
+5. Validate resolution completeness.
 - Confirm `git diff --name-only --diff-filter=U` returns nothing.
 - Confirm no conflict markers remain with:
   - `rg '^(<<<<<<<|=======|>>>>>>>)'`
 
-5. Run quick verification.
+6. Run quick verification.
 - Run targeted checks or tests that are reasonable for the changed files.
 - If checks cannot run locally, record that clearly.
 
-6. Commit and push.
+7. Commit and push.
 - If the merge was a fast-forward, no merge commit is created. Commit any other local changes before pushing.
 - Push current branch: `git push`
 - After push, record local `HEAD` with `git rev-parse HEAD` and verify the exact same SHA is visible on the remote branch with `git ls-remote origin refs/heads/<current-branch>` or an equivalent trusted GitHub path.
 - If there was nothing to commit, still verify the current local `HEAD` exactly matches the remote branch head.
 - On successful push, write canonical evidence:
   ```bash
-  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-pushed \
+  python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" write-pushed \
     --skill-id fix-merge-conflicts \
     --repo "$REPO" \
     --branch "$BRANCH"
   ```
 - On verified no-op, write canonical no-op evidence:
   ```bash
-  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-no-op \
+  python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" write-no-op \
     --skill-id fix-merge-conflicts \
     --repo "$REPO" \
     --branch "$BRANCH"
   ```
 - If push or remote verification is unavailable, write blocked evidence, then stop as blocked with reason `publish_unavailable`:
   ```bash
-  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-blocked \
+  python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" write-blocked \
     --skill-id fix-merge-conflicts \
     --repo "$REPO" \
     --branch "$BRANCH" \

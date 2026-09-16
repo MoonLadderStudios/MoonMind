@@ -617,6 +617,147 @@ async def test_materializer_can_skip_adapter_alias_projection(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_materializer_accepts_valid_conflict_free_alias_to_selected_snapshot(
+    tmp_path: Path,
+):
+    """A legitimate alias to the selected immutable snapshot passes (issue #4275).
+
+    The pre-existing MoonMind-owned alias to the selected snapshot's backing
+    store must be reused (not treated as contamination), the selected helper
+    must execute from the alias, and unrelated repo-authored sources must be
+    left unchanged.
+    """
+    repo_source = tmp_path / "repo_source" / "fix-comments" / "SKILL.md"
+    repo_source.parent.mkdir(parents=True)
+    repo_source.write_text("repo-authored source\n", encoding="utf-8")
+    payload = b"---\nname: fix-comments\ndescription: test\n---\n"
+    active_dir = tmp_path / "runtime" / "skills_active" / "selected_snap"
+    active_dir.mkdir(parents=True)
+    (active_dir / "_manifest.json").write_text('{"snapshot_id": "old"}\n', encoding="utf-8")
+    alias = tmp_path / ".agents" / "skills"
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(active_dir)
+    materializer = AgentSkillMaterializer(
+        str(tmp_path),
+        artifact_service=_StaticArtifactService({"artifact-fix": payload}),
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="selected_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="fix-comments",
+                content_ref="artifact-fix",
+                content_digest=_digest(payload),
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ],
+    )
+
+    result = await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="test_runtime",
+        mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+    )
+
+    assert alias.is_symlink()
+    assert alias.resolve() == active_dir.resolve()
+    assert (alias / "fix-comments" / "SKILL.md").read_bytes() == payload
+    assert repo_source.read_text(encoding="utf-8") == "repo-authored source\n"
+    assert result.metadata["canonicalAliasAvailable"] is True
+    assert result.metadata["visiblePath"] == str(alias)
+
+
+@pytest.mark.asyncio
+async def test_materializer_rejects_dangling_alias_with_missing_asset_diagnostic(
+    tmp_path: Path,
+):
+    """A dangling alias (missing snapshot target) fails with a precise diagnostic."""
+    alias = tmp_path / ".agents" / "skills"
+    alias.parent.mkdir(parents=True)
+    missing_target = tmp_path / "elsewhere" / "gone_snap"
+    alias.symlink_to(missing_target)
+    assert not missing_target.exists()
+    materializer = AgentSkillMaterializer(str(tmp_path))
+    skillset = ResolvedSkillSet(
+        snapshot_id="selected_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[],
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await materializer.materialize(
+            resolved_skillset=skillset,
+            runtime_id="test_runtime",
+            mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+        )
+
+    message = str(exc_info.value).lower()
+    assert "missing" in message
+    assert str(alias) in str(exc_info.value)
+    assert "object kind: symlink" in str(exc_info.value)
+    # The dangling link is left for the workspace/materialization owner to repair.
+    assert alias.is_symlink()
+
+
+@pytest.mark.asyncio
+async def test_materializer_unknown_alias_diagnostic_names_owner_and_preserves_work(
+    tmp_path: Path,
+):
+    """Conflicting aliases fail with an owner-specific diagnostic (issue #4275).
+
+    The diagnostic must direct repair through the workspace/materialization
+    owner and must not advise deleting repo-authored sources or discarding
+    cumulative work.
+    """
+    external_target = tmp_path / "external-skills"
+    external_target.mkdir()
+    alias = tmp_path / ".agents" / "skills"
+    alias.parent.mkdir(parents=True)
+    alias.symlink_to(external_target)
+    materializer = AgentSkillMaterializer(str(tmp_path))
+    skillset = ResolvedSkillSet(
+        snapshot_id="blocked_snap",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[],
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await materializer.materialize(
+            resolved_skillset=skillset,
+            runtime_id="test_runtime",
+            mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+        )
+
+    message = str(exc_info.value)
+    assert "existing symlink does not resolve under a MoonMind-owned active skill root" in message
+    assert "workspace" in message.lower() or "materialization owner" in message.lower()
+    assert "repo-authored" in message.lower() or "preserve" in message.lower()
+    assert "clean reclone" not in message.lower()
+    assert alias.is_symlink()
+    assert alias.resolve() == external_target.resolve()
+
+
+def test_nested_asset_change_updates_bundle_identity() -> None:
+    """A nested helper change alters bundle identity (issue #4275 R3/A4)."""
+    before = _skill_bundle_payload(
+        {
+            "SKILL.md": b"# Skill\n",
+            "bin/run.py": b"print('before')\n",
+        }
+    )
+    after = _skill_bundle_payload(
+        {
+            "SKILL.md": b"# Skill\n",
+            "bin/run.py": b"print('after')\n",
+        }
+    )
+    assert _digest(before) != _digest(after)
+
+
+@pytest.mark.asyncio
 async def test_materializer_prompt_bundle_mode(tmp_path: Path):
     materializer = AgentSkillMaterializer(str(tmp_path))
 

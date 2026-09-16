@@ -236,6 +236,36 @@ def test_ensure_shared_skill_links_rejects_unknown_symlink(tmp_path):
         ensure_shared_skill_links(run_root=run_root, skills_active_path=skills_active)
 
 
+def test_unknown_alias_blocked_reason_names_owner_and_preserves_work(tmp_path):
+    """Conflicting alias diagnostics direct repair through the owning layer."""
+    from moonmind.workflows.skills.workspace_links import _replace_link
+
+    run_root = tmp_path / "runs" / "run-unknown-owner"
+    skills_active = run_root / "skills_active"
+    external = tmp_path / "external"
+    skills_active.mkdir(parents=True)
+    external.mkdir()
+    agents = run_root / ".agents" / "skills"
+    agents.parent.mkdir(parents=True)
+    agents.symlink_to(external)
+
+    result = _replace_link(
+        agents,
+        target=skills_active,
+        owned_roots=(skills_active,),
+        optional=True,
+    )
+
+    assert result.available is False
+    assert result.status.value == "blocked"
+    assert agents.is_symlink()
+    assert agents.resolve() == external.resolve()
+    reason = (result.reason or "").lower()
+    assert "moonmind-owned" in reason
+    assert "workspace" in reason or "materialization owner" in reason
+    assert "preserve" in reason or "repo-authored" in reason
+
+
 def test_cleanup_moonmind_skill_projections_removes_only_owned_symlinks(tmp_path):
     run_root = tmp_path / "runs" / "run-clean"
     active = run_root / "runtime" / "skills_active" / "active"

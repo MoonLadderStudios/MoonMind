@@ -13,13 +13,17 @@ def test_moonspec_verify_skill_includes_projection_contamination_preflight() -> 
     text = skill_path.read_text(encoding="utf-8")
 
     assert "## Workspace Projection Preflight" in text
-    assert "test ! -L .agents/skills" in text
-    assert "test ! -L .gemini/skills" in text
+    assert "conflict-free alias" in text
     assert "git status --porcelain -- .agents/skills .gemini/skills skills_active" in text
     assert "ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION" in text
+    assert "SKILL_PROJECTION_STALE_TARGET" in text
+    assert "SKILL_PROJECTION_CONFLICTING_ALIAS" in text
+    assert "workspace/materialization owner" in text
     assert "verdict `BLOCKED`" in text
     assert "`recoverableInCurrentRuntime: false`" in text
     assert "`recommendedNextAction: blocked`" in text
+    assert "test ! -L .agents/skills" not in text
+    assert "clean reclone" not in text
     assert "stop with verdict `ADDITIONAL_WORK_NEEDED`" not in text
 
 

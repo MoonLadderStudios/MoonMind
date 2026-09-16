@@ -89,7 +89,7 @@ For canonical documentation under `docs/`, do not downgrade the documented desir
 
 8. Jira fallback for misaligned updates.
    - If step 5 determined that the document update is not aligned with the project's direction, create a Jira issue instead of editing the document.
-   - Read `.agents/skills/jira-issue-creator/SKILL.md` and follow its workflow.
+   - Read the `jira-issue-creator` skill from the resolved active bundle (`$MOONMIND_ACTIVE_SKILLS_DIR/jira-issue-creator/SKILL.md` inside MoonMind; the installed skills directory outside MoonMind) and follow its workflow.
    - The Jira issue must include:
      - A clear summary naming the document and the planned update.
      - A description that explains the drift found in the drift ledger.

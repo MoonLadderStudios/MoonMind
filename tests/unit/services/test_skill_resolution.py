@@ -425,6 +425,48 @@ async def test_resolver_resolves_repo_skills_when_allowed(tmp_path):
     assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.REPO
     assert result.policy_summary["repo_skills_allowed"] is True
 
+async def test_repo_override_is_recorded_explicitly_not_silent_shadow(tmp_path):
+    """A repo override wins by documented precedence but is recorded (issue #4275).
+
+    Existing resolution order is preserved (SkillSystem section 7): a later
+    repo source may override deployment by canonical name. The snapshot must
+    record the winning source explicitly so the run executes selected content
+    instead of silently falling back to stale repository code.
+    """
+    skills_dir = tmp_path / ".agents" / "skills"
+    skill_dir = skills_dir / "shared_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Stale repo Skill\n", encoding="utf-8")
+
+    deployment = DeploymentSkillLoader()
+    deployment.load_skills = AsyncMock(
+        return_value=[
+            ResolvedSkillEntry(
+                skill_name="shared_skill",
+                content_ref="artifact-selected",
+                content_digest="sha256:selected",
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.DEPLOYMENT
+                ),
+            )
+        ]
+    )
+
+    resolver = AgentSkillResolver(loaders=[deployment, RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-selected",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "shared_skill"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert len(result.skills) == 1
+    assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.REPO
+    assert result.skills[0].provenance.source_path is not None
+    assert result.skills[0].content_ref != "artifact-selected"
+
 async def test_resolver_policy_summary_reports_repo_and_local_policy():
     resolver = AgentSkillResolver(loaders=[])
     context = SkillResolutionContext(
