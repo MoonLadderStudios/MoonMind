@@ -65,7 +65,16 @@ def test_code_improvement_proposal_skill_documents_github_and_jira_publishing() 
         "GitHub routes to a repository; Jira routes to a project, issue type, "
         "component, and labels" in text
     )
-    assert "gh issue create" in text
+    # Selected-provider invocation shapes live in the portable provider
+    # reference (#4273 R10), not inline in the root; the root links to them.
+    assert "references/provider-commands.md" in text
+    reference = (
+        _SKILLS_DIR
+        / "code-improvement-proposal"
+        / "references"
+        / "provider-commands.md"
+    ).read_text(encoding="utf-8")
+    assert "gh issue create" in reference
     assert "fetch create metadata" in text.lower()
 
 
