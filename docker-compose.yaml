@@ -25,6 +25,31 @@
 # when OMNIGENT_SHARED_HOST_IMAGE_REF is unset; legacy mutable
 # OMNIGENT_HOST_IMAGE / OMNIGENT_HOST_IMAGE_TAG construction is not honored
 # for static hosts.
+#
+# Effective launch contract (MoonLadderStudios/MoonMind#3936): only a
+# digest-pinned OMNIGENT_SHARED_HOST_IMAGE_REF (or, when it is unset, a
+# digest-pinned OMNIGENT_HOST_IMAGE_REF bounded alias) is supported launch
+# authority. The OMNIGENT_SHARED_HOST_IMAGE / OMNIGENT_SHARED_HOST_IMAGE_TAG
+# fallback below is a development/bootstrap input only:
+# `moonmind.omnigent.bootstrap.image_resolution` must resolve it to a digest
+# and persist it as OMNIGENT_SHARED_HOST_IMAGE_REF before admission, and
+# `require_static_host_image_authority` fails the persistence/reconciliation
+# pass when a requested static profile has no digest-pinned resolution. That
+# persistence gate runs inside the API container after Compose has already
+# started creating profile-selected services, so it alone cannot prevent the
+# mutable fallback from being pulled: qualified static launches must pass the
+# operator-side prelaunch admission boundary
+# `moonmind.omnigent.harness_platform.static_hosts.admit_static_host_compose_launch`
+# (via `services/omnigent/scripts/check-static-host-image.sh --profile
+# <omnigent-host-codex|omnigent-host-claude>` before a direct
+# `docker compose --profile <profile> up`, or automatically through
+# `OmnigentOAuthHostRuntime._compose_static_check` on the managed path,
+# which admits the rendered effective environment via
+# `admit_static_host_effective_launch` and resolves the effective image
+# through `resolve_effective_static_host_image`, binding the staged
+# generation to the live lease) immediately before `docker compose up`; a direct
+# `docker compose up` that bypasses that prelaunch admission launches the
+# mutable fallback below and is not a qualified static launch.
 x-omnigent-static-host:
   image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
   user: "1000:1000"
@@ -1187,6 +1212,13 @@ services:
       CLAUDE_VOLUME_PATH: /home/app/.claude
       CLAUDE_CONFIG_DIR: /home/app/.claude
       CLAUDE_CREDENTIAL_GENERATION: ${CLAUDE_CREDENTIAL_GENERATION:-1}
+      # Bounded readiness deadlines (MoonLadderStudios/MoonMind#3936 R5): the
+      # packaged entrypoint and the workflow-side enrollment classifier read
+      # the same timeout names, so operator overrides must reach the static
+      # container environment instead of silently using the entrypoint
+      # defaults while the workflow judges different values.
+      MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS: ${MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS:-1800}
+      MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS: ${MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS:-600}
     volumes:
       - omnigent-host-claude-home:/home/app
       - omnigent-host-claude-state:/home/app/.omnigent
@@ -1334,6 +1366,13 @@ services:
       CODEX_VOLUME_PATH: /home/app/.codex
       CODEX_CREDENTIAL_GENERATION: ${CODEX_CREDENTIAL_GENERATION:-1}
       OMNIGENT_SERVER_URL: http://omnigent:8000
+      # Bounded readiness deadlines (MoonLadderStudios/MoonMind#3936 R5): the
+      # packaged entrypoint and the workflow-side enrollment classifier read
+      # the same timeout names, so operator overrides must reach the static
+      # container environment instead of silently using the entrypoint
+      # defaults while the workflow judges different values.
+      MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS: ${MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS:-1800}
+      MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS: ${MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS:-600}
       OMNIGENT_EXECUTION_TIMEOUT_SECONDS: ${OMNIGENT_HOST_TIMEOUT_SECONDS:-5400}
       OMNIGENT_EXECUTION_TIMEOUT_OWNER: temporal_workflow
       OMNIGENT_CAPTURE_OWNER: moonmind_bridge
