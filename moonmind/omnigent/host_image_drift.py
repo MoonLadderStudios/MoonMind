@@ -254,6 +254,16 @@ def reconcile_effective_launch_to_selected_host(
         return None
     if planned == selected:
         return dict(effective_launch)
+    # Mutable tags and synthetic placeholders never participate in drift
+    # recovery: an unadmitted tag or placeholder must fail closed rather than
+    # silently becoming launch authority.
+    if (
+        not _is_digest_pinned(planned)
+        or not _is_digest_pinned(selected)
+        or _is_placeholder(planned)
+        or _is_placeholder(selected)
+    ):
+        return None
     if not is_compatible_image_drift(planned, selected):
         return None
     reconciled = copy.deepcopy(dict(effective_launch))

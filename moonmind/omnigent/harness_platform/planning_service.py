@@ -429,9 +429,24 @@ class OmnigentExecutionPlanningService:
             # deployment evidence. Same-repository drift is reconciled to the
             # selected Host Class image (launch-time attestation re-verifies
             # major.minor); a foreign repository still fails closed.
+            #
+            # Two cases keep the exact conflict: legacy Codex plans are
+            # consumed by a coordinator that recompiles launch authority from
+            # the unchanged policy snapshot and rejects a reconciled digest,
+            # so admitting a reconciled Codex plan would guarantee a later
+            # failure; and an explicitly requested Host Class is preserved as
+            # explicit selection authority rather than silently rewritten.
             if str(effective_launch.get("hostImageRef") or "") != (
                 host_class.imageRef
             ):
+                if harness.id == "codex-native" or self._requested_host_class_ref(
+                    request
+                ) is not None:
+                    raise HarnessPlatformError(
+                        "effective launch host image conflicts with the selected "
+                        "Host Class",
+                        code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+                    )
                 from moonmind.omnigent.host_image_drift import (
                     reconcile_effective_launch_to_selected_host,
                 )
