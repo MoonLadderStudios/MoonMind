@@ -10,23 +10,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 import pytest
 
-from tools.ci.reliability_shard_partition import (
-    SHARD_COUNT as RELIABILITY_SHARD_COUNT,
-)
-from tools.ci.reliability_shard_partition import (
-    SHARD_NAMES as RELIABILITY_SHARD_NAMES,
-)
-from tools.ci.reliability_shard_partition import (
-    partition as _lpt_partition,
-)
-from tools.ci.reliability_shard_partition import (
+from tools.ci.reliability_shard_partition import partition as _lpt_partition  # noqa: E402
+from tools.ci.reliability_shard_partition import (  # noqa: E402
     shard_for_path as _partition_shard_for_path,
 )
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 PROVIDER_MARKERS = {"provider_verification", "requires_credentials"}
 
 

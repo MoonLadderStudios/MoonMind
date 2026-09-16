@@ -48,11 +48,12 @@ def test_reliability_budgets_and_evidence_4365() -> None:
     job = workflow["jobs"]["backend-matrix"]
     steps = {step["name"]: step for step in job["steps"]}
 
-    # Short reliability budgets: 12-minute job ceiling, 8-minute test step.
-    assert job["timeout-minutes"] == 12
+    # Reliability budgets: 20-minute job ceiling, 11-minute test step
+    # (above the 510-525s LPT partition and the 300s single-test estimate).
+    assert job["timeout-minutes"] == 20
     reliability_run = steps["Run hermetic reliability shard"]["run"]
-    assert "timeout 480s python -m pytest" in reliability_run
-    assert "--timeout 180" in reliability_run
+    assert "timeout 660s python -m pytest" in reliability_run
+    assert "--timeout 420" in reliability_run
 
     # Every-run evidence: fault-lab upload and reliability diagnostics run
     # on always(); heavy compose logs stay failure-gated inside the script.
@@ -61,10 +62,10 @@ def test_reliability_budgets_and_evidence_4365() -> None:
     upload = steps["Upload reliability shard diagnostics"]
     assert upload["if"].startswith("always()")
 
-    # Dependency-layer reuse without shared mutable state (#4376): the pip
+    # Dependency-layer reuse without shared mutable state (#4376): the uv
     # cache covers reliability rows with a content-derived key while each
     # shard keeps its own isolated Compose project/network.
-    cache = steps["Cache pip dependencies"]
+    cache = steps["Cache uv dependencies"]
     assert "reliability-" in cache["if"]
     assert "hashFiles('**/pyproject.toml')" in cache["with"]["key"]
     start = steps["Start isolated reliability dependencies"]["run"]
@@ -326,13 +327,13 @@ def test_parallel_shards_bound_hung_tests_and_spread_large_modules() -> None:
     assert "--dist load " in api_command or api_command.rstrip().endswith("--dist load")
     assert "--dist loadfile" not in api_command
     assert "--dist loadfile" in temporal_command
-    # Reliability shards run serially with short per-test and test-step
+    # Reliability shards run serially with per-test and test-step
     # bounds (MoonLadderStudios/MoonMind#4369): a hung journey fails its own
-    # shard inside 180s per test / 480s per step instead of running to the
+    # shard inside 420s per test / 660s per step instead of running to the
     # job timeout.
     assert "-n auto" not in reliability_command
-    assert "--timeout 180" in reliability_command
-    assert "timeout 480s python -m pytest" in reliability_command
+    assert "--timeout 420" in reliability_command
+    assert "timeout 660s python -m pytest" in reliability_command
 
 
 def test_deterministic_conformance_is_selection_gated() -> None:
@@ -648,7 +649,7 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     assert "needs.select-test-suites.outputs.api_component" in job_if
     assert "needs.select-test-suites.outputs.temporal_boundary" in job_if
     assert "needs.select-test-suites.outputs.reliability_journey" in job_if
-    assert job["timeout-minutes"] == 12
+    assert job["timeout-minutes"] == 20
     strategy = job["strategy"]
     # Native matrix fail-fast for PR/merge-group validation, disabled for
     # scheduled diagnostics.

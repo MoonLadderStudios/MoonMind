@@ -214,9 +214,10 @@ jobs:
     # Per-row setup stays isolated: fast rows never build images or start
     # Compose services; each reliability shard starts its own isolated
     # Compose PostgreSQL/Temporal/MinIO under its own Docker project name.
-    # Per-test (--timeout 600 on fast rows, --timeout 180 on reliability
-    # rows), test-step (reliability pytest wrapped in `timeout 480s`), job
-    # (timeout-minutes: 12) and cleanup (always() compose down) bounds are
+    # Per-test (--timeout 600 on fast rows, --timeout 420 on reliability
+    # rows), test-step (reliability pytest wrapped in `timeout 660s` for an
+    # 11-minute ceiling above the 510-525s LPT partition), job
+    # (timeout-minutes: 20) and cleanup (always() compose down) bounds are
     # preserved; each row writes a uniquely named junit report and
     # attempted cancellation diagnostics.
     needs: select-test-suites
@@ -226,7 +227,7 @@ jobs:
       needs.select-test-suites.outputs.temporal_boundary == 'true' ||
        needs.select-test-suites.outputs.reliability_journey == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
       matrix:
@@ -267,21 +268,22 @@ jobs:
           sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update
           sudo apt-get install -y libcairo2-dev pkg-config
-      - name: Cache pip dependencies
+      - name: Cache uv dependencies
         # MoonLadderStudios/MoonMind#4376: read-only dependency-layer reuse
         # for the warm rows. The cache key is content-derived
         # (pyproject.toml); each reliability shard keeps its own isolated
         # Compose project and Docker network, so no mutable release state
-        # is shared between shards. No custom cache subsystem: native
-        # GitHub Actions caching plus the runner Docker layer cache supply
-        # the reuse.
+        # is shared between shards. Project installs run through
+        # `uv pip install`, so the uv cache (not pip's) is persisted.
+        # No custom cache subsystem: native GitHub Actions caching plus
+        # the runner Docker layer cache supply the reuse.
         if: (matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true') || (startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true')
         uses: actions/cache@v6
         with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('**/pyproject.toml') }}
           restore-keys: |
-            ${{ runner.os }}-pip-
+            ${{ runner.os }}-uv-
       - name: Install dependencies via uv
         if: >-
           (matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true') ||
@@ -382,16 +384,18 @@ jobs:
           echo "Reliability shard ${{ matrix.suite }} runs ${#shard_files[@]} files"
           test_start=$SECONDS
           set +e
-          # Short reliability budgets (MoonLadderStudios/MoonMind#4369):
-          # 180s per-test and an 8-minute test-step ceiling keep a hung
-          # journey inside its shard instead of running to the job timeout.
-          timeout 480s python -m pytest "${shard_files[@]}" \
+          # Reliability budgets (MoonLadderStudios/MoonMind#4369):
+          # 420s per-test (above the 300s single-test estimate) and an
+          # 11-minute test-step ceiling (above the 510-525s LPT partition)
+          # keep a hung journey inside its shard instead of running to the
+          # job timeout.
+          timeout 660s python -m pytest "${shard_files[@]}" \
             -m reliability_journey \
-            -vv --tb=short --durations=25 --timeout 180 \
+            -vv --tb=short --durations=25 --timeout 420 \
             --junitxml=artifacts/pytest-backend-${{ matrix.suite }}.xml 2>&1 | tee artifacts/pytest-backend-${{ matrix.suite }}.log
           status=${PIPESTATUS[0]}
           if [[ $status -eq 124 ]]; then
-            echo "::error::reliability shard ${{ matrix.suite }} exceeded its 8-minute test-step budget"
+            echo "::error::reliability shard ${{ matrix.suite }} exceeded its 11-minute test-step budget"
           fi
           echo $((SECONDS - test_start)) > "/tmp/backend-${{ matrix.suite }}-test-seconds.txt" || true
           exit $status

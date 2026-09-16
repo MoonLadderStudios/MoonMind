@@ -156,10 +156,11 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   `MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-<suite>_default` so
   fixture tests attach to their row's isolated Compose network instead of
   the retired single-job `moonmind-reliability-qualification_default`.
-- Per-test (`--timeout 600` on fast rows, `--timeout 180` on reliability
-  rows), test-step (reliability pytest wrapped in `timeout 480s` for an
-  8-minute ceiling with an explicit budget-exceeded annotation), job
-  (`timeout-minutes: 12`), and cleanup (`always()` compose `down -v`,
+- Per-test (`--timeout 600` on fast rows, `--timeout 420` on reliability
+  rows), test-step (reliability pytest wrapped in `timeout 660s` for an
+  11-minute ceiling above the 510-525s LPT partition with an explicit
+  budget-exceeded annotation), job
+  (`timeout-minutes: 20`), and cleanup (`always()` compose `down -v`,
   wrapped in `timeout 100s`) bounds are preserved on every row. Reliability
   collection steps are additionally wrapped in `timeout 100s`/`timeout 60s`
   so one slow diagnostic command cannot stall the row; each command
@@ -244,7 +245,7 @@ success-path text log/JUnit upload, `-q` reliability verbosity):
    `python3 tools/ci/partition_reliability_shards.py --shard <N>`).
 2. Fix the revision/configuration: compare runs on the same commit (or
    adjacent commits with no test/workflow changes), same workflow file,
-   same per-row `--timeout` / `timeout 480s` / `timeout-minutes: 12`
+   same per-row `--timeout` / `timeout 660s` / `timeout-minutes: 20`
    bounds, same runner class (`ubuntu-latest`).
 3. Repeat each side at least twice to separate ordinary timing noise from a
    real shift; do not add a performance gate on the result.
@@ -457,8 +458,8 @@ The archive replay deliberately destroys the source workspace before using
 durable artifact evidence to restore a distinct destination and retries the
 restore idempotently. It exercises production capture/restore engines and the
 artifact boundary, but does not substitute for the Temporal-to-managed-AgentRun
-journey. The required CI reliability shards each carry an 8-minute test-step
-budget inside a 12-minute job ceiling.
+journey. The required CI reliability shards each carry an 11-minute test-step
+budget (above the 510-525s LPT partition) inside a 20-minute job ceiling.
 
 Verify that every eligible provider-free node has exactly one owner:
 
