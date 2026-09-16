@@ -1815,7 +1815,7 @@ class SecretMutationReceipt(Base):
     never advances revisions twice; reuse of the same ``request_id`` with a
     different operation/slug/candidate fingerprint is rejected as a conflict.
     Only metadata is stored: slug, operation, revisions, outcome, and an
-    opaque HMAC-bound candidate fingerprint — never plaintext, ciphertext, or
+    opaque key-bound candidate fingerprint — never plaintext, ciphertext, or
     a publicly comparable token digest.
     """
 
