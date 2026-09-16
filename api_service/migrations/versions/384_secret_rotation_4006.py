@@ -1,7 +1,7 @@
 """Atomic, revision-fenced secret rotation (#4006).
 
 Revision ID: 384_secret_rotation_4006
-Revises: 378_saved_work_retention_4017
+Revises: 383_terminal_contract_source
 
 Monotonic ``credential_revision`` / ``policy_revision`` on
 ``managed_secrets`` (timestamps are never generation authority), plus
@@ -28,7 +28,7 @@ __all__ = [
 ]
 
 revision: str = "384_secret_rotation_4006"
-down_revision: Union[str, None] = "378_saved_work_retention_4017"
+down_revision: Union[str, None] = "383_terminal_contract_source"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

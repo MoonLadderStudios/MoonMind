@@ -496,6 +496,21 @@ class SecretUpdateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     plaintext: str = Field(..., min_length=1, description="The new raw secret value to be encrypted")
+    expected_credential_revision: Optional[int] = Field(
+        default=None,
+        alias="expectedCredentialRevision",
+        description="CAS fence: the active credential revision the caller admitted.",
+    )
+    expected_policy_revision: Optional[int] = Field(
+        default=None,
+        alias="expectedPolicyRevision",
+        description="Fence against concurrent policy (disable) transitions.",
+    )
+    request_id: Optional[str] = Field(
+        default=None,
+        alias="requestId",
+        description="Stable mutation request identity for idempotent retries.",
+    )
 
 class SecretStatusUpdateRequest(BaseModel):
     """Request body to change secret status."""
@@ -503,6 +518,11 @@ class SecretStatusUpdateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     status: Literal["active", "disabled"] = Field(..., description="New status for the secret")
+    request_id: Optional[str] = Field(
+        default=None,
+        alias="requestId",
+        description="Stable mutation request identity for idempotent retries.",
+    )
 
 class SecretMetadataResponse(BaseModel):
     """Safe metadata representation of a secret, explicitly excluding ciphertext."""
@@ -516,6 +536,16 @@ class SecretMetadataResponse(BaseModel):
     details: dict[str, Any]
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+
+    @field_validator("credential_revision", "policy_revision", mode="before")
+    @classmethod
+    def _default_revision(cls, value: Any) -> Any:
+        return 1 if value is None else value
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _coerce_status(cls, value: Any) -> Any:
+        return value.value if hasattr(value, "value") else value
 
     @computed_field(alias="secretRef")
     @property

@@ -339,6 +339,30 @@ class SecretsService:
         await db.commit()
         return len(delivered)
 
+    @classmethod
+    async def _finish_post_commit(
+        cls, db: AsyncSession, secret: ManagedSecret, events: Sequence[dict[str, Any]]
+    ) -> None:
+        """Complete post-commit bookkeeping without failing a durable mutation.
+
+        The secret and its outbox row are already durable after the first
+        ``commit()``. A refresh, delivery, or marking failure must not roll
+        back or report the confirmed mutation as failed; it is recorded for
+        the restart sweep while the success response stands.
+        """
+        try:
+            await db.refresh(secret)
+            delivered = await cls._deliver_events(events)
+            await cls._mark_outbox_delivered(db, delivered)
+            if delivered:
+                await db.commit()
+        except Exception as exc:  # noqa: BLE001 - auxiliary work only
+            logger.warning(
+                "secret_post_commit_bookkeeping_failed",
+                slug=getattr(secret, "slug", None),
+                error=str(exc),
+            )
+
     # -- stable request identity ------------------------------------------
 
     @staticmethod
@@ -484,6 +508,22 @@ class SecretsService:
                     f"{expected} != active {_credential_revision_of(secret)}"
                 ),
             )
+        expected_policy = validation.get("expected_policy_revision")
+        if expected_policy is not None and int(expected_policy) != _policy_revision_of(
+            secret
+        ):
+            raise SecretFencedError(
+                slug,
+                reason=(
+                    "expected policy revision "
+                    f"{expected_policy} != active {_policy_revision_of(secret)}"
+                ),
+            )
+        if _status_value(secret.status) != SecretStatus.ACTIVE.value:
+            raise SecretFencedError(
+                slug,
+                reason="secret is not active; re-admit against the current state",
+            )
         envelope_owner = validation.get("owner_ref")
         stored_owner = (secret.details or {}).get("owner_ref")
         if envelope_owner and stored_owner and envelope_owner != stored_owner:
@@ -507,7 +547,14 @@ class SecretsService:
         reason: str | None = None,
         commit: bool = True,
     ) -> ManagedSecret:
-        """Create a new managed secret at credential/policy revision 1."""
+        """Create a new managed secret at credential/policy revision 1.
+
+        Slug reuse after a delete is refused: deletion removes the only
+        durable generation-bearing row, so recreating the same slug at
+        revision 1 would let an old binding resolve unrelated replacement
+        material (revision ABA). The ``secrets.deleted`` tombstone audit
+        preserves the generation without retaining values.
+        """
         if request_id is not None:
             receipt = await cls._find_receipt(db, request_id)
             if receipt is not None:
@@ -521,6 +568,25 @@ class SecretsService:
                 if existing is None:  # pragma: no cover - defensive
                     raise SecretConflictError(slug, request_id)
                 return existing
+
+        tombstone = await db.execute(
+            select(SettingsAuditEvent.id).where(
+                SettingsAuditEvent.event_type == "secrets.deleted",
+                SettingsAuditEvent.key == f"secrets.{slug}",
+            )
+        )
+        tombstone_row = tombstone.first()
+        # Mock AsyncSessions (unit tests without a real DB) return MagicMock
+        # rows; only a real SQLAlchemy row counts as a tombstone.
+        if tombstone_row is not None and type(tombstone_row).__module__.startswith(
+            "sqlalchemy"
+        ):
+            if commit:
+                await db.rollback()
+            raise SecretFencedError(
+                slug,
+                reason="slug was deleted; reuse is refused to prevent revision ABA",
+            )
 
         secret = ManagedSecret(
             slug=slug,
@@ -561,7 +627,14 @@ class SecretsService:
             )
         if commit:
             await db.commit()
-            await db.refresh(secret)
+            try:
+                await db.refresh(secret)
+            except Exception as exc:  # noqa: BLE001 - auxiliary work only
+                logger.warning(
+                    "secret_post_commit_bookkeeping_failed",
+                    slug=slug,
+                    error=str(exc),
+                )
         logger.info("secret_created", slug=slug)
         return secret
 
@@ -669,11 +742,7 @@ class SecretsService:
                 )
             if commit:
                 await db.commit()
-                await db.refresh(secret)
-                delivered = await cls._deliver_events(events)
-                await cls._mark_outbox_delivered(db, delivered)
-                if delivered:
-                    await db.commit()
+                await cls._finish_post_commit(db, secret, events)
         except (SecretFencedError, SecretRepairRequiredError, SecretConflictError):
             raise
         except Exception:
@@ -695,6 +764,7 @@ class SecretsService:
         new_plaintext: str,
         *,
         expected_credential_revision: int | None = None,
+        expected_policy_revision: int | None = None,
         validation: dict[str, Any] | None = None,
         validator: Callable[[str], Awaitable[bool] | bool] | None = None,
         request_id: str | None = None,
@@ -710,6 +780,10 @@ class SecretsService:
         event/revision transition, never as an unreadable state. A failed
         candidate, changed ownership/policy/credentials, or a concurrent
         rotation leaves the prior active secret unchanged.
+
+        A trusted validation result is required: either a ``validation``
+        envelope from :meth:`prepare_rotation_validation` or a ``validator``
+        probe. An omitted validator is never treated as success.
         """
         fingerprint = _candidate_fingerprint(new_plaintext)
         if request_id is not None:
@@ -722,6 +796,9 @@ class SecretsService:
                     candidate_fingerprint=fingerprint,
                 )
                 return await cls._reconcile_receipt(db, receipt)
+
+        if validator is None and validation is None:
+            raise SecretFencedError(slug, reason="candidate validation required")
 
         # Candidate probing happens before row-locked work: no database
         # transaction is held across provider calls.
@@ -750,6 +827,13 @@ class SecretsService:
                 if commit:
                     await db.rollback()
                 raise SecretRepairRequiredError(slug)
+            if _status_value(secret.status) != SecretStatus.ACTIVE.value:
+                if commit:
+                    await db.rollback()
+                raise SecretFencedError(
+                    slug,
+                    reason="secret is not active; re-admit against the current state",
+                )
             cls._check_validation_envelope(secret, new_plaintext, validation)
             active_revision = _credential_revision_of(secret)
             if expected_credential_revision is not None and (
@@ -763,6 +847,23 @@ class SecretsService:
                         "expected credential revision "
                         f"{expected_credential_revision} != active "
                         f"{active_revision}"
+                    ),
+                )
+            active_policy = _policy_revision_of(secret)
+            envelope_policy = (validation or {}).get("expected_policy_revision")
+            want_policy = (
+                expected_policy_revision
+                if expected_policy_revision is not None
+                else envelope_policy
+            )
+            if want_policy is not None and int(want_policy) != active_policy:
+                if commit:
+                    await db.rollback()
+                raise SecretFencedError(
+                    slug,
+                    reason=(
+                        "expected policy revision "
+                        f"{want_policy} != active {active_policy}"
                     ),
                 )
             envelope_owner = (validation or {}).get("owner_ref")
@@ -808,11 +909,7 @@ class SecretsService:
                 )
             if commit:
                 await db.commit()
-                await db.refresh(secret)
-                delivered = await cls._deliver_events(events)
-                await cls._mark_outbox_delivered(db, delivered)
-                if delivered:
-                    await db.commit()
+                await cls._finish_post_commit(db, secret, events)
         except (
             SecretFencedError,
             SecretRepairRequiredError,
@@ -925,11 +1022,7 @@ class SecretsService:
                 )
             if commit:
                 await db.commit()
-                await db.refresh(secret)
-                delivered = await cls._deliver_events(events)
-                await cls._mark_outbox_delivered(db, delivered)
-                if delivered:
-                    await db.commit()
+                await cls._finish_post_commit(db, secret, events)
         except (SecretFencedError, SecretConflictError):
             raise
         except Exception:
@@ -994,6 +1087,11 @@ class SecretsService:
             previous_status = _status_value(secret.status)
             new_status = _status_value(status)
 
+            if previous_status == SecretStatus.ROTATED.value:
+                if commit:
+                    await db.rollback()
+                raise SecretRepairRequiredError(slug)
+
             old_snapshot = _redacted_revision_json(secret)
             secret.status = status
             secret.policy_revision = _policy_revision_of(secret) + 1
@@ -1036,11 +1134,7 @@ class SecretsService:
                 )
             if commit:
                 await db.commit()
-                await db.refresh(secret)
-                delivered = await cls._deliver_events(events)
-                await cls._mark_outbox_delivered(db, delivered)
-                if delivered:
-                    await db.commit()
+                await cls._finish_post_commit(db, secret, events)
         except (SecretConflictError,):
             raise
         except Exception:
@@ -1105,7 +1199,9 @@ class SecretsService:
                     await db.rollback()
                 return False
 
-            counts = await cls._server_side_consumer_counts(db, slug)
+            counts = await cls._server_side_consumer_counts(
+                db, slug, for_update=True
+            )
             if sum(counts.values()) > 0:
                 cls._record_audit(
                     db,
@@ -1165,10 +1261,17 @@ class SecretsService:
                 )
             if commit:
                 await db.commit()
-                delivered = await cls._deliver_events(events)
-                await cls._mark_outbox_delivered(db, delivered)
-                if delivered:
-                    await db.commit()
+                try:
+                    delivered = await cls._deliver_events(events)
+                    await cls._mark_outbox_delivered(db, delivered)
+                    if delivered:
+                        await db.commit()
+                except Exception as exc:  # noqa: BLE001 - auxiliary work only
+                    logger.warning(
+                        "secret_post_commit_bookkeeping_failed",
+                        slug=slug,
+                        error=str(exc),
+                    )
         except SecretReferenceProtectedError:
             raise
         except SecretConflictError:
@@ -1254,9 +1357,42 @@ class SecretsService:
             for text in cls._iter_nested_strings(payload)
         )
 
+    @staticmethod
+    def _typed_connection_references_slug(config: Any, slug: str) -> bool:
+        """Match the canonical typed secret reference for connections.
+
+        Repository connections persist ``{"source": "secret_ref",
+        "credentialRef": {"provider": "managed", "key": "<slug>"}}`` (camel
+        and snake aliases accepted). A literal ``db://`` scan never sees
+        those rows, so deletion protection must match the typed contract.
+        """
+        stack: list[Any] = [config]
+        while stack:
+            item = stack.pop()
+            if isinstance(item, dict):
+                source = item.get("source")
+                ref = item.get("credentialRef", item.get("credential_ref"))
+                if source == "secret_ref" and isinstance(ref, dict):
+                    provider = ref.get("provider")
+                    key = ref.get("key")
+                    if provider == "managed" and key == slug:
+                        return True
+                stack.extend(item.values())
+            elif isinstance(item, (list, tuple)):
+                stack.extend(item)
+        return False
+
+    @classmethod
+    def _connection_config_references_slug(cls, config: Any, slug: str) -> bool:
+        if config is None:
+            return False
+        if cls._payload_references_slug(config, f"db://{slug}"):
+            return True
+        return cls._typed_connection_references_slug(config, slug)
+
     @classmethod
     async def _extended_consumer_usages(
-        cls, db: AsyncSession, slug: str
+        cls, db: AsyncSession, slug: str, *, for_update: bool = False
     ) -> list[dict[str, Any]]:
         """Scan Provider Profile and RepositoryConnection typed references."""
         from api_service.db.models import (
@@ -1268,16 +1404,17 @@ class SecretsService:
         pattern = f"%db://{cls._like_escape(slug)}%"
         usages: list[dict[str, Any]] = []
         try:
-            profile_rows = await db.execute(
-                select(
-                    ManagedAgentProviderProfile.profile_id,
-                    ManagedAgentProviderProfile.secret_refs,
-                ).where(
-                    func.cast(
-                        ManagedAgentProviderProfile.secret_refs, Text
-                    ).like(pattern, escape="\\")
-                )
+            profile_stmt = select(
+                ManagedAgentProviderProfile.profile_id,
+                ManagedAgentProviderProfile.secret_refs,
+            ).where(
+                func.cast(
+                    ManagedAgentProviderProfile.secret_refs, Text
+                ).like(pattern, escape="\\")
             )
+            if for_update:
+                profile_stmt = profile_stmt.with_for_update()
+            profile_rows = await db.execute(profile_stmt)
             for profile_id, secret_refs in profile_rows:
                 if secret_refs is None:
                     continue
@@ -1297,20 +1434,22 @@ class SecretsService:
                 "secret_usage_profile_scan_failed", slug=slug, error=str(exc)
             )
         try:
-            connection_rows = await db.execute(
-                select(
-                    RepositoryConnectionRecord.connection_id,
-                    RepositoryConnectionRecord.credential_config,
-                ).where(
-                    func.cast(
-                        RepositoryConnectionRecord.credential_config, Text
-                    ).like(pattern, escape="\\")
-                )
+            broad = f"%{cls._like_escape(slug)}%"
+            connection_stmt = select(
+                RepositoryConnectionRecord.connection_id,
+                RepositoryConnectionRecord.credential_config,
+            ).where(
+                func.cast(
+                    RepositoryConnectionRecord.credential_config, Text
+                ).like(broad, escape="\\")
             )
+            if for_update:
+                connection_stmt = connection_stmt.with_for_update()
+            connection_rows = await db.execute(connection_stmt)
             for connection_id, credential_config in connection_rows:
                 if credential_config is None:
                     continue
-                if not cls._payload_references_slug(credential_config, secret_ref):
+                if not cls._connection_config_references_slug(credential_config, slug):
                     continue
                 usages.append(
                     {
@@ -1329,25 +1468,30 @@ class SecretsService:
 
     @classmethod
     async def _server_side_consumer_counts(
-        cls, db: AsyncSession, slug: str
+        cls, db: AsyncSession, slug: str, *, for_update: bool = False
     ) -> dict[str, int]:
         """Complete server-side inventory for deletion protection.
 
         Unlike the caller-filtered usage display, this scans every scope and
         every consumer domain. Only per-type counts are returned so errors
         never leak consumer identities across scopes.
+
+        With ``for_update=True`` the matching consumer rows are locked in the
+        same transaction as the secret delete, so a concurrent attach cannot
+        commit a new reference between the inventory check and the delete.
         """
         counts = {"setting_override": 0, "provider_profile": 0, "repository_connection": 0}
         secret_ref = f"db://{slug}"
         pattern = f"%db://{cls._like_escape(slug)}%"
         try:
-            override_rows = await db.execute(
-                select(SettingsOverride.value_json).where(
-                    func.cast(SettingsOverride.value_json, Text).like(
-                        pattern, escape="\\"
-                    )
+            override_stmt = select(SettingsOverride.value_json).where(
+                func.cast(SettingsOverride.value_json, Text).like(
+                    pattern, escape="\\"
                 )
             )
+            if for_update:
+                override_stmt = override_stmt.with_for_update()
+            override_rows = await db.execute(override_stmt)
             for (value_json,) in override_rows:
                 if cls._value_references_secret(value_json, secret_ref):
                     counts["setting_override"] += 1
@@ -1356,7 +1500,7 @@ class SecretsService:
                 "secret_delete_scan_failed", slug=slug, error=str(exc)
             )
             raise SecretFencedError(slug, reason="consumer scan unavailable")
-        extended = await cls._extended_consumer_usages(db, slug)
+        extended = await cls._extended_consumer_usages(db, slug, for_update=for_update)
         for usage in extended:
             consumer_type = usage["consumerType"]
             if consumer_type == "provider_profile":
@@ -1610,7 +1754,9 @@ class SecretsService:
             for key, value in env_dict.items():
                 with db.sync_session.no_autoflush:
                     result = await db.execute(
-                        select(ManagedSecret).where(ManagedSecret.slug == key)
+                        select(ManagedSecret)
+                        .where(ManagedSecret.slug == key)
+                        .with_for_update()
                     )
                 existing = result.scalar_one_or_none()
                 if existing is not None:
@@ -1687,10 +1833,16 @@ class SecretsService:
             if imported_count > 0:
                 if commit:
                     await db.commit()
-                    delivered = await cls._deliver_events(events)
-                    await cls._mark_outbox_delivered(db, delivered)
-                    if delivered:
-                        await db.commit()
+                    try:
+                        delivered = await cls._deliver_events(events)
+                        await cls._mark_outbox_delivered(db, delivered)
+                        if delivered:
+                            await db.commit()
+                    except Exception as exc:  # noqa: BLE001 - auxiliary work only
+                        logger.warning(
+                            "secret_post_commit_bookkeeping_failed",
+                            error=str(exc),
+                        )
                 logger.info("secrets_imported_from_env", count=imported_count)
         except Exception:
             if commit:

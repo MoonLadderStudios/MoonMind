@@ -2934,25 +2934,55 @@ async def _upsert_managed_secret(
     plaintext: str,
     details: dict[str, Any],
 ) -> ManagedSecret:
+    """Write provider credentials through the revision owner.
+
+    Direct ``ManagedSecret.ciphertext`` replacement would bypass credential
+    revisions, outbox evidence, and audit. Route through
+    :class:`SecretsService` with ``commit=False`` so the caller's transaction
+    still owns the commit while every write advances revisions atomically.
+    """
+    from api_service.services.secrets import SecretsService
+
     result = await session.execute(
         select(ManagedSecret).where(ManagedSecret.slug == slug)
     )
-    secret = result.scalar_one_or_none()
-    if secret is None:
-        secret = ManagedSecret(
+    row = result.scalar_one_or_none()
+    if row is None:
+        created = await SecretsService.create_secret(
+            session,
             slug=slug,
-            ciphertext=plaintext,
-            status=SecretStatus.ACTIVE,
+            plaintext=plaintext,
             details=details,
+            commit=False,
         )
-        session.add(secret)
-        return secret
+        return created
+    # Preserve existing owner/details and merge the caller's metadata.
+    current_details = dict(getattr(row, "details", {}) or {})
+    try:
+        updated = await SecretsService.update_secret(
+            session,
+            slug,
+            plaintext,
+            commit=False,
+        )
+    except Exception as exc:
+        from api_service.services.secrets import SecretRepairRequiredError
 
-    secret.ciphertext = plaintext
-    secret.status = SecretStatus.ACTIVE
-    secret.details = {**(secret.details or {}), **details}
-    secret.updated_at = datetime.now(UTC)
-    return secret
+        if not isinstance(exc, SecretRepairRequiredError):
+            raise
+        # A historical ROTATED provider credential is reactivated only with
+        # the just-validated token through the reviewed repair path.
+        updated = await SecretsService.repair_rotated_secret(
+            session,
+            slug,
+            plaintext,
+            validator=lambda _c: True,
+            commit=False,
+        )
+    if updated is None:  # pragma: no cover - defensive; slug existed above
+        raise RuntimeError(f"Managed secret '{slug}' disappeared during upsert.")
+    updated.details = {**current_details, **details}
+    return updated
 
 
 async def validate_claude_manual_token(token: str) -> None:

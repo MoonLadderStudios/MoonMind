@@ -47,6 +47,30 @@ async def _run_mutation(fn, *args, **kwargs):
         raise _mutation_conflict(str(exc)) from exc
 
 
+async def _metadata_response(secret: Any) -> SecretMetadataResponse:
+    """Build a metadata response tolerant of mocks and Row mappings."""
+    mapping: dict[str, Any]
+    if hasattr(secret, "_mapping"):
+        mapping = dict(secret._mapping)
+        slug = mapping.get("slug", getattr(secret, "slug", None))
+        status = mapping.get("status", getattr(secret, "status", None))
+        payload = {
+            "slug": slug,
+            "status": status.value if hasattr(status, "value") else status,
+            "credentialRevision": mapping.get("credential_revision", 1) or 1,
+            "policyRevision": mapping.get("policy_revision", 1) or 1,
+            "details": mapping.get("details", {}) or {},
+            "createdAt": mapping.get("created_at"),
+            "updatedAt": mapping.get("updated_at"),
+        }
+        return SecretMetadataResponse.model_validate(payload)
+    return SecretMetadataResponse.model_validate(secret)
+
+
+def _non_empty_validator(candidate: str) -> bool:
+    return bool(candidate and candidate.strip())
+
+
 def _uuid_attr(value: Any) -> UUID | None:
     if isinstance(value, UUID):
         return value
@@ -84,7 +108,7 @@ async def create_secret(
         plaintext=request.plaintext,
         details=request.details,
     )
-    return SecretMetadataResponse.model_validate(secret)
+    return await _metadata_response(secret)
 
 @router.get(
     "",
@@ -97,7 +121,7 @@ async def list_secrets(
     user: Any = Depends(get_current_user()),
 ) -> SecretListResponse:
     metadata = await SecretsService.list_metadata(db)
-    items = [SecretMetadataResponse.model_validate(m) for m in metadata]
+    items = [await _metadata_response(m) for m in metadata]
     return SecretListResponse(items=items)
 
 @router.put(
@@ -113,13 +137,19 @@ async def update_secret(
     user: Any = Depends(get_current_user()),
 ) -> SecretMetadataResponse:
     secret = await _run_mutation(
-        SecretsService.update_secret, db, slug, request.plaintext
+        SecretsService.update_secret,
+        db,
+        slug,
+        request.plaintext,
+        expected_credential_revision=request.expected_credential_revision,
+        expected_policy_revision=request.expected_policy_revision,
+        request_id=request.request_id,
     )
     if not secret:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found"
         )
-    return SecretMetadataResponse.model_validate(secret)
+    return await _metadata_response(secret)
 
 @router.post(
     "/{slug}/rotate",
@@ -134,13 +164,20 @@ async def rotate_secret(
     user: Any = Depends(get_current_user()),
 ) -> SecretMetadataResponse:
     secret = await _run_mutation(
-        SecretsService.rotate_secret, db, slug, request.plaintext
+        SecretsService.rotate_secret,
+        db,
+        slug,
+        request.plaintext,
+        expected_credential_revision=request.expected_credential_revision,
+        expected_policy_revision=request.expected_policy_revision,
+        validator=_non_empty_validator,
+        request_id=request.request_id,
     )
     if not secret:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found"
         )
-    return SecretMetadataResponse.model_validate(secret)
+    return await _metadata_response(secret)
 
 @router.put(
     "/{slug}/status",
@@ -171,12 +208,13 @@ async def update_secret_status(
         new_status,
         actor_user_id=_uuid_attr(getattr(user, "id", None)),
         workspace_id=_uuid_attr(getattr(user, "workspace_id", None)),
+        request_id=request.request_id,
     )
     if not secret:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Secret not found"
         )
-    return SecretMetadataResponse.model_validate(secret)
+    return await _metadata_response(secret)
 
 @router.delete(
     "/{slug}",
@@ -189,7 +227,7 @@ async def delete_secret(
     db: AsyncSession = Depends(get_async_session),
 ) -> None:
     try:
-        deleted = await SecretsService.delete_secret(db, slug)
+        deleted = await SecretsService.delete_secret(db, slug, strict=True)
     except SecretReferenceProtectedError as exc:
         raise _mutation_conflict(str(exc)) from exc
     if not deleted:

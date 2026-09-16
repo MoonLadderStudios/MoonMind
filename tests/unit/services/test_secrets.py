@@ -139,7 +139,7 @@ async def test_rotate_secret(mock_db_session):
 
     mock_db_session.execute.side_effect = mock_execute
 
-    rotated = await SecretsService.rotate_secret(mock_db_session, slug, "new-value")
+    rotated = await SecretsService.rotate_secret(mock_db_session, slug, "new-value", validator=lambda _c: True)
 
     # Rotation is an event/revision transition: the replacement stays ACTIVE
     # under the existing resolution contract at a new credential revision.
@@ -179,6 +179,7 @@ async def test_rotate_secret_refuses_stale_expected_revision(mock_db_session):
             "test-secret",
             "new-value",
             expected_credential_revision=6,
+            validator=lambda _c: True,
         )
     assert existing_secret.ciphertext == "old"
     assert existing_secret.credential_revision == 7
