@@ -30,22 +30,36 @@ If no constraints are provided, default to addressing all applicable feedback.
 
 ## Workflow
 
-1. Resolve PR and collect all comments.
-- Resolve the comments helper before reading any existing comments artifact:
-  - Prefer `${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/fix-comments/tools/get_branch_pr_comments.py`; its repository-default path is `.agents/skills/fix-comments/tools/get_branch_pr_comments.py`.
+1. Resolve helpers exclusively from the run's immutable active bundle.
+- Establish the portable paths before running any helper:
+
+  ```bash
+  FIX_COMMENTS_SKILL_DIR="${FIX_COMMENTS_SKILL_DIR:-${MOONMIND_ACTIVE_SKILLS_DIR:+$MOONMIND_ACTIVE_SKILLS_DIR/fix-comments}}"
+  ACTIVE_SKILLS_DIR="${MOONMIND_ACTIVE_SKILLS_DIR:-$(dirname "$FIX_COMMENTS_SKILL_DIR")}"
+  test -n "$FIX_COMMENTS_SKILL_DIR" && test -f "$FIX_COMMENTS_SKILL_DIR/SKILL.md"
+  ```
+
+  Inside MoonMind, `MOONMIND_ACTIVE_SKILLS_DIR` is always set and every helper
+  below resolves from it; a checked-in `.agents/skills` directory must never
+  shadow the selected snapshot. Outside MoonMind, set `FIX_COMMENTS_SKILL_DIR`
+  to the directory containing this `SKILL.md` (no MoonMind-only environment
+  variables required). A missing selected helper is a materialization/packaging
+  error: stop as blocked instead of substituting stale repository code.
+2. Resolve PR and collect all comments.
+- Resolve the comments helper as `$FIX_COMMENTS_SKILL_DIR/tools/get_branch_pr_comments.py` before reading any existing comments artifact:
   - Fall back to `tools/get_branch_pr_comments.py` only for repositories that intentionally mirror skill helper tools into the repo root.
   - If neither helper exists, stop as blocked with reason `comments_helper_missing`; do not use a stale `var/pr_comments/current-branch-comments.json`.
 - Run the resolved helper with `python3 <helper> --output var/pr_comments/current-branch-comments.json`.
 - If PR resolution or comment retrieval fails, stop and ask the user for a PR number/URL or GitHub credential fix. Do not continue from pre-fetched or stale comments unless the helper successfully refreshed `var/pr_comments/current-branch-comments.json` in this run.
 - Load `var/pr_comments/current-branch-comments.json` and treat every entry in `comments` as input feedback.
 
-2. Build a feedback ledger before editing code.
+3. Build a feedback ledger before editing code.
 - Create a working checklist with one row per comment:
   - `id`, `type`, `author`, `url`, `path:line` (if present), `summary`, `still_applies`, `should_address`, `action_plan`.
 - Keep replies (`in_reply_to_id`) tied to their parent comment to avoid duplicate work.
 - Never silently drop a comment.
 
-3. Decide if each comment still applies.
+4. Decide if each comment still applies.
 - For code-line comments:
   - Inspect current file state and surrounding logic, not just the old line number.
   - Mark `still_applies=false` only when the concern is already fixed or made irrelevant by later changes.
@@ -53,20 +67,20 @@ If no constraints are provided, default to addressing all applicable feedback.
   - Compare against current behavior, tests, and architecture constraints.
 - Record a one-sentence rationale for each `still_applies=false` decision.
 
-4. Decide whether each applicable comment should be addressed now.
+5. Decide whether each applicable comment should be addressed now.
 - Default to `should_address=true` for correctness, crashes, determinism, networking, security, data loss, CI stability, and test gaps.
 - `should_address=false` is allowed only when:
   - It conflicts with explicit user direction, or
   - It requires product/design decisions outside current scope.
 - Record rationale for each skipped item and keep the skipped list in final output.
 
-5. Implement fixes with the smallest safe change.
+6. Implement fixes with the smallest safe change.
 - Process one actionable item at a time.
 - Prefer root-cause fixes over cosmetic edits.
 - Add or update tests whenever behavior changes.
 - Re-check adjacent comments after each fix to collapse duplicates.
 
-6. Run compile/tests and retry until green.
+7. Run compile/tests and retry until green.
 - Follow repo AGENTS guidance for local Unreal validation:
   - Compile only if platform build entrypoint and toolchain exist.
   - Run targeted automation tests when `UnrealEditor-Cmd` is available.
@@ -76,7 +90,7 @@ If no constraints are provided, default to addressing all applicable feedback.
   - Re-run compile/tests.
 - Repeat until the touched scope is passing locally, or until blocked by missing environment prerequisites. If blocked, report exact blocker.
 
-7. Finalize and push.
+8. Finalize and push.
 - Ensure every comment is classified in the ledger (`addressed`, `not-applicable`, or `deferred-with-reason`).
 - Run a final `git status` review.
 - If tracked or untracked code/documentation changes exist outside ignored artifacts, commit with a clear message (default: `Address PR feedback for #<number>`).
@@ -100,14 +114,14 @@ If no constraints are provided, default to addressing all applicable feedback.
 - Refresh `var/pr_comments/current-branch-comments.json` after resolving threads. Do not report success while any handled, non-outdated review comment still has `thread_resolved=false`.
 - After any push or no-op verification, re-check that the remote PR branch head SHA equals local `HEAD` by writing canonical evidence through the shared helper:
   ```bash
-  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-pushed \
+  python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" write-pushed \
     --skill-id fix-comments \
     --repo "$REPO" \
     --branch "$BRANCH"
   ```
   If there was no commit to push, use:
   ```bash
-  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-no-op \
+  python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" write-no-op \
     --skill-id fix-comments \
     --repo "$REPO" \
     --branch "$BRANCH"
@@ -115,7 +129,7 @@ If no constraints are provided, default to addressing all applicable feedback.
   If push or remote verification is unavailable, write blocked evidence and
   stop as blocked with reason `publish_unavailable`:
   ```bash
-  python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/_shared/publish_evidence.py" write-blocked \
+  python3 "$ACTIVE_SKILLS_DIR/_shared/publish_evidence.py" write-blocked \
     --skill-id fix-comments \
     --repo "$REPO" \
     --branch "$BRANCH" \
@@ -136,8 +150,8 @@ Provide a concise report with:
 
 ## Notes
 
-- Use `tools/get_branch_pr_comments.py` as the default retrieval path; it wraps `tools/get_pr_comments.py`.
-- If retrieval needs customization (repo/token/review-body filtering), pass through the corresponding flags supported by `tools/get_branch_pr_comments.py`.
+- Use the resolved `$FIX_COMMENTS_SKILL_DIR/tools/get_branch_pr_comments.py` helper as the default retrieval path; it wraps `tools/get_pr_comments.py` from the same active bundle.
+- If retrieval needs customization (repo/token/review-body filtering), pass through the corresponding flags supported by the resolved helper.
 - Do not claim completion if compile/tests are still failing.
 
 ## Comment Resolution Ledger

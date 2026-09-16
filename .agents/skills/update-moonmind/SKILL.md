@@ -12,7 +12,19 @@ metadata:
 
 ## Invocation
 
-Run `bash .agents/skills/update-moonmind/scripts/run-update-moonmind.sh --repo <deployment-checkout> --branch <branch>` (defaults: current directory and `main`). The portable script requires Python 3.10+, Git, Bash and Docker Compose V2. It checks these before fetching or changing deployment state. `tools/update-moonmind.sh` invokes this same entrypoint.
+Establish the portable path before running the entrypoint:
+
+```bash
+UPDATE_MOONMIND_SKILL_DIR="${UPDATE_MOONMIND_SKILL_DIR:-${MOONMIND_ACTIVE_SKILLS_DIR:+$MOONMIND_ACTIVE_SKILLS_DIR/update-moonmind}}"
+test -n "$UPDATE_MOONMIND_SKILL_DIR" && test -f "$UPDATE_MOONMIND_SKILL_DIR/SKILL.md"
+```
+
+Inside MoonMind, `MOONMIND_ACTIVE_SKILLS_DIR` is always set and the entrypoint
+resolves from it; a checked-in `.agents/skills` directory must never shadow
+the selected snapshot. Outside MoonMind, set `UPDATE_MOONMIND_SKILL_DIR` to
+the directory containing this `SKILL.md` (no MoonMind-only environment
+variables required). Run the update entrypoint exclusively from the resolved
+Skill directory: `bash "$UPDATE_MOONMIND_SKILL_DIR/scripts/run-update-moonmind.sh --repo <deployment-checkout> --branch <branch>"` (defaults: current directory and `main`). The portable script requires Python 3.10+, Git, Bash and Docker Compose V2. It checks these before fetching or changing deployment state. `tools/update-moonmind.sh` invokes this same entrypoint.
 
 ## Release authority and completion
 

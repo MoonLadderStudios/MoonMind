@@ -129,11 +129,25 @@ each queued `pr-resolver` child owns its repository publishing outcome.
 
 ## Workflow
 
-1. Run the helper script from the resolved active Skill snapshot (repo-relative
-path is a portable-host fallback only when no active snapshot is set):
+1. Resolve helpers exclusively from the run's immutable active bundle.
 
 ```bash
-python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/batch-dependabot-resolver/bin/batch_dependabot_resolver.py" \
+BATCH_DEPENDABOT_RESOLVER_SKILL_DIR="${BATCH_DEPENDABOT_RESOLVER_SKILL_DIR:-${MOONMIND_ACTIVE_SKILLS_DIR:+$MOONMIND_ACTIVE_SKILLS_DIR/batch-dependabot-resolver}}"
+test -n "$BATCH_DEPENDABOT_RESOLVER_SKILL_DIR" && test -f "$BATCH_DEPENDABOT_RESOLVER_SKILL_DIR/SKILL.md"
+```
+
+Inside MoonMind, `MOONMIND_ACTIVE_SKILLS_DIR` is always set and the helper
+below resolves from it; a checked-in `.agents/skills` directory must never
+shadow the selected snapshot. Outside MoonMind, set
+`BATCH_DEPENDABOT_RESOLVER_SKILL_DIR` to the directory containing this
+`SKILL.md` (no MoonMind-only environment variables required). A missing
+selected helper is a materialization/packaging error: stop as blocked instead
+of substituting stale repository code.
+
+2. Run the helper script from the resolved Skill directory:
+
+```bash
+python3 "$BATCH_DEPENDABOT_RESOLVER_SKILL_DIR/bin/batch_dependabot_resolver.py" \
   --repo <owner/repo> \
   --merge-method squash \
   --max-iterations 5 \
@@ -149,10 +163,10 @@ python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/batch-dependabot-resolver
    Always forward the parent task's explicit runtime selection fields when present so the
    queued `pr-resolver` tasks reuse the same runtime/model/effort/provider profile.
 
-2. The skill discovers open PRs via
+3. The skill discovers open PRs via
    `gh pr list --json number,title,author,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,labels`.
 
-3. A PR is **matched** only when ALL of:
+4. A PR is **matched** only when ALL of:
    - it is open and not a fork/cross-repository PR (same head-locality check as `batch-pr-resolver`),
    - the author is `dependabot[bot]` (also accepts `app/dependabot`),
    - the head branch starts with `dependabot/`,
@@ -165,7 +179,7 @@ python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/batch-dependabot-resolver
    `not-dependabot-author`, `non-dependabot-branch`, `title-mismatch`,
    `package-manager-filtered`, `security-update-excluded`, `missing-head-sha`, or `max-prs-cap`.
 
-4. For each matched PR, submit a `pr-resolver` task with the canonical `batch-pr-resolver`
+5. For each matched PR, submit a `pr-resolver` task with the canonical `batch-pr-resolver`
    payload (`repository`, `task.inputs = { repo, pr, branch, mergeMethod, maxIterations }`,
    `task.git.startingBranch/branch`, `task.skill.name = pr-resolver`,
    `task.publish.mode = auto`, inherited runtime) and a stable idempotency key:
@@ -178,7 +192,7 @@ python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/batch-dependabot-resolver
    bearer and mark both calls as fan-out v1. A configured capability file that
    is missing or empty fails closed.
 
-5. Write a summary artifact `batch_dependabot_resolver_result.json` (under the managed
+6. Write a summary artifact `batch_dependabot_resolver_result.json` (under the managed
    session artifact spool when available, otherwise the configured `--artifacts-dir`) listing
    discovered PRs, matched count, queued / would-queue resolver workflows, skipped PRs with
    reasons, runtime-inheritance mode, and submission errors. A deliberate zero-match run also
@@ -187,7 +201,7 @@ python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/batch-dependabot-resolver
    ...`), the helper records title-contract drift and fails instead of silently reporting a
    successful no-op.
 
-6. Print a short summary to stdout (`matched`, `queued`, `would_queue`, `skipped`, `errors`).
+7. Print a short summary to stdout (`matched`, `queued`, `would_queue`, `skipped`, `errors`).
 
 ## Idempotency
 

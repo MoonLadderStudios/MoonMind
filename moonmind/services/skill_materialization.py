@@ -367,8 +367,20 @@ class AgentSkillMaterializer:
             return
         if alias_dir.is_dir() and not alias_dir.is_symlink():
             return
+        if alias_dir.is_symlink() and not alias_dir.exists():
+            raise RuntimeError(
+                "existing symlink does not resolve to a materialized snapshot: "
+                f"alias {alias_dir} points at a missing snapshot target "
+                f"({alias_dir.resolve(strict=False)}); this is a stale target or "
+                "missing-asset materialization failure, not a valid conflict-free "
+                "alias; repair through the workspace/materialization owner without "
+                "deleting repo-authored skill sources or discarding run work"
+            )
         raise RuntimeError(
-            "existing symlink does not resolve under a MoonMind-owned active skill root"
+            "existing symlink does not resolve under a MoonMind-owned active skill root; "
+            f"conflicting alias at {alias_dir}; repair through the "
+            "workspace/materialization owner without deleting or relocating "
+            "repo-authored skill sources or discarding run work"
         )
 
     def _alias_projection_diagnostic(
@@ -469,9 +481,11 @@ class AgentSkillMaterializer:
             f"path: {path}; "
             f"object kind: {self._path_kind(path)}; "
             "attempted action: project active skill snapshot; "
-            "remediation: remove or relocate the existing path so MoonMind can "
-            "create the canonical .agents/skills projection to the run-scoped "
-            "active skill backing store"
+            "remediation: repair through the workspace/materialization owner that "
+            "installed the active skill projection; preserve repo-authored skill "
+            "sources and cumulative run work; do not delete or relocate "
+            "repository-authored skill directories and do not reset the workspace "
+            "merely to satisfy the projection check"
         )
         if cause:
             message += f"; cause: {cause}"
