@@ -116,3 +116,71 @@ def test_local_build_dry_run_never_builds_or_launches(tmp_path, monkeypatch, cap
 def test_local_build_rejects_release_inputs(tmp_path, extra):
     with pytest.raises(ValueError):
         update.main(["--repo", str(tmp_path), "--local-build", *extra])
+
+
+@pytest.mark.parametrize(
+    ("daemon_output", "hint"),
+    [
+        (
+            "Error response from daemon: manifest for ghcr.io/moonladderstudios/moonmind:sha-abc123 not found: manifest unknown",
+            "no published image",
+        ),
+        (
+            'Error response from daemon: Head "https://ghcr.io/v2/x/manifests/sha-abc": unauthorized: authentication required',
+            "docker login ghcr.io",
+        ),
+        (
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+            "Docker daemon is unreachable",
+        ),
+    ],
+)
+def test_run_reports_actionable_docker_pull_diagnostics(tmp_path, monkeypatch, daemon_output, hint):
+    def failing(args, **kwargs):
+        return SimpleNamespace(returncode=1, stdout="", stderr=daemon_output)
+    monkeypatch.setattr(update.subprocess, "run", failing)
+    with pytest.raises(RuntimeError) as excinfo:
+        update.run(["docker", "pull", "ghcr.io/moonladderstudios/moonmind:sha-abc123"], cwd=tmp_path)
+    message = str(excinfo.value)
+    assert "docker pull failed (exit 1)" in message
+    assert "ghcr.io/moonladderstudios/moonmind:sha-abc123" in message
+    assert daemon_output in message
+    assert hint in message
+    assert "deployment remains owned by its recorded release job" in message
+
+
+def test_run_redacts_credentials_in_diagnostics(tmp_path, monkeypatch):
+    def failing(args, **kwargs):
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="Head https://user:s3cr3t-token@ghcr.io/v2/x: unauthorized token=abcdef123456",
+        )
+    monkeypatch.setattr(update.subprocess, "run", failing)
+    with pytest.raises(RuntimeError) as excinfo:
+        update.run(["docker", "pull", "ghcr.io/moonladderstudios/moonmind:sha-abc123"], cwd=tmp_path)
+    message = str(excinfo.value)
+    assert "s3cr3t-token" not in message
+    assert "***@" in message
+    assert "token=***" in message
+
+
+def test_main_pull_failure_names_branch_revision_and_image(tmp_path, monkeypatch):
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    git = _init_repo(repo)
+    revision = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    original_run = subprocess.run
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        assert args[1] == "pull"
+        return SimpleNamespace(returncode=1, stdout="", stderr="manifest unknown")
+    monkeypatch.setattr(update.subprocess, "run", command)
+    with pytest.raises(RuntimeError) as excinfo:
+        update.main(["--repo", str(repo)])
+    message = str(excinfo.value)
+    assert revision in message
+    assert f":sha-{revision}" in message
+    assert "origin/main" in message
