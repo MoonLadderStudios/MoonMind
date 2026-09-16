@@ -104,6 +104,7 @@ from api_service.api.routers.system_operations import (
 )
 from api_service.api.routers.proxy import router as proxy_router
 from api_service.api.routers.auth_advanced_4124 import router as auth_advanced_4124_router
+from api_service.api.routers.accounts_4122 import router as accounts_4122_router
 from api_service.api.routers.issue_lifecycle import router as issue_lifecycle_router
 from api_service.api.websockets import router as websockets_router
 from api_service.api.schemas import UserProfileUpdate
@@ -1356,6 +1357,11 @@ app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
 # through the shared auth boundary. Endpoints fail closed when the classified
 # production mode does not select them.
 app.include_router(auth_advanced_4124_router)
+# Built-in accounts lifecycle (#4122): protected first-owner setup,
+# invitation-only enrollment, password recovery, and administrator member
+# management through the shared #4121 session authority. Endpoints fail
+# closed unless the classified production mode is `accounts`.
+app.include_router(accounts_4122_router)
 if _ENABLE_TEST_UI_ROUTE:
     app.include_router(test_ui_router)
 
