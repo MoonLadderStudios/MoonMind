@@ -118,6 +118,72 @@ def test_api_worker_cli_import_without_manifest_services() -> None:
     assert not any(cmd == "manifest" for cmd in registered_commands)
 
 
+def test_worker_process_spec_has_no_manifest_bindings() -> None:
+    """Real worker-process composition carries no Manifest workflow/activity.
+
+    R3 gap: prior coverage proved imports and catalog contents in-process.
+    This exercises the exact immutable worker identity the worker process
+    passes to the Temporal SDK (``build_worker_spec`` over the real
+    workflow-fleet topology, workflow classes, and activity handlers),
+    which is the closest executable composition proof without a live
+    Temporal server (live connect/poll remains deployment-owner evidence).
+    """
+    import os
+
+    from moonmind.workflows.temporal.workers import (
+        WORKFLOW_FLEET,
+        build_worker_spec,
+        build_worker_topology,
+    )
+    from moonmind.workflows.temporal.workflow_registry import (
+        workflow_fleet_activity_handlers,
+        workflow_fleet_workflow_classes,
+    )
+
+    topology = build_worker_topology(fleet=WORKFLOW_FLEET)
+    spec = build_worker_spec(
+        topology=topology,
+        workflows=workflow_fleet_workflow_classes(),
+        activities=workflow_fleet_activity_handlers(),
+        environ={**os.environ, "MOONMIND_DEPLOYMENT_MODE": "development"},
+    )
+    lowered_workflows = [str(t).lower() for t in spec.workflow_types]
+    assert "moonmind.manifestingest" not in lowered_workflows
+    assert not any("manifestingest" in t for t in lowered_workflows)
+    assert "manifest.compile" not in set(spec.activity_types)
+    assert "manifest.write_summary" not in set(spec.activity_types)
+    assert not any(str(t).lower().startswith("manifest.") for t in spec.activity_types)
+    payload = spec.readiness_payload()
+    assert payload["fleet"] == WORKFLOW_FLEET
+    assert "moonmind.manifestingest" not in [
+        str(t).lower() for t in payload["workflowTypes"]
+    ]
+
+
+def test_cli_starts_without_manifest_services() -> None:
+    """CLI process starts (``--help``) with no Manifest command or setting.
+
+    R3 gap: prior coverage proved CLI imports. This invokes the real Typer
+    app entry (the same ``moonmind.cli:main`` target the installed
+    ``moonmind`` console script calls) across every command group without
+    Manifest service mocks or settings. A live installed-binary launch
+    remains deployment-owner evidence (the sandbox binary may be stale).
+    """
+    from typer.testing import CliRunner
+
+    from moonmind.cli import app
+
+    runner = CliRunner()
+    for argv in ([], ["worker"], ["container"], ["workflow"]):
+        result = runner.invoke(app, [*argv, "--help"], color=False)
+        assert result.exit_code == 0, result.output
+    top = runner.invoke(app, ["--help"], color=False)
+    assert top.exit_code == 0, top.output
+    assert "no `manifest` command group" in (app.info.help or "")
+    retired = runner.invoke(app, ["manifest", "--help"], color=False)
+    assert retired.exit_code != 0
+
+
 # ---------------------------------------------------------------------------
 # R4: historical rows via the generic authorized read path
 # ---------------------------------------------------------------------------
