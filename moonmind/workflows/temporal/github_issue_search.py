@@ -22,6 +22,37 @@ from moonmind.workflows.temporal.github_issue_lifecycle import (
     attempt_evidence_blocks_admission,
     interpret_issue,
 )
+from moonmind.workflows.temporal.issue_claim_store import ActiveIssueClaimConflict
+
+
+#: An explicit, declared dependency convention. "Blocked from starting" means
+#: no useful implementation can begin; "blocked from completing" means the work
+#: can proceed but final acceptance or closure waits. An issue whose body says
+#: its *completion* depends on other issues can still receive the independently
+#: useful work it also describes.
+PREREQUISITE_SCOPE_START = "start"
+PREREQUISITE_SCOPE_COMPLETION = "completion"
+
+# Only a declaration whose own words name completion is completion-scoped.
+# "Integration prerequisites", "Depends on", "Blocked by", and child lists keep
+# their established start-blocking meaning until each is reviewed and migrated.
+_COMPLETION_KEYWORDS = ("completion depends on",)
+
+_PREREQUISITE_DECLARATION_RE = re.compile(
+    r"(?P<keyword>\bCompletion depends on|\bIntegration prerequisites:|"
+    r"(?:^|(?<=[.!?]))[ \t]*(?:[-*] )?(?:Depends on|Blocked by):?)\s*"
+    r"(?P<refs>.+?)(?=\.(?:\s|$)|\n|$)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _declaration_scope(keyword: str) -> str:
+    normalized = keyword.strip().lstrip("-* \t").casefold()
+    return (
+        PREREQUISITE_SCOPE_COMPLETION
+        if normalized.startswith(_COMPLETION_KEYWORDS)
+        else PREREQUISITE_SCOPE_START
+    )
 
 
 @dataclass
@@ -30,22 +61,24 @@ class PrerequisiteLookup:
 
     states: dict[tuple[str, int], str] = field(default_factory=dict)
     requests: int = 0
+    completion_dependencies: list[dict[str, Any]] = field(default_factory=list)
 
 
-def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
-    """Read declared prerequisites and child lists, never contextual issue links."""
+def declared_dependencies(body: str, repository: str) -> dict[tuple[str, int], str]:
+    """Read declared dependencies and child lists, never contextual issue links.
+
+    Each reference carries its declared scope. Only a declaration whose own
+    words name completion (``Completion depends on``) is completion-scoped;
+    everything else keeps its established start-blocking meaning, so no
+    existing declaration is silently reinterpreted. Child lists and other
+    conventions move deliberately, declaration by declaration.
+    """
     declarations = [
-        (match.group(1), False)
-        for match in re.finditer(
-            r"(?:\bCompletion depends on|\bIntegration prerequisites:|"
-            r"(?:^|(?<=[.!?]))[ \t]*(?:[-*] )?Depends on:?)\s*"
-            r"(.+?)(?=\.(?:\s|$)|\n|$)",
-            body,
-            re.IGNORECASE | re.MULTILINE,
-        )
+        (match.group("refs"), _declaration_scope(match.group("keyword")), False)
+        for match in _PREREQUISITE_DECLARATION_RE.finditer(body)
     ]
-    # Child lists declare completion dependencies even when a stale checkbox
-    # claims completion. Their state is resolved by the same GitHub lookup as
+    # Child lists declare dependencies even when a stale checkbox claims
+    # completion. Their state is resolved by the same GitHub lookup as
     # sentence declarations, with one shared identity cache and request budget.
     child_section_level: int | None = None
     tokens = MarkdownIt("commonmark").parse(body)
@@ -70,9 +103,9 @@ def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
             # child. Markdown parsing excludes code and HTML-comment examples
             # while retaining legal heading indentation and nested sections.
             entry = re.sub(r"^\[[ xX]\]\s+", "", token.content)
-            declarations.append((entry, True))
-    refs: list[tuple[str, int]] = []
-    for declaration, is_child in declarations:
+            declarations.append((entry, PREREQUISITE_SCOPE_START, True))
+    scopes: dict[tuple[str, int], str] = {}
+    for declaration, scope, is_child in declarations:
         text = re.sub(
             r"\[[^\]\n]*\]\((https://github\.com/[\w.-]+/[\w.-]+/issues/[1-9]\d*)\)",
             r"\1",
@@ -86,12 +119,14 @@ def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
         if is_child:
             # A spaced dash introduces a title, including numeric titles such
             # as "2FA support". A spaced range must name its endpoint with #.
-            text = re.split(r"\s+[-–—]\s+(?![\s#])", text, maxsplit=1)[0]
+            text = re.split(r"\s+[-\u2013\u2014]\s+(?![\s#])", text, maxsplit=1)[0]
         # Consume only the leading reference list. Prose after the list can
         # contain parent, related, or other contextual issue references.
         text = re.sub(r"^issues?\s+", "", text, flags=re.IGNORECASE)
         while match := re.match(
-            r"(?:([\w.-]+/[\w.-]+))?#([1-9]\d*)" r"(?:\s*[-–—]\s*#?([1-9]\d*))?", text
+            r"(?:([\w.-]+/[\w.-]+))?#([1-9]\d*)"
+            r"(?:\s*[-\u2013\u2014]\s*#?([1-9]\d*))?",
+            text,
         ):
             start = int(match.group(2))
             end = int(match.group(3) or start)
@@ -99,16 +134,37 @@ def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
                 raise ValueError(
                     "GitHub prerequisite range is invalid or exceeds 100 issues."
                 )
-            refs.extend(
-                (match.group(1) or repository, number)
-                for number in range(start, end + 1)
-            )
-            text = text[match.end() :].lstrip(" \t,;")
+            for number in range(start, end + 1):
+                key = (match.group(1) or repository, number)
+                # A reference declared both ways keeps the stronger meaning:
+                # nothing useful can start until it is resolved.
+                if scopes.get(key) != PREREQUISITE_SCOPE_START:
+                    scopes[key] = scope
+            text = text[match.end():].lstrip(" \t,;")
             text = re.sub(r"^(?:and\b|&)\s*", "", text, flags=re.IGNORECASE)
-    refs = list(dict.fromkeys(refs))
-    if len(refs) > 100:
+    if len(scopes) > 100:
         raise ValueError("GitHub prerequisite declaration exceeds 100 issues.")
-    return refs
+    return scopes
+
+
+def declared_prerequisites(body: str, repository: str) -> list[tuple[str, int]]:
+    """References that must be resolved before implementation can start."""
+    return [
+        key
+        for key, scope in declared_dependencies(body, repository).items()
+        if scope == PREREQUISITE_SCOPE_START
+    ]
+
+
+def declared_completion_dependencies(
+    body: str, repository: str
+) -> list[tuple[str, int]]:
+    """References that gate acceptance or closure, not the start of work."""
+    return [
+        key
+        for key, scope in declared_dependencies(body, repository).items()
+        if scope == PREREQUISITE_SCOPE_COMPLETION
+    ]
 
 
 async def check_prerequisites(
@@ -117,60 +173,81 @@ async def check_prerequisites(
     repository: str,
     github_service: GitHubService,
     lookup: PrerequisiteLookup | None = None,
+    include_completion: bool = False,
 ) -> list[dict[str, Any]]:
-    """Resolve prerequisite state through authenticated GitHub reads only."""
-    refs = declared_prerequisites(str(issue.get("body") or ""), repository)
+    """Resolve prerequisite state through authenticated GitHub reads only.
+
+    Only an open start-blocking prerequisite denies selection. Open completion
+    dependencies are recorded on ``lookup.completion_dependencies`` (when
+    ``include_completion`` authorizes the extra reads) so the completion gate
+    can hold closure without stopping independently useful implementation.
+    """
+    scopes = declared_dependencies(str(issue.get("body") or ""), repository)
+    refs = [
+        (repo, number, scope)
+        for (repo, number), scope in scopes.items()
+        if include_completion or scope == PREREQUISITE_SCOPE_START
+    ]
+    refs.sort(key=lambda ref: ref[2] != PREREQUISITE_SCOPE_START)
     if not refs:
         return []
     lookup = lookup if lookup is not None else PrerequisiteLookup()
     async with httpx.AsyncClient(timeout=30.0) as client:
-        for dependency_repo, number in refs:
+        for dependency_repo, number, scope in refs:
             key = (dependency_repo.casefold(), number)
             prerequisite_state = lookup.states.get(key)
-            if prerequisite_state == "closed":
+            if prerequisite_state is None:
+                if lookup.requests >= 100:
+                    raise ValueError(
+                        "GitHub issue selection exceeded the 100-request prerequisite lookup budget; "
+                        "select an explicit issue or narrow the issue search."
+                    )
+                token, _error = await github_service.resolve_github_token(
+                    repo=dependency_repo
+                )
+                if not token:
+                    raise ValueError("GitHub prerequisite lookup is unavailable.")
+                lookup.requests += 1
+                try:
+                    response = await client.get(
+                        f"https://api.github.com/repos/{dependency_repo}/issues/{number}",
+                        headers=github_service._github_headers(token),
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                except (httpx.HTTPError, ValueError) as exc:
+                    raise ValueError("GitHub prerequisite lookup failed.") from exc
+                if (
+                    not isinstance(payload, Mapping)
+                    or payload.get("state") not in {"open", "closed"}
+                    or payload.get("number") != number
+                    or not is_complete_open_issue(
+                        {**payload, "state": "open"}, dependency_repo
+                    )
+                ):
+                    raise ValueError("GitHub prerequisite identity or state is invalid.")
+                lookup.states[key] = payload["state"]
+                prerequisite_state = payload["state"]
+            if prerequisite_state != "open":
                 continue
-            if prerequisite_state == "open":
+            if scope == PREREQUISITE_SCOPE_START:
                 return [_prerequisite_blocker(dependency_repo, number)]
-            if lookup.requests >= 100:
-                raise ValueError(
-                    "GitHub issue selection exceeded the 100-request prerequisite lookup budget; "
-                    "select an explicit issue or narrow the issue search."
-                )
-            token, _error = await github_service.resolve_github_token(
-                repo=dependency_repo
+            dependency = _prerequisite_blocker(
+                dependency_repo, number, scope=PREREQUISITE_SCOPE_COMPLETION
             )
-            if not token:
-                raise ValueError("GitHub prerequisite lookup is unavailable.")
-            lookup.requests += 1
-            try:
-                response = await client.get(
-                    f"https://api.github.com/repos/{dependency_repo}/issues/{number}",
-                    headers=github_service._github_headers(token),
-                )
-                response.raise_for_status()
-                payload = response.json()
-            except (httpx.HTTPError, ValueError) as exc:
-                raise ValueError("GitHub prerequisite lookup failed.") from exc
-            if (
-                not isinstance(payload, Mapping)
-                or payload.get("state") not in {"open", "closed"}
-                or payload.get("number") != number
-                or not is_complete_open_issue(
-                    {**payload, "state": "open"}, dependency_repo
-                )
-            ):
-                raise ValueError("GitHub prerequisite identity or state is invalid.")
-            lookup.states[key] = payload["state"]
-            if payload["state"] == "open":
-                return [_prerequisite_blocker(dependency_repo, number)]
+            if dependency not in lookup.completion_dependencies:
+                lookup.completion_dependencies.append(dependency)
     return []
 
 
-def _prerequisite_blocker(repository: str, number: int) -> dict[str, Any]:
+def _prerequisite_blocker(
+    repository: str, number: int, *, scope: str = PREREQUISITE_SCOPE_START
+) -> dict[str, Any]:
     return {
         "source": "prerequisite",
         "repository": repository,
         "number": number,
+        "scope": scope,
         "statusKnown": True,
         "done": False,
     }
@@ -392,13 +469,124 @@ def _selected_author_identity(candidate: Mapping[str, Any]) -> dict[str, Any] | 
     return {"id": user_id, "login": login.strip()}
 
 
+def _record_rejection(
+    counts: dict[str, Any], issue_number: int, reason: str, **details: Any
+) -> None:
+    """Retain bounded diagnostic samples without changing admission authority."""
+    reasons = counts.setdefault("rejectionCounts", {})
+    reasons[reason] = reasons.get(reason, 0) + 1
+    samples = counts.setdefault("rejectedCandidates", [])
+    # Keep owner diagnostics visible even behind a full page of label rejects.
+    if len(samples) >= 20 and reason in CLAIM_EVIDENCE_EXCLUSIONS:
+        for index, sample in enumerate(samples):
+            if sample["reasonCode"] not in CLAIM_EVIDENCE_EXCLUSIONS:
+                samples.pop(index)
+                break
+    if len(samples) < 20:
+        samples.append({"issueNumber": issue_number, "reasonCode": reason, **details})
+    counts["rejectedCandidatesTruncated"] = sum(reasons.values()) > len(samples)
+
+
+#: Actionable distinctions for a candidate that still carries an advisory
+#: in-progress label after reassessment. Diagnostics only; never GitHub labels.
+_RESERVATION_EXCLUSION_REASONS = {
+    "live_or_legacy_owner": "live_or_legacy_reservation",
+    "successor_observed": "live_reservation",
+    "claim_changed": "reservation_changed",
+    "settled_status_retained": "lifecycle_ineligible",
+    "operator_hold": "operator_hold",
+    "claim_read_failure": "github_evidence_unavailable",
+    "claim_actor_unavailable": "github_evidence_unavailable",
+    "untrusted_claim_poster": "untrusted_claim_evidence",
+    "claim_evidence_incomplete": "github_evidence_unavailable",
+    "conflicting_attempt_copies": "conflicting_attempt_copies",
+}
+
+
+def reservation_exclusion_reason(reconciliation: Mapping[str, Any] | None) -> str:
+    """Report why an advisory status label survived reassessment."""
+    if not reconciliation:
+        return "stale_status_label_unreconciled"
+    return _RESERVATION_EXCLUSION_REASONS.get(
+        str(reconciliation.get("reasonCode") or ""), "live_or_legacy_reservation"
+    )
+
+
+#: Exclusions backed by a specific attempt record, which therefore name an
+#: owner worth keeping in the bounded diagnostic sample.
+CLAIM_EVIDENCE_EXCLUSIONS = frozenset(
+    {
+        "active_attempt_conflict",
+        "live_reservation",
+        "legacy_reservation_awaiting_migration",
+        "operator_hold",
+        "conflicting_attempt_copies",
+    }
+)
+
+#: Exclusions that mean "someone else is reserving this issue right now",
+#: as opposed to lifecycle, author, or prerequisite exclusions.
+RESERVATION_EXCLUSIONS = frozenset(
+    {
+        "active_attempt_conflict",
+        "live_reservation",
+        "live_or_legacy_reservation",
+        "legacy_reservation_awaiting_migration",
+        "operator_hold",
+        "reservation_changed",
+        "stale_status_label_unreconciled",
+    }
+)
+
+
+def _exclusion_summary(counts: Mapping[str, Any]) -> str:
+    reasons = counts.get("rejectionCounts", {})
+    if not reasons:
+        return ""
+    summary = (
+        " Exclusions: "
+        + ", ".join(
+            f"{reason.replace('_', ' ')}: {count}"
+            for reason, count in sorted(reasons.items())
+        )
+        + "."
+    )
+    conflicts = sum(reasons.get(reason, 0) for reason in RESERVATION_EXCLUSIONS)
+    if conflicts:
+        samples = counts.get("rejectedCandidates", [])
+        examples = [
+            f"#{item['issueNumber']}"
+            for item in samples
+            if item["reasonCode"] in CLAIM_EVIDENCE_EXCLUSIONS
+        ] or [
+            f"#{item['issueNumber']}"
+            for item in samples
+            if item["reasonCode"] in RESERVATION_EXCLUSIONS
+        ]
+        examples = examples[:5]
+        summary += f" {conflicts} candidate(s) are reserved by another attempt"
+        if examples:
+            summary += " (" + ", ".join(examples) + ")"
+        summary += (
+            ". Inspect searchEvidence.rejectedCandidates for the recorded owner "
+            "and reservation status. A live reservation expires on its own; a "
+            "legacy (version 1) reservation is retired by the operator-declared "
+            "migration cutover, not by removing a status label."
+        )
+    return summary
+
+
 async def resolve_issue(
     *,
     repository: str,
     query: str,
     github_service: GitHubService,
     blockers_from_issue: Callable[[Mapping[str, Any]], Awaitable[list[dict[str, Any]]]],
-    attempt_evidence_resolver: Callable[[Mapping[str, Any]], Awaitable[Mapping[str, Any] | None]] | None = None,
+    reconcile_candidate: Callable[[int], Awaitable[Mapping[str, Any]]] | None = None,
+    attempt_evidence_resolver: Callable[
+        [Mapping[str, Any]], Awaitable[Mapping[str, Any] | None]
+    ]
+    | None = None,
     recovery_handoff: Mapping[str, Any] | None = None,
     attempt_context: Mapping[str, Any] | None = None,
     pr_identities: Sequence[Mapping[str, Any]] | None = None,
@@ -609,6 +797,9 @@ async def resolve_issue(
                         "reasonCode": "incomplete_evidence",
                     }
                 if "pull_request" in candidate:
+                    counts["pullRequestsSkipped"] = (
+                        counts.get("pullRequestsSkipped", 0) + 1
+                    )
                     continue
                 if not is_complete_open_issue(candidate, repository):
                     return None, {
@@ -639,24 +830,71 @@ async def resolve_issue(
                         counts["authorMismatchesSkipped"] = (
                             int(counts.get("authorMismatchesSkipped") or 0) + 1
                         )
+                        _record_rejection(
+                            counts, candidate["number"], "author_mismatch"
+                        )
                         continue
                 normalized = dict(candidate)
                 labels = candidate["labels"]
                 normalized["labels"] = [label["name"] for label in labels]
-                if has_in_progress_status(normalized):
+                # A status label is advisory bookkeeping, never ownership. An
+                # in-progress candidate is reassessed against current attempt
+                # evidence; only a live reservation, an explicit hold, or
+                # unreadable evidence still excludes it.
+                reconciliation: Mapping[str, Any] | None = None
+                advisory_only = has_in_progress_status(
+                    normalized
+                ) and is_lifecycle_selectable_candidate(
+                    {
+                        **normalized,
+                        "labels": [
+                            label
+                            for label in normalized["labels"]
+                            if str(label).strip().lower() not in _IN_PROGRESS_LABELS
+                        ],
+                    }
+                )
+                if advisory_only and reconcile_candidate is not None:
+                    reconciliation = await reconcile_candidate(candidate["number"])
+                    if reconciliation.get("reclaimed"):
+                        normalized["labels"] = [
+                            label
+                            for label in normalized["labels"]
+                            if str(label).strip().lower() not in _IN_PROGRESS_LABELS
+                        ]
+                if advisory_only and has_in_progress_status(normalized):
+                    _record_rejection(
+                        counts,
+                        candidate["number"],
+                        reservation_exclusion_reason(reconciliation),
+                        reservationEvidence=dict(reconciliation or {}) or None,
+                    )
                     continue
                 if not is_lifecycle_selectable_candidate(normalized):
+                    _record_rejection(
+                        counts,
+                        candidate["number"],
+                        "lifecycle_ineligible",
+                        lifecycleState=interpret_issue(normalized).settled,
+                    )
                     continue
-                if (
-                    interpret_issue(
-                        {"state": "open", "labels": normalized["labels"]}
-                    ).settled == SETTLED_RECOVERY_NEEDED
-                    and not _recovery_handoff_usable(recovery_handoff)
+                if interpret_issue(
+                    {"state": "open", "labels": normalized["labels"]}
+                ).settled == SETTLED_RECOVERY_NEEDED and not _recovery_handoff_usable(
+                    recovery_handoff
                 ):
+                    _record_rejection(
+                        counts, candidate["number"], "recovery_handoff_missing"
+                    )
                     continue
                 if attempt_evidence_resolver is not None:
-                    candidate_attempt_context: Mapping[str, Any] | None = await attempt_evidence_resolver(normalized)
+                    candidate_attempt_context: (
+                        Mapping[str, Any] | None
+                    ) = await attempt_evidence_resolver(normalized)
                     if attempt_evidence_blocks_admission(candidate_attempt_context):
+                        _record_rejection(
+                            counts, candidate["number"], "active_attempt_conflict"
+                        )
                         continue
                 else:
                     candidate_attempt_context = attempt_context
@@ -667,9 +905,9 @@ async def resolve_issue(
                 # candidate and threaded into the admit decision itself (not a
                 # post-hoc skip): a blocked candidate is denied as
                 # blocked_prerequisite on both the query and fallback paths.
-                candidate_blockers: list[dict[str, Any]] | None = await blockers_from_issue(
-                    normalized
-                )
+                candidate_blockers: (
+                    list[dict[str, Any]] | None
+                ) = await blockers_from_issue(normalized)
                 shared = admit_for_entrypoint(
                     ENTRYPOINT_SEARCH,
                     repository=repository,
@@ -684,9 +922,17 @@ async def resolve_issue(
                 )
                 if not shared.allowed:
                     if shared.reason_code == "read_failure":
-                        return None, {**evidence, "error": shared.summary, "reasonCode": "read_failure"}
+                        return None, {
+                            **evidence,
+                            "error": shared.summary,
+                            "reasonCode": "read_failure",
+                        }
+                    _record_rejection(counts, candidate["number"], shared.reason_code)
                     continue
                 if candidate_blockers:
+                    _record_rejection(
+                        counts, candidate["number"], "blocked_prerequisite"
+                    )
                     continue
                 # Confirm current identity/lifecycle inside the bounded scan so
                 # a stale first candidate does not fail the whole scheduled tick.
@@ -698,33 +944,95 @@ async def resolve_issue(
                     current_response.raise_for_status()
                     current = current_response.json()
                 except (httpx.HTTPError, ValueError) as exc:
-                    return None, {**evidence, "error": f"Candidate confirmation failed: {type(exc).__name__}."}
-                if not isinstance(current, Mapping) or current.get("number") != candidate["number"]:
-                    return None, {**evidence, "error": "Candidate confirmation returned a different or malformed issue."}
+                    return None, {
+                        **evidence,
+                        "error": f"Candidate confirmation failed: {type(exc).__name__}.",
+                    }
+                if (
+                    not isinstance(current, Mapping)
+                    or current.get("number") != candidate["number"]
+                ):
+                    return None, {
+                        **evidence,
+                        "error": "Candidate confirmation returned a different or malformed issue.",
+                    }
                 if current.get("state") == "closed":
+                    _record_rejection(counts, candidate["number"], "candidate_closed")
                     continue
                 if not is_complete_open_issue(current, repository):
-                    return None, {**evidence, "error": "Candidate confirmation evidence is incomplete."}
-                if not is_lifecycle_selectable_candidate(current) or await blockers_from_issue(current):
+                    return None, {
+                        **evidence,
+                        "error": "Candidate confirmation evidence is incomplete.",
+                    }
+                if not is_lifecycle_selectable_candidate(current):
+                    _record_rejection(
+                        counts,
+                        candidate["number"],
+                        "lifecycle_ineligible",
+                        lifecycleState=interpret_issue(current).settled,
+                    )
                     continue
-                if interpret_issue(current).settled == SETTLED_RECOVERY_NEEDED and not _recovery_handoff_usable(recovery_handoff):
+                if await blockers_from_issue(current):
+                    _record_rejection(
+                        counts, candidate["number"], "blocked_prerequisite"
+                    )
+                    continue
+                if interpret_issue(
+                    current
+                ).settled == SETTLED_RECOVERY_NEEDED and not _recovery_handoff_usable(
+                    recovery_handoff
+                ):
+                    _record_rejection(
+                        counts, candidate["number"], "recovery_handoff_missing"
+                    )
                     continue
                 # Recheck author scope on the authoritative issue read before
                 # granting a durable claim; a search hit alone is not authority.
                 selected_author = _selected_author_identity(current)
                 if authenticated_user is not None:
                     if selected_author is None:
-                        return None, {**evidence, "error": "Candidate confirmation author evidence is incomplete.", "reasonCode": "invalid_author_evidence"}
+                        return None, {
+                            **evidence,
+                            "error": "Candidate confirmation author evidence is incomplete.",
+                            "reasonCode": "invalid_author_evidence",
+                        }
                     if selected_author["id"] != authenticated_user["id"]:
                         counts["authorMismatchesSkipped"] += 1
+                        _record_rejection(
+                            counts, candidate["number"], "author_mismatch"
+                        )
                         continue
+                try:
+                    if reserve_candidate is not None and not await reserve_candidate(
+                        int(candidate["number"])
+                    ):
+                        _record_rejection(
+                            counts, candidate["number"], "reservation_rejected"
+                        )
+                        continue
+                except ActiveIssueClaimConflict as exc:
+                    _record_rejection(
+                        counts,
+                        candidate["number"],
+                        exc.evidence.get("reasonCode") or "active_attempt_conflict",
+                        claimEvidence=exc.evidence,
+                    )
+                    continue
                 if selected_author is not None:
                     counts["selectedIssueAuthor"] = dict(selected_author)
-                if reserve_candidate is not None and not await reserve_candidate(int(candidate["number"])):
-                    continue
                 evidence["selectedIssue"] = dict(current)
                 return candidate["number"], evidence
             if len(candidates) < 100:
+                if any(
+                    counts.get("rejectionCounts", {}).get(reason)
+                    for reason in RESERVATION_EXCLUSIONS
+                ):
+                    return None, {
+                        **evidence,
+                        "disposition": "idle",
+                        "summary": "No issue selected." + _exclusion_summary(counts),
+                        "reasonCode": "unresolved_issue_attempts",
+                    }
                 if authenticated_user is not None:
                     return None, {
                         **evidence,
@@ -733,13 +1041,15 @@ async def resolve_issue(
                             "No eligible open GitHub issue created by the authenticated "
                             "search account was found; candidate pages exhausted. "
                             "No other author's issue was selected."
-                        ),
+                        )
+                        + _exclusion_summary(counts),
                         "reasonCode": "no_eligible_self_authored_issue",
                     }
                 return None, {
                     **evidence,
                     "disposition": "idle",
-                    "summary": "No eligible open GitHub issue found; candidate pages exhausted.",
+                    "summary": "No eligible open GitHub issue found; candidate pages exhausted."
+                    + _exclusion_summary(counts),
                 }
     if authenticated_user is not None:
         return None, {
@@ -748,11 +1058,13 @@ async def resolve_issue(
                 "No eligible GitHub issue created by the authenticated search account "
                 "was found within the 500-candidate scan limit. No other author's "
                 "issue was selected."
-            ),
+            )
+            + _exclusion_summary(counts),
             "reasonCode": "no_eligible_self_authored_issue",
         }
     return None, {
         **evidence,
-        "error": "No eligible GitHub issue found within the 500-candidate scan limit.",
+        "error": "No eligible GitHub issue found within the 500-candidate scan limit."
+        + _exclusion_summary(counts),
         "reasonCode": "no_eligible_candidate",
     }

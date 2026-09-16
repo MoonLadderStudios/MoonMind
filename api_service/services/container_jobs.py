@@ -51,6 +51,7 @@ from moonmind.schemas.container_job_models import (
     OwnerIdentity,
     RegistryAuthorization,
     TerminalOutcome,
+    require_explicit_resources,
 )
 from moonmind.workflows.temporal.client import TemporalClientAdapter
 
@@ -274,8 +275,19 @@ class ContainerJobService:
                     raise ContainerJobAuthorizationError(authorization)
         existing = await self.repository.find_exact_replay(owner=owner, request=request)
         if existing is not None:
+            # An exact idempotent replay preserves the existing job identity
+            # and the original serialized request comparison, including
+            # historical zero-valued or memory-range requests. Only new
+            # execution is gated below.
             record, replayed = existing, True
         else:
+            try:
+                require_explicit_resources(request.spec.resources)
+            except ValueError as exc:
+                raise ValueError(
+                    "container-job resources must be explicit for new jobs: "
+                    f"{exc}"
+                ) from exc
             record, replayed = await self.repository.create_or_replay(
                 owner=owner, request=request, authorization=authorization
             )

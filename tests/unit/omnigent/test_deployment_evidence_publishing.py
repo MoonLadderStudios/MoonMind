@@ -109,6 +109,69 @@ def test_publisher_preserves_independent_materializer_qualifications(
     assert go_entry.support_identity.modelConfigDigest == "sha256:" + "b" * 64
 
 
+def test_none_fast_path_tolerates_volatile_build_drift_but_blocks_isolation_drift(
+    tmp_path, monkeypatch,
+) -> None:
+    """none@1 keeps materializer/image/policy enforcement without rebuild churn."""
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
+        str(tmp_path / "deployment_evidence_key"),
+    )
+    evidence = _evidence("none@1", profile_ref="opencode-zen-free")
+    path = tmp_path / "deployment-evidence.json"
+    path.write_text(json.dumps({"entries": [evidence]}))
+
+    # Volatile build digests advance (server/host/harness/vendor/agent) — still admitted.
+    drifted = _identity("none@1").model_copy(
+        update={
+            "omnigentServerBuildRef": "sha256:" + "f" * 64,
+            "omnigentHostBuildRef": "sha256:" + "e" * 64,
+            "harnessImplementationRef": "omnigent-harness-implementation:sha256:" + "d" * 64,
+            "vendorRuntimeRefs": ("opencode@1.19.0#sha256:" + "c" * 64,),
+            "agentSourceRef": "agent-source:sha256:" + "b" * 64,
+        }
+    )
+    plan = SimpleNamespace(
+        supportIdentity=drifted,
+        supportCombinationKey=compute_support_combination_key(drifted),
+        hostImageRef=evidence["hostImageRef"],
+    )
+    assert load_deployment_evidence(plan, path=path) == evidence
+
+    # Isolation-relevant fields still fail closed.
+    for field, value in [
+        ("materializerRefs", ("opencode-auth-json@1",)),
+        ("launchPolicyRef", "omnigent-on-demand@9"),
+        ("hostClassRef", "omnigent-opencode@9"),
+        ("providerCompatibilityClass", "other-class"),
+        ("executionRealizerRef", "codex-profile-bound@1"),
+    ]:
+        blocked = _identity("none@1").model_copy(update={field: value})
+        blocked_plan = SimpleNamespace(
+            supportIdentity=blocked,
+            supportCombinationKey=compute_support_combination_key(blocked),
+            hostImageRef=evidence["hostImageRef"],
+        )
+        with pytest.raises(ValueError) as failure:
+            load_deployment_evidence(blocked_plan, path=path)
+        assert f"{field} differs" in str(failure.value)
+
+    # Auth-bearing identities stay exact: same volatile drift still blocks.
+    auth_evidence = _evidence("opencode-auth-json@1", profile_ref="opencode-go-default")
+    auth_path = tmp_path / "deployment-evidence-auth.json"
+    auth_path.write_text(json.dumps({"entries": [auth_evidence]}))
+    auth_drifted = _identity("opencode-auth-json@1").model_copy(
+        update={"agentSourceRef": "agent-source:sha256:" + "c" * 64}
+    )
+    auth_plan = SimpleNamespace(
+        supportIdentity=auth_drifted,
+        supportCombinationKey=compute_support_combination_key(auth_drifted),
+        hostImageRef=auth_evidence["hostImageRef"],
+    )
+    with pytest.raises(ValueError, match="agentSourceRef differs"):
+        load_deployment_evidence(auth_plan, path=auth_path)
+
+
 def test_profile_drift_reports_closest_identity_without_historical_error_explosion(
     tmp_path, monkeypatch,
 ) -> None:

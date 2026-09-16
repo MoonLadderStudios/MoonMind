@@ -150,8 +150,9 @@ steps:
     constraints: '{{ inputs.constraints }}'
 - title: Check GitHub issue blockers before implementation
   type: tool
-  instructions: 'Read artifacts/github-issue-implement-assessment.json (or the recorded
-    verdict from the assess step) before deciding how to apply blocker results.
+  instructions: 'Use the carried assessmentVerdict ref from the assess step; reread
+    artifacts/github-issue-implement-assessment.json only when identity or freshness
+    requires it before deciding how to apply blocker results.
 
 
     Check GitHub issue {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
@@ -173,8 +174,9 @@ steps:
       issueNumber: '{{ inputs.github_issue.number }}'
 - title: Mark GitHub issue In Progress
   type: tool
-  instructions: 'Read artifacts/github-issue-implement-assessment.json (or the previous
-    step''s recorded verdict) before doing anything.
+  instructions: 'Use the carried assessmentVerdict ref from the assess step; reread
+    artifacts/github-issue-implement-assessment.json only when identity or freshness
+    requires it before doing anything.
 
 
     If the recorded verdict is FULLY_IMPLEMENTED, skip the In Progress update because

@@ -19,12 +19,15 @@ from temporalio import activity
 from api_service.db.models import GitHubIssueClaim
 from moonmind.workflows.temporal.github_issue_attempts import (
     parse_attempt_comment,
-    stable_attempt_marker,
 )
 
 
 class ActiveIssueClaimConflict(ValueError):
     """Another durable owner reserved this candidate before any local write."""
+
+    def __init__(self, message: str, *, evidence: Mapping[str, Any] | None = None):
+        super().__init__(message)
+        self.evidence = dict(evidence or {})
 
 
 def claim_owner(context: Mapping[str, Any] | None = None) -> str:
@@ -53,6 +56,8 @@ class ClaimReceipt:
     released: bool
     announcement_started: bool = False
     finalization_json: dict[str, Any] | None = None
+    ownership_ended: bool = False
+    ownership_ended_reason: str | None = None
 
     @classmethod
     def from_row(cls, row):
@@ -61,6 +66,11 @@ class ClaimReceipt:
     def handoff(self) -> dict[str, Any]:
         parsed = parse_attempt_comment(self.comment_body)
         return {
+            **({"issueClaimLease": {
+                "owner": self.owner, "attemptId": self.attempt_id,
+                "repository": self.repository, "issueNumber": self.issue_number,
+                "commentId": self.comment_id,
+            }} if parsed.handoff and parsed.handoff.lease_expires_at else {}),
             "attemptId": self.attempt_id,
             "existingAttemptCommentId": self.comment_id,
             "admittedIdentity": {
@@ -96,6 +106,7 @@ class IssueClaimStore:
                         GitHubIssueClaim.repository == repository.casefold(),
                         GitHubIssueClaim.issue_number == issue_number,
                         GitHubIssueClaim.released.is_(False),
+                        GitHubIssueClaim.ownership_ended.is_(False),
                     )
                 )
             ).scalar_one_or_none()
@@ -189,6 +200,30 @@ class IssueClaimStore:
                 await session.delete(row)
                 return True
 
+    async def end_ownership(self, owner: str, attempt_id: str, *, reason: str) -> bool:
+        """Retire this attempt's reservation without waiting for bookkeeping.
+
+        Ownership and cleanup are separate facts: a failed label write or an
+        unconfirmed terminal comment must not keep an issue reserved. The
+        receipt, its pending comment intent, and its finalization evidence are
+        all retained so the remaining bookkeeping can be retried.
+        """
+        async with self.sessions() as session:
+            async with session.begin():
+                row = (
+                    await session.execute(
+                        select(GitHubIssueClaim)
+                        .where(GitHubIssueClaim.owner == owner)
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if row is None or row.attempt_id != attempt_id:
+                    return False
+                if not row.ownership_ended:
+                    row.ownership_ended = True
+                    row.ownership_ended_reason = reason[:200]
+                return True
+
     async def record_finalization(
         self, owner: str, phase: str, value: dict[str, Any]
     ) -> None:
@@ -212,6 +247,10 @@ class IssueClaimStore:
                 parsed = parse_attempt_comment(body)
                 if parsed.handoff and parsed.handoff.activity == "released":
                     row.released = True
+                    row.ownership_ended = True
+                    row.ownership_ended_reason = (
+                        row.ownership_ended_reason or "released"
+                    )
 
     async def prepare(
         self,
@@ -240,8 +279,17 @@ class IssueClaimStore:
                 await session.rollback()
             row = await session.get(GitHubIssueClaim, owner)
             if row is None:
+                active = await self.active_for_issue(repository, issue_number)
                 raise ActiveIssueClaimConflict(
-                    "active_attempt_conflict: another durable owner selected this issue"
+                    "active_attempt_conflict: another durable owner selected this issue",
+                    evidence={
+                        "source": "local_claim",
+                        **(
+                            {"owner": active.owner, "attemptId": active.attempt_id}
+                            if active is not None
+                            else {}
+                        ),
+                    },
                 )
             if (row.repository, row.issue_number) != (
                 repository.casefold(),
@@ -294,16 +342,33 @@ class IssueClaimStore:
 
 
 def inspect_claim_comments(
-    receipt: ClaimReceipt, comments: list[dict[str, Any]]
+    receipt: ClaimReceipt,
+    comments: list[dict[str, Any]],
+    *,
+    block_on_contenders: bool = True,
 ) -> str | None:
-    """Validate own provenance and reject active contenders or conflicting copies."""
+    """Validate own provenance and locate this attempt's own comment.
+
+    Two decisions live here and must stay separate. Permission to *continue
+    shared work* requires current ownership and no winning competing claim, so
+    the default rejects live contenders. Permission to *retire your own
+    reservation* requires only authentic ownership of this attempt record:
+    callers pass ``block_on_contenders=False`` so the operation that resolves
+    contention can never be blocked by contention. Withdrawing never clears a
+    successor's labels, overwrites their PR, or reports stopped writers.
+    """
+    from moonmind.workflows.temporal.github_issue_claim_lease import (
+        blocks_new_work,
+        reservation_status,
+    )
+
     own = []
-    contenders = False
+    contenders = []
     observed_release = receipt.released
-    marker = stable_attempt_marker(receipt.attempt_id)
     for comment in comments:
         body = str(comment.get("body") or "")
-        if marker in body:
+        parsed = parse_attempt_comment(body)
+        if parsed.attempt_id == receipt.attempt_id:
             if str(
                 (comment.get("user") or {}).get("id") or ""
             ) != receipt.actor_id or body not in {
@@ -314,22 +379,32 @@ def inspect_claim_comments(
                     "claim_evidence_conflict: own comment provenance/content changed"
                 )
             own.append(str(comment.get("id") or ""))
-            parsed = parse_attempt_comment(body)
             observed_release = bool(
                 parsed.handoff and parsed.handoff.activity == "released"
             )
             continue
-        parsed = parse_attempt_comment(body)
-        if parsed.status == "no_marker":
+        status = reservation_status(parsed, comment)
+        if status is None or not blocks_new_work(status):
+            # Released, expired, retired-legacy, and stale-unreadable comments
+            # are history. They never create permanent ownership.
             continue
-        if parsed.handoff is None or parsed.handoff.activity in {
-            "preparing",
-            "active",
-            "awaiting-review",
-            "releasing",
-            "attention",
-        }:
-            contenders = True
+        contender = {
+            "commentId": str(comment.get("id") or ""),
+            "parseStatus": parsed.status,
+            "attemptId": parsed.attempt_id,
+            "reservationStatus": status,
+        }
+        if parsed.handoff is not None:
+            contender.update(
+                {
+                    "deploymentId": parsed.handoff.deployment_id,
+                    "workflowId": parsed.handoff.workflow_id,
+                    "runId": parsed.handoff.run_id,
+                    "activity": parsed.handoff.activity,
+                    "leaseExpiresAt": parsed.handoff.lease_expires_at,
+                }
+            )
+        contenders.append(contender)
     own = list(dict.fromkeys(own))
     if len(own) > 1:
         from moonmind.observability.metrics import increment_counter
@@ -341,14 +416,50 @@ def inspect_claim_comments(
         raise ValueError(
             "claim_evidence_conflict: own receipt is missing or duplicated"
         )
-    if contenders and not observed_release:
+    if block_on_contenders and contenders and not observed_release:
         raise ActiveIssueClaimConflict(
-            "active_attempt_conflict: another unresolved attempt is present"
+            "active_attempt_conflict: another unresolved attempt is present",
+            evidence={
+                "source": "github_comments",
+                "unresolvedAttemptCount": len(contenders),
+                "reasonCode": _contender_reason_code(contenders),
+                "attempts": contenders[:10],
+                "attemptsTruncated": len(contenders) > 10,
+            },
         )
     return own[0] if own else None
 
 
+def _contender_reason_code(contenders: list[dict[str, Any]]) -> str:
+    """Report the most actionable distinction, not one undifferentiated veto."""
+    from moonmind.workflows.temporal.github_issue_claim_lease import (
+        RESERVATION_LEGACY_PENDING,
+        RESERVATION_LIVE,
+        RESERVATION_OPERATOR_HOLD,
+    )
+
+    observed = {item.get("reservationStatus") for item in contenders}
+    for status in (RESERVATION_OPERATOR_HOLD, RESERVATION_LIVE, RESERVATION_LEGACY_PENDING):
+        if status in observed:
+            return status
+    return "active_attempt_conflict"
+
+
 async def verify_claim(receipt: ClaimReceipt, service) -> bool:
+    """Confirm this attempt may still perform shared work on the issue."""
+    from moonmind.workflows.temporal.github_issue_claim_lease import (
+        RESERVATION_EXPIRED,
+        RESERVATION_LEGACY_RETIRED,
+        reservation_status,
+    )
+
+    if receipt.ownership_ended:
+        raise ValueError(
+            "claim_lease_expired: this attempt already retired its reservation"
+        )
+    status = reservation_status(parse_attempt_comment(receipt.comment_body))
+    if status in {RESERVATION_EXPIRED, RESERVATION_LEGACY_RETIRED}:
+        raise ValueError("claim_lease_expired: the old attempt cannot resume shared writes")
     listed = await service.list_issue_comments(
         repo=receipt.repository, issue_number=receipt.issue_number
     )
@@ -357,16 +468,29 @@ async def verify_claim(receipt: ClaimReceipt, service) -> bool:
     return bool(inspect_claim_comments(receipt, listed["comments"]))
 
 
+def is_withdrawal(body: str) -> bool:
+    """A body that retires this attempt rather than continuing shared work."""
+    parsed = parse_attempt_comment(body)
+    return bool(parsed.handoff and parsed.handoff.activity == "released")
+
+
 async def reconcile_claim_comment(
     store: IssueClaimStore, receipt: ClaimReceipt, service
 ) -> ClaimReceipt:
-    """Read back a pending write without issuing another external effect."""
+    """Read back a pending write without issuing another external effect.
+
+    Confirming what GitHub already stores for *our own* comment grants no new
+    shared-write authority, so a contender must not block it. Blocking here
+    deadlocked release: the finalizer reconciles before it can withdraw.
+    """
     listed = await service.list_issue_comments(
         repo=receipt.repository, issue_number=receipt.issue_number
     )
     if not listed.get("ok") or not isinstance(listed.get("comments"), list):
         raise ValueError("read_failure: claim comment update cannot be reconciled")
-    comment_id = inspect_claim_comments(receipt, listed["comments"])
+    comment_id = inspect_claim_comments(
+        receipt, listed["comments"], block_on_contenders=False
+    )
     if not comment_id:
         raise ValueError("claim_evidence_conflict: announced comment disappeared")
     observed = next(
@@ -379,14 +503,29 @@ async def reconcile_claim_comment(
 async def publish_claim_comment(
     store: IssueClaimStore, receipt: ClaimReceipt, service, body: str
 ) -> str:
-    """Persist an update intent, reconcile its response, then commit its receipt."""
+    """Persist an update intent, reconcile its response, then commit its receipt.
+
+    Retiring this attempt's own reservation stays available under contention;
+    every other lifecycle update still requires uncontested ownership.
+    """
+    # Ordinary lifecycle updates must retain the admitted lease contract.
+    from dataclasses import replace
+    from moonmind.workflows.temporal.github_issue_attempts import render_attempt_comment
+    admitted = parse_attempt_comment(receipt.comment_body).handoff
+    proposed = parse_attempt_comment(body).handoff
+    if admitted and proposed and admitted.lease_expires_at and not proposed.lease_expires_at:
+        body = render_attempt_comment(replace(proposed,
+            lease_renewed_at=admitted.lease_renewed_at, lease_expires_at=admitted.lease_expires_at))
+    block = not is_withdrawal(body)
     # Finish any acknowledged-by-GitHub update before accepting a new intent.
     listed = await service.list_issue_comments(
         repo=receipt.repository, issue_number=receipt.issue_number
     )
     if not listed.get("ok") or not isinstance(listed.get("comments"), list):
         raise ValueError("read_failure: claim comment update cannot be reconciled")
-    comment_id = inspect_claim_comments(receipt, listed["comments"])
+    comment_id = inspect_claim_comments(
+        receipt, listed["comments"], block_on_contenders=block
+    )
     if not comment_id:
         raise ValueError("claim_evidence_conflict: announced comment disappeared")
     observed = next(
@@ -408,7 +547,7 @@ async def publish_claim_comment(
     )
     if not listed.get("ok") or not isinstance(listed.get("comments"), list):
         raise ValueError("read_failure: claim comment update is unconfirmed")
-    inspect_claim_comments(current, listed["comments"])
+    inspect_claim_comments(current, listed["comments"], block_on_contenders=block)
     if not any(
         str(item.get("id")) == comment_id and item.get("body") == body
         for item in listed["comments"]

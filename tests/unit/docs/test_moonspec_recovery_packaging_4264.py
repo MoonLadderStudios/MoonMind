@@ -171,16 +171,14 @@ def test_fix_merge_conflicts_preserves_exact_base_and_task_only_changes():
     assert "or `git add -A`" not in text
     assert "Never use `git add -A`" in text
     assert "Commit any other local changes" not in text
-    assert "Commit only intentional task changes" in text
-    assert "preserve pre-existing unrelated" in text.lower()
+    assert "Commit and push only intentional task changes" in text
+    assert "leave pre-existing staged, unstaged, and untracked" in text.lower()
     assert "base_unavailable" in text
     assert "Never silently substitute a default branch" in text
-    assert "git_identity_unavailable" in text
-    assert "do not invent an author/email" in text.lower()
-    assert "git config --local --get user.name" not in text
     assert "git config --get user.name" in text
-    assert "stash push --staged" in text
-    assert "staged_changes_not_restorable" in text
+    assert "Do not invent, default, or export a fallback author/email" in text
+    assert "git merge --autostash" in text
+    assert "never stage or commit unrelated" in text.lower()
 
 
 def test_jira_verify_posts_comment_before_status_transition():
@@ -188,10 +186,10 @@ def test_jira_verify_posts_comment_before_status_transition():
     assert "evidence-first" in text.lower()
     assert "before any status transition" in text.lower() or "before any completion transition" in text.lower()
     assert "If posting fails" in text
-    assert "do not attempt a completion transition" in text.lower() or "do not claim Jira was updated" in text
-    assert "pending" in text.lower() and "not yet attempted" in text.lower()
-    assert "follow-up comment" in text.lower()
-    assert "only the follow-up comment may state it" in text.lower()
+    assert "do not attempt a completion transition" in text.lower() or "do not claim jira was updated" in text.lower()
+    assert "planned/pending execution" in text.lower()
+    assert "follow-up jira comment" in text.lower()
+    assert "Do not claim `transitioned` or `failed` here" in text
 
 
 def test_jira_issue_creator_distinguishes_draft_from_write_intent():

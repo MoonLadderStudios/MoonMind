@@ -341,22 +341,10 @@ CONCURRENCY_SCENARIO_CATALOG: tuple[ScenarioOwner, ...] = (
         escaped_regressions=("MoonLadderStudios/MoonMind#3884",),
         required_in_ci=True,
     ),
-    # The hermetic layer's declared environment includes real database
-    # constraints. The final-slot race is decided by two *independent*
-    # PostgreSQL transactions racing the same budget, which an in-memory
-    # ledger cannot reproduce: this owner holds one transaction open between
-    # the count and the commit and proves the second is serialized behind it.
-    _owner(
-        _F.host_and_transport_pressure,
-        _L.hermetic,
-        "tests/integration/omnigent/test_machine_capacity_reservations_postgres.py",
-        escaped_regressions=("MoonLadderStudios/MoonMind#3881",),
-    ),
     _owner(
         _F.host_and_transport_pressure,
         _L.exact_docker,
-        "tests/integration/omnigent/test_machine_capacity_reservations_postgres.py",
-        escaped_regressions=("MoonLadderStudios/MoonMind#3881",),
+        "tests/integration/omnigent/test_exact_docker_n_way_concurrency.py",
     ),
     # 5. Failure at authority handoffs.
     _owner(

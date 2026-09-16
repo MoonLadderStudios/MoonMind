@@ -1029,7 +1029,7 @@ class TemporalClientAdapter:
     async def ensure_github_issue_reconcile_schedule(
         self,
         *,
-        cron_expression: str = "17 * * * *",
+        cron_expression: str = "*/5 * * * *",
         timezone: str = "UTC",
         enabled: bool = True,
         repository: str = "",
@@ -1037,7 +1037,7 @@ class TemporalClientAdapter:
         """Create or replace the recurring GitHub issue reconcile schedule.
 
         Registers ``MoonMind.GitHubIssueReconcile`` through the production
-        Temporal scheduling mechanism so the default hourly maintenance run
+        Temporal scheduling mechanism so the default five-minute maintenance run
         starts without manual invocation. Skip-on-overlap keeps duplicate
         observations bounded without a global lock.
         """

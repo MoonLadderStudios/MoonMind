@@ -97,7 +97,8 @@ class OmnigentLaunchPolicy(BaseModel):
             "temporaryStorageMiB",
         }
         if set(self.limits) != required_limits or any(
-            not isinstance(v, int) or v <= 0 for v in self.limits.values()
+            not isinstance(v, int) or isinstance(v, bool) or v < 1
+            for k, v in self.limits.items()
         ):
             raise ValueError(
                 "limits must contain positive cpu, memory, process, timeout, "

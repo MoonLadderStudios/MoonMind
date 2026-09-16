@@ -46,10 +46,10 @@ steps:
   - title: Create document update tasks
     type: tool
     instructions: |-
-      Create one document-update task for each document discovered in the previous step.
-      Each task must use the document-update skill and target the specific document path.
+      Create one document-update task for each document discovered in the previous step, bounded to {{ inputs.document_directory }} through the existing discovery and child-creation tools. Do not build another scheduler or docs registry.
+      Each child receives the exact discovered document path and inherits this run's repository, runtime, and publish intent. Shared owner documents and reference edits are sequenced through the existing linear dependency chain so fan-out cannot silently write conflicting global changes.
       Preserve the document order from the discovery step.
-      Report created tasks, skipped documents, dependency edges, and any partial failures honestly.
+      Report created tasks, skipped documents, dependency edges, and any partial failures honestly. Queue success is publication of the child workflow, not document completion.
     documentUpdateOrchestration:
       task:
         repository: "{{ context.repository }}"

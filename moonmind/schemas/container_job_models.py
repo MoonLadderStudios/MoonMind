@@ -92,6 +92,7 @@ class ContainerJobState(StrEnum):
     ACQUIRING_IMAGE = "acquiring_image"
     BUILDING_IMAGE = "building_image"
     STARTING = "starting"
+    WAITING_FOR_CAPACITY = "waiting_for_capacity"
     RUNNING = "running"
     CANCELING = "canceling"
     PUBLISHING_ARTIFACTS = "publishing_artifacts"
@@ -209,8 +210,17 @@ class CacheMount(ContractModel):
 
 
 class ResourceLimits(ContractModel):
-    cpu_millis: int = Field(alias="cpuMillis", ge=1, le=128000)
+    # Historical documents may carry cpuMillis=0 (shared pool) or a
+    # minimumMemoryMiB range (adaptive negotiation). Both remain decodable so
+    # persisted jobs and Temporal histories replay, but new requests must use
+    # explicit positive limits (see require_explicit_resources). Resource
+    # limits are ceilings enforced directly by Docker, never reservations
+    # subtracted from a machine-derived pool.
+    cpu_millis: int = Field(2000, alias="cpuMillis", ge=0, le=128000)
     memory_mib: int = Field(alias="memoryMiB", ge=16, le=1048576)
+    minimum_memory_mib: int | None = Field(
+        None, alias="minimumMemoryMiB", ge=16, le=1048576
+    )
     pids: int = Field(256, ge=16, le=32768)
     # A caller-supplied device request. Absent for every CPU-only job. The
     # request contract is shared with the container launch boundary so a GPU
@@ -223,6 +233,15 @@ class ResourceLimits(ContractModel):
     # never differs from the value the caller asked for.
     shm_size: str | None = Field(None, alias="shmSize", max_length=32)
 
+    @model_validator(mode="after")
+    def valid_memory_range(self) -> "ResourceLimits":
+        if (
+            self.minimum_memory_mib is not None
+            and self.minimum_memory_mib > self.memory_mib
+        ):
+            raise ValueError("minimumMemoryMiB must not exceed memoryMiB")
+        return self
+
     @field_validator("shm_size")
     @classmethod
     def _shm_size_is_a_size(cls, value: str | None) -> str | None:
@@ -230,6 +249,34 @@ class ResourceLimits(ContractModel):
             return None
         parse_size_bytes(value)
         return value
+
+
+def is_historical_shared_or_adaptive(resources: "ResourceLimits") -> bool:
+    """Return True when ``resources`` uses a retired historical interpretation.
+
+    Zero CPU once selected the shared pool; a ``minimumMemoryMiB`` range once
+    requested adaptive negotiation. Both remain decodable, never executable.
+    """
+
+    return resources.cpu_millis == 0 or resources.minimum_memory_mib is not None
+
+
+def require_explicit_resources(resources: "ResourceLimits") -> "ResourceLimits":
+    """Reject retired resource interpretations for new container-job requests.
+
+    A new zero-valued CPU request must never mean unlimited CPU, silently
+    select a fallback, or reach a removed pool implementation, and a memory
+    range must never trigger adaptive negotiation. Historical documents stay
+    readable; only new execution is gated here.
+    """
+
+    if resources.cpu_millis < 1:
+        raise ValueError("cpuMillis must be a positive explicit limit for new jobs")
+    if resources.minimum_memory_mib is not None:
+        raise ValueError(
+            "minimumMemoryMiB was retired; new jobs must set one fixed memoryMiB limit"
+        )
+    return resources
 
 
 class OutputDeclaration(ContractModel):
@@ -918,6 +965,8 @@ class ContainerJobActivityRequest(TemporalContractModel):
     """Typed, retry-safe request crossing a container-job Activity boundary."""
 
     contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
+    wait_for_capacity: bool = Field(False, alias="waitForCapacity")
+    resolved_resources: ResourceLimits | None = Field(None, alias="resolvedResources")
     job_id: str = Field(alias="jobId")
     owner: OwnerIdentity = Field(
         default_factory=lambda: OwnerIdentity(
@@ -983,6 +1032,8 @@ class ContainerJobActivityResult(TemporalContractModel):
     """Bounded result returned by trusted container-job Activities."""
 
     contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
+    capacity_wait: str | None = Field(None, alias="capacityWait", max_length=2048)
+    resolved_resources: ResourceLimits | None = Field(None, alias="resolvedResources")
     resolved_workspace_ref: str | None = Field(
         None, alias="resolvedWorkspaceRef", max_length=1024
     )

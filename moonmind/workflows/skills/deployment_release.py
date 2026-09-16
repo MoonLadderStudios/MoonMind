@@ -249,62 +249,70 @@ async def successful_release_image(root, version):
             # Malformed unrelated jobs cannot revoke a valid release receipt.
             continue
         directory = path.parent
-        receipt_file = directory / "deployment-result.json"
-        request_file = directory / "request.json"
-        if not receipt_file.exists() or not request_file.exists():
+        try:
+            receipt_file = directory / "deployment-result.json"
+            request_file = directory / "request.json"
+            if not receipt_file.exists() or not request_file.exists():
+                continue
+            receipt = json.loads(receipt_file.read_text())
+            request = json.loads(request_file.read_text())
+            if receipt.get("owner") != request["authored"]["owner"]:
+                raise ValueError("Successful release receipt owner differs")
+            if receipt.get("result", {}).get("status") != "COMPLETED":
+                continue
+            digest = request["image"].partition("@")[2] or request["image"]
+            outputs = receipt["result"].get("outputs", {})
+            if not digest.startswith("sha256:") or outputs.get("resolvedDigest") != digest:
+                raise ValueError("Successful release receipt image differs")
+            expected_source = request["authored"]["inputs"].get("sourceRevision")
+            if "sourceRevision" in outputs and outputs.get("sourceRevision") != expected_source:
+                raise ValueError("Successful release receipt source differs")
+            # Receipts predating the bound source stamp carry no sourceRevision
+            # output; their source authority still binds through the live image
+            # manifest check below, so absence alone is not rejection evidence.
+            image_ids = set((await docker("image", "ls", "-q", "--no-trunc")).split())
+            if request["imageId"] not in image_ids:
+                await docker("pull", request["image"])
+            image = json.loads(await docker("image", "inspect", request["imageId"]))[0]
+            if image["Id"] != request["imageId"]:
+                raise ValueError("Successful release image identity differs")
+            manifest = json.loads(
+                await docker(
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--entrypoint",
+                    "python",
+                    request["imageId"],
+                    "-c",
+                    "import json; from moonmind.release_identity import installed_release; "
+                    "print(json.dumps(installed_release()))",
+                )
+            )
+            if (
+                not manifest
+                or manifest.get("digest") != routing["candidate"]
+                or (
+                    manifest.get("sourceRevision")
+                    != request["authored"]["inputs"].get("sourceRevision")
+                )
+            ):
+                raise ValueError(
+                    "Successful release manifest differs from its source authority"
+                )
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            # Invalid evidence grants no image authority. Its failure must not
+            # suppress valid current or retained cohorts from another job.
+            # In particular, receipts authored before sourceRevision existed
+            # cannot prove source identity and are skipped, not fatal.
             continue
-        receipt = json.loads(receipt_file.read_text())
-        request = json.loads(request_file.read_text())
-        if receipt.get("owner") != request["authored"]["owner"]:
-            raise ValueError("Successful release receipt owner differs")
-        if receipt.get("result", {}).get("status") != "COMPLETED":
-            continue
-        digest = request["image"].partition("@")[2] or request["image"]
-        outputs = receipt["result"].get("outputs", {})
-        if not digest.startswith("sha256:") or outputs.get("resolvedDigest") != digest:
-            raise ValueError("Successful release receipt image differs")
-        expected_source = request["authored"]["inputs"].get("sourceRevision")
-        if "sourceRevision" in outputs and outputs.get("sourceRevision") != expected_source:
-            raise ValueError("Successful release receipt source differs")
-        # Receipts predating the bound source stamp carry no sourceRevision
-        # output; their source authority still binds through the live image
-        # manifest check below, so absence alone is not rejection evidence.
-        image_ids = set((await docker("image", "ls", "-q", "--no-trunc")).split())
-        if request["imageId"] not in image_ids:
-            await docker("pull", request["image"])
-        image = json.loads(await docker("image", "inspect", request["imageId"]))[0]
-        if image["Id"] != request["imageId"]:
-            raise ValueError("Successful release image identity differs")
-        manifest = json.loads(
-            await docker(
-                "run",
-                "--rm",
-                "--network",
-                "none",
-                "--entrypoint",
-                "python",
-                request["imageId"],
-                "-c",
-                "import json; from moonmind.release_identity import installed_release; "
-                "print(json.dumps(installed_release()))",
-            )
-        )
-        if (
-            not manifest
-            or manifest.get("digest") != routing["candidate"]
-            or (
-                manifest.get("sourceRevision")
-                != request["authored"]["inputs"]["sourceRevision"]
-            )
-        ):
-            raise ValueError(
-                "Successful release manifest differs from its source authority"
-            )
-        return {
-            "image": request["imageId"],
-            "sourceReceipt": directory.name,
-            "sourceRevision": manifest["sourceRevision"],
-        }
+        else:
+            return {
+                "image": request["imageId"],
+                "sourceReceipt": directory.name,
+                "sourceRevision": manifest["sourceRevision"],
+            }
     # An initial Compose installation may never have produced its own release
     # receipt. Its availability owner or first updater records the proven image.
     deployment, _, expected_digest = version.partition(".sha256:")
@@ -340,6 +348,42 @@ async def successful_release_image(root, version):
                 "sourceRevision": manifest["sourceRevision"],
             }
     return None
+
+
+async def docker_logs_tail(name, tail_lines=30, timeout_seconds=60):
+    """Return the merged stdout+stderr tail for a release container.
+
+    Updater tracebacks (for example the ``FileNotFoundError`` from an empty
+    state volume) are written to stderr, while the shared ``docker()`` helper
+    returns only stdout. Merging both streams keeps the diagnosis from
+    reporting ``(empty)`` for exactly the failures it must surface.
+    """
+    process = await asyncio.create_subprocess_exec(
+        "docker",
+        "logs",
+        "--tail",
+        str(tail_lines),
+        name,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(), timeout=timeout_seconds
+        )
+    except BaseException:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+        raise
+    if process.returncode:
+        raise RuntimeError(f"Docker logs failed for {name}")
+    merged = stdout.decode(errors="replace")
+    if stderr:
+        merged += ("\n" if merged and not merged.endswith("\n") else "") + stderr.decode(
+            errors="replace"
+        )
+    return merged.strip()
 
 
 async def execute_detached(executor, inputs, context):
@@ -431,8 +475,75 @@ async def execute_detached(executor, inputs, context):
                     else 1
                 )
                 if deliveries >= 3:
+                    from moonmind.utils.logging import redact_sensitive_text
+
+                    diagnosis = []
+                    try:
+                        inner_attempts = directory / "attempts.json"
+                        diagnosis.append(
+                            "attempts="
+                            + (
+                                str(
+                                    json.loads(inner_attempts.read_text()).get(
+                                        "count"
+                                    )
+                                )
+                                if inner_attempts.exists()
+                                else "none (updater never entered its retry loop)"
+                            )
+                        )
+                    except (OSError, ValueError):
+                        diagnosis.append("attempts=unreadable")
+                    try:
+                        last_error_file = directory / "last-error.json"
+                        if last_error_file.exists():
+                            last_error = json.loads(last_error_file.read_text())
+                            diagnosis.append(
+                                "last-error="
+                                + redact_sensitive_text(
+                                    str(last_error.get("error") or last_error)[:500]
+                                )
+                            )
+                    except (OSError, ValueError):
+                        diagnosis.append("last-error=unreadable")
+                    try:
+                        state = existing.get("State", {})
+                        diagnosis.append(f"updater-exit={state.get('ExitCode')}")
+                    except (AttributeError, TypeError):
+                        # inspect_owned contracts a Mapping; a foreign shape
+                        # carries no exit evidence, so record that explicitly.
+                        diagnosis.append("updater-exit=unknown")
+                    try:
+                        tail = await docker_logs_tail(name)
+                        diagnosis.append(
+                            "updater-logs="
+                            + redact_sensitive_text(tail[-2000:] or "(empty)")
+                        )
+                    except (RuntimeError, OSError, TimeoutError) as exc:
+                        # Auxiliary log collection must never replace the
+                        # established exhaustion with an unrelated failure.
+                        diagnosis.append(
+                            "updater-logs=unavailable:"
+                            + redact_sensitive_text(str(exc)[:200])
+                        )
+                    recovery_hint = f"release job {key} (owner {name})"
+                    if owner.startswith("host-update:"):
+                        recovery_hint += (
+                            "; delivery budget exhausted: start a new audited release with"
+                            " ./tools/update-moonmind.sh (do not --resume this submission;"
+                            " resume reuses the spent budget and its stopped container,"
+                            " so it returns here without progressing)"
+                        )
+                    else:
+                        recovery_hint += (
+                            "; delivery budget exhausted: start a new audited release;"
+                            " its retained workers still require release.reconcile"
+                        )
                     raise RuntimeError(
                         "Release updater exhausted three deliveries without terminal evidence"
+                        f" ({recovery_hint}; deliveries={deliveries}; "
+                        + "; ".join(diagnosis)
+                        + f"; inspect docker logs {name} and {directory / 'request.json'})"
                     )
                 write_record(attempts_file, {"count": deliveries + 1})
                 await docker("start", name)
@@ -791,6 +902,49 @@ class ReleaseCohort:
                     raise RuntimeError("Candidate worker did not drain")
                 await docker("rm", name)
 
+    async def migrate_omnigent(self, image, *, actor="release"):
+        """Advance the singular Omnigent release; no-op when already aligned.
+
+        Runs inside the primary success path so an omnigent migration failure
+        blocks the release receipt exactly like a fleet verification failure:
+        the retained fleet owns recovery and a resume converges instead of
+        duplicating completed steps.
+        """
+        from moonmind.workflows.skills.deployment_execution import (
+            FileDesiredStateStore,
+        )
+        from moonmind.workflows.skills.omnigent_release import (
+            migrate_omnigent_release,
+            production_drivers,
+        )
+
+        store = FileDesiredStateStore(
+            env_file_path=os.environ.get(
+                "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", ""
+            ),
+            json_file_path=os.environ.get(
+                "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", ""
+            )
+            or None,
+        )
+        if not str(
+            os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE") or ""
+        ).strip():
+            # No durable desired-state file: the singular record has nowhere
+            # to live, so there is nothing to migrate. The receipt says so
+            # explicitly instead of pretending alignment was verified.
+            return {"status": "skipped", "reason": "no durable desired-state file"}
+        return await migrate_omnigent_release(
+            store=store,
+            runner=self.runner,
+            owner=self.owner,
+            moonmind_image=image,
+            drivers=production_drivers(
+                runner=self.runner, moonmind_image=image, actor=actor
+            ),
+            actor=actor,
+        )
+
 
 async def verify_operator_access(image, urls, owner, *, expected_release=None):
     """Probe published origins through the daemon's declared host transport."""
@@ -1003,6 +1157,29 @@ async def _run_job_body(request_file):
                     if expected_revision:
                         readiness_outputs["sourceRevision"] = expected_revision
                     result = replace(result, outputs=readiness_outputs)
+                    try:
+                        omnigent_receipt = await cohort.migrate_omnigent(
+                            record["image"]
+                        )
+                    except Exception as exc:
+                        write_record(
+                            request_file.parent / "attempt-result.json",
+                            {
+                                "owner": owner,
+                                "result": result.to_payload(),
+                            },
+                        )
+                        raise RuntimeError(
+                            f"Omnigent release migration did not establish "
+                            f"completion ({exc}); retained workers own recovery"
+                        ) from exc
+                    result = replace(
+                        result,
+                        outputs={
+                            **result.outputs,
+                            "omnigentRelease": omnigent_receipt,
+                        },
+                    )
             write_record(primary_file, {"owner": owner, "result": result.to_payload()})
         if result.status == "COMPLETED":
             # Cleanup is auxiliary to the verified deployment. Preserve primary

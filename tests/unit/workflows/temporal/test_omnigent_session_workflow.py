@@ -1618,7 +1618,7 @@ async def test_unavailable_snapshot_does_not_satisfy_timeout_reconciliation() ->
 
 
 def test_agent_run_patch_preserves_legacy_replay_and_selects_new_supervisor() -> None:
-    source = inspect.getsource(MoonMindAgentRun.run)
+    source = inspect.getsource(MoonMindAgentRun._run_under_claim)
 
     assert "OMNIGENT_SESSION_SUPERVISOR_PATCH_ID" in source
     assert "OMNIGENT_SESSION_ADMISSION_PATCH_ID" in source

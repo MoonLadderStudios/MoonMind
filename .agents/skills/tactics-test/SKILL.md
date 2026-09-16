@@ -115,3 +115,18 @@ build verdict when only the test phase ran.
   portable direct-Docker fallback outside MoonMind.
 - Use `--pull always` when you need to force-refresh the container image.
 - Gate contract: publish gating consumes the JSON gate output and requires `status="PASS"`.
+
+## Terminal outcomes
+
+- A `--dry-run` preview reports `status="SKIPPED"` on stdout and never satisfies publish
+  gating. It submits no build or test work, writes no gate artifact, and
+  preserves any prior verified gate result. It proves nothing about the target.
+- Completion requires the current run's gate artifact with `status="PASS"`,
+  its recorded `resultsDir` timestamped artifact folder, and the build/test
+  log paths it names. Only logs for phases marked `pass` are required: a
+  `--phase build` gate omits `testLog` and a `--phase test` gate omits
+  `buildLog`. A process exit, a submitted job identifier, or a
+  successful container start alone does not establish completion.
+- A stale `latest/gate.json` from an earlier run must not be reused: always
+  read the gate written by the current run and confirm its `resultsDir`
+  matches the timestamped folder just produced.

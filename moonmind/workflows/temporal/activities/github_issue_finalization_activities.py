@@ -15,6 +15,11 @@ unknown after any comment/label operation). Pending results remain
 repairable by a later finalizer or the periodic reconciler and never claim
 false release success. Failed GitHub reporting never discards the only
 workspace/evidence (``workspaceRetained=True``).
+
+``ownershipEnded`` is reported separately from ``released``: once the attempt
+is proven stopped, settled, and preserved, its reservation is retired even
+while bookkeeping stays pending, so unfinished cleanup never blocks another
+contributor from working the issue.
 """
 
 from __future__ import annotations
@@ -166,7 +171,7 @@ async def _fetch_issue(*, service: Any, repository: str, issue_number: int) -> d
             return {"ok": False, "reasonCode": "outcome_unknown", "summary": f"Issue read result unknown: {name}."}
 
 
-async def finalize_failed_attempt(
+async def _apply_failed_attempt_finalization(
     *,
     repository: str,
     issue_number: int,
@@ -219,7 +224,9 @@ async def finalize_failed_attempt(
         receipts = claim_receipt.finalization_json or {}
         if "result" in receipts:
             return dict(receipts["result"])
-        claim_receipt = await reconcile_claim_comment(claim_store, claim_receipt, service)
+        claim_receipt = await reconcile_claim_comment(
+            claim_store, claim_receipt, service
+        )
         if "plan" in receipts:
             saved_plan = finalization.FinalizationPlan(**receipts["plan"])
     # Step 0: read current issue state before planning any label mutation.
@@ -228,10 +235,17 @@ async def finalize_failed_attempt(
     # (closed issue, operator hold, or a newer settled state) abandons new
     # mutations before any GitHub write. An unreadable issue never proves a
     # successor: the post-mutation read-back remains the release gate.
-    prefetched = {} if claim_receipt is not None and claim_receipt.released else await _fetch_issue(service=service, repository=repository, issue_number=issue_number)
+    prefetched = (
+        {}
+        if claim_receipt is not None and claim_receipt.released
+        else await _fetch_issue(
+            service=service, repository=repository, issue_number=issue_number
+        )
+    )
     observed_labels: list[str] | None = None
     if prefetched.get("ok"):
         read_state, observed_labels = _issue_label_names(prefetched.get("issue"))
+        observed = None
         try:
             observed = lifecycle.interpret_issue(
                 {"state": read_state, "labels": observed_labels}
@@ -248,14 +262,36 @@ async def finalize_failed_attempt(
         if saved_plan is not None and saved_plan.mutation:
             mutation = saved_plan.mutation
             observed_outcome = lifecycle.classify_mutation_outcome(
-                plan=lifecycle.LabelMutationPlan(tuple(mutation.get("labelsToAdd") or []),
-                    tuple(mutation.get("labelsToRemove") or []), bool(mutation.get("closeIssue"))),
+                plan=lifecycle.LabelMutationPlan(
+                    tuple(mutation.get("labelsToAdd") or []),
+                    tuple(mutation.get("labelsToRemove") or []),
+                    bool(mutation.get("closeIssue")),
+                ),
                 read_back={"state": read_state, "labels": observed_labels},
             )
-            own_destination = observed_outcome.outcome in {lifecycle.OUTCOME_APPLIED, lifecycle.OUTCOME_ALREADY_APPLIED}
-        if abandon and not own_destination:
+            own_destination = observed_outcome.outcome in {
+                lifecycle.OUTCOME_APPLIED,
+                lifecycle.OUTCOME_ALREADY_APPLIED,
+            }
+        # A verified stopped, no-work owner still has to release its comment
+        # when someone already removed its advisory status label. The receipt
+        # read above rejects successors/competing comments before this path.
+        available_no_work = (
+            claim_receipt is not None
+            and observed is not None
+            and read_state == "open"
+            and observed.settled == lifecycle.SETTLED_AVAILABLE
+            and finalization.choose_disposition(disposition_evidence)["disposition"]
+            == finalization.DISPOSITION_AVAILABLE
+            and finalization.preserve_authoritative_output(preservation_evidence)[
+                "reasonCode"
+            ]
+            == "explicit_no_work"
+        )
+        if abandon and not own_destination and not available_no_work:
             return {
                 "released": False,
+                "ownershipReleasable": True,
                 "reasonCode": "successor_observed",
                 "summary": f"Pre-mutation read observes a successor; no new mutations attempted: {abandon_reason}.",
                 "disposition": "",
@@ -306,13 +342,21 @@ async def finalize_failed_attempt(
         "mutationOutcome": None,
     }
     if not plan.releasable or plan.mutation is None or plan.transition is None:
+        # The attempt is not proven stopped, settled, and preserved. Ownership
+        # is retained on purpose; only bookkeeping may lag behind ownership.
         return base
+    base["ownershipReleasable"] = True
     if claim_receipt is not None:
         await claim_store.record_finalization(claim_receipt.owner, "plan", asdict(plan))
         if claim_receipt.released:
-            base.update(released=True, reasonCode="released", summary=plan.summary,
-                        workspaceRetained=bool(plan.workspace_retained), pendingSync=None,
-                        commentId=claim_receipt.comment_id)
+            base.update(
+                released=True,
+                reasonCode="released",
+                summary=plan.summary,
+                workspaceRetained=bool(plan.workspace_retained),
+                pendingSync=None,
+                commentId=claim_receipt.comment_id,
+            )
             await claim_store.record_finalization(claim_receipt.owner, "result", base)
             return base
     # Step 1: scan the proposed terminal comment through the repository
@@ -335,8 +379,20 @@ async def finalize_failed_attempt(
         parsed = parse_attempt_comment(claim_receipt.comment_body)
         if parsed.handoff is None:
             raise ValueError("claim_evidence_conflict: canonical handoff is unreadable")
-        releasing = replace(parsed.handoff, activity="releasing", writers_stopped=True,
-                            pending_disposition=plan.disposition, outcome="failed")
+        no_work = plan.disposition == finalization.DISPOSITION_AVAILABLE
+        remaining = disposition_evidence.get("retryRemaining")
+        if type(remaining) is not int or not 0 <= remaining <= parsed.handoff.retry_remaining:
+            remaining = parsed.handoff.retry_remaining
+        releasing = replace(
+            parsed.handoff,
+            activity="releasing",
+            writers_stopped=True,
+            pending_disposition=plan.disposition,
+            outcome="no_work" if no_work else "failed",
+            next_action="fresh_retry" if no_work else next_action or parsed.handoff.next_action,
+            retry_remaining=remaining,
+            verification_summary=plan.summary,
+        )
         comment_body = render_attempt_comment(releasing) + "\n\n" + proposed_body
         # Do not overwrite a pending released-comment update on restart. Its
         # remote effect is reconciled after rechecking the exact label outcome.
@@ -525,6 +581,38 @@ async def finalize_failed_attempt(
     if claim_receipt is not None:
         await claim_store.record_finalization(claim_receipt.owner, "result", base)
     return base
+
+
+async def finalize_failed_attempt(**kwargs: Any) -> dict[str, Any]:
+    """Apply terminal effects, then retire the reservation independently.
+
+    ``released`` remains the completed-bookkeeping receipt. ``ownershipEnded``
+    is the separate fact that this attempt no longer reserves the issue: once
+    the attempt is proven stopped, settled, and preserved, a denied label, an
+    unknown read-back, or an unconfirmed terminal comment stays pending and
+    retryable without holding the issue against every other contributor.
+    """
+    claim_store = kwargs.get("claim_store")
+    claim_receipt = kwargs.get("claim_receipt")
+    result = await _apply_failed_attempt_finalization(**kwargs)
+    releasable = bool(result.pop("ownershipReleasable", False))
+    if claim_store is None or claim_receipt is None:
+        return result
+    ended = bool(result.get("released")) or (
+        releasable and not result.get("released")
+    )
+    if ended:
+        reason = str(result.get("reasonCode") or "finalized")
+        ended = await claim_store.end_ownership(
+            claim_receipt.owner, claim_receipt.attempt_id, reason=reason
+        )
+    result["ownershipEnded"] = ended
+    if ended and not result.get("released"):
+        result["summary"] = (
+            str(result.get("summary") or "").rstrip()
+            + " Reservation retired; remaining bookkeeping is pending and retryable."
+        ).strip()
+    return result
 
 
 __all__ = ["finalize_failed_attempt"]

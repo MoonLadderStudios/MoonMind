@@ -4781,6 +4781,10 @@ async def load_github_issue_preset_brief(
                     if (explicit_repo.casefold(), explicit_number) != (receipt.repository, receipt.issue_number):
                         raise ValueError("substitution_denied: execution already selected a different issue")
                 service = github_service_factory()
+                if receipt.pending_comment_body:
+                    from moonmind.workflows.temporal.issue_claim_store import reconcile_claim_comment
+                    receipt = await reconcile_claim_comment(IssueClaimStore(), receipt, service)
+                    context["issue_claim_receipt"] = receipt
                 context["verified_issue_claim"] = await verify_claim(receipt, service)
                 inputs = {key: value for key, value in inputs.items() if key != "issueSearch"}
                 inputs = {**inputs, "repository": receipt.repository, "issueNumber": receipt.issue_number, **receipt.handoff()}
@@ -4840,14 +4844,20 @@ async def _load_github_issue_preset_brief(
     async def reserve_candidate(issue_number: int) -> bool:
         if issue_number in (_context or {}).get("rejected_claim_candidates", ()):
             return False
+        await _prepare_github_issue_claim(
+            inputs=inputs, context=_context, repository=repository,
+            issue_number=issue_number, service=github_service_factory(),
+        )
+        return True
+
+    async def reconcile_candidate(issue_number: int) -> dict[str, Any]:
+        """Reassess an advisory status label against current attempt evidence."""
+        from moonmind.workflows.temporal.github_issue_claim_lease import reconcile_expired_issue
         try:
-            await _prepare_github_issue_claim(
-                inputs=inputs, context=_context, repository=repository,
-                issue_number=issue_number, service=github_service_factory(),
-            )
-            return True
-        except ActiveIssueClaimConflict:
-            return False
+            return await reconcile_expired_issue(service=github_service_factory(),
+                repository=repository, issue_number=issue_number)
+        except ValueError as exc:
+            return {"reclaimed": False, "reasonCode": str(exc).split(":", 1)[0]}
 
     if "issueSearch" in inputs:
         repository = _string(inputs.get("repository"))
@@ -4869,6 +4879,7 @@ async def _load_github_issue_preset_brief(
                 query=_string(inputs.get("issueSearch")),
                 github_service=github_service_factory(),
                 blockers_from_issue=blockers_for_issue,
+                reconcile_candidate=reconcile_candidate,
                 reserve_candidate=reserve_candidate,
                 recovery_handoff=recovery_handoff or None,
                 # Same shared exact-issue admission boundary as explicit /
@@ -4906,6 +4917,10 @@ async def _load_github_issue_preset_brief(
             issue_number=issue_number,
             github_service_factory=github_service_factory,
         )
+    if issue_data and not search_evidence and has_in_progress_status(issue_data) and not (_context or {}).get("verified_issue_claim"):
+        if (await reconcile_candidate(issue_number)).get("reclaimed"):
+            issue_data, error = await _fetch_github_issue(repository=repository,
+                issue_number=issue_number, github_service_factory=github_service_factory)
     if issue_data is None:
         return ToolResult(
             status="FAILED",
@@ -4931,18 +4946,25 @@ async def _load_github_issue_preset_brief(
                 "decision": "blocked",
             },
         )
+    completion_lookup = PrerequisiteLookup()
     try:
         selected_blockers = (
             await _resolved_github_blockers(
                 _github_issue_payload(issue_data, repository),
                 repository=repository,
                 github_service=github_service_factory(),
+                prerequisite_lookup=completion_lookup,
+                include_completion=True,
             )
             if search_evidence
             else []
         )
     except ValueError as exc:
         return ToolResult(status="FAILED", outputs={"error": str(exc)})
+    # Blocked from completing is not blocked from starting: the open
+    # dependencies travel with the brief so the completion gate can hold
+    # closure without stopping implementation.
+    completion_dependencies = list(completion_lookup.completion_dependencies)
     # Fresh-detail author revalidation happens before the trusted brief /
     # admission handoff so a wrong-author or unverifiable candidate is never
     # announced, labeled, or dispatched. Explicit issue-number paths keep
@@ -5153,6 +5175,29 @@ async def _load_github_issue_preset_brief(
                         ),
                     },
                 )
+    if isinstance(receipt, ClaimReceipt):
+        attempt = parse_attempt_comment(receipt.comment_body).handoff
+        if attempt and attempt.lease_expires_at:
+            preset_brief += (
+                "\n\nGitHub claim lease: "
+                f"https://github.com/{repository}/issues/{issue_number}"
+                f"#issuecomment-{receipt.comment_id}. "
+                "Before shared issue, branch, or PR writes, reread this attempt comment "
+                "and competing attempt comments. Proceed only while this lease is "
+                "unexpired and no live competing claim or hold exists. The workflow "
+                "owner renews this lease; do not extend it yourself. If evidence is "
+                "unreadable or ownership is lost, stop shared writes and retain local "
+                "work for recovery. An expired attempt cannot resume publication."
+            )
+        if attempt and attempt.predecessor_comment_id:
+            preset_brief += (
+                "\n\nPrior attempt evidence: "
+                f"https://github.com/{repository}/issues/{issue_number}"
+                f"#issuecomment-{attempt.predecessor_comment_id}. "
+                "Read the retained attempt history and inspect its linked PRs and branches "
+                "before editing. Claim expiry proves neither stopped writers nor absence "
+                "of prior work. Preserve existing work and implement only verified gaps."
+            )
     return ToolResult(
         status="COMPLETED",
         outputs={
@@ -5166,6 +5211,11 @@ async def _load_github_issue_preset_brief(
             ),
             "presetBrief": preset_brief,
             "artifactPath": artifact_path,
+            **(
+                {"completionDependencies": completion_dependencies}
+                if completion_dependencies
+                else {}
+            ),
             "summary": f"Loaded GitHub issue preset brief for {issue_ref} from trusted GitHub data.",
         },
     )
@@ -5192,13 +5242,22 @@ async def _resolved_github_blockers(
     repository: str,
     github_service: GitHubService,
     prerequisite_lookup: PrerequisiteLookup | None = None,
+    include_completion: bool = False,
 ) -> list[dict[str, Any]]:
+    """Resolve what blocks *starting* this issue.
+
+    Completion dependencies are recorded on the lookup instead of denying
+    selection: a parent's unfinished children do not stop its independently
+    useful work. ``include_completion`` authorizes those extra reads once the
+    candidate is selected rather than for every scanned candidate.
+    """
     blockers = _github_blockers_from_issue(issue)
     return blockers or await check_prerequisites(
         issue=issue,
         repository=repository,
         github_service=github_service,
         lookup=prerequisite_lookup,
+        include_completion=include_completion,
     )
 
 
@@ -5241,12 +5300,18 @@ async def check_github_issue_blockers(
             },
         )
     issue = _github_issue_payload(issue_data, repository)
+    # This is the completion gate, not the start gate: it holds acceptance and
+    # closure while a declared completion dependency is still open, even though
+    # selection admits the issue's independently useful implementation work.
+    completion_lookup = PrerequisiteLookup()
     try:
         blockers = await _resolved_github_blockers(
             issue,
             repository=repository,
             github_service=github_service_factory(),
-        )
+            prerequisite_lookup=completion_lookup,
+            include_completion=True,
+        ) or list(completion_lookup.completion_dependencies)
     except ValueError as exc:
         return ToolResult(
             status="FAILED",
@@ -5298,13 +5363,29 @@ async def resolve_pull_request_target(
         inputs.get("repository") or inputs.get("repo")
     )
     selector = _string(inputs.get("pullRequest") or inputs.get("pull_request"))
-    if not repository or not selector:
+    if not repository:
         return ToolResult(
             status="FAILED",
             outputs={
                 "summary": (
                     "Pull request target resolution requires a repository and a "
                     "pull request number, URL, or head branch."
+                ),
+            },
+        )
+    if not selector:
+        # Best-effort continuation: a fresh search run carries no prior-work
+        # PR selector. Report a successful skip so the workflow runner does
+        # not treat an ordinary fresh run as a failure that stops
+        # implementation and all remaining nodes.
+        return ToolResult(
+            status="COMPLETED",
+            outputs={
+                "repository": repository,
+                "skipped": True,
+                "summary": (
+                    "No prior-work pull request selector was supplied; "
+                    "existing-PR resolution skipped without failure."
                 ),
             },
         )
@@ -6506,6 +6587,11 @@ async def _execute_brief_admission_claim(
 
 
 async def _prepare_github_issue_claim(*, inputs, context, repository, issue_number, service):
+    from moonmind.workflows.temporal.github_issue_claim_lease import (
+        blocks_new_work,
+        reservation_status,
+        with_lease,
+    )
     owner = claim_owner(context)
     existing = (context or {}).get("issue_claim_receipt") or await IssueClaimStore().for_execution(owner)
     if existing:
@@ -6522,6 +6608,33 @@ async def _prepare_github_issue_claim(*, inputs, context, repository, issue_numb
         inputs={**inputs, "attemptId": attempt_id, "workflowId": owner},
         context=context, pull_request_url="",
     )
+    listed = await service.list_issue_comments(repo=repository, issue_number=issue_number)
+    if not listed.get("ok") or not isinstance(listed.get("comments"), list):
+        raise ValueError("claim_read_failure: complete comment history required")
+    comments = listed["comments"]
+    prior_attempts = [(comment, parse_attempt_comment(comment.get("body"))) for comment in comments]
+    prior_attempts = [(comment, parsed) for comment, parsed in prior_attempts if parsed.status != "no_marker"]
+    # Carry portable lineage into a fresh ID instead of resetting its budget.
+    if prior_attempts and not any(
+        blocks_new_work(reservation_status(parsed, comment))
+        for comment, parsed in prior_attempts
+    ):
+        from dataclasses import replace
+        from moonmind.workflows.temporal.github_issue_attempts import reconstruct_from_comments
+        from moonmind.workflows.temporal.activities.github_issue_reconciliation_activities import _trusted_posters
+        trusted = _trusted_posters(service=service) + [str((comment.get("user") or {}).get("login") or "")
+            for comment in comments if str((comment.get("user") or {}).get("id")) == actor["actorId"]
+            or comment.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}]
+        lineage = reconstruct_from_comments(comments, expected_repository=repository,
+            expected_issue_number=issue_number, trusted_posters=trusted, max_attempts=handoff.retry_allowance)
+        if lineage.outcome != "reconstructed":
+            raise ActiveIssueClaimConflict("retry_lineage_blocks_admission", evidence={
+                "reasonCode": lineage.reason_code, "source": "github_comments"})
+        comment, prior = prior_attempts[-1]
+        handoff = replace(handoff, predecessor_attempt_id=prior.attempt_id,
+            predecessor_comment_id=str(comment["id"]), retry_remaining=lineage.retry_remaining,
+            retry_history=tuple(parsed.attempt_id for _, parsed in prior_attempts))
+    handoff = with_lease(handoff)
     values = dict(owner=owner, repository=repository,
         issue_number=issue_number, attempt_id=attempt_id, actor_id=actor["actorId"],
         comment_body=render_attempt_comment(handoff))
@@ -6530,6 +6643,36 @@ async def _prepare_github_issue_claim(*, inputs, context, repository, issue_numb
     # before reserving this candidate so a search can continue without effects.
     await verify_claim(ClaimReceipt(**values, comment_id=None, confirmed=False,
         pending_comment_body=None, released=False), service)
+    # A local receipt is a cache of GitHub ownership. Its expired lease must
+    # not block a new consumer that sees the same expired comment remotely.
+    store = IssueClaimStore()
+    prior = await store.active_for_issue(repository, issue_number)
+    if prior is not None:
+        # A migration or another authorized owner can retire the GitHub
+        # reservation without updating this deployment's cached comment.
+        # Bind the fresh remote evidence to the cached attempt and poster;
+        # a missing comment or changed identity grants no release authority.
+        observed = [
+            (comment, parsed.handoff)
+            for comment, parsed in prior_attempts
+            if parsed.handoff is not None and parsed.attempt_id == prior.attempt_id
+        ]
+        if len(observed) == 1:
+            comment, remote = observed[0]
+            if (
+                remote.repository.casefold() == prior.repository
+                and remote.issue_number == prior.issue_number
+                and str((comment.get("user") or {}).get("id")) == prior.actor_id
+                and (not prior.comment_id or str(comment.get("id")) == prior.comment_id)
+                and not blocks_new_work(
+                    reservation_status(parse_attempt_comment(comment.get("body")), comment)
+                )
+            ):
+                # Preserve the receipt and pending bookkeeping; end only the
+                # reservation whose retirement GitHub has confirmed.
+                await store.end_ownership(
+                    prior.owner, prior.attempt_id, reason="reservation_expired"
+                )
     return await IssueClaimStore().prepare(**values)
 
 

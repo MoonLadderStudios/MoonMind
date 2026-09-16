@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import logging
 import re
 from typing import Any, Mapping
 
@@ -22,7 +24,9 @@ from api_service.services.omnigent_agent_profile_service import (
     UpstreamInventoryRefreshError,
     projection_identity,
     projection_readiness,
+    readiness_actionable_detail,
     refresh_upstream_inventory,
+    synchronize_omnigent_harness_catalog,
 )
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
@@ -33,6 +37,19 @@ from api_service.services.provider_profile_service import (
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 
 _OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
+
+# Only version-drift 409s may trigger catalog recovery. Incompatible,
+# contract-mismatch, capacity, and usage-conflict failures cannot be repaired
+# by synchronization, so they fail fast without upstream load.
+_DRIFT_RECOVERABLE_PREFIXES = (
+    "stable upstream identity is unavailable",
+    "stable upstream identity has not been synchronized",
+    "upstream inventory is stale",
+)
+# Admission-sized bound for the fallback sync (per-request client timeouts are
+# larger; without an aggregate deadline a degraded endpoint could hold an
+# ordinary submission for minutes).
+_DRIFT_RECOVERY_TIMEOUT_SECONDS = 30
 
 
 def default_launch_policy_ref(allowed_launch_policy_refs: Any) -> str:
@@ -396,7 +413,17 @@ async def resolve_agent_profile_snapshot(
             ),
         )
         if not readiness["ready"]:
-            raise HTTPException(status.HTTP_409_CONFLICT, readiness["reason"])
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                readiness_actionable_detail(
+                    readiness,
+                    profile_id=profile_id,
+                    version=version_number,
+                    endpoint_ref=str(document.get("endpointRef") or ""),
+                    upstream_id=str(source.get("upstreamId") or ""),
+                    upstream_version=source.get("upstreamVersion"),
+                ),
+            )
         upstream_snapshot = projection.metadata_snapshot
 
     overrides = selection.get("overrides") or {}
@@ -631,12 +658,18 @@ async def resolve_default_agent_profile_snapshot(
     consumer_type: str,
     consumer_id: str,
     user: User | None,
+    _allow_drift_recovery: bool = True,
 ) -> dict[str, Any]:
     """Resolve the deployment-managed default into explicit launch authority.
 
     The default is selected only at API admission.  The returned immutable
     snapshot is then compiled into the same plan as an explicitly authored
     Agent Profile, so workers never repeat default/profile resolution.
+
+    The caller floated on the default (no explicit profile version), so one
+    bounded catalog recovery is attempted before failing: upstream bumps the
+    exact pinned version frequently, and the background sync may not have
+    advanced ``active_version`` yet. Explicit pins never take this path.
     """
 
     if provider_profile_ref:
@@ -669,10 +702,50 @@ async def resolve_default_agent_profile_snapshot(
         }}
         if launch_policy_ref:
             selection["launchPolicyRef"] = launch_policy_ref
-        return await resolve_agent_profile_snapshot(
-            session, selection=selection, consumer_type=consumer_type,
-            consumer_id=consumer_id, user=user,
-        )
+        try:
+            return await resolve_agent_profile_snapshot(
+                session, selection=selection, consumer_type=consumer_type,
+                consumer_id=consumer_id, user=user,
+            )
+        except HTTPException as exc:
+            if exc.status_code != status.HTTP_409_CONFLICT or not _allow_drift_recovery:
+                raise
+            detail = str(getattr(exc, "detail", "") or "")
+            if not detail.startswith(_DRIFT_RECOVERABLE_PREFIXES):
+                raise
+            # Recovery runs in an independent session so catalog maintenance
+            # commits can never commit the caller's partially authored
+            # admission state. A losing concurrent sync still falls through
+            # to the single permitted retry, which then reads the winner's
+            # advanced default authority.
+            from api_service.db.base import async_session_maker
+
+            try:
+                async with asyncio.timeout(_DRIFT_RECOVERY_TIMEOUT_SECONDS):
+                    async with async_session_maker() as sync_session:
+                        await synchronize_omnigent_harness_catalog(sync_session)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Default profile drift recovery sync failed",
+                    exc_info=True,
+                )
+            if user is not None:
+                try:
+                    session.expunge(user)
+                except Exception:
+                    # Best effort only: detached/test principals are not in
+                    # this session, and expire_all must still run below.
+                    pass
+            session.expire_all()
+            return await resolve_default_agent_profile_snapshot(
+                session,
+                provider_profile_ref=provider_profile_ref,
+                launch_policy_ref=launch_policy_ref,
+                consumer_type=consumer_type,
+                consumer_id=consumer_id,
+                user=user,
+                _allow_drift_recovery=False,
+            )
 
     profile = await session.scalar(
         select(OmnigentAgentProfile)

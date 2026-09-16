@@ -233,9 +233,15 @@ def _run(
         raise CliError("container.submit returned no jobId")
     deadline = time.monotonic() + timeout_seconds + 120
     snapshot: dict[str, Any] = {}
+    last_state = None
     while time.monotonic() < deadline:
         snapshot = _call("container.status", {"jobId": job_id})
         state = str(snapshot.get("state") or "").strip().lower()
+        if state == "waiting_for_capacity" and state != last_state:
+            print(
+                f"container job {job_id}: waiting for machine capacity", file=sys.stderr
+            )
+        last_state = state
         if state in TERMINAL_STATES:
             break
         time.sleep(2)
@@ -253,7 +259,8 @@ def _run(
     exit_code = terminal.get("exitCode")
     print(
         f"container job {job_id}: {state} "
-        f"(exitCode={exit_code}, logsRef={snapshot.get('logsRef')}, "
+        f"(exitCode={exit_code}, failureClass={terminal.get('failureClass')}, "
+        f"message={terminal.get('message')}, logsRef={snapshot.get('logsRef')}, "
         f"artifactsRef={snapshot.get('artifactsRef')})"
     )
     return 0 if state == "succeeded" and exit_code in {None, 0} else 1
@@ -279,7 +286,12 @@ def _python_tests(targets: list[str], timeout_seconds: int) -> int:
             },
             {"name": "PYTHONPATH", "value": "/workspace"},
         ],
-        "resources": {"cpuMillis": 4000, "memoryMiB": 4096, "pids": 512},
+        "resources": {
+            # Static product default matching moonmind/container_job_cli.py.
+            "cpuMillis": 2000,
+            "memoryMiB": 4096,
+            "pids": 512,
+        },
         "timeoutSeconds": timeout_seconds,
         "outputs": [
             {"name": "pytest-junit", "relativePath": "artifacts/pytest-unit.xml"}

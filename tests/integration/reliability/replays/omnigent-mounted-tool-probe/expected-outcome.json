@@ -1,5 +1,5 @@
 {
-  "invariant": "Exact-host attestation executes the deployment manifest's probe as literal arguments after verifying the read-only mount and executable digest, before publishing readiness.",
+  "invariant": "Exact-host attestation executes the deployment manifest's probe as literal arguments after verifying the read-only mount and executable presence, recording digest drift as advisory evidence, before publishing readiness.",
   "versionProbe": ["--help"],
   "probeTimeoutSeconds": 10,
   "probeFailureExitCode": 2,

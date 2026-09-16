@@ -130,6 +130,11 @@ if [ -n "$control_file" ]; then
 fi
 
 # --- 7. Generic GitHub CLI setup (bounded, non-secret path selector) -------------
+# Restart semantics (MoonLadderStudios/MoonMind#3936, coordinated with #4011):
+# a restart without a new GH_TOKEN preserves the previously persisted
+# hosts.yml untouched (no deletion path exists below); unsetting the
+# environment selectors after the write removes them from this process only
+# and does not revoke cached credential authority.
 github_token=${GH_TOKEN:-}
 if [ -n "$github_token" ]; then
   case "$github_token" in
@@ -160,23 +165,65 @@ unset github_token GH_TOKEN GIT_TOKEN GITHUB_TOKEN
 mkdir -p "$state_root"
 printf '%s\n' "$expected_generation" > "$state_root/credential-generation"
 printf '%s\n' "$pack_ref" > "$state_root/runtime-pack"
+# The staged marker records which generation this container staged; it is not
+# admission evidence by itself. Admission authority stays with the Provider
+# Profile lease/generation, host binding/lease, and attestation owners named
+# in moonmind.omnigent.harness_platform.static_hosts.static_host_authority_notes.
+# Verify the staging write read it back before gating on it.
+[ "$(cat "$state_root/credential-generation")" = "$expected_generation" ] || {
+  echo "credential generation staging verification failed" >&2
+  exit 69
+}
 
-# --- 9. Readiness gates -------------------------------------------------------------
+# --- 9. Bounded readiness gates --------------------------------------------------
+# An optional static service may wait for operator enrollment, but a workflow
+# must not wait indefinitely and process existence is never admitted usable
+# capacity: the workflow admission/retry deadline and the capacity, lease,
+# attestation, and session owners decide admitted capacity. These loops bound
+# the operator waiting state with distinct waiting vs failed outcomes: expiry
+# exits nonzero (waiting-for-enrollment / missing-projection) so the
+# waiting state stays distinguishable from ready, and Docker restart policy
+# re-enters the wait instead of hanging a workflow forever.
+credential_timeout=${MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS:-1800}
+skill_timeout=${MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS:-600}
+readiness_interval=5
+# Validate each timeout independently: the joined "1800:600" value always
+# contains the ":" separator, which itself matches a digits-only rejection
+# pattern applied to the pair. Checking the pair jointly exits 64 even for
+# the defaults, before either readiness probe can run.
+case "$credential_timeout" in
+  ""|*[!0-9]*) echo "static readiness timeouts must be positive integers" >&2; exit 64 ;;
+esac
+case "$skill_timeout" in
+  ""|*[!0-9]*) echo "static readiness timeouts must be positive integers" >&2; exit 64 ;;
+esac
+[ "$credential_timeout" -ge "$readiness_interval" ] || { echo "credential readiness timeout is below the probe interval" >&2; exit 64; }
+[ "$skill_timeout" -ge "$readiness_interval" ] || { echo "skill readiness timeout is below the probe interval" >&2; exit 64; }
 if [ "$pack_ref" = "codex-native-pack@1" ]; then
-  until /opt/moonmind/check-omnigent-host.sh; do
-    echo "Codex static host waiting for authenticated credentials" >&2
-    sleep 5
-  done
+  waiting_label="Codex static host waiting for authenticated credentials"
 else
-  until /opt/moonmind/check-omnigent-host.sh; do
-    echo "Claude static host waiting for authenticated credentials" >&2
-    sleep 5
-  done
+  waiting_label="Claude static host waiting for authenticated credentials"
 fi
+elapsed=0
+until /opt/moonmind/check-omnigent-host.sh; do
+  if [ "$elapsed" -ge "$credential_timeout" ]; then
+    echo "static host waiting-for-enrollment deadline exceeded after ${credential_timeout}s: authenticated credentials not ready (operator enrollment pending, not admitted capacity)" >&2
+    exit 69
+  fi
+  echo "$waiting_label" >&2
+  sleep "$readiness_interval"
+  elapsed=$((elapsed + readiness_interval))
+done
 
+elapsed=0
 until /opt/moonmind/check-runner-projections.sh; do
+  if [ "$elapsed" -ge "$skill_timeout" ]; then
+    echo "static host Skill-projection deadline exceeded after ${skill_timeout}s: no resolved Skill projection (missing projection, not admitted capacity)" >&2
+    exit 69
+  fi
   echo "Static host waiting for a resolved Skill projection" >&2
-  sleep 5
+  sleep "$readiness_interval"
+  elapsed=$((elapsed + readiness_interval))
 done
 /opt/moonmind/clear-stale-host-daemons.sh
 

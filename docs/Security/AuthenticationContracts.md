@@ -2,27 +2,42 @@
 
 **Document Class:** Canonical declarative  
 **Viewpoint:** Cross-Cutting Concept View  
-**Status:** Draft  
+**Status:** Predecessor account model; superseded target\
 **Owners:** MoonMind Engineering  
 **Audience:** API, dashboard, runtime, security contributors and operators  
-**Authority:** Application authentication modes, identity mapping, session/revocation, CSRF/origin, error semantics, and background-work policy for MoonMind user authentication. Freezes the target contract inventoried in `[KeycloakRemovalInventory-4117.md](../tmp/KeycloakRemovalInventory-4117.md)` (MoonLadderStudios/MoonMind#4117, parent epic #4116).  
+**Authority:** Account-era authentication contracts and guidance for deployments that still use them. The [single-user application model](../MoonMindArchitecture.md#single-user-application-model) and [Single-User Application Design](../SingleUserApplicationDesign.md) govern the desired application architecture.\
 **Owning Surface:** `api_service/auth.py`, `api_service/auth_providers.py`, `api_service/main.py`, `moonmind/config/settings.py` (`OIDCSettings` storage), `moonmind/security/auth_modes_4120.py` (selector owner, #4120), `moonmind/security/session_authority_4121.py` + `api_service/services/session_store.py` (session/revocation/CSRF owner, #4121), `moonmind/security/account_lifecycle_4122.py` (enrollment/administration rules, #4122) + `api_service/services/account_lifecycle_store_4122.py` + `MoonmindAccountNonce` (production User-table wiring and operated runbook, #4122), `moonmind/security/oidc_advanced_4124.py` + `trusted_proxy_4124.py` + `advanced_identity_4124.py` + `api_service/services/advanced_auth_service_4124.py` + `api_service/api/routers/auth_advanced_4124.py` (advanced identity owner, #4124), `api_service/db/models.py` (`User`)  
 **Related Docs:** [SecretsSystem.md](./SecretsSystem.md), [ProviderProfiles.md](./ProviderProfiles.md), [SettingsSystem.md](./SettingsSystem.md), [KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) (predecessor proposal from #4102; starting evidence only, not the deliverable), [KeycloakRemovalResidual-4129.md](../tmp/KeycloakRemovalResidual-4129.md) (reviewed removal manifest for #4129)
 **Related Tooling:** [`tools/keycloak_cutover_rehearsal.py`](../../tools/keycloak_cutover_rehearsal.py) (hermetic K6 preflight/rehearsal gate for #4131; never mutates a live deployment)
 
-> [!NOTE]
-> This document defines desired-state MoonMind application-authentication contracts.
-> It is a declarative contract, not an implementation checklist. Rollout sequencing,
-> migration tasks, and backlog tickets belong in MoonSpec artifacts, gitignored
-> handoffs, or `docs/tmp/` implementation plans.
+> [!IMPORTANT]
+> The account-based application target below is superseded by the
+> [Single-User Application Design](../SingleUserApplicationDesign.md). Its
+> account selectors, enrollment, identity mappings, role checks, and human
+> ownership are predecessor requirements, not features to finish or preserve in
+> the target application. This includes the requirement to retain a default
+> `User` and application-user profile plumbing.
+>
+> This document remains a reference for code and deployments that still contain
+> the account mechanisms, subject to the qualification limits recorded below.
+> Its use of "target" or normative account language refers to that predecessor
+> design, not a parallel supported application architecture. Reading or merging
+> the new design does not disable any currently enforced protection.
+>
+> Deployment admission, browser/origin protections, scoped machine authority,
+> credential isolation, and preservation of data and in-flight work remain
+> required. The single-user design replaces human identity requirements, not
+> these boundaries. Exact machine contracts retain their owning authority.
+> Operational cutover steps and evidence remain in issues, `docs/tmp/`, or
+> run-local artifacts.
 
 ---
 
 ## 1. Summary
 
-MoonMind has exactly one application authentication selector, `AUTH_PROVIDER`, and
-exactly one canonical principal, `User.id` (a stable MoonMind UUID). The supported
-target modes are `accounts`, `oidc`, `header`, and an explicitly restricted local
+The predecessor account model defines one application authentication selector,
+`AUTH_PROVIDER`, and one canonical principal, `User.id` (a stable MoonMind UUID).
+Its modes are `accounts`, `oidc`, `header`, and an explicitly restricted local
 mode `disabled`. Retired selectors (`keycloak`, `default`, `google`, `local`) are rejected
 at startup with migration guidance; they are never silently translated.
 
@@ -198,6 +213,44 @@ plus reactivation/promotion for a stranded administrator), and
 last-admin protection; deactivation also revokes sessions). Member rows are
 deactivated, never deleted: UUIDs and ownership records are preserved.
 
+Request surface (`api_service/api/routers/accounts_4122.py`, prefix
+`/api/v1/accounts`, only when the classified production mode is
+`accounts`): `POST /setup` (operator-held bootstrap capability),
+`POST /login` (password verify off the event loop, login resolved to
+the existing `User` UUID, session minted through the shared #4121
+authority), `POST /logout` (browser authority only — never cancels
+admitted work or machine credentials), `GET /me`,
+`POST /password/change` (bumps the durable revocation generation, caller
+receives a fresh session), `POST /invites` (admin-only; membership
+only, never administrator authority), `POST /enroll`,
+`POST /recovery/request` (admin-only) and `POST /recovery/redeem`
+(capability-gated, preserves active/admin flags, rotates credentials,
+invalidates prior sessions, mints no session), `GET /members` and
+`POST /members/action` (admin-only, last-admin safe). Unknown logins
+fail exactly like wrong passwords (`401 auth_invalid`); incompatible
+or missing hashes take the explicit reset path (`403
+enrollment_required`), never silent hash conversion. Login, setup,
+enrollment, and recovery redemption are rate-limited (`429
+rate_limited`); JSON responses never carry session/refresh material
+(sessions travel only as `HttpOnly` cookies) and refresh-shaped
+request fields are rejected. A lost-acknowledgment enrollment retry
+observes `409 email_taken` and continues via login — never a duplicate
+profile.
+
+Local operator recovery (`moonmind accounts mint-bootstrap |
+mint-recovery | restore-access`): the tested path the last-admin
+refusal points at. Capabilities are operator-held, expiring, one-use,
+and login-bound; `restore-access` consumes the nonce and reactivates /
+promotes the existing login in one transaction, preserving the UUID
+and emitting only a redacted audit event.
+
+Mode-specific limitations: accounts mode does not preserve an
+existing deployment's MFA or federation features — such deployments
+require a qualified replacement (typically their advanced IdP mode)
+before cutover. There is no mandatory email service: invitation and
+recovery capabilities travel over the authenticated operator channel,
+never SMTP.
+
 ## 8. API error semantics
 
 | Situation | Status | Code |
@@ -247,8 +300,8 @@ semantics.
 
 ## 12. Support matrix and operator evidence
 
-This document is the single owner of target behavior. It is still
-**Draft**: the session, revocation, CSRF/origin, enrollment,
+This section records the predecessor account design's qualification limits.
+That design was **Draft**: the session, revocation, CSRF/origin, enrollment,
 OIDC/proxy, and cutover semantics in §§5–8 and §§12.4–12.5 are backed
 by hermetic implementation on this checkout (#4121 session authority,
 #4122 account lifecycle, #4124 advanced identity, #4125 API cutover —

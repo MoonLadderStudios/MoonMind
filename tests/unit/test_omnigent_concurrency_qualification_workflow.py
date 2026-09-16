@@ -101,7 +101,7 @@ def test_the_protected_live_job_runs_only_the_protected_live_layer() -> None:
 
 
 def test_the_exact_image_job_supplies_the_cluster_its_owners_require() -> None:
-    """Four of this layer's owners decide their invariant against PostgreSQL.
+    """Three of this layer's owners decide their invariant against PostgreSQL.
 
     Their fixture fails closed without a cluster, so a job that provides none
     can never produce a row — the runner would honestly record `unavailable`,
@@ -290,8 +290,10 @@ def test_the_hermetic_rows_are_recorded_under_the_same_identity() -> None:
     assert _flag_value(hermetic["run"], "--levels") == ",".join(
         str(level) for level in HERMETIC_LEVELS
     )
-    # This layer's owners also decide their invariant against real constraints.
-    assert layer_requires_postgres(
+    # After the automatic machine-capacity retirement (Plan A) no hermetic
+    # owner requires PostgreSQL; the scheduled job still provides a cluster
+    # for the exact-image rows recorded in the same job.
+    assert not layer_requires_postgres(
         ConcurrencyQualificationLayer.hermetic, root=REPO_ROOT
     )
     assert hermetic["env"]["MOONMIND_TEST_POSTGRES_URL"] == (

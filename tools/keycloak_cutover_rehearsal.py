@@ -265,7 +265,16 @@ def _capability_present(pid: str, repo_root: Path = REPO_ROOT) -> bool:
         tools_dir = repo_root / "tools"
         if not tools_dir.exists():
             return False
-        return bool(sorted(tools_dir.glob("*recover*")))
+        # GitHub issue-claim migration tooling (recover_legacy_issue_claims)
+        # is a separate workflow-runtime domain, not the Keycloak protected
+        # recovery path owned by #4122.
+        return bool(
+            sorted(
+                p
+                for p in tools_dir.glob("*recover*")
+                if "issue_claim" not in p.name
+            )
+        )
     if pid == "4129-removal":
         return not collect_inventory_survey(repo_root).get("keycloak_surfaces")
     return False
@@ -547,9 +556,12 @@ def detect_capability_presence(repo_root: Path = REPO_ROOT) -> dict[str, str]:
             f"AUTH_PROVIDER default is {auth_default!r} "
             "(moonmind/config/settings.py); #4120 selector/key contract not landed"
         )
-    # #4122: protected recovery tooling outside this gate.
+    # #4122: protected recovery tooling outside this gate. GitHub
+    # issue-claim migration tooling is a separate domain and never counts.
     recovery_hits = [
-        str(p) for p in sorted((repo_root / "tools").glob("*recover*"))
+        str(p)
+        for p in sorted((repo_root / "tools").glob("*recover*"))
+        if "issue_claim" not in p.name
     ] if (repo_root / "tools").exists() else []
     presence["4122-protected-recovery"] = (
         f"found: {', '.join(recovery_hits)}" if recovery_hits

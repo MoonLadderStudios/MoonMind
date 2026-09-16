@@ -91,9 +91,9 @@ RETRY_BACKOFF_SECONDS: tuple[int, ...] = (5, 15, 60)
 #: once; a second failure defers to the next run with pending evidence).
 MAX_MUTATION_RETRIES_PER_ISSUE = 1
 
-#: Default periodic maintenance cadence (UTC cron). Hourly, with skip-on-
+#: Default periodic maintenance cadence (UTC cron). Every five minutes, with skip-on-
 #: overlap so duplicate observations stay bounded without a global lock.
-DEFAULT_RECONCILIATION_CRON = "17 * * * *"
+DEFAULT_RECONCILIATION_CRON = "*/5 * * * *"
 DEFAULT_RECONCILIATION_TIMEZONE = "UTC"
 DEFAULT_RECONCILIATION_OVERLAP_MODE = "skip"
 DEFAULT_RECONCILIATION_CATCHUP_MODE = "last"
@@ -1225,7 +1225,7 @@ def default_reconciliation_schedule() -> dict[str, Any]:
         "paused": False,
         "ensureMethod": "ensure_github_issue_reconcile_schedule",
         "summary": (
-            "Default hourly bounded reconciliation through the existing "
+            "Default five-minute bounded reconciliation through the existing "
             "Temporal workflow/activity boundary; no hidden enable flag and "
             "no permanently paused schedule."
         ),

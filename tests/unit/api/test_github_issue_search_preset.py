@@ -28,7 +28,10 @@ from moonmind.workflows.temporal.story_output_tools import (
     register_story_output_tool_handlers,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
-from moonmind.workflows.temporal.github_issue_search import declared_prerequisites
+from moonmind.workflows.temporal.github_issue_search import (
+    declared_completion_dependencies,
+    declared_prerequisites,
+)
 from tests.support.issue_claims import issue_claim_store  # noqa: F401
 
 REPOSITORY = "MoonLadderStudios/MoonMind"
@@ -334,11 +337,12 @@ async def test_loader_name_cannot_authorize_a_substituted_executor(activity_boun
 def test_explicit_prerequisites_preserve_ranges_without_parent_or_related_links(
     declaration,
 ):
-    assert declared_prerequisites(declaration, REPOSITORY) == [
-        (REPOSITORY, 4004),
-        (REPOSITORY, 4005),
-        (REPOSITORY, 4006),
-    ]
+    expected = [(REPOSITORY, 4004), (REPOSITORY, 4005), (REPOSITORY, 4006)]
+    if declaration.casefold().find("completion depends on") >= 0:
+        assert declared_prerequisites(declaration, REPOSITORY) == []
+        assert declared_completion_dependencies(declaration, REPOSITORY) == expected
+    else:
+        assert declared_prerequisites(declaration, REPOSITORY) == expected
 
 
 def test_prerequisite_urls_and_qualified_refs_keep_repository_scope():
@@ -591,9 +595,14 @@ async def test_unknown_child_state_cannot_admit_parent(activity_boundary, state)
     ],
 )
 def test_dependency_list_stops_before_contextual_references(context):
-    assert declared_prerequisites(
-        f"Completion depends on #10 and #11{context}.", REPOSITORY
-    ) == [(REPOSITORY, 10), (REPOSITORY, 11)]
+    body = f"Completion depends on #10 and #11{context}."
+    # "Completion depends on" gates acceptance, not the start of work, so the
+    # same reference list is read as completion dependencies.
+    assert declared_prerequisites(body, REPOSITORY) == []
+    assert declared_completion_dependencies(body, REPOSITORY) == [
+        (REPOSITORY, 10),
+        (REPOSITORY, 11),
+    ]
 
 
 @pytest.mark.asyncio
@@ -752,7 +761,10 @@ async def test_dependency_gate_selection_and_preflight_use_fresh_github_state(
     # Follow-up incident mm:ec76f857: the release gate was admitted while
     # its explicitly required implementation issues remained open.
     gate = issue(4024, body="Parent epic: #4003. Completion depends on #2615.")
-    candidate = gate if state == "closed" else issue(4004)
+    # Blocked from completing is not blocked from starting: the gate issue is
+    # selectable for its own implementation work in both states, and the
+    # completion check below still holds closure while #2615 is open.
+    candidate = gate
     activity_boundary.pages[:] = [[gate, issue(4004)]]
     activity_boundary.detail.update(candidate)
     dependency_path = f"/repos/{REPOSITORY}/issues/2615"
@@ -811,12 +823,13 @@ async def test_default_preset_resolves_and_preserves_issue_across_agent_steps(
 ):
     seeds = tmp_path / "seeds"
     seeds.mkdir()
-    shutil.copy(
-        Path(__file__).resolve().parents[3]
-        / "api_service/data/presets"
-        / f"{PRESET}.yaml",
-        seeds,
-    )
+    preset_dir = Path(__file__).resolve().parents[3] / "api_service/data/presets"
+    for filename in (
+        f"{PRESET}.yaml",
+        "issue-implement-assessment.yaml",
+        "issue-implement-work-pr.yaml",
+    ):
+        shutil.copy(preset_dir / filename, seeds / filename)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/catalog.db")
     try:
         async with engine.begin() as connection:
@@ -1161,12 +1174,13 @@ async def test_finalize_with_mixed_labels_and_published_pr_ends_degraded_complet
 async def _synced_catalog_session(tmp_path, session_factory_holder=None):
     seeds = tmp_path / "seeds"
     seeds.mkdir(exist_ok=True)
-    shutil.copy(
-        Path(__file__).resolve().parents[3]
-        / "api_service/data/presets"
-        / f"{PRESET}.yaml",
-        seeds,
-    )
+    preset_dir = Path(__file__).resolve().parents[3] / "api_service/data/presets"
+    for filename in (
+        f"{PRESET}.yaml",
+        "issue-implement-assessment.yaml",
+        "issue-implement-work-pr.yaml",
+    ):
+        shutil.copy(preset_dir / filename, seeds / filename)
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/catalog.db")
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)

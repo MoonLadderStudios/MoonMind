@@ -37,6 +37,7 @@ from moonmind.omnigent.policies import (
     compile_policy_snapshot,
     document_digest,
     normalize_document,
+    require_explicit_policy_resources,
 )
 from moonmind.omnigent.settings import opencode_support_enabled
 from moonmind.omnigent.stock_agents import CODEX_STOCK_AGENT_NAME
@@ -153,6 +154,14 @@ def validate_policy(
 
     diagnostics: list[dict[str, str]] = []
     payload = document.model_dump(by_alias=True, mode="json")
+    try:
+        require_explicit_policy_resources(document)
+    except ValueError as exc:
+        diagnostics.append({
+            "code": "OMNIGENT_CPU_LIMIT_REQUIRED",
+            "path": "resources.cpuMillis",
+            "message": str(exc),
+        })
     image_pattern = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
     for field in ("serverImageRef", "hostImageRef"):
         image_ref = payload["host"][field]
@@ -817,6 +826,11 @@ async def resolve_bootstrap_image_refs(
     return server_image, host_image, opencode_host_image
 
 
+# Stock bootstrap policies always carry fixed explicit resource limits.
+# There is no capability probe: omitted values and their documented defaults
+# exercise the same production Docker path.
+
+
 # Every production remediation adapter registered by
 # ``moonmind.workflows.temporal.remediation_actions.build_remediation_action_executor``
 # dispatches by its canonical action identity, and ``resolve_action`` performs an
@@ -1000,7 +1014,7 @@ async def _cutover_inactive_bootstrap_bindings(
     return len(cutover_bindings), len(active_binding_refs)
 
 
-async def _reconcile_bootstrap_image_authority(
+async def _reconcile_bootstrap_authority(
     session: AsyncSession,
     *,
     service: OmnigentPolicyService,
@@ -1009,7 +1023,7 @@ async def _reconcile_bootstrap_image_authority(
     definitions: tuple[_BootstrapPolicyDefinition, ...],
     live_server_image_resolver: LiveServerImageResolver,
 ) -> list[str]:
-    """Advance bootstrap-owned defaults when their resolved images change."""
+    """Version bootstrap image and resource defaults without rewriting history."""
 
     reconciled: list[str] = []
     live_server_checked = False
@@ -1034,6 +1048,22 @@ async def _reconcile_bootstrap_image_authority(
         current_host = current.document_json.get("host")
         if not isinstance(current_host, Mapping):
             continue
+        current_resources = current.document_json.get("resources")
+        desired_resources = current_resources
+        stock_resources = bootstrap_document(
+            host_mode=definition.host_mode,
+            execution_profile_ref=definition.profile_ref,
+        ).resources.model_dump(by_alias=True)
+        # Reverse migration for the retired shared-CPU defaults: only a
+        # bootstrap-owned policy carrying the known shared-resource
+        # configuration (fixed stock with cpuMillis=0) moves to the fixed
+        # successor. Custom positive limits, customized zero-valued policies,
+        # and every already-recorded version retain authority; customized
+        # zero-valued policies receive an explicit successor disposition
+        # elsewhere rather than being guessed as stock.
+        if current_resources == {**stock_resources, "cpuMillis": 0}:
+            desired_resources = stock_resources
+        # A bootstrap-owned policy already on fixed limits needs no migration.
         versions = await service.versions(policy_id)
         desired_server_image = (
             server_image
@@ -1071,6 +1101,7 @@ async def _reconcile_bootstrap_image_authority(
         if (
             current_host.get("serverImageRef") == desired_server_image
             and current_host.get("hostImageRef") == desired_host_image
+            and current_resources == desired_resources
         ):
             updated_binding_count, deferred_binding_count = (
                 await _cutover_inactive_bootstrap_bindings(
@@ -1083,13 +1114,14 @@ async def _reconcile_bootstrap_image_authority(
                 service._event(
                     policy_id,
                     current.version,
-                    "bootstrap_image_authority_cutover",
+                    "bootstrap_authority_cutover",
                     "bootstrap",
                     {
                         "previousRefs": list(predecessor_refs),
                         "policyRef": current_ref,
                         "serverImageRef": desired_server_image,
                         "hostImageRef": desired_host_image,
+                        "resources": desired_resources,
                         "updatedBindingCount": updated_binding_count,
                         "deferredBindingCount": deferred_binding_count,
                     },
@@ -1101,6 +1133,7 @@ async def _reconcile_bootstrap_image_authority(
         desired_payload = copy.deepcopy(current.document_json)
         desired_payload["host"]["serverImageRef"] = desired_server_image
         desired_payload["host"]["hostImageRef"] = desired_host_image
+        desired_payload["resources"] = desired_resources
         desired_document = PolicyDocument.model_validate(desired_payload)
         desired_digest = document_digest(normalize_document(desired_document))
         later_versions = sorted(
@@ -1141,7 +1174,7 @@ async def _reconcile_bootstrap_image_authority(
             )
         else:
             logger.warning(
-                "Omnigent bootstrap image refresh for %s deferred because a "
+                "Omnigent bootstrap refresh for %s deferred because a "
                 "later policy version owns evolution",
                 policy_id,
             )
@@ -1185,13 +1218,14 @@ async def _reconcile_bootstrap_image_authority(
         service._event(
             policy_id,
             candidate.version,
-            "bootstrap_image_authority_cutover",
+            "bootstrap_authority_cutover",
             "bootstrap",
             {
                 "previousRefs": list(predecessor_refs),
                 "policyRef": candidate_ref,
                 "serverImageRef": desired_server_image,
                 "hostImageRef": desired_host_image,
+                "resources": desired_resources,
                 "updatedBindingCount": updated_binding_count,
                 "deferredBindingCount": deferred_binding_count,
             },
@@ -1208,7 +1242,7 @@ async def seed_bootstrap_policies(
     image_resolver: ImageResolver = resolve_bootstrap_image_ref,
     live_server_image_resolver: LiveServerImageResolver = resolve_live_server_image_ref,
 ) -> list[str]:
-    """Idempotently persist and refresh the built-in image authorities."""
+    """Idempotently persist and refresh built-in policy defaults."""
 
     service = OmnigentPolicyService(session)
     definitions = _bootstrap_policy_definitions(env)
@@ -1280,7 +1314,7 @@ async def seed_bootstrap_policies(
     # keeps that family unready without withholding valid Codex authority (and
     # vice versa). Placeholder drafts are never persisted.
     if not resolvable_definitions:
-        return await _reconcile_bootstrap_image_authority(
+        return await _reconcile_bootstrap_authority(
             session,
             service=service,
             server_image=server_image,
@@ -1289,7 +1323,7 @@ async def seed_bootstrap_policies(
             live_server_image_resolver=live_server_image_resolver,
         )
     if not reconciliation_required:
-        return await _reconcile_bootstrap_image_authority(
+        return await _reconcile_bootstrap_authority(
             session,
             service=service,
             server_image=server_image,
@@ -1445,7 +1479,7 @@ async def seed_bootstrap_policies(
                 make_default=True,
             )
         seeded.append(policy_id)
-    image_reconciled = await _reconcile_bootstrap_image_authority(
+    defaults_reconciled = await _reconcile_bootstrap_authority(
         session,
         service=service,
         server_image=server_image,
@@ -1453,7 +1487,7 @@ async def seed_bootstrap_policies(
         definitions=definitions,
         live_server_image_resolver=live_server_image_resolver,
     )
-    seeded.extend(item for item in image_reconciled if item not in seeded)
+    seeded.extend(item for item in defaults_reconciled if item not in seeded)
     return seeded
 
 

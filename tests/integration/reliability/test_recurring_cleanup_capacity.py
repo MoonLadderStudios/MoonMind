@@ -26,12 +26,6 @@ from api_service.db.models import (
     OmnigentRuntimeBindingRecord,
     OmnigentHostBindingRecordV2,
     OmnigentHostLeaseRecordV2,
-    MachineCapacityReservation,
-)
-from moonmind.capacity import (
-    MachineCapacityLedger,
-    OwnedContainerInventory,
-    OWNED_CONTAINER_LABEL_FILTERS,
 )
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 from moonmind.omnigent.host_capacity import GenericHostCapacityAdmission
@@ -60,7 +54,6 @@ from tests.integration.services.temporal.workflows.test_agent_run import (
     MockProviderProfileManager,
 )
 from tests.support.isolated_postgres import isolated_postgres
-from tests.unit.capacity.test_machine_capacity_boundaries import _budget
 from tests.unit.omnigent.test_generic_platform_production_services import (
     _generic_publication_harness,
     _plan,
@@ -101,7 +94,6 @@ async def test_scheduled_cleanup_isolates_oauth_failure_and_unblocks_same_agent_
         OmnigentRuntimeBindingRecord.__table__,
         OmnigentHostBindingRecordV2.__table__,
         OmnigentHostLeaseRecordV2.__table__,
-        MachineCapacityReservation.__table__,
     ]
     async with isolated_postgres(tables) as sessions:
         monkeypatch.setattr("api_service.db.base.async_session_maker", sessions)
@@ -113,33 +105,19 @@ async def test_scheduled_cleanup_isolates_oauth_failure_and_unblocks_same_agent_
         plan = _plan("opencode-go/model")
         await DbExecutionPlanStore(sessions).persist(plan)
         bindings = DbRuntimeBindingStore(sessions)
-        ledger = MachineCapacityLedger(sessions)
+        # The stranded host below occupies the only host slot, so the waiting
+        # run parks on the host count until the janitor cleans it. There is no
+        # machine budget: fixed per-container limits are enforced by Docker.
         admission = GenericHostCapacityAdmission(
             session_factory=sessions,
-            host_capacity=8,
+            host_capacity=1,
             cold_launch_burst=8,
             cold_launch_window_seconds=30,
-            machine_capacity=ledger,
-            backend_ref=key,
         )
-        budget = _budget()
-        limits = {
-            "memoryMiB": 4096,
-            "cpuMillis": 1000,
-            "processes": 256,
-            "temporaryStorageMiB": 256,
-        }
         leases = DbOmnigentHostLeaseRepository(
             sessions,
             capacity_admission=admission,
-            machine_budget_provider=lambda: asyncio.sleep(0, result=budget),
         )
-        acquire = leases.acquire
-
-        async def allocate(**kwargs):
-            return await acquire(**kwargs, resource_limits=limits)
-
-        leases.acquire = allocate
         harness.runtime_store = harness.realizer._runtime_bindings = bindings
         harness.host_leases = harness.realizer._host_leases = leases
         from moonmind.omnigent import runtime_bindings as binding_module
@@ -224,9 +202,6 @@ async def test_scheduled_cleanup_isolates_oauth_failure_and_unblocks_same_agent_
             ]
         )
         harness.realizer._host_capacity_admission = admission
-        await harness.realizer._confirm_machine_reservation(
-            host_lease.leaseRef, container
-        )
         cleanup = DockerOmnigentHostCleanupService(backend)
 
         async def clean(**kwargs):
@@ -240,28 +215,13 @@ async def test_scheduled_cleanup_isolates_oauth_failure_and_unblocks_same_agent_
         harness.realizer._host_runtime.cleanup = clean
         harness.realizer._provider_leases.release_from_binding = AsyncMock()
 
-        async def inventory():
-            # This disposable backend contains only the named test allocation.
-            # Absence is read from Docker, never synthesized from a lease flag.
-            _, stdout, _ = await backend.run(
-                ["docker", "ps", "-aq", "--filter", f"name=^/{container}$"]
-            )
-            assert not stdout.strip(), "capacity may release only after Docker removal"
-            return OwnedContainerInventory(
-                containers={}, label_selectors=OWNED_CONTAINER_LABEL_FILTERS
-            )
-
         services = SimpleNamespace(
             host_lease_repository=leases,
             runtime_binding_store=bindings,
             generic_realizer=harness.realizer,
-            machine_capacity=ledger,
-            machine_backend_ref=key,
-            owned_container_inventory=inventory,
             planned_host_resolver=AsyncMock(
-                return_value=(None, SimpleNamespace(limits=limits))
+                return_value=(None, SimpleNamespace(limits={}))
             ),
-            machine_budget_provider=lambda: asyncio.sleep(0, result=budget),
         )
         monkeypatch.setattr(
             "moonmind.omnigent.production.build_generic_omnigent_execution_services",
@@ -337,7 +297,7 @@ async def test_scheduled_cleanup_isolates_oauth_failure_and_unblocks_same_agent_
             if name == "omnigent.admit_generic_host_capacity":
                 result = await omnigent_admit_generic_host_capacity_activity(payload)
                 if not result["admitted"]:
-                    assert result["limitingResource"] == "machine_memory"
+                    assert result["limitingLayer"] == "generic_host_capacity"
                     waiting.set()
                 return result
             if name == "integration.omnigent.profile_bound_execute":
@@ -426,10 +386,7 @@ async def test_scheduled_cleanup_isolates_oauth_failure_and_unblocks_same_agent_
                 ).result()
                 assert result["status"] == "degraded"
                 assert result["genericHost"]["reconciled"] == 1
-                assert (
-                    result["genericHost"]["machineCapacity"]["backendObserved"] is True
-                )
-                assert (await ledger.usage(backend_ref=key)).reserved_memory_mib == 0
+                assert "machineCapacity" not in result["genericHost"]
                 assert (
                     await bindings.get(binding_id)
                 ).state is RuntimeBindingState.cleaned
