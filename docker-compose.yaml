@@ -33,21 +33,22 @@
 # fallback below is a development/bootstrap input only:
 # `moonmind.omnigent.bootstrap.image_resolution` must resolve it to a digest
 # and persist it as OMNIGENT_SHARED_HOST_IMAGE_REF before admission, and
-# `require_static_host_image_authority` fails the reconciliation pass when a
-# requested static profile has no digest-pinned resolution.
+# `require_static_host_image_authority` fails the persistence/reconciliation
+# pass when a requested static profile has no digest-pinned resolution. That
+# persistence gate runs inside the API container after Compose has already
+# started creating profile-selected services, so it alone cannot prevent the
+# mutable fallback from being pulled: qualified static launches must pass the
+# operator-side prelaunch admission boundary
 # `moonmind.omnigent.harness_platform.static_hosts.admit_static_host_compose_launch`
-# is the Compose prelaunch admission boundary: it judges the rendered
-# effective environment and resolves the effective image through
-# `resolve_effective_static_host_image` for every operator configuration
-# (shared digest, missing ref, mutable tag, legacy-only digest, conflicting
-# settings) and fails closed on anything but a digest pin. The managed
-# launch path calls the same boundary through
-# `OmnigentOAuthHostRuntime._compose_static_check` (which admits the
-# rendered effective environment via `admit_static_host_effective_launch`
-# and binds the staged generation to the live lease) immediately before
-# `docker compose up`; a direct `docker compose up` that bypasses the
-# bootstrap pass or that admission gate launches the mutable fallback below
-# and is not a qualified static launch.
+# (via `services/omnigent/scripts/check-static-host-image.sh --profile
+# <omnigent-host-codex|omnigent-host-claude>` before a direct
+# `docker compose --profile <profile> up`, or automatically through
+# `OmnigentOAuthHostRuntime._compose_static_check` on the managed path,
+# which admits the rendered effective environment via
+# `admit_static_host_effective_launch` and binds the staged generation to
+# the live lease) immediately before `docker compose up`; a direct
+# `docker compose up` that bypasses that prelaunch admission launches the
+# mutable fallback below and is not a qualified static launch.
 x-omnigent-static-host:
   image: ${OMNIGENT_SHARED_HOST_IMAGE_REF:-${OMNIGENT_SHARED_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-moonmind}:${OMNIGENT_SHARED_HOST_IMAGE_TAG:-1.18.11}}
   user: "1000:1000"

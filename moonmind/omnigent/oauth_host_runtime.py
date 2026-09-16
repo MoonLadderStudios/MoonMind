@@ -3664,6 +3664,61 @@ class OmnigentOAuthHostRuntime:
             )
 
     @staticmethod
+    def _static_service_raw_env(
+        service: str,
+        operator_env: Mapping[str, str],
+    ) -> dict[str, str] | None:
+        """Load the selected Compose service's raw ``environment`` mapping.
+
+        The rendered container environment is derived from these declared
+        service fields (interpolated against the operator environment), not
+        from the worker's ambient process environment. Returns ``None`` when
+        the deployment Compose file is unavailable or unparsable so callers
+        can fall back to the supplied operator mapping.
+        """
+
+        local_root = Path(
+            os.getenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", "") or Path.cwd()
+        ).expanduser()
+        compose_text = os.getenv("MOONMIND_DEPLOYMENT_COMPOSE_FILE", "").strip()
+        if compose_text:
+            configured = Path(compose_text).expanduser()
+            compose_path = (
+                local_root / configured
+                if not configured.is_absolute()
+                else configured
+            )
+            if configured.is_absolute() and not configured.exists():
+                compose_path = local_root / configured.name
+        else:
+            compose_path = local_root / "docker-compose.yaml"
+        try:
+            if not compose_path.is_file():
+                return None
+            import yaml  # type: ignore[import-not-found]
+
+            loaded = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        try:
+            services = (loaded or {}).get("services", {})
+            service_def = services.get(service, {})
+            environment = service_def.get("environment", {})
+            if isinstance(environment, dict):
+                return {str(k): str(v) for k, v in environment.items()}
+            mapped: dict[str, str] = {}
+            for item in environment or []:
+                text = str(item)
+                if "=" in text:
+                    key, value = text.split("=", 1)
+                    mapped[key] = value
+                else:
+                    mapped[text] = str(operator_env.get(text, ""))
+            return mapped
+        except Exception:
+            return None
+
+    @staticmethod
     def _admit_static_compose_prelaunch(
         *,
         binding: OmnigentOAuthHostBinding,
@@ -3684,6 +3739,13 @@ class OmnigentOAuthHostRuntime:
         ``trace_static_credential_ownership`` (profile -> lease -> exact
         registered host -> one-session exclusivity on the static mode).
         The staged marker alone is never admission evidence.
+
+        The rendered mapping is built from the selected Compose service's
+        declared ``environment`` fields (interpolated against the operator
+        environment), never by validating the worker's ambient process
+        environment: the canonical worker service defines credential keys
+        (including as empty strings) that are not part of the static
+        service environment.
         """
 
         adapter = OmnigentOAuthHostRuntime._runtime_adapter(binding)
@@ -3695,7 +3757,15 @@ class OmnigentOAuthHostRuntime:
                     "credential generation variable",
                     code="OMNIGENT_HOST_BINDING_MISMATCH",
                 )
-            rendered = dict(operator_env)
+            raw_service_env = OmnigentOAuthHostRuntime._static_service_raw_env(
+                row.service, operator_env
+            )
+            if raw_service_env is not None:
+                rendered = static_hosts.render_static_service_env(
+                    raw_service_env, operator_env
+                )
+            else:
+                rendered = dict(operator_env)
             admission = static_hosts.admit_static_host_effective_launch(
                 service=row.service,
                 pack_ref=row.runtime_pack_ref,
