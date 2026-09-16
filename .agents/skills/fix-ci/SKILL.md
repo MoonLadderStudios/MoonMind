@@ -60,8 +60,12 @@ absolute prerequisite.
   available, run it and ensure it fails in the same way as CI before fixing.
 - When no representative local path exists or its prerequisite is
   unavailable, record the missing prerequisite and continue through the
-  authorized managed/CI path (step 6) instead of blocking on local
-  reproduction. Never push solely to test when the workflow forbids
+  authorized managed/CI path instead of blocking on local
+  reproduction. When the local prerequisite is unavailable but the
+  authorized managed substrate is available, execute the discovered
+  managed runner first for the touched scope; use pushed-head CI (step 6)
+  only when the managed substrate is also unavailable.
+  Never push solely to test when the workflow forbids
   publication; in that case stop as blocked.
 
 3. Fix the underlying issue.
@@ -75,10 +79,10 @@ absolute prerequisite.
 - If the command still fails, repeat step 3.
 - If the required local toolchain or service is unavailable, do not treat
   weaker checks such as `git diff --check` as sufficient verification. Record
-  the missing prerequisite and default to exact pushed-head CI verification
-  (step 6) unless the task explicitly forbids pushing; otherwise stop as
-  blocked. An absent local Docker executable alone never proves the shared
-  managed backend is unavailable.
+  the missing prerequisite and default to the managed runner first, then
+  exact pushed-head CI verification (step 6), unless the task explicitly
+  forbids pushing; otherwise stop as blocked. An absent local Docker
+  executable alone never proves the shared managed backend is unavailable.
 
 5. Commit and push.
 - Ensure the working tree is clean except for the fixed files.

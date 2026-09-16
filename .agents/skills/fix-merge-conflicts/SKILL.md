@@ -66,39 +66,49 @@ test -n "$FIX_MERGE_CONFLICTS_SKILL_DIR" && test -f "$FIX_MERGE_CONFLICTS_SKILL_
   helper is a materialization/packaging error: stop as blocked instead of
   substituting stale repository code.
 
-1. Ensure git identity is available from existing authorized configuration
-before any merge/commit, and revalidate it before each write:
-- Read only the already-configured identity (`git config --get user.name`
+1. Resolve the merge target from authoritative sources before any mutation:
+- `inputs.base` (required) is the only task-supplied input: the PR base
+  branch name (for example `main` or `release/2.x`). The merge target is
+  always `origin/<base>`. If the base is missing or empty, stop as blocked
+  with reason `base_unavailable`; never silently substitute a default branch
+  for a PR that targets another base branch. This non-merging skill takes no
+  finish mode.
+- Confirm the exact repository, head branch, and base branch against the
+  authoritative PR itself (`gh pr view --json number,headRefName,baseRefName,headRepository`)
+  before mutating. If `inputs.base` disagrees with the PR's base, or the
+  base ref changed since task start, stop as blocked instead of merging a
+  changed/wrong base.
+- Preserve source authority: if the PR head lives in a fork or another
+  combination the authorized boundary cannot safely mutate, stop before
+  mutation as blocked with reason `unsupported_source` instead of pushing
+  across authority boundaries.
+- Git identity is required only when Git is about to create a commit. Do
+  not block fetching or attempting the merge on missing identity: read only
+  the already-configured identity (`git config --get user.name`
   and `git config --get user.email`, honoring repository-local configuration
-  first). Do not invent, default, or export a fallback author/email and do
+  first) just before committing, and revalidate both values before each
+  write. Do not invent, default, or export a fallback author/email and do
   not write identity from unvalidated inputs or environment defaults.
-- If either value is missing, stop as blocked without merging, committing,
-  or pushing: report the missing identity and the supported setup
-  (`git config user.name "<name>"` / `git config user.email "<email>"`)
-  so the operator can provide authorized configuration.
-- If identity configuration changes mid-task, re-read and revalidate both
-  values before the next write; never carry a stale identity across writes.
-- Preserve source authority: resolve the exact repository, head, base, and
-  allowed finish mode from authoritative task inputs before any mutation. If
-  the PR head lives in a fork or another combination the authorized boundary
-  cannot safely mutate, stop before mutation as blocked with reason
-  `unsupported_source` instead of pushing across authority boundaries.
+- If identity is missing when a commit is actually needed, stop as blocked
+  without committing or pushing: report the missing identity and the
+  supported setup (`git config user.name "<name>"` /
+  `git config user.email "<email>"`) so the operator can provide authorized
+  configuration. A clean, fast-forward, or already-up-to-date merge that
+  creates no commit needs no identity and must not be blocked by this check.
 
 2. Sync remote refs for the PR base branch.
-- Resolve the exact repository, head branch, base branch name, and allowed
-  finish mode from authoritative task inputs (required). If the base is
-  missing or empty, stop as blocked with reason `base_unavailable`.
-- Record the resolved `origin/<base>` at task start. Before merging,
-  re-read the authoritative base and head; if the base changed or does not
-  match the recorded target, stop as blocked instead of merging a
-  changed/wrong base.
 - Run `git fetch origin <base> --prune`.
 - Confirm branch state with `git status`. Preserve pre-existing staged,
   unstaged, and untracked work, local branch state, and configured Git
   identity; take no mutation that would discard or absorb unrelated changes.
 
 3. Merge the latest PR base ref into the current branch.
-- Run `git merge origin/<base>`.
+- When the working tree is not clean, run
+  `git merge --autostash origin/<base>` so pre-existing staged/unstaged
+  work is stashed and restored automatically. If the merge still refuses,
+  or `--autostash` is unsupported, perform the merge in an isolated
+  worktree with bounded restoration instead of stalling.
+- Otherwise run `git merge origin/<base>`.
 - If merge completes cleanly, continue to step 4.
 - If git reports conflicts, continue to step 3.
 
