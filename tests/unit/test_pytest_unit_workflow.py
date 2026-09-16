@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -704,6 +705,10 @@ def test_backend_matrix_records_attempted_cancellation_diagnostics() -> None:
     upload = steps["Upload backend-matrix cancellation diagnostics"]
     assert "failure()" in upload["if"] and "cancelled()" in upload["if"]
     assert upload["with"]["name"] == "backend-matrix-${{ matrix.suite }}-cancellation-attempt-${{ github.run_attempt }}"
+    # MoonLadderStudios/MoonMind#4371: shard diagnostics (compose logs plus
+    # scoped manifests) are collected and uploaded on every selected run so
+    # a slow but passing shard stays diagnosable; cancellation-only
+    # bookkeeping above is unchanged.
     collect = steps["Collect reliability shard diagnostics"]
     # Every-run retention (MoonLadderStudios/MoonMind#4371): reliability
     # dependency logs/replays/manifests upload on every run via always(),
@@ -757,3 +762,128 @@ def test_ci_required_consumes_backend_matrix_aggregate() -> None:
         'require_selected "reliability-journey-checkpoint-resume"',
     ):
         assert removed not in script
+
+
+def test_reliability_shards_enforce_short_step_and_test_deadlines() -> None:
+    """MoonLadderStudios/MoonMind#4369, #4384: short reliability budgets.
+
+    Each reliability shard uses a short per-test timeout (150s PR / 300s
+    schedule, never the fast-lane 600s) under a ~10-min PR step ceiling
+    (``timeout 600s``, above the ~500s heaviest duration-balanced partition
+    load) and a 12-min schedule step ceiling. The 124 exit from ``timeout``
+    flows through ``PIPESTATUS`` so the evidence hook reports an interrupted
+    run instead of masking it, and the 30-minute job timeout reserves setup,
+    diagnostics, cleanup, and evidence/upload margin.
+    """
+    workflow = _load_workflow()
+    job = workflow["jobs"]["backend-matrix"]
+    assert job["timeout-minutes"] == 30
+    steps = {step["name"]: step for step in job["steps"]}
+    assert steps["Run hermetic reliability shard"].get("timeout-minutes") == 12
+    command = steps["Run hermetic reliability shard"]["run"]
+    assert "pytest_timeout=150" in command
+    assert "pytest_timeout=300" in command
+    assert "step_budget=600" in command
+    assert "--timeout \"$pytest_timeout\"" in command
+    assert "status=${PIPESTATUS[0]}" in command
+    # The step cap must wrap the test process itself, not the log pipe, and
+    # the per-shard JUnit report keeps its unique name.
+    assert "2>&1 | tee artifacts/pytest-backend-${{ matrix.suite }}.log" in command
+    assert "--junitxml=artifacts/pytest-backend-${{ matrix.suite }}.xml" in command
+
+
+def test_step_timeout_wrapper_fails_fast_on_a_hung_process() -> None:
+    """Disposable probe: the ``timeout`` mechanism used for the reliability
+    step ceiling terminates a non-returning process quickly with
+    a non-success exit instead of waiting out a production budget."""
+    import shutil
+    import subprocess
+    import time
+
+    if shutil.which("timeout") is None:
+        pytest.skip("coreutils timeout is unavailable")
+    start = time.monotonic()
+    proc = subprocess.run(
+        ["timeout", "2s", "sleep", "300"],
+        capture_output=True,
+        timeout=30,
+    )
+    elapsed = time.monotonic() - start
+    assert proc.returncode == 124
+    assert elapsed < 10
+
+
+def test_pytest_timeout_fails_a_hanging_test_fast(tmp_path) -> None:
+    """Disposable probe (MoonLadderStudios/MoonMind#4365 R11): the per-test
+    ``--timeout`` bound used on reliability shards fails a hanging test
+    with non-success instead of holding the shard."""
+    import subprocess
+    import sys
+    import time
+
+    probe = tmp_path / "test_hang_probe_4365.py"
+    probe.write_text(
+        "import time\n\ndef test_hang_forever():\n    time.sleep(300)\n",
+        encoding="utf-8",
+    )
+    start = time.monotonic()
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", str(probe), "--timeout", "2", "-q"],
+        capture_output=True,
+        text=True,
+        timeout=90,
+    )
+    elapsed = time.monotonic() - start
+    combined = (proc.stdout or "") + (proc.stderr or "")
+    if "unrecognized arguments: --timeout" in combined:
+        pytest.skip("pytest-timeout plugin is unavailable")
+    assert proc.returncode != 0
+    assert elapsed < 60
+
+
+def test_timeout_bounds_a_hanging_teardown_phase() -> None:
+    """Disposable probe (MoonLadderStudios/MoonMind#4365 R11): a teardown
+    phase that never returns (EXIT trap sleeping) is terminated by the
+    ``timeout`` step wrapper with a non-success exit instead of hanging
+    the shard's bounded diagnostics/cleanup."""
+    import shutil
+    import subprocess
+    import time
+
+    if shutil.which("timeout") is None or shutil.which("bash") is None:
+        pytest.skip("coreutils timeout or bash is unavailable")
+    start = time.monotonic()
+    proc = subprocess.run(
+        ["timeout", "5s", "bash", "-c", "cleanup(){ sleep 300; }; trap cleanup EXIT; sleep 1"],
+        capture_output=True,
+        timeout=60,
+    )
+    elapsed = time.monotonic() - start
+    assert proc.returncode == 124
+    assert elapsed < 30
+
+
+def test_reliability_fixtures_reuse_registry_layers_without_shared_state() -> None:
+    """MoonLadderStudios/MoonMind#4376: no redundant cache subsystem.
+
+    The reliability Compose file builds no images (dependency layers are
+    registry layers reused natively by ``docker compose up``) and mounts no
+    mutable release state -- only the read-only Temporal dynamic config.
+    Isolation comes from per-shard Compose project names in the workflow,
+    so shards never share services, networks, or volumes.
+    """
+    compose_path = REPO_ROOT / "tests" / "integration" / "reliability" / "compose.yaml"
+    compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    assert set(compose["services"]) >= {"postgres", "temporal", "minio"}
+    for name, service in compose["services"].items():
+        assert "build" not in service, f"{name} must not build a local image"
+        assert "image" in service, f"{name} must come from a registry layer"
+        for volume in service.get("volumes", []):
+            assert ":ro" in str(volume), f"{name} must not share mutable state: {volume}"
+    workflow = _load_workflow()
+    steps = {step["name"]: step for step in workflow["jobs"]["backend-matrix"]["steps"]}
+    assert "moonmind-reliability-${{ matrix.suite }}" in steps["Start isolated reliability dependencies"]["run"]
+    assert "moonmind-reliability-${{ matrix.suite }}" in steps["Remove isolated reliability dependencies"]["run"]
+    assert "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" in steps[
+        "Start isolated reliability dependencies"
+    ]["run"]

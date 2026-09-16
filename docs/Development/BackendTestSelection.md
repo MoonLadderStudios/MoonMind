@@ -185,8 +185,9 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   files (JUnit XML, text log, slowest report, duration-hints snapshot) with
   `retention-days: 7` and `if-no-files-found: warn`, on success, failure,
   and (best-effort) normal cancellation via `always()` plus the native
-  selection guard. Reliability Compose logs and scoped manifests upload
-  separately with the same retention. No hidden environment files, tokens,
+  selection guard. Reliability Compose logs and scoped manifests upload the
+  same way on every selected run (MoonLadderStudios/MoonMind#4371) with the
+  same retention. No hidden environment files, tokens,
   unrestricted workspaces, or whole source trees are staged.
 - Each row appends a per-job `$GITHUB_STEP_SUMMARY` (via the same hook)
   with suite/shard identity, tested revision, run/attempt, JUnit counts
@@ -219,6 +220,27 @@ is `tools/ci/reliability_shard_partition.py`, called by the CI workflow as
 so local ownership checks and CI execute each file in the same shard.
 Timing history is an optimization hint only: new or unweighted files run
 via `DEFAULT_WEIGHT_SECONDS` and are never skipped.
+
+### Reliability Docker Fixture Layers (MoonLadderStudios/MoonMind#4376)
+
+No additional Dockerfile-layer GHA cache is added for reliability shards.
+Content-addressed pip/uv package caches are shared across shards and runs
+(MoonLadderStudios/MoonMind#4376); no mutable release state lives there.
+Measured-gap analysis: `tests/integration/reliability/compose.yaml` declares only
+registry images (`minio`, `postgres`, `temporalio/auto-setup`) with no
+`build` section, and its sole volume mount is the read-only Temporal
+dynamic config (`:ro`). There are therefore no local Dockerfile layers to
+cache — `docker compose up` natively reuses the pulled registry layers,
+and each shard runs them under its own Compose project
+(`moonmind-reliability-<suite>`) with per-shard networks/volumes, so no
+mutable release state is shared. This is pinned by
+`test_reliability_fixtures_reuse_registry_layers_without_shared_state`.
+By contrast, `integration-ci` and `omnigent-exact-artifact` do build local
+images (`api_service/Dockerfile` `test-runtime` / exact artifact) and
+already carry GHA layer caches (`cache-from`/`cache-to` with dedicated
+scopes); that is where layer caching demonstrably applies. If reliability
+`compose.yaml` later gains a `build` section, revisit caching there —
+until then an extra cache subsystem would be redundant machinery.
 
 Diagnostic limitation: a canceled sibling may exit before writing its
 junit report or Compose logs. Cancellation uploads are best-effort
