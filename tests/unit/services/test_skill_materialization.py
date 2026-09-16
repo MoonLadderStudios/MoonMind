@@ -981,8 +981,9 @@ async def test_historical_snapshot_reuse_preserves_admitted_digest(tmp_path: Pat
     original = _skill_bundle_payload({"SKILL.md": b"# v1\n"})
     changed = _skill_bundle_payload({"SKILL.md": b"# v2\n"})
     assert _digest(original) != _digest(changed)
+    payloads = {"artifact-v1": original}
     materializer = AgentSkillMaterializer(
-        str(tmp_path), artifact_service=_StaticArtifactService({"artifact-v1": original})
+        str(tmp_path), artifact_service=_StaticArtifactService(payloads)
     )
     skillset = ResolvedSkillSet(
         snapshot_id="reuse_snap",
@@ -1005,6 +1006,23 @@ async def test_historical_snapshot_reuse_preserves_admitted_digest(tmp_path: Pat
     )
     assert manifest["skills"][0]["content_digest"] == _digest(original)
     assert manifest["skills"][0]["content_digest"] != _digest(changed)
+
+    # Re-materializing the admitted skillset after the source changed must
+    # not silently re-point history: the digest guard rejects the changed
+    # bytes and the admitted manifest keeps the original digest.
+    payloads["artifact-v1"] = changed
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        await materializer.materialize(
+            resolved_skillset=skillset,
+            runtime_id="test_runtime",
+            mode=RuntimeMaterializationMode.WORKSPACE_MOUNTED,
+        )
+    reread = json.loads(
+        (tmp_path / "runtime" / "skills_active" / "reuse_snap" / "_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert reread["skills"][0]["content_digest"] == _digest(original)
 
 
 @pytest.mark.asyncio

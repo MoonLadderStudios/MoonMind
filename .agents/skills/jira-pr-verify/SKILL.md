@@ -152,7 +152,7 @@ Validation:
 7. Scan and post.
 - Before posting, scan the outgoing comment for secret-like patterns such as `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
 - If any secret-like content appears, do not post. Redact and re-scan.
-- If the bundled helper is materialized, post with the helper from the resolved active bundle: `$MOONMIND_ACTIVE_SKILLS_DIR/jira-pr-verify/tools/post_pr_comment.py --repo <owner/repo> --pr <pr> --body-file <comment_file>` inside MoonMind, or `<installed-skill-dir>/jira-pr-verify/tools/post_pr_comment.py` (the directory containing this `SKILL.md`) outside MoonMind. Never substitute the checked-in `.agents/skills` directory for the selected snapshot.
+- If the bundled helper is materialized, post with the helper from the resolved active bundle: `$MOONMIND_ACTIVE_SKILLS_DIR/jira-pr-verify/tools/post_pr_comment.py --repo <owner/repo> --pr <pr> --body-file <comment_file>` inside MoonMind, or `<installed-skill-dir>/tools/post_pr_comment.py` (the directory containing this `SKILL.md`) outside MoonMind. Never substitute the checked-in `.agents/skills` directory for the selected snapshot.
 - Otherwise post with the PR comment operation from [the provider command catalog](references/provider-commands.md).
 - If the helper fails, record the exact `gh` error, then optionally try the GitHub connector as a fallback.
 - If connector posting also fails, leave the comment body in a local artifact and report both the `gh` and connector blockers.
