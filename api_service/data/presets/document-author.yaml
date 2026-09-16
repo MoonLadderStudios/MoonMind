@@ -54,7 +54,7 @@ steps:
       Additional constraints:
       {{ inputs.constraints }}
 
-      Follow the document-author skill. Choose the document class, location, filename, viewpoint template, metadata header, stable claims, and embedded rationale before writing. If the request is broad or cleanup-oriented, write a bounded improvement plan under docs/tmp/ instead of editing canonical docs.
+      Follow the document-author skill. Resolve the document role first (factual implementation reference, authorized desired-state design, or temporary execution artifact), discover the repository's actual conventions, and load only the relevant document-class references. Choose the document class, location, filename, viewpoint template, metadata header, stable claims, and embedded rationale before writing. Preserve requested metadata, claim traceability, and ownership where the repository requires them. Write a bounded improvement plan under docs/tmp/ only when the request genuinely cannot be satisfied by one bounded canonical document; an authorized multi-document output stays a multi-document output and is not replaced with a plan solely because it is substantial.
 
       Keep canonical docs declarative. Put imperative plans under docs/tmp/ or a gitignored handoff path. Do not create spec.md and do not write under specs/.
 
