@@ -45,8 +45,9 @@
 # `docker compose --profile <profile> up`, or automatically through
 # `OmnigentOAuthHostRuntime._compose_static_check` on the managed path,
 # which admits the rendered effective environment via
-# `admit_static_host_effective_launch` and binds the staged generation to
-# the live lease) immediately before `docker compose up`; a direct
+# `admit_static_host_effective_launch` and resolves the effective image
+# through `resolve_effective_static_host_image`, binding the staged
+# generation to the live lease) immediately before `docker compose up`; a direct
 # `docker compose up` that bypasses that prelaunch admission launches the
 # mutable fallback below and is not a qualified static launch.
 x-omnigent-static-host:

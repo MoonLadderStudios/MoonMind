@@ -393,7 +393,9 @@ def _run_github_token_block(env: dict[str, str], config_dir: Path) -> subprocess
     )
 
 
-def test_packaged_github_token_block_writes_restart_preserving_and_rejects() -> None:
+def test_packaged_github_token_block_writes_restart_preserving_and_rejects(
+    tmp_path: Path,
+) -> None:
     block = _github_token_block()
     # No deletion path: a restart without a token cannot clear persisted auth.
     assert "rm " not in block
@@ -406,7 +408,7 @@ def test_packaged_github_token_block_writes_restart_preserving_and_rejects() -> 
         "HOME": "/home/app",
     }
     pid = str(subprocess.os.getpid())
-    config_home = Path(f"/home/app/.cache/mm-gh-token-test-{pid}")
+    config_home = tmp_path / f"mm-gh-token-test-{pid}"
     try:
         # Supplied token is written with the bounded selector charset.
         result = _run_github_token_block(
@@ -1068,13 +1070,13 @@ def test_packaged_startup_rejects_wrong_credential_homes() -> None:
     assert result.returncode == 64
 
 
-def test_packaged_github_token_block_rotates_and_preserves() -> None:
+def test_packaged_github_token_block_rotates_and_preserves(tmp_path: Path) -> None:
     base_env = {
         "PATH": "/usr/bin:/bin",
         "HOME": "/home/app",
     }
     pid = str(subprocess.os.getpid())
-    config_home = Path(f"/home/app/.cache/mm-gh-token-rotate-test-{pid}")
+    config_home = tmp_path / f"mm-gh-token-rotate-test-{pid}"
     try:
         # A changed connection (new valid token) rotates the persisted config.
         result = _run_github_token_block(
@@ -1492,13 +1494,15 @@ def test_packaged_startup_rejects_opencode_ambient_selectors() -> None:
     assert "ADMITTED" in result.stdout
 
 
-def test_github_token_block_preserves_unrelated_config_contents() -> None:
+def test_github_token_block_preserves_unrelated_config_contents(
+    tmp_path: Path,
+) -> None:
     base_env = {
         "PATH": "/usr/bin:/bin",
         "HOME": "/home/app",
     }
     pid = str(subprocess.os.getpid())
-    config_home = Path(f"/home/app/.cache/mm-gh-token-preserve-test-{pid}")
+    config_home = tmp_path / f"mm-gh-token-preserve-test-{pid}"
     try:
         gh_dir = config_home / "gh"
         gh_dir.mkdir(parents=True, exist_ok=True)
