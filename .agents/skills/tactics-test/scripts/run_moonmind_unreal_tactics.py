@@ -117,23 +117,51 @@ def main() -> int:
     if not (repo / uproject).is_file():
         raise ValueError(f"uproject does not exist: {repo / uproject}")
     results_subdir = _relative_path(args.results_subdir, field="--results-subdir")
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    results_dir = repo / results_subdir / timestamp
     gate_path = (
         repo / _relative_path(args.gate_file, field="--gate-file")
         if args.gate_file
         else repo / results_subdir / "latest" / "gate.json"
     )
-    if not args.dry_run:
-        # Dry-run is strictly non-mutating: preview only, so directory and
-        # gate writes stay behind the non-dry-run path.
-        results_dir.mkdir(parents=True, exist_ok=True)
-        gate_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # A dry-run preview is explicitly non-mutating: it must never create,
+    # overwrite, or erase the gate artifact (MoonLadderStudios/MoonMind#4277).
+    # The preview reports SKIPPED on stdout only so a prior verified PASS
+    # result survives the preview. This covers the supported managed path
+    # where the shell entrypoint execs this runner before any shell guard.
+    if args.dry_run:
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        results_dir = repo / results_subdir / timestamp
+        if args.phase in {"all", "build"}:
+            _run_job(
+                _base_spec(timeout_seconds=14400),
+                request_id=f"tactics-build-{timestamp}",
+                log_path=results_dir / "build.log",
+                dry_run=True,
+            )
+        if args.phase in {"all", "test"}:
+            _run_job(
+                _base_spec(timeout_seconds=7200),
+                request_id=f"tactics-test-{timestamp}",
+                log_path=results_dir / "test.log",
+                dry_run=True,
+            )
+        print('Gate preview: status="SKIPPED" (dry-run; no gate artifact written)')
+        return 0
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    results_dir = repo / results_subdir / timestamp
+    results_dir.mkdir(parents=True, exist_ok=True)
+    gate_path.parent.mkdir(parents=True, exist_ok=True)
 
     build_status = "not_run"
     test_status = "not_run"
     reason = "Requested phases completed successfully"
     exit_code = 0
+
+    if args.phase not in {"all", "build"}:
+        build_status = "skipped"
+    if args.phase not in {"all", "test"}:
+        test_status = "skipped"
 
     if args.phase in {"all", "build"}:
         build_spec = _base_spec(timeout_seconds=14400)
@@ -204,21 +232,25 @@ def main() -> int:
         if exit_code:
             reason = "Test phase failed"
 
-    gate = {
-        "status": "SKIPPED" if args.dry_run else ("PASS" if exit_code == 0 else "FAIL"),
-        "reason": "Dry-run mode; jobs not submitted" if args.dry_run else reason,
+    gate: dict[str, Any] = {
+        "status": "PASS" if exit_code == 0 else "FAIL",
+        "reason": reason,
         "timestamp": datetime.now(UTC).isoformat(),
         "source": "moonmind-container-job",
         "repo": str(repo),
         "phase": args.phase,
-        "buildStatus": "skipped" if args.dry_run else build_status,
-        "testStatus": "skipped" if args.dry_run else test_status,
+        "buildStatus": build_status,
+        "testStatus": test_status,
         "resultsDir": str(results_dir),
     }
-    if args.dry_run:
-        print(json.dumps({"dry_run_gate_preview": gate}, indent=2))
-    else:
-        gate_path.write_text(json.dumps(gate, indent=2) + "\n", encoding="utf-8")
+    # Phase-aware log evidence: only logs for phases that ran are named, so a
+    # verifier following the gate never rejects a successful single-phase run
+    # for a skipped phase's absent log file.
+    if args.phase in {"all", "build"}:
+        gate["buildLog"] = str(results_dir / "build.log")
+    if args.phase in {"all", "test"}:
+        gate["testLog"] = str(results_dir / "test.log")
+    gate_path.write_text(json.dumps(gate, indent=2) + "\n", encoding="utf-8")
     return exit_code
 
 

@@ -128,7 +128,7 @@ class does not describe.
 
 | Layer | Levels | Environment | Owner |
 | --- | --- | --- | --- |
-| `hermetic` | 1, 2, 4, 8, 16 | Real schemas, planning, realizer, runtime bindings, host leases, session/bridge stores, cleanup authority, and real database constraints, over controlled provider and Docker boundaries. | Gated by required pull-request CI, except the PostgreSQL-backed machine-capacity owner, which is impact-selected `integration_ci`. Its **record** is produced by the scheduled workflow below. |
+| `hermetic` | 1, 2, 4, 8, 16 | Real schemas, planning, realizer, runtime bindings, host leases, session/bridge stores, cleanup authority, and real database constraints, over controlled provider and Docker boundaries. | Gated by required pull-request CI. |
 | `exact_docker` | 2, 4, 8 | The built MoonMind, Omnigent server, and host artifacts under a real Docker daemon on a declared resource class. | `Provider / Omnigent Concurrency Qualification` (scheduled). |
 | `protected_live` | 2 up to the provider-safe ceiling (`PROTECTED_LIVE_MAX_LEVEL`, 4) | The exact eligible credentialless OpenCode Zen route under a bounded pricing/privacy/load policy (`tests/provider/omnigent/test_omnigent_concurrency.py`). Every session it opens is reclaimed in a bounded `finally`, including a wave that failed part-way through: sessions left on a shared free route consume the next run's capacity and contaminate the level it measures. | Same workflow, opt-in dispatch only. |
 
@@ -163,15 +163,15 @@ The hermetic layer spans three production boundaries, each with its own owner:
   `ProfileSlotState` ledger and the production `GenericHostCapacityAdmission`,
   so admission, durable waiting, grant-on-release, capacity changes, and queued
   cancellation are decided by the ledger rather than by a stub.
-- **Execution** — `N` real `GenericOmnigentHostRealizer.execute` calls against
-  one shared machine ledger.
+- **Execution** — `N` real `GenericOmnigentHostRealizer.execute` calls
+  against the shared durable host-lease ledger.
 
-Because the layer includes real database constraints, one hermetic owner
-(`tests/integration/omnigent/test_machine_capacity_reservations_postgres.py`)
-races two **independent PostgreSQL transactions** for the final slot. Running
-`--layer hermetic` therefore requires local PostgreSQL binaries or
-`MOONMIND_TEST_POSTGRES_URL`; that is the same environment
-`./tools/test_integration.sh` provides.
+The hermetic layer exercises the durable host-lease admission fence:
+concurrent allocations race for the final host slot under the
+transaction-scoped admission lock, so only one wins. The former
+machine-capacity two-transaction race owner was retired with the automatic
+resource-accounting subsystem; contention is now proven at the host-count and
+container-job-slot boundaries.
 
 The exact-Docker layer launches `N` run-dedicated hosts from the digest-pinned
 image through the production side-effect owners — `DockerOmnigentHostLauncher`,
@@ -205,9 +205,9 @@ establishes nothing about the resource, so the entry stays unresolved, the
 reason travels with it, and `zero_leak` cannot report a clean sweep the scan
 never observed.
 
-Four of its owners — the capacity-admission fence, the control plane, the
-machine-capacity reservations and the provider-lease incremental contract — also
-decide their invariant against real PostgreSQL, so `--layer exact_docker` needs
+Three of its owners — the capacity-admission fence, the control plane,
+and the provider-lease incremental contract — also decide their invariant
+against real PostgreSQL, so `--layer exact_docker` needs
 the same cluster the hermetic layer does; the scheduled job supplies one as a
 service container. Because the layer proves registration, it also needs the
 control-plane endpoint, its token and the expected host owner

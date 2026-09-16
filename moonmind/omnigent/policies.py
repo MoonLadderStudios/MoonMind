@@ -51,7 +51,11 @@ class HostPolicy(PolicySection):
 
 
 class ResourcePolicy(PolicySection):
-    cpu_millis: PositiveInt = Field(alias="cpuMillis")
+    # Historical documents may carry cpuMillis=0 (shared pool) so persisted
+    # policies and in-flight histories remain decodable. New executable
+    # policies must pass require_explicit_policy_resources: resource limits
+    # are explicit ceilings enforced directly by Docker, never pool selections.
+    cpu_millis: int = Field(alias="cpuMillis", ge=0)
     memory_mib: PositiveInt = Field(alias="memoryMiB")
     processes: PositiveInt
     timeout_seconds: PositiveInt = Field(alias="timeoutSeconds")
@@ -220,6 +224,19 @@ class PolicyDocument(BaseModel):
         if missing_tiers:
             raise ValueError(f"remediation actions lack risk tiers: {sorted(missing_tiers)}")
         return self
+
+
+def require_explicit_policy_resources(document: "PolicyDocument") -> "PolicyDocument":
+    """Reject retired resource interpretations for new executable policies.
+
+    A new zero-valued CPU request must never mean unlimited CPU, silently
+    select a fallback, or reach a removed pool implementation. Historical
+    zero-valued documents remain decodable; only new execution is gated here.
+    """
+
+    if document.resources.cpu_millis < 1:
+        raise ValueError("resources.cpuMillis must be a positive explicit limit")
+    return document
 
 
 def normalize_document(document: PolicyDocument | Mapping[str, Any]) -> dict[str, Any]:

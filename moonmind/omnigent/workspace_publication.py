@@ -168,20 +168,110 @@ class OmnigentWorkspacePublicationService:
             from moonmind.workflows.temporal.step_checkpoints import build_step_checkpoint_payload
             from moonmind.schemas.temporal_models import StepExecutionIdentityModel, STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE
             payload = build_step_checkpoint_payload(
-                identity=StepExecutionIdentityModel(workflowId=identity.workflow_id, runId=identity.run_id,
-                    logicalStepId=identity.logical_step_id, executionOrdinal=identity.execution_ordinal),
-                boundary="after_execution", task_input_snapshot_ref=plan.task_input_snapshot_ref,
-                workspace=workspace_evidence, created_at=datetime.now(UTC),
-                plan_ref=plan.plan_artifact_ref, plan_digest=plan.plan_digest,
+                identity=StepExecutionIdentityModel(
+                    workflowId=identity.workflow_id,
+                    runId=identity.run_id,
+                    logicalStepId=identity.logical_step_id,
+                    executionOrdinal=identity.execution_ordinal,
+                ),
+                boundary="after_execution",
+                task_input_snapshot_ref=plan.task_input_snapshot_ref,
+                workspace=workspace_evidence,
+                created_at=datetime.now(UTC),
+                plan_ref=plan.plan_artifact_ref,
+                plan_digest=plan.plan_digest,
                 prepared_input_refs=identity.prepared_input_refs,
             )
-            ref = await Capture(workspace_root=self._workspace_root)._put_checkpoint_bytes(
+            ref = await Capture(
+                workspace_root=self._workspace_root
+            )._put_checkpoint_bytes(
                 json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(),
                 content_type=STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
                 metadata={"artifact_kind": "step_execution_checkpoint"},
             )
-            return {**workspace_evidence, "checkpointRef": ref}
+            # This is preservation evidence, not completion or write authority.
+            # Keep it outside the versioned checkpoint payload so admitted
+            # checkpoints retain their existing reader contract.
+            recovery = await self._repository_recovery_evidence(
+                request, workspace_evidence
+            )
+            return {
+                **workspace_evidence,
+                "checkpointRef": ref,
+                "recoveryEvidence": recovery,
+            }
         return workspace_evidence
+
+    async def _repository_recovery_evidence(self, request, saved):
+        """Bind clean-worktree observation to the remotely verified archive.
+
+        Failure to obtain this auxiliary proof must never invalidate a saved
+        checkpoint. The claim reconciler owns repeatable remote ancestry reads;
+        a clean checkout alone does not grant release or publication authority.
+        """
+        try:
+            from moonmind.omnigent.repository_sources import normalize_repository_source
+
+            workspace = self.resolve_request_workspace(request)
+            repository = authored_repository_source(request)
+            if not repository:
+                return {"reasonCode": "repository_unavailable"}
+            _, origin, _ = await self._run(
+                "git",
+                "-c",
+                f"safe.directory={workspace}",
+                "-C",
+                str(workspace),
+                "config",
+                "--get",
+                "remote.origin.url",
+            )
+            if (
+                normalize_repository_source(origin.strip())[0].casefold()
+                != normalize_repository_source(repository)[0].casefold()
+            ):
+                return {"reasonCode": "repository_authority_changed"}
+
+            async def run(command, *, check=True):
+                code, out, err = await self._run(
+                    command[0],
+                    "-c",
+                    f"safe.directory={workspace}",
+                    "-C",
+                    str(workspace),
+                    *command[1:],
+                    check=check,
+                )
+                return SimpleNamespace(returncode=code, stdout=out, stderr=err)
+
+            status = await run(
+                ["git", "status", "--porcelain", "--untracked-files=all"]
+            )
+            if status.stdout.strip():
+                return {"reasonCode": "saved_work_requires_recovery"}
+            base = authored_starting_branch(request)
+            if not base:
+                base = (
+                    (await run(["git", "symbolic-ref", "refs/remotes/origin/HEAD"]))
+                    .stdout.strip()
+                    .removeprefix("refs/remotes/origin/")
+                )
+            head = (await run(["git", "rev-parse", "HEAD"])).stdout.strip()
+            status = await run(
+                ["git", "status", "--porcelain", "--untracked-files=all"]
+            )
+            if status.stdout.strip() or head != saved.get("headCommit"):
+                return {"reasonCode": "workspace_changed_during_observation"}
+            return {
+                "schemaVersion": "repository-worktree-state/v1",
+                "worktreeClean": True,
+                "repository": repository,
+                "headSha": head,
+                "baseBranch": base,
+                "checkpointArchiveDigest": saved["archiveDigest"],
+            }
+        except Exception as exc:  # noqa: BLE001 -- auxiliary proof cannot invalidate saved work
+            return {"reasonCode": "no_work_unverified", "errorType": type(exc).__name__}
 
     @staticmethod
     async def _run(

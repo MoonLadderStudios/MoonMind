@@ -279,10 +279,30 @@ class FileDesiredStateStore:
             if self.json_file_path
             else env_path.with_suffix(env_path.suffix + ".json")
         )
+        # The singular Omnigent release owns `OMNIGENT_*` env refs and the
+        # `omnigentRelease` sidecar document independently of MoonMind image
+        # authority. A plain rewrite would delete them on every MoonMind
+        # update and lose the revision chain, so preserve them here; the
+        # release migration remains the sole writer of those keys.
+        try:
+            existing_env, existing_json = _read_desired_state_files(
+                env_path, json_path
+            )
+        except OSError:
+            existing_env, existing_json = {}, {}
+        preserved_env = {
+            k: v
+            for k, v in existing_env.items()
+            if k.startswith("OMNIGENT_") and str(v or "").strip()
+        }
+        if isinstance(existing_json, dict) and "omnigentRelease" in existing_json:
+            if "omnigentRelease" not in record:
+                record["omnigentRelease"] = existing_json["omnigentRelease"]
         desired_image = _desired_deployed_image(record)
         requested_image = _desired_requested_image(record)
         run_id = str(record.get("sourceRunId") or "").strip()
         env_payload = {
+            **preserved_env,
             self.image_env_var: desired_image,
             f"{self.image_env_var}_REQUESTED": requested_image,
             "MOONMIND_DEPLOYMENT_RUN_ID": run_id,
@@ -295,6 +315,45 @@ class FileDesiredStateStore:
             record,
         )
         return f"file:{env_path}"
+
+    async def merge(
+        self,
+        *,
+        env_updates: Mapping[str, Any] | None = None,
+        json_updates: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Merge keys into the desired-state files, preserving other entries.
+
+        Unlike :meth:`persist`, which rewrites the MoonMind image authority
+        from scratch, merge keeps every existing entry (including entries this
+        release did not author) and only adds or replaces the supplied keys.
+        Unparseable env lines are preserved verbatim so a merge never drops
+        operator content it cannot understand.
+        """
+        env_path = Path(self.env_file_path).expanduser()
+        json_path = (
+            Path(self.json_file_path).expanduser()
+            if self.json_file_path
+            else env_path.with_suffix(env_path.suffix + ".json")
+        )
+        await asyncio.to_thread(
+            _merge_desired_state_files,
+            env_path,
+            json_path,
+            dict(env_updates or {}),
+            dict(json_updates or {}),
+        )
+        return f"file:{env_path}"
+
+    def read(self) -> tuple[Mapping[str, str], Mapping[str, Any]]:
+        """Return the current desired-state env entries and JSON record."""
+        env_path = Path(self.env_file_path).expanduser()
+        json_path = (
+            Path(self.json_file_path).expanduser()
+            if self.json_file_path
+            else env_path.with_suffix(env_path.suffix + ".json")
+        )
+        return _read_desired_state_files(env_path, json_path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,21 +489,94 @@ def _is_host_absolute_path(path: Path | str) -> bool:
     return False
 
 
-def _docker_desktop_host_path(path: str) -> str | None:
-    """Translate a Windows drive path into Docker Desktop's daemon namespace.
+def _is_wsl_distro_path(path: str) -> bool:
+    """Return True for WSL user-distro ``/mnt/<drive>`` paths.
 
-    The Linux deployment worker talks directly to the Desktop daemon. WSL's
-    user-distro ``/mnt/<drive>`` paths are not the daemon's host-file mounts.
+    Only single-letter drives qualify; longer ``/mnt/<name>`` mounts (for
+    example ``/mnt/data``) are genuine Linux mounts and keep their POSIX
+    namespace.
+    """
+
+    return (
+        re.match(r"^/mnt/[A-Za-z](?:/.*)?$", path.strip().replace("\\", "/"))
+        is not None
+    )
+
+
+_desktop_daemon_probe_cache: dict[str, bool | None] = {}
+
+
+async def _probe_docker_desktop_daemon() -> bool | None:
+    """Report whether the reachable daemon is Docker Desktop.
+
+    Returns True for Docker Desktop, False for another daemon, and None when
+    the platform cannot be established. Results are cached per ``DOCKER_HOST``
+    so every Compose invocation does not re-probe. ``None`` callers keep the
+    Desktop rewrite: the daemon is unreachable either way, and rewritten binds
+    disable automatic host-directory creation so a misclassified source fails
+    loudly instead of mounting an empty directory.
+    """
+
+    key = os.environ.get("DOCKER_HOST", "")
+    if key in _desktop_daemon_probe_cache:
+        return _desktop_daemon_probe_cache[key]
+    result: bool | None = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "docker",
+            "info",
+            "--format",
+            "{{.OperatingSystem}}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError:
+        result = None
+    else:
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+        except TimeoutError:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            result = None
+        except OSError:
+            result = None
+        else:
+            if process.returncode == 0:
+                result = (
+                    stdout.decode("utf-8", errors="replace").strip()
+                    == "Docker Desktop"
+                )
+    _desktop_daemon_probe_cache[key] = result
+    return result
+
+
+def _docker_desktop_host_path(path: str) -> str | None:
+    """Translate Windows and WSL paths into Docker Desktop's daemon namespace.
+
+    The Linux deployment worker talks directly to the Desktop daemon. Both
+    Windows drive paths (``C:\\repo``) and WSL user-distro ``/mnt/<drive>``
+    paths are not the daemon's host-file mounts; they resolve to
+    ``/run/desktop/mnt/host/<drive>/...``. Longer ``/mnt/<name>`` mounts
+    (for example ``/mnt/data``) are genuine Linux mounts and pass through.
     """
 
     normalized = path.strip()
-    if len(normalized) < 3 or normalized[1] != ":" or not normalized[0].isalpha():
-        return None
-    tail = normalized[2:].replace("\\", "/").lstrip("/")
-    drive = normalized[0].lower()
-    if tail:
-        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
-    return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
+    if len(normalized) >= 2 and normalized[1] == ":" and normalized[0].isalpha():
+        tail = normalized[2:].replace("\\", "/").lstrip("/")
+        drive = normalized[0].lower()
+        if tail:
+            return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
+        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
+    unified = normalized.replace("\\", "/")
+    if _is_wsl_distro_path(normalized):
+        drive = unified.split("/")[2].lower()
+        tail = "/".join(part for part in unified.split("/")[3:] if part)
+        if tail:
+            return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
+        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
+    return None
 
 
 def _remap_host_compose_path(
@@ -775,9 +907,36 @@ class HostDockerComposeRunner:
             *parts[2:],
         ]
 
-    def _uses_windows_host_project_dir(self) -> bool:
+    def _requires_desktop_host_rewrite(self) -> bool:
+        """Return True when the host project dir is not daemon-visible.
+
+        Docker Desktop on Windows serves host files from
+        ``/run/desktop/mnt/host/<drive>/...``. Both Windows drive-letter
+        paths (``C:\\repo``) and WSL distro mounts (``/mnt/<drive>/...``)
+        must be rewritten to that namespace before the daemon can mount
+        them. Native Linux host paths pass through unchanged.
+        """
         text = str(self.project_dir).strip()
-        return len(text) >= 2 and text[1] == ":" and text[0].isalpha()
+        if len(text) >= 2 and text[1] == ":" and text[0].isalpha():
+            return True
+        return _is_wsl_distro_path(text)
+
+    async def _use_desktop_host_rewrite(self) -> bool:
+        """Decide whether daemon-bound Compose input needs the host rewrite.
+
+        Windows drive-letter paths are unambiguous Desktop signals. A bare
+        ``/mnt/<drive>`` shape may instead be a native Linux mount, so it is
+        rewritten only when the reachable daemon confirms Docker Desktop (or
+        when the platform cannot be established, where rewritten binds still
+        fail loudly instead of mounting empty directories). A confirmed
+        non-Desktop daemon keeps the POSIX namespace untouched.
+        """
+        if not (self._requires_desktop_host_rewrite() and self.local_project_dir):
+            return False
+        if _is_wsl_distro_path(str(self.project_dir)):
+            if await _probe_docker_desktop_daemon() is False:
+                return False
+        return True
 
     def _host_bind_source_for_local_path(self, local_source: str) -> str:
         local_dir = str(self._local_dir()).replace("\\", "/").rstrip("/")
@@ -834,7 +993,7 @@ class HostDockerComposeRunner:
         rewritten["services"] = rewritten_services
         return rewritten
 
-    async def _write_windows_host_resolved_compose_file(
+    async def _write_desktop_host_resolved_compose_file(
         self, env: Mapping[str, str]
     ) -> Path:
         resolved = [
@@ -1005,8 +1164,8 @@ class HostDockerComposeRunner:
         if requested_image:
             env["MOONMIND_IMAGE"] = requested_image
         temp_compose_file: Path | None = None
-        if self._uses_windows_host_project_dir() and self.local_project_dir:
-            temp_compose_file = await self._write_windows_host_resolved_compose_file(env)
+        if await self._use_desktop_host_rewrite():
+            temp_compose_file = await self._write_desktop_host_resolved_compose_file(env)
             resolved = self._compose_command(
                 command,
                 project_dir=self._local_dir(),
@@ -2988,6 +3147,121 @@ def _write_desired_state_files(
     json_text = json.dumps(record, sort_keys=True, default=str, indent=2) + "\n"
     _atomic_write_bytes(
         json_path,
+        json_text.encode("utf-8"),
+        normalize_permissions=True,
+    )
+
+
+_ENV_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=\"(.*)\"$")
+
+
+def _unescape_desired_state_env_value(text: str) -> str:
+    """Invert :func:`_compose_env_value` for values this store wrote."""
+    out: list[str] = []
+    escaped = False
+    for char in text:
+        if escaped:
+            out.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        else:
+            out.append(char)
+    if escaped:
+        out.append("\\")
+    return "".join(out)
+
+
+def _parse_desired_state_env(
+    text: str,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """Split desired-state env text into entries and preserved lines.
+
+    Returns ``(entries, preserved)`` where entries are ``(key, value)``
+    pairs in file order (last duplicate wins) and preserved holds every
+    line this store did not author (comments, blanks, unparseable lines),
+    kept verbatim so merges never drop operator content.
+    """
+    entries: list[tuple[str, str]] = []
+    seen: dict[str, int] = {}
+    preserved: list[str] = []
+    for line in text.splitlines():
+        match = _ENV_LINE_RE.fullmatch(line.strip())
+        if match is None:
+            preserved.append(line)
+            continue
+        key = match.group(1)
+        value = _unescape_desired_state_env_value(match.group(2))
+        if key in seen:
+            entries[seen[key]] = (key, value)
+        else:
+            seen[key] = len(entries)
+            entries.append((key, value))
+    return entries, preserved
+
+
+def _read_desired_state_files(
+    env_path: Path,
+    json_path: Path,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Read desired-state files tolerantly; missing files read as empty."""
+    try:
+        env_text = env_path.expanduser().read_text(encoding="utf-8")
+    except OSError:
+        env_text = ""
+    entries, _preserved = _parse_desired_state_env(env_text)
+    try:
+        record_text = json_path.expanduser().read_text(encoding="utf-8")
+    except OSError:
+        return dict(entries), {}
+    try:
+        record = json.loads(record_text)
+    except ValueError:
+        return dict(entries), {}
+    if not isinstance(record, dict):
+        return dict(entries), {}
+    return dict(entries), record
+
+
+def _merge_desired_state_files(
+    env_path: Path,
+    json_path: Path,
+    env_updates: Mapping[str, Any],
+    json_updates: Mapping[str, Any],
+) -> None:
+    """Merge updates into desired-state files, preserving other entries."""
+    try:
+        env_text = env_path.expanduser().read_text(encoding="utf-8")
+    except OSError:
+        env_text = ""
+    entries, preserved = _parse_desired_state_env(env_text)
+    merged = dict(entries)
+    for key, value in env_updates.items():
+        text = _env_value(value)
+        if text:
+            merged[str(key)] = text
+        else:
+            merged.pop(str(key), None)
+    ordered = [(key, merged[key]) for key, _ in entries if key in merged]
+    ordered.extend(
+        (str(key), merged[str(key)])
+        for key in env_updates
+        if _env_value(env_updates[key]) and str(key) not in dict(entries)
+    )
+    lines = [f'{key}="{_compose_env_value(value)}"\n' for key, value in ordered]
+    lines.extend(
+        line + "\n" for line in preserved if line.strip()
+    )
+    _atomic_write_bytes(
+        env_path.expanduser(),
+        "".join(lines).encode("utf-8"),
+        normalize_permissions=True,
+    )
+    _existing_env, record = _read_desired_state_files(env_path, json_path)
+    record = {**record, **{str(k): v for k, v in json_updates.items()}}
+    json_text = json.dumps(record, sort_keys=True, default=str, indent=2) + "\n"
+    _atomic_write_bytes(
+        json_path.expanduser(),
         json_text.encode("utf-8"),
         normalize_permissions=True,
     )

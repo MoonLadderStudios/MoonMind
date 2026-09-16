@@ -1786,8 +1786,9 @@ async def test_daemon_workspace_root_skips_inspection_for_local_daemon(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cpu_millis", [2000, 0])
 async def test_on_demand_host_initializes_state_before_unprivileged_launch(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, cpu_millis
 ) -> None:
     environment_image = "registry.example/environment-host@sha256:" + "1" * 64
     snapshot_image = "registry.example/snapshot-host@sha256:" + "2" * 64
@@ -1804,6 +1805,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     runtime._run = AsyncMock(
         side_effect=[
             (1, "", "no such container"),
+            (0, "", ""),
             (0, "", ""),
             (0, "", ""),
         ]
@@ -1824,8 +1826,8 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         provider_profile_id="codex",
     )
     effective_launch["hostImageRef"] = snapshot_image
-
-    await runtime._launch_on_demand(
+    effective_launch["limits"]["cpuMillis"] = cpu_millis
+    launch_kwargs = dict(
         binding=binding,
         host_lease=lease,
         container_name="mm-host-lease-1",
@@ -1845,8 +1847,18 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         effective_launch=effective_launch,
         egress_attestation=_egress_attestation(),
     )
+    if cpu_millis == 0:
+        # Retired shared-pool requests never reach Docker: new execution
+        # requires an explicit positive CPU limit.
+        with pytest.raises(OmnigentOAuthHostError, match="positive explicit"):
+            await runtime._launch_on_demand(**launch_kwargs)
+        runtime._run.assert_not_awaited()
+        return
+
+    await runtime._launch_on_demand(**launch_kwargs)
 
     commands = [call.args for call in runtime._run.await_args_list]
+    assert commands[2][commands[2].index("--cpus") + 1] == "2.0"
     assert commands[0][:3] == ("docker", "inspect", "--format")
     assert "/opt/moonmind/init-oauth-host.sh" in commands[1]
     assert commands[2][:3] == ("docker", "run", "-d")

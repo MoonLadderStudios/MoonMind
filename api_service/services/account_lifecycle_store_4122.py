@@ -80,6 +80,7 @@ __all__ = [
     "redeem_invite_and_create_user",
     "redeem_invite_with_token",
     "redeem_recovery_for_user",
+    "redeem_recovery_and_rotate_password",
     "redeem_recovery_with_token",
     "redeem_recovery_and_restore_access",
     "apply_member_action_transactional",
@@ -364,6 +365,51 @@ async def redeem_recovery_for_user(
     return user
 
 
+async def redeem_recovery_and_rotate_password(
+    session: AsyncSession, *, login: str, nonce: str, hashed_password: str
+) -> User:
+    """Atomically consume a recovery nonce, rotate credentials, revoke sessions.
+
+    Single-transaction boundary for the HTTP recovery-redeem path: the
+    one-use nonce insert, password update, and revocation-generation bump
+    commit together. A database failure before commit leaves the nonce
+    unconsumed so the operator can retry with the same capability instead
+    of burning the token while leaving the password unchanged. Preserves
+    active/admin flags exactly; never mints a session.
+    """
+    from api_service.services.session_store import DbRevocationStore
+
+    clean = _normalize_login(login, RecoveryError)
+    if not nonce:
+        raise RecoveryError("auth_invalid", "recovery requires a capability nonce")
+    if not hashed_password:
+        raise RecoveryError("auth_invalid", "recovery requires a replacement password")
+    outer = await session.begin_nested()
+    try:
+        result = await session.execute(select(User).where(User.email == clean))
+        user = result.scalars().first()
+        if user is None:
+            raise RecoveryError("auth_invalid", "unknown login for recovery")
+        session.add(
+            MoonmindAccountNonce(nonce=nonce, purpose="recovery", login=clean)
+        )
+        try:
+            await session.flush()
+        except IntegrityError as exc:
+            raise RecoveryError(
+                "auth_invalid", "recovery capability was already consumed"
+            ) from exc
+        user.hashed_password = hashed_password
+        await session.flush()
+        await DbRevocationStore(session).revoke_all_for_user(user.id)
+        await outer.commit()
+    except RecoveryError:
+        await session.rollback()
+        raise
+    await session.commit()
+    return user
+
+
 async def claim_first_owner_with_token(
     session: AsyncSession,
     *,
@@ -452,7 +498,10 @@ async def redeem_recovery_and_restore_access(
 
     When ``hashed_password`` is supplied it is applied atomically with the
     restore; otherwise the existing credential material is retained and
-    rotation stays on the controlled invitation/reset path.
+    rotation stays on the controlled invitation/reset path. Existing
+    sessions are revoked in the same transaction so previously issued or
+    attacker-held sessions cannot retain administrator authority after
+    restoration.
     """
     clean = _normalize_login(login, RecoveryError)
     nonce = recovery_nonce_for_login(token, key=key, login=clean, now=now)
@@ -477,6 +526,9 @@ async def redeem_recovery_and_restore_access(
         if hashed_password is not None:
             user.hashed_password = hashed_password
         await session.flush()
+        from api_service.services.session_store import DbRevocationStore
+
+        await DbRevocationStore(session).revoke_all_for_user(user.id)
         await outer.commit()
     except RecoveryError:
         # Full session rollback: the failed flush poisons the session, so a

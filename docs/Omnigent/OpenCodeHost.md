@@ -717,7 +717,11 @@ runtime substrate and credential compatibility class. Per-run model/options
 and Required Capabilities are admitted independently through class admission,
 provider/runtime validation, and exact-host model attestation, so selecting a
 valid launch-ready Provider Profile does not require changing the runtime
-default or manual requalification. The deployment evidence publication retains
+default or manual requalification. The credentialless `none@1` fast-path
+additionally ignores volatile build digests (server/host builds, harness
+implementation, vendor runtime, agent source), which are covered by catalog
+sync, trust, and launch preflight; auth-bearing materializers stay exact.
+The deployment evidence publication retains
 one independently signed entry per launchable materializer class; entries are
 replaced only by a newly qualified entry for the same deployment-scoped class.
 

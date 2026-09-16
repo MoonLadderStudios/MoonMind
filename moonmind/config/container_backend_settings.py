@@ -165,7 +165,11 @@ class ContainerBackendSettings:
     raw_cli_enabled: bool
     max_cpu_millis: int
     max_memory_mib: int
-    max_active_memory_mib: int | None
+    #: Maximum container-job containers launching or running at once on this
+    #: backend. Fixed count-only concurrency: no machine-budget calculation,
+    #: no resource-ledger write. Waiting work reuses the durable capacity-wait
+    #: state; the daemon's owned containers are the slot ledger.
+    max_active_jobs: int
     max_pids: int
     #: Highest device count a caller may request. ``None`` imposes no MoonMind
     #: ceiling, so host capability remains the only gate; ``0`` refuses every
@@ -533,10 +537,11 @@ def resolve_container_backend_settings(
             minimum=1,
         ),
         max_memory_mib=max_memory_mib,
-        max_active_memory_mib=_coerce_optional_int(
-            source.get("MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB"),
-            field_name="MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB",
-            minimum=16,
+        max_active_jobs=_coerce_int(
+            source.get("MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_JOBS"),
+            field_name="MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_JOBS",
+            default=1,
+            minimum=1,
         ),
         max_pids=_coerce_int(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_PIDS"),

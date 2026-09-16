@@ -418,6 +418,49 @@ async def _reconcile_one_issue(
             summary=summary,
         )
         return outcome
+    from moonmind.workflows.temporal.github_issue_claim_lease import classified_attempts, reconcile_expired_issue
+    try:
+        active_claims, expired_claims, attempts_seen = classified_attempts(comments,
+            repository=repository, issue_number=issue_number)
+    except ValueError:
+        active_claims, expired_claims, attempts_seen = [], [], 1
+    if any(handoff.lease_expires_at and handoff.activity in {"preparing", "active", "awaiting-review"}
+           for _, handoff in active_claims):
+        outcome.update(action=recon.ACTION_NO_ACTION, reasonCode="claim_lease_active",
+            summary="A live GitHub claim lease retains ownership; no foreign runtime observation is required.")
+        return outcome
+    # A stale advisory label with no attempt evidence at all is bookkeeping
+    # left behind, not ownership: announcement always posts its comment first.
+    stale_status_label = not attempts_seen and "status: in-progress" in names
+    if (expired_claims or stale_status_label) and not active_claims:
+        if not _spend(9):
+            outcome.update(reasonCode="request_budget_exhausted")
+            return outcome
+        try:
+            expired_result = await reconcile_expired_issue(service=service,
+                repository=repository, issue_number=issue_number)
+        except (ValueError, AttributeError) as exc:
+            outcome.update(action=recon.ACTION_DEFERRED_UNKNOWN,
+                reasonCode=str(exc).split(":", 1)[0] if isinstance(exc, ValueError)
+                else "claim_reconciliation_unavailable",
+                summary="Reservation reassessment could not complete; deferred without ownership decisions.")
+            return outcome
+        if expired_result.get("reclaimed"):
+            outcome.update(action=recon.ACTION_COMPLETE,
+                reasonCode=expired_result.get("reasonCode", "lease_expired"),
+                summary="Expired or unowned GitHub advisory status no longer excludes assessment; "
+                "prior comments and work references retained.",
+                expiredAttempts=expired_result["expiredAttempts"])
+            return outcome
+        if expired_result.get("reasonCode") == "nothing_to_reconcile":
+            # No attempt evidence and no advisory label: nothing owns this
+            # issue, so fall through to the ordinary handoff reconciliation.
+            pass
+        else:
+            outcome.update(action=recon.ACTION_NO_ACTION,
+                reasonCode=expired_result.get("reasonCode", "claim_changed"),
+                summary="Current GitHub ownership or lifecycle state prevents lease reclamation.")
+            return outcome
     handoffs, malformed = _validated_handoffs(
         comments, repository=repository, issue_number=issue_number, service=service
     )
@@ -721,6 +764,61 @@ async def _probe_reconciliation_access(
     return True, "", True
 
 
+async def reconcile_local_github_issue_claims(*, state_dir=None):
+    """Default maintenance discovers scope from durable local claim receipts."""
+    from moonmind.workflows.temporal.github_issue_claim_recovery import (
+        reconcile_local_claims,
+    )
+
+    path = _state_dir(state_dir) / "local_claims.json"
+    state = _load_json(path)
+    result = await reconcile_local_claims(state=state)
+    _save_json(path, state)
+    # Scope discovery is local configuration; every foreign claim decision is
+    # made from GitHub alone. No foreign Temporal/database access is needed.
+    import asyncio
+    from moonmind.config.settings import settings
+    repositories = sorted(set(state.get("repositories") or []) | set(result.get("repositories") or []))
+    configured = str(settings.workflow.github_repository or "")
+    if configured and configured not in repositories:
+        repositories.append(configured)
+    repositories.sort()
+    state["repositories"] = repositories
+    offset = int(state.get("repositoryCursor") or 0)
+    github_results = []
+    for repository in (repositories[offset:] + repositories[:offset])[:3]:
+        try:
+            async with asyncio.timeout(40):
+                github_results.append(await reconcile_github_issue_handoffs(
+                    repository=repository, state_dir=state_dir, max_issues=25))
+        except Exception as exc:  # noqa: BLE001 -- one repository cannot starve the sweep
+            github_results.append({"repository": repository, "reasonCode": type(exc).__name__})
+    state["repositoryCursor"] = (offset + 3) % len(repositories) if repositories else 0
+    _save_json(path, state)
+    routine = {
+        "owner_or_child_running",
+        "cleanup_grace",
+        "cancellation_hold",
+        "successful_owner_requires_finalization",
+    }
+    failures = [
+        item
+        for item in result["results"]
+        if not item["released"] and item.get("reasonCode") not in routine
+    ]
+    failures.extend(
+        {"repository": item.get("repository"), "reasonCode": item.get("reasonCode", "github_scan_incomplete")}
+        for item in github_results
+        if not item.get("ok") or item.get("scan", {}).get("status") == recon.SCAN_UNKNOWN
+    )
+    return {
+        "status": "succeeded",
+        "localClaims": result,
+        "githubRepositories": github_results,
+        "diagnostics": {"actionableFailures": failures},
+    }
+
+
 async def reconcile_github_issue_handoffs(
     *,
     repository: str,
@@ -798,9 +896,14 @@ async def reconcile_github_issue_handoffs(
         # filtered out for being in-progress).
         import httpx
 
+        cursor = int((state.get("scanCursor") or {}).get(_string(repository), 0))
+        start_page = max(1, int((state.get("scanPage") or {}).get(_string(repository), 1)))
+        target_pages: dict[int, int] = {}
+        resume_page = start_page
         headers = service._github_headers(token)
         async with httpx.AsyncClient(timeout=30.0) as client:
-            for page in range(1, max(1, int(max_pages)) + 1):
+            for page in range(start_page, start_page + max(1, int(max_pages))):
+                resume_page = page
                 if budget["requests"] >= recon.MAX_SCAN_API_REQUESTS:
                     requests_exhausted = True
                     break
@@ -830,31 +933,19 @@ async def reconcile_github_issue_handoffs(
                         number = int(entry.get("number"))
                     except (TypeError, ValueError):
                         continue
-                    if number > 0 and number not in targets:
+                    if number > cursor and number not in targets:
                         targets.append(number)
+                        target_pages[number] = page
                     if len(targets) >= max(0, int(max_issues)):
                         break
+                if len(targets) >= max(0, int(max_issues)):
+                    pages_exhausted = True
+                    break
                 if len(payload) < min(100, recon.MAX_SCAN_PER_PAGE):
                     break
+                resume_page = page + 1
             else:
                 pages_exhausted = True
-        if len(targets) >= max(0, int(max_issues)) and issue_numbers is None:
-            # Hit the issue budget while pages may remain: partial, not clean.
-            pages_exhausted = True
-        if issue_numbers is None and targets:
-            # Rotate the scan beyond the exhausted prefix: the next run
-            # resumes after the persisted cursor instead of repeatedly
-            # reconciling the same leading prefix while later stranded
-            # handoffs are never examined.
-            cursor = 0
-            try:
-                cursor = int((state.get("scanCursor") or {}).get(_string(repository), 0))
-            except (TypeError, ValueError):
-                cursor = 0
-            if cursor > 0 and any(number > cursor for number in targets):
-                after = [number for number in targets if number > cursor]
-                before = [number for number in targets if number <= cursor]
-                targets = after + before
 
     for number in targets:
         if budget["requests"] >= recon.MAX_SCAN_API_REQUESTS:
@@ -862,12 +953,20 @@ async def reconcile_github_issue_handoffs(
             failures.append({"reasonCode": "request_budget_exhausted", "summary": f"Deferred {repository}#{number}: request budget exhausted."})
             continue
         try:
-            item = await _reconcile_one_issue(
-                service=service, repository=_string(repository), issue_number=number, budget=budget, state=state, now_iso=now_iso
-            )
+            import asyncio
+            async with asyncio.timeout(10):
+                item = await _reconcile_one_issue(
+                    service=service, repository=_string(repository), issue_number=number, budget=budget, state=state, now_iso=now_iso
+                )
         except Exception as exc:  # noqa: BLE001 - one issue never fails the run
             item = {"repository": _string(repository), "issueNumber": number, "action": recon.ACTION_DEFERRED_UNKNOWN, "reasonCode": "issue_error", "summary": f"Reconciliation error deferred: {exc.__class__.__name__}.", "apiRequests": 0}
         results.append(item)
+        if issue_numbers is None:
+            # Persist progress between issues so the repository's outer time
+            # budget/worker loss cannot repeatedly strand the same prefix.
+            state.setdefault("scanCursor", {})[_string(repository)] = number
+            state.setdefault("scanPage", {})[_string(repository)] = target_pages[number]
+        _save_json(pending_path, state)
         if item.get("rateLimited"):
             rate_limited = True
         if item.get("reasonCode") in {"unresponsive_owner_uncertain", "manual_in_progress_surfaced"}:
@@ -875,7 +974,7 @@ async def reconcile_github_issue_handoffs(
 
     _save_json(pending_path, state)
     examined = len(results)
-    repaired = sum(1 for r in results if r.get("action") == recon.ACTION_COMPLETE and r.get("reasonCode") == "repaired")
+    repaired = sum(1 for r in results if r.get("action") == recon.ACTION_COMPLETE and r.get("reasonCode") in {"repaired", "lease_expired"})
     surfaced = sum(1 for r in results if r.get("action") == recon.ACTION_ATTENTION)
     deferred = sum(1 for r in results if r.get("action") == recon.ACTION_DEFERRED_UNKNOWN)
     scan = recon.merge_scan_results(
@@ -890,13 +989,18 @@ async def reconcile_github_issue_handoffs(
     )
     # Persist the rotation cursor: on a partial run the next scan resumes
     # after the last examined issue; on a complete run the cursor clears.
-    if issue_numbers is None and targets:
+    if issue_numbers is None:
         cursor_map = dict(state.get("scanCursor") or {}) if isinstance(state.get("scanCursor"), Mapping) else {}
+        page_map = dict(state.get("scanPage") or {})
         if scan.get("status") != recon.SCAN_COMPLETE:
             examined_numbers = [int(r.get("issueNumber", 0)) for r in results if isinstance(r, Mapping)]
-            cursor_map[_string(repository)] = max(examined_numbers) if examined_numbers else max(targets)
+            last = max(examined_numbers) if examined_numbers else cursor
+            cursor_map[_string(repository)] = last
+            page_map[_string(repository)] = target_pages.get(last, resume_page)
         else:
             cursor_map.pop(_string(repository), None)
+            page_map.pop(_string(repository), None)
+        state["scanPage"] = page_map
         if cursor_map:
             state["scanCursor"] = cursor_map
         else:

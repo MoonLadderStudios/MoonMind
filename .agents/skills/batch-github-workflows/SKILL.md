@@ -94,6 +94,91 @@ execute the same portable fan-out engine from the resolved active Skill snapshot
 3. Report the helper's `artifacts/batch-workflows-result.json` queued, skipped,
    and error counts honestly and link every queued child workflow.
 
+## Multi-repository batch (isolated fan-out)
+
+MoonLadderStudios/MoonMind#1657 selects isolated fan-out as the first
+multi-repository increment: one operation applies a bounded task to an
+explicit set of repositories, with a separately admitted child workflow and
+workspace per repository. The parent publishes nothing and forwards no raw
+credential bundle; each child carries only its own explicit `connectionRef`
+and is re-admitted through the existing repository and execution contracts.
+
+This path reuses the same portable engine and the normal execution
+API/Temporal substrate. It does not mount several writable repositories into
+one agent, does not discover every repository a token can see, and does not
+promise cross-repository atomicity.
+
+1. Author an explicit bounded target list as a JSON array (default cap 10,
+   hard cap 25). Each entry names `repository` (`owner/repo`, no wildcards),
+   an explicit `connectionRef` (never an ambient fallback), a safe `branch`,
+   and an `operation` (`read`, `branch`, `pr`, `pr_with_merge_automation`).
+   Optional keys: `endpoint` (default `https://github.com`; identical names
+   on different hosts stay distinct), `revision` (pinned SHA intent),
+   `dependsOn` (explicit upstream target refs), and `evidenceKind`
+   (`revision` or `artifact`). Raw credential keys are rejected.
+
+2. Preflight first to freeze the immutable target manifest for approval:
+
+   ```bash
+   python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py" \
+     --run-ref skill:<name> \
+     --repository-targets-file <targets.json> \
+     --preflight-only
+   ```
+
+   The engine normalizes duplicates (exact duplicates collapse with
+   evidence; same name on different hosts stays distinct; conflicting
+   connections for one repository fail closed), writes
+   `artifacts/batch-repository-manifest.json` with its `digest`, and
+   dispatches nothing. The operator's approval covers that exact digest:
+   the task snapshot, publication mode, limits, and target set.
+
+3. Dispatch with the approved digest. Preflight classifies every target
+   before launch; any inaccessible target blocks the batch unless the
+   operator explicitly passes `--allow-partial` to proceed with the
+   accessible subset:
+
+   ```bash
+   python3 "$MOONMIND_ACTIVE_SKILLS_DIR/batch-github-workflows/bin/batch_workflows.py" \
+     --run-ref skill:<name> \
+     --repository-targets-file <targets.json> \
+     --approved-batch-digest <sha256:...> \
+     [--allow-partial] [--retry-failed-only] \
+     [--upstream-evidence-file <evidence.json>] \
+     [--batch-budget-file <budget.json>]
+   ```
+
+   A target injected after approval changes the digest, so
+   `--approved-batch-digest` mismatches and dispatch refuses. Each target
+   gets a stable child identity bound to the manifest digest and parent
+   execution, its own
+   `repositoryTarget` (separate workspace), artifact namespace, and cleanup
+   owner. Repository batches require `skill:<name>` run-refs with generic
+   repository inputs; `preset:` run-refs (e.g. `preset:github-issue-implement`)
+   are rejected because they require preset-specific inputs such as
+   `github_issue` that this path does not bind. Every admission is verified via `GET /api/executions/{workflowId}`
+   before it counts as queued; ambiguous submissions retry under the same
+   idempotency key, and a parent restart discovers accepted children from
+   the prior `artifacts/batch-repositories-result.json` instead of
+   duplicating work. Concurrency is bounded by `maxConcurrency` with a
+   bounded capacity wait; exhausted capacity marks remaining targets
+   `blocked` truthfully. Cancel owned queued/running children with
+   `--cancel-owned` instead of dispatching.
+
+4. Dependent phases use explicit `dependsOn` edges plus verified evidence:
+   `--upstream-evidence-file` maps upstream refs to `{verified: true,
+   kind: revision|artifact, targetRef: <upstream ref>,
+   revision: <hex 7..64>|artifactRef: <ref>, verifiedBy: <verifier>,
+   observedAt: <timestamp>}`. A bare PR number never
+   satisfies a merged-code dependency; without bound, verifiable evidence the
+   dependent stays `blocked`.
+
+5. Report `artifacts/batch-repositories-result.json` honestly:
+   `queued/running/succeeded/failed/blocked/canceled` plus publication
+   results per target. Batch dispatch success is not task completion.
+   Retrying selected failed children (`--retry-failed-only`) admits fresh
+   children for those targets only and never republishes completed ones.
+
 ## Security and execution constraints
 
 - Require `MOONMIND_URL`; the legacy direct-DB queue is unsupported.

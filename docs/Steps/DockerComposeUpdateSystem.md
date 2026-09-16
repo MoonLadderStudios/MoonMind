@@ -559,6 +559,16 @@ The env file is the Compose-consumed desired state. A JSON sidecar stores the
 full audit payload, including fields that should not be projected into process
 environment variables.
 
+The same files carry the singular Omnigent release: digest-pinned server and
+host image refs as env entries (`OMNIGENT_IMAGE_REF`,
+`OMNIGENT_OPENCODE_HOST_IMAGE_REF`, `OMNIGENT_SHARED_HOST_IMAGE_REF`,
+`OMNIGENT_PI_HOST_IMAGE_REF`, `OMNIGENT_HOST_IMAGE_REF`) plus an
+`omnigentRelease` document in the JSON sidecar (revision, previous revision,
+refs, timestamp, author). The release controller is the single writer; Compose
+rendering, launch policy versions, schedule admissions, and dispatch all derive
+from this record instead of independently resolving mutable tags. Merges must
+preserve entries the writer did not author.
+
 ## 9.3 Mutable tag rule
 
 Before mutation, the system resolves every requested tag to an immutable digest and verifies its release identity. Missing or ambiguous digest or source identity fails admission with actionable diagnostics.
@@ -675,11 +685,39 @@ The tool verifies:
 
 Verification output is written to an immutable artifact.
 
-## 10.8 Capture after state
+## 10.8 Migrate the singular Omnigent release
+
+After fleet verification and before the primary receipt, the controller
+advances the deployment-wide Omnigent release so one `update-moonmind.sh` run
+moves the server, the launch policy versions, and every recurring schedule to
+the same digests:
+
+1. Resolve the candidate server/host digests from the deployment tag inputs.
+2. Compare the candidates against the recorded release and the live deployment:
+   all three agree is a no-op; live disagreeing with the record converges to
+   the record without a new revision; upstream offering new digests cuts a new
+   revision with the previous revision retained for rollback.
+3. Persist the record (compare-and-set on the revision), recreate the omnigent
+   server container onto the recorded digests, and wait for readiness.
+4. Publish the new resolution, synchronize the harness catalog, cut one launch
+   policy version per bootstrap policy whose images moved (carrying the current
+   default document over verbatim except the two image refs), and re-admit all
+   recurring schedules so their Temporal actions embed the new plan authority.
+5. Verify the resolved refs, the running container digest, and the refreshed
+   schedules; record the receipt in the release outputs.
+
+Every step is convergent, so resuming an interrupted update completes pending
+work instead of duplicating it. A step failure blocks the primary receipt like
+a fleet verification failure: the retained fleet owns recovery. Deployments
+without a durable desired-state file skip this phase with an explicit receipt
+reason and keep the previous tag-driven behavior. The major.minor dispatch
+gate is unchanged and now only fires on genuine out-of-band drift.
+
+## 10.9 Capture after state
 
 The tool captures the same state collected before the update and stores it as an after-state artifact.
 
-## 10.9 Release lock and report result
+## 10.10 Release lock and report result
 
 The workflow releases the deployment lock and writes a structured result containing:
 
@@ -688,12 +726,13 @@ The workflow releases the deployment lock and writes a structured result contain
 - running services
 - requested image
 - resolved digest
+- omnigent release receipt (revision, refs, policies cut, schedules refreshed)
 - before artifact ref
 - after artifact ref
 - command log artifact ref
 - verification artifact ref
 
-## 10.10 Bind-mounted checkouts: a host `git pull` alone is not a deployment
+## 10.11 Bind-mounted checkouts: a host `git pull` alone is not a deployment
 
 The default production Compose deployment does not overlay application source.
 Its immutable image provides release identity. Source mounts are explicit
@@ -785,6 +824,19 @@ pinned canary verifies their image identity through each queue. The controller
 also qualifies a candidate API's health, dashboard, assets and read-only API.
 Temporal's compare-and-set routing update promotes only that candidate. A lost
 response reuses the same canary run and verifies the server's current decision.
+
+A plain restart onto a never-promoted release with no live route left to
+preserve must still converge: when the recorded current version has no live
+pollers on any of its queues, the starting workflow fleet runs the same
+pinned canary and compare-and-set promotion itself instead of waiting for an
+update owner, qualified across every queue the current version served. This
+is the disjoint complement of the row above: whenever the current version
+still serves any traffic, startup preserves the route and leaves
+qualification and promotion to the authorized release controller. Local
+presence alone grants nothing; only the canary identity proof, the
+compare-and-set, and the proven absence of any serving capability authorize
+the handoff. A live route is never displaced whatever image backs it, so
+deliberate moves of a serving route stay on the managed update path.
 
 Before promotion, the controller retains pollers from the exact previous image.
 Pinned work remains owned by that version after normal Compose services change.
@@ -935,8 +987,10 @@ through the operator URL. The preflight never infers ingress authorization or
 prints rendered environment/inspect payloads, including OIDC credentials.
 
 The host scripts require Python 3.10+ and Docker Compose V2, validated before
-deployment changes. Fetching a branch selects its published source-SHA image
-without changing the checkout. Failed qualification preserves current routing
+deployment changes. Fetching a branch selects the newest published source-SHA
+image on that branch's first-parent history (up to 20 commits) without changing
+the checkout, so a just-fetched tip whose publish workflow has not finished yet
+falls back to its newest published ancestor with a recorded notice. Failed qualification preserves current routing
 and normal services. Explicit specialized maintenance skips the API check only
 when its dependency closure and orphan removal cannot affect the API.
 
@@ -960,10 +1014,20 @@ and verifies those same origins again before recording release success. The port
 updater accepts repeatable `--operator-url <existing-origin>` declarations, recorded
 as `deployment_operator_urls` in the immutable submission context. These supply
 verification targets without changing API authentication or published bindings.
-A configured `MOONMIND_PUBLIC_BASE_URL` remains a required target. Otherwise, fixed published
-API bindings supply the origins; omitted and explicitly empty public URL values
-use this same path when no operator origins were declared. Wildcard bindings require a declared operator origin because
-an unspecified address cannot identify the client's route. Missing targets or an
+A configured `MOONMIND_PUBLIC_BASE_URL` remains a required target. For
+`AUTH_PROVIDER=header`, verification must use the trusted ingress origin, supplied by
+that public URL or `--operator-url`. Published API bindings bypass the proxy, and the
+trusted-proxy peer allowlist does not identify its public scheme, host, and port. If
+neither origin is supplied, preflight stops with actionable ingress configuration
+guidance before recording a target or replacing the API; it never substitutes a
+direct API probe or a fabricated identity header.
+For other authentication modes, published API bindings supply the origins when no
+public URL or operator origins were declared; omitted and explicitly empty public URL
+values use the same path. A fixed binding supplies its own address. A wildcard binding
+(`MOONMIND_API_PUBLISH_HOST=0.0.0.0` or `::`) publishes on every host address, so its own
+loopback origin on the published port is the derived target without a declaration,
+`.env` edit, or authentication change. Declare the LAN or VPN address with
+`--operator-url` to verify that route instead. Missing targets or an
 unreachable route leave the existing release in place before replacement; a
 post-replacement failure retains the durable updater and recovery evidence.
 

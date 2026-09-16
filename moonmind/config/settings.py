@@ -1392,6 +1392,13 @@ class GitHubSettings(BaseSettings):
         None, alias="GITHUB_REPOS"
     )  # Comma-delimited string of repositories
     github_enabled: bool = Field(True, alias="GITHUB_ENABLED")
+    # Operator declaration that every version-1 issue-claim writer is upgraded
+    # or stopped. Version-1 attempt comments GitHub timestamps before this
+    # instant stop reserving their issue; newer ones are untouched. Unset means
+    # legacy reservations still block and are reported as awaiting migration.
+    issue_claim_legacy_cutover_at: Optional[str] = Field(
+        None, alias="MOONMIND_ISSUE_CLAIM_LEGACY_CUTOVER_AT"
+    )
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="")
 

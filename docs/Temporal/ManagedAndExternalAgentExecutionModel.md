@@ -11,6 +11,30 @@ restore. An `external_state_ref` proves session continuity only and cannot satis
 workspace restore preflight. Recovery uses the versioned, digested snapshot admitted
 with the run rather than rewriting it after registry or credential changes.
 
+Generic workspace capture retains the authored repository and source branch in
+the compact runtime recovery request. A successful save may carry an auxiliary
+`repository-worktree-state/v1` observation outside the versioned checkpoint:
+the repository, source branch, exact head, clean worktree (including untracked
+files), and archive digest. Failure to capture this observation does not overwrite
+successful preservation. The issue recovery owner combines it with completed
+fenced runtime cleanup and fresh remote ancestry evidence before releasing a
+no-work claim; the observation alone grants no release or publication authority.
+
+New GitHub issue attempts carry a version-2 comment lease through the trusted
+brief and canonical AgentRun request. The AgentRun workflow confirms ownership
+before launch and renews the same GitHub comment: a five-minute deadline while
+the attempt is only announced, and a 30-minute deadline renewed every five
+minutes once it is running. A run queued behind unavailable provider or host
+capacity has not started work, so its reservation is not renewed and lapses;
+the deployment backs off instead of holding the issue behind a queue it cannot
+drain. Loss of the last confirmed lease cancels execution through
+the runtime's existing preservation and cleanup owner. Foreign consumers need
+only GitHub labels and comments to assess expiry; no foreign runtime or database
+access is required. Expiry grants no workspace-deletion or completion authority.
+See [GitHub Issue Status State Machine](../Workflows/GitHubIssueStatusStateMachineDesign.md)
+for the cooperative timing contract, prior-work handling, and the operator
+cutover that migrates version-1 history.
+
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
@@ -219,19 +243,30 @@ canceled
 timed_out
 ```
 
-`awaiting_slot` means a required execution resource, commonly Provider Profile capacity or machine capacity, has not yet been acquired. Metadata states the exact reason and authority rather than using a vague waiting state.
+`awaiting_slot` means a required execution resource, commonly Provider Profile capacity, host count, or a container-job slot, has not yet been acquired. Metadata states the exact reason and authority rather than using a vague waiting state.
 
-Generic-host preadmission resolves resource demand from the committed plan's
-launch policy and compares it with the same machine budget and ledger used by
-allocation. A short control Activity reports the limiting resource; workflow
-timers own waiting without occupying an execution Activity or consuming a host
-attempt. An existing owned lease reuses its reservation. The cumulative waiting
-budget survives capacity requeues, and an unsatisfiable demand is rejected rather
-than queued indefinitely. Atomic allocation remains the final admission fence.
+Generic-host preadmission evaluates the aggregate host ceiling and the
+cold-launch rate against the durable host-lease ledger. A short control
+Activity reports the limiting layer; workflow timers own waiting without
+occupying an execution Activity or consuming a host attempt. An existing owned
+lease is admitted unconditionally. Atomic allocation remains the final
+admission fence.
+
+Bootstrap on-demand policies always carry fixed stock limits (2 CPUs, 4 GiB)
+with no capability probe; omitted values and their documented defaults
+exercise the same production Docker path. Historical zero-valued documents
+remain decodable for replay, and bootstrap reconciliation migrates only
+bootstrap-owned shared-CPU defaults to the fixed successor — custom limits and
+historical versions keep their authority. New container-job requests must carry
+explicit positive limits; historical requests remain decodable, and unstarted
+legacy jobs are re-planned as successor attempts. Container-job capacity waits
+use durable timers under the original timeout.
+See [Docker Backend Service](../ManagedAgents/DockerBackendService.md#fixed-limits-and-concurrency)
+for enforcement, prerequisites, and diagnostics.
 
 The scheduled host janitor bounds OAuth and generic-host cleanup independently.
 A historical credential-generation failure remains fenced and visible while
-unrelated leases and machine reconciliation continue. Generic reclamation needs
+unrelated leases and ordinary cleanup continue. Generic reclamation needs
 positive closure evidence for the exact Temporal workflow/run owner; stale age
 alone cannot release a host. Existing workspace preservation, canonical cleanup
 claims, generation fences, and Docker-observed resource release remain the
@@ -528,24 +563,25 @@ Capacity rules:
 - selection never silently changes the chosen profile;
 - retry retains the same profile unless an explicit reroute policy authorizes a different selection before credential use;
 - profile lease ownership is deterministic and purpose-aware;
-- a host lease or machine-capacity token does not replace the profile lease;
+- a host lease or container-job slot does not replace the profile lease;
 - provider-attributed 429/quota evidence updates the selected profile's cooldown policy;
 - profile capacity is released only after every credential consumer is stopped or safely reconciled.
 
 ---
 
-## 9. Machine, host, session, and policy capacity
+## 9. Host, session, and policy capacity
 
 Execution may be constrained by several independent layers:
 
 1. Provider Profile account capacity;
 2. profile-bound host count;
 3. sessions per host;
-4. worker or Docker machine capacity;
-5. image and runtime resource policy;
-6. network and egress policy;
-7. workspace and mount availability;
-8. approval policy.
+4. aggregate generic-host count and cold-launch rate;
+5. container-job slots;
+6. image and runtime resource policy;
+7. network and egress policy;
+8. workspace and mount availability;
+9. approval policy.
 
 The status projection identifies the blocking layer. Counters are not conflated, and success at one layer does not bypass another.
 

@@ -375,38 +375,47 @@ class DockerOmnigentHostAttestor:
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
         configured_image = str(container.get("Config", {}).get("Image") or "")
+        # SHA/patch drift: rebuilt images change digests while keeping
+        # major.minor. Exact equality is required when possible, but a
+        # same-repository image is acceptable drift -- downstream version gates
+        # (omnigent major.minor, vendor major.minor) still enforce release
+        # compatibility. Different repositories are never compatible drift.
         if configured_image != host_class.imageRef:
-            raise HarnessPlatformError(
-                "launched host image ref differs from the selected Host Class",
-                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-            )
+            try:
+                from moonmind.omnigent.host_image_drift import (
+                    is_compatible_image_drift,
+                )
+
+                drift_ok = is_compatible_image_drift(
+                    host_class.imageRef, configured_image
+                )
+            except Exception:
+                drift_ok = False
+            if not drift_ok:
+                raise HarnessPlatformError(
+                    "launched host image ref differs from the selected Host Class",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                )
+        # Inspect the actually launched image (fallback-aware): the launcher
+        # records the effective digest it created the container from. Falling
+        # back to the Host Class ref preserves historical behavior when no
+        # drift occurred.
+        inspect_ref = str(
+            (launch_result or {}).get("launchImageRef")
+            or configured_image
+            or host_class.imageRef
+        ).strip() or host_class.imageRef
         _code, image_json, _err = await self._backend.run(
-            ["docker", "image", "inspect", host_class.imageRef],
+            ["docker", "image", "inspect", inspect_ref],
             failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
         image_rows = json.loads(image_json)
         image = image_rows[0] if isinstance(image_rows, list) and image_rows else {}
-        _assert_exact_omnigent_build(image, host_class.omnigentBuildDigest)
-        repo_digests = set(image.get("RepoDigests") or [])
-        if (
-            host_class.imageRef not in repo_digests
-            and configured_image not in repo_digests
-        ):
-            # Docker may omit RepoDigests only for a content-addressed local image;
-            # in that case the configured immutable ref remains the exact authority.
-            if "@sha256:" not in configured_image:
-                raise HarnessPlatformError(
-                    "host image repository digest could not be attested",
-                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-                )
-        architecture = (
-            f"{str(image.get('Os') or 'linux')}/{str(image.get('Architecture') or '')}"
-        )
-        if architecture not in host_class.architectures:
-            raise HarnessPlatformError(
-                f"host architecture {architecture} is not admitted",
-                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-            )
+        # Probe the executable omnigent version before judging build identity:
+        # rebuilt images change SHA/patch while keeping major.minor, and
+        # independently built hosts share a release series. Exact build match
+        # remains required when versions differ; same-series drift with no
+        # operator pin is acceptable (bootstrap judges the same way).
         _code, omnigent_version, _err = await self._backend.run(
             [
                 "docker",
@@ -424,13 +433,76 @@ class DockerOmnigentHostAttestor:
             host_class.omnigentVersion,
             omnigent_version.strip()[:200],
         )
-        from moonmind.omnigent.compatibility import versions_compatible
+        from moonmind.omnigent.compatibility import (
+            vendor_versions_compatible,
+            versions_compatible,
+        )
 
         if not versions_compatible(host_class.omnigentVersion, omnigent_version):
             raise HarnessPlatformError(
                 "host Omnigent version differs from the catalog build",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
+        try:
+            _assert_exact_omnigent_build(image, host_class.omnigentBuildDigest)
+        except HarnessPlatformError:
+            # Same-series rebuilds may carry a different build digest while
+            # reporting a compatible major.minor (proven by the live probe
+            # above). Accept that only when the launched image actually
+            # drifted from the selected Host Class image within the same
+            # repository: an unchanged image with a different build label is
+            # tampering, not a rebuild. Selection-time pin authority stays in
+            # host_class.omnigentBuildDigest and both digests are recorded in
+            # evidence below; worker-environment pins are never consulted here
+            # so a post-admission pin change cannot silently reinterpret the
+            # admitted plan.
+            try:
+                from moonmind.omnigent.host_image_drift import (
+                    is_compatible_image_drift,
+                )
+
+                drifted = inspect_ref != host_class.imageRef and bool(
+                    is_compatible_image_drift(host_class.imageRef, inspect_ref)
+                )
+            except Exception:
+                drifted = False
+            if not drifted:
+                raise
+            logging.getLogger(__name__).info(
+                "host build drift: accepting compatible same-repo build "
+                "(expected=%s actual=%s)",
+                str(host_class.omnigentBuildDigest)[:19],
+                str(
+                    (image.get("Config", {}).get("Labels", {}) or {}).get(
+                        "moonmind.omnigent.build_digest"
+                    )
+                    or ""
+                )[:19]
+                or "unknown",
+            )
+        repo_digests = set(image.get("RepoDigests") or [])
+        if (
+            host_class.imageRef not in repo_digests
+            and configured_image not in repo_digests
+            and inspect_ref not in repo_digests
+        ):
+            # Docker may omit RepoDigests only for a content-addressed local image;
+            # in that case the configured immutable ref remains the exact authority.
+            if "@sha256:" not in configured_image:
+                raise HarnessPlatformError(
+                    "host image repository digest could not be attested",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                )
+        architecture = (
+            f"{str(image.get('Os') or 'linux')}/{str(image.get('Architecture') or '')}"
+        )
+        if architecture not in host_class.architectures:
+            raise HarnessPlatformError(
+                f"host architecture {architecture} is not admitted",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            )
+        # omnigent_version was probed above (before the tolerant build check)
+        # so build drift can be judged against the same major.minor series.
         runtime_versions: dict[str, str] = {}
         selected_entry = next(
             item
@@ -447,7 +519,10 @@ class DockerOmnigentHostAttestor:
                 ["docker", "exec", launch_result["containerName"], name, "--version"],
                 failure_code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
             )
-            if version and version not in observed:
+            # Patch may evolve (1.18.11 -> 1.18.12); only major.minor steers
+            # compatibility. Exact-substring matching fails every vendor patch
+            # update even when the image is functionally identical.
+            if version and not vendor_versions_compatible(version, observed):
                 raise HarnessPlatformError(
                     f"host {name} version does not match the Host Class",
                     code=HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH,
@@ -473,7 +548,8 @@ class DockerOmnigentHostAttestor:
                 "resolved Skill projection is missing or writable on the exact host",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
-        await self._backend.run(
+        skill_target = str(spec.skillAttachment["targetPath"])
+        code, out, err = await self._backend.run(
             [
                 "docker",
                 "exec",
@@ -482,11 +558,28 @@ class DockerOmnigentHostAttestor:
                 "-ceu",
                 'test -d "$1"; test -r "$1"',
                 "--",
-                str(spec.skillAttachment["targetPath"]),
+                skill_target,
             ],
             failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            check=False,
         )
-        skill_target = str(spec.skillAttachment["targetPath"])
+        if code != 0:
+            detail = (err or out).strip()[:512]
+            if detail:
+                # Docker transport/container failure (missing container,
+                # daemon unavailable, rejected request): preserve the
+                # backend diagnostic instead of misdirecting to Skill repair.
+                raise HarnessPlatformError(
+                    f"Skill projection check failed at Docker boundary for "
+                    f"{skill_target}: {detail}",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                )
+            # Silent nonzero from shell ``test``: name the missing projection
+            # so the operator does not see an empty Docker failure.
+            raise HarnessPlatformError(
+                f"resolved Skill projection is missing or unreadable at {skill_target}",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            )
         code, _out, _err = await _run_exact_host_runner_command(
             backend=self._backend,
             container_name=launch_result["containerName"],
@@ -562,42 +655,124 @@ class DockerOmnigentHostAttestor:
                         "mounted tool has no valid manifest-declared version probe",
                         code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                     )
+                tool_name = str(tool.get("name") or "tool")
                 executable = (
                     str(attachment["targetPath"]).rstrip("/")
                     + "/"
                     + str(tool.get("path") or "").lstrip("/")
                 )
-                digests = ",".join(tool.get("executableDigests") or [])
-                verify_tool_script = "".join(
-                    (
-                        'test -x "$1"; actual=$(sha256sum "$1" | awk \'{print $1}\'); ',
-                        'case ",$2," in *,"$actual",*) :;; *) exit 1;; esac; ',
-                        'executable="$1"; shift 2; "$executable" "$@" >/dev/null',
-                    )
-                )
-                _code, observed, _err = await self._backend.run(
+                expected_digests = {
+                    str(item).strip().lower()
+                    for item in (tool.get("executableDigests") or [])
+                    if str(item).strip()
+                }
+                # Serious and probable: the executable is absent or not
+                # executable, or its version probe fails. Digest drift alone
+                # (rebuild, deployment skew) is advisory only when the probe
+                # also proves the manifest-declared version; arbitrary
+                # mismatched bytes that merely exit 0 remain blocked.
+                code, _out, _err = await self._backend.run(
                     [
                         "docker",
                         "exec",
                         launch_result["containerName"],
                         "/bin/sh",
                         "-ceu",
-                        verify_tool_script,
+                        'test -x "$1"',
                         "--",
                         executable,
-                        digests,
+                    ],
+                    timeout_seconds=10.0,
+                    check=False,
+                )
+                if code != 0:
+                    detail = (_err or _out).strip()[:200]
+                    suffix = f": {detail}" if detail else ""
+                    raise HarnessPlatformError(
+                        f"mounted tool {tool_name} is not executable at "
+                        f"{executable}{suffix}",
+                        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    )
+                actual_digest = ""
+                code, out, _err = await self._backend.run(
+                    [
+                        "docker",
+                        "exec",
+                        launch_result["containerName"],
+                        "/bin/sh",
+                        "-ceu",
+                        'sha256sum "$1"',
+                        "--",
+                        executable,
+                    ],
+                    timeout_seconds=10.0,
+                    check=False,
+                )
+                if code == 0:
+                    actual_digest = (out.strip().split() or [""])[0].lower()[:128]
+                digest_verified = bool(
+                    actual_digest and actual_digest in expected_digests
+                )
+                code, observed, err = await self._backend.run(
+                    [
+                        "docker",
+                        "exec",
+                        launch_result["containerName"],
+                        executable,
                         *probe,
                     ],
                     timeout_seconds=10.0,
-                    failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    check=False,
                 )
+                if code != 0:
+                    detail = (err or observed).strip().replace("\n", " ")[:200]
+                    suffix = f": {detail}" if detail else ""
+                    raise HarnessPlatformError(
+                        f"mounted tool {tool_name} version probe "
+                        f"{' '.join(probe)[:80]} failed "
+                        f"(exit {code}){suffix}",
+                        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    )
+                if expected_digests and not digest_verified:
+                    import logging
+
+                    expected_version = str(tool.get("version") or "").strip()
+                    probe_text = f"{observed}\n{err}".strip()
+                    if expected_version and expected_version != "container-v1":
+                        version_ok = expected_version in probe_text
+                    else:
+                        # The container CLI declares no semantic version in
+                        # --help; require substantive help output, not merely
+                        # exit 0, so a stub executable cannot attest readiness.
+                        lowered = probe_text.lower()
+                        version_ok = bool(probe_text) and (
+                            "usage:" in lowered
+                            or "moonmind" in lowered
+                            or len(probe_text) > 20
+                        )
+                    if not version_ok:
+                        raise HarnessPlatformError(
+                            f"mounted tool {tool_name} digest mismatch and "
+                            f"version evidence does not match manifest "
+                            f"({expected_version or 'unknown version'})",
+                            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                        )
+                    logging.getLogger(__name__).info(
+                        "mounted tool digest drift with matching version "
+                        "(advisory): tool=%r executable=%r actual=%r "
+                        "version=%r",
+                        tool_name,
+                        executable,
+                        actual_digest[:19] or "unknown",
+                        expected_version or "unknown",
+                    )
                 tool_mount_evidence.append(
                     {
                         "name": str(tool.get("name") or ""),
                         "version": str(tool.get("version") or ""),
                         "path": executable,
                         "accessMode": "read-only",
-                        "digestVerified": bool(digests),
+                        "digestVerified": digest_verified,
                         "versionProbe": list(tool["versionProbe"]),
                         "probe": observed.strip()[:128],
                     }
@@ -948,7 +1123,11 @@ class DockerOmnigentHostAttestor:
                     }
                 ),
                 attachment_identity=launch_result["containerName"],
-                expected_image_ref=host_class.imageRef,
+                # The container was created from the effective image
+                # (drift-resolved above), so egress must prove the running
+                # workload matches what actually launched. Series qualification
+                # of that effective image was proven by the version gates.
+                expected_image_ref=inspect_ref,
             )
         except (RuntimeError, ValueError) as exc:
             raise HarnessPlatformError(
@@ -1024,16 +1203,28 @@ class DockerOmnigentHostAttestor:
                     "Failed to retain exhausted exact-host model catalog evidence"
                 )
             raise failure
+        observed_build_digest = str(
+            (image.get("Config", {}).get("Labels", {}) or {}).get(
+                "moonmind.omnigent.build_digest"
+            )
+            or ""
+        )
         host_evidence = {
             "schemaVersion": "moonmind.omnigent-exact-host-attestation.v1",
             "containerId": str(container.get("Id") or ""),
             "containerName": launch_result["containerName"],
             "omnigentHostId": host_id,
             "hostOwner": registration["host"].get("owner"),
-            "imageRef": host_class.imageRef,
+            # The image and build that actually ran (drift-resolved). When no
+            # drift occurred these equal the selected Host Class values; the
+            # expected (planned) values are retained alongside for audit and
+            # retry revalidation.
+            "imageRef": inspect_ref,
+            "expectedImageRef": host_class.imageRef,
             "architecture": architecture,
             "omnigentVersion": omnigent_version.strip()[:256],
-            "omnigentBuildDigest": host_class.omnigentBuildDigest,
+            "omnigentBuildDigest": observed_build_digest,
+            "expectedOmnigentBuildDigest": host_class.omnigentBuildDigest,
             "harnessId": plan.payload.harnessId,
             "harnessImplementationRef": plan.payload.harnessImplementationRef,
             "runtimeVersions": runtime_versions,

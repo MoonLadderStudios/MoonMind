@@ -466,8 +466,9 @@ async def test_terminal_receipt_source_revision_binds_image_authority(
     )
     monkeypatch.setattr(release, "docker", docker)
     if receipt_source == "rev-2":
-        with pytest.raises(ValueError, match="receipt source differs"):
-            await release.successful_release_image(tmp_path, version)
+        # A mismatched source stamp denies authority from that receipt but is
+        # skipped, never fatal to the scan.
+        assert await release.successful_release_image(tmp_path, version) is None
         docker.assert_not_awaited()
         return
     # A matching stamp grants authority; a pre-stamp legacy receipt without
@@ -478,3 +479,197 @@ async def test_terminal_receipt_source_revision_binds_image_authority(
         "sourceRevision": "rev-1",
     }
     assert docker.await_count == 3
+
+async def test_legacy_receipt_without_source_revision_cannot_block_promotion_scan(
+    tmp_path, monkeypatch
+):
+    """A pre-sourceRevision receipt is skipped, never fatal to the scan.
+
+    Regression: one legacy-format COMPLETED receipt (authored before
+    sourceRevision existed) crashed successful_release_image with
+    KeyError, blocking every promotion including outage recovery.
+    """
+    from unittest.mock import AsyncMock
+
+    deployment = "legacy-install"
+    digest = "sha256:" + "c" * 64
+    version = deployment + "." + digest
+
+    legacy = tmp_path / "legacy-job"
+    legacy.mkdir()
+    release.write_record(
+        legacy / "routing.json",
+        {"deployment": deployment, "candidate": digest, "previous": "other"},
+    )
+    release.write_record(
+        legacy / "request.json",
+        {
+            "authored": {
+                "owner": "legacy-owner",
+                "inputs": {
+                    "stack": "moonmind",
+                    "image": {"repository": "example/moonmind", "reference": "latest"},
+                },
+            },
+            "image": f"example/moonmind@{digest}",
+            "imageId": "sha256:" + "d" * 64,
+        },
+    )
+    release.write_record(
+        legacy / "deployment-result.json",
+        {
+            "owner": "legacy-owner",
+            "result": {"status": "COMPLETED", "outputs": {"resolvedDigest": digest}},
+        },
+    )
+
+    valid = tmp_path / "valid-job"
+    valid.mkdir()
+    release.write_record(
+        valid / "routing.json",
+        {"deployment": deployment, "candidate": digest, "previous": "other"},
+    )
+    release.write_record(
+        valid / "request.json",
+        {
+            "authored": {
+                "owner": "valid-owner",
+                "inputs": {
+                    "stack": "moonmind",
+                    "image": {"repository": "example/moonmind", "reference": "candidate"},
+                    "sourceRevision": "rev",
+                },
+            },
+            "image": f"example/moonmind@{digest}",
+            "imageId": "sha256:" + "e" * 64,
+        },
+    )
+    release.write_record(
+        valid / "deployment-result.json",
+        {
+            "owner": "valid-owner",
+            "result": {"status": "COMPLETED", "outputs": {"resolvedDigest": digest}},
+        },
+    )
+
+    docker = AsyncMock(
+        side_effect=[
+            "sha256:" + "d" * 64,
+            json.dumps([{"Id": "sha256:" + "d" * 64}]),
+            json.dumps({"digest": digest, "sourceRevision": "rev"}),
+            "sha256:" + "e" * 64,
+            json.dumps([{"Id": "sha256:" + "e" * 64}]),
+            json.dumps({"digest": digest, "sourceRevision": "rev"}),
+        ]
+    )
+    monkeypatch.setattr(release, "docker", docker)
+    # "legacy-job" sorts first: it must be skipped, and the valid receipt
+    # for the same version must still be returned.
+    assert await release.successful_release_image(tmp_path, version) == {
+        "image": "sha256:" + "e" * 64,
+        "sourceReceipt": "valid-job",
+        "sourceRevision": "rev",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_failure", [None, TimeoutError("timed out")])
+async def test_exhausted_deliveries_surface_updater_evidence_and_recovery_hint(
+    tmp_path, monkeypatch, log_failure
+):
+    """Exhaustion must name the recovery owner and preserve inner evidence.
+
+    Regression: WSL /mnt/<drive> checkouts launched updater containers with
+    empty state volumes. The updater exited with FileNotFoundError three
+    times without attempts.json/result.json, and the outer error hid that
+    cause behind a generic message with no recovery path. A failing log
+    collection must not replace the established exhaustion either.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(tmp_path / "desired.json")
+    )
+    owner = "host-update:dc9f2a60-0e8e-464e-bc97-6657fb608d76"
+    digest = "sha256:" + "a" * 64
+    inputs = {
+        "stack": "moonmind",
+        "image": {"repository": "example/moonmind", "reference": "candidate"},
+    }
+    context = {"idempotency_key": owner}
+
+    class Runner:
+        async def pull(self, **kwargs):
+            return {"exitCode": 0}
+
+        async def inspect_image(self, requested):
+            return {"Id": "image-id", "RepoDigests": [f"example/moonmind@{digest}"]}
+
+        async def _run_compose_command(self, command, **kwargs):
+            return {"exitCode": 0, "stdout": json.dumps({"services": {}})}
+
+    async def inspect_owned(name, owner):
+        assert name.startswith("moonmind-release-update-")
+        return {"Image": "image-id", "State": {"Running": False, "ExitCode": 1}}
+
+    async def docker(*args):
+        assert args[0] in {"update", "start"}
+        return ""
+
+    async def logs_tail(name, tail_lines=30, timeout_seconds=60):
+        assert name.startswith("moonmind-release-update-")
+        if log_failure is not None:
+            raise log_failure
+        return "Traceback (most recent call last):\nFileNotFoundError"
+
+    async def coherent(*args):
+        return {}
+
+    monkeypatch.setattr(release, "inspect_owned", inspect_owned)
+    monkeypatch.setattr(release, "docker", docker)
+    monkeypatch.setattr(release, "docker_logs_tail", logs_tail)
+    monkeypatch.setattr(release, "require_coherent_images", coherent)
+
+    async def no_sleep(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(release.asyncio, "sleep", no_sleep)
+    executor = SimpleNamespace(runner=Runner())
+    with pytest.raises(RuntimeError, match="exhausted three deliveries") as exc_info:
+        await release.execute_detached(executor, inputs, context)
+    message = str(exc_info.value)
+    assert "release job" in message
+    assert "do not --resume this submission" in message
+    assert "--resume dc9f2a60" not in message
+    assert "attempts=none" in message
+    assert "updater-exit=1" in message
+    if log_failure is None:
+        assert "FileNotFoundError" in message
+    else:
+        assert "updater-logs=unavailable" in message
+
+
+@pytest.mark.asyncio
+async def test_docker_logs_tail_merges_stdout_and_stderr(tmp_path, monkeypatch):
+    """Tracebacks reach the logs command over stderr; stdout alone hides them."""
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return (b"container stdout line\n", b"Traceback: FileNotFoundError\n")
+
+        def kill(self):  # pragma: no cover - success path never kills
+            raise AssertionError("kill must not run on success")
+
+        async def wait(self):
+            return self.returncode
+
+    async def fake_exec(*args, **kwargs):
+        assert args[:3] == ("docker", "logs", "--tail")
+        assert kwargs.get("stdout") is release.asyncio.subprocess.PIPE
+        assert kwargs.get("stderr") is release.asyncio.subprocess.PIPE
+        return FakeProcess()
+
+    monkeypatch.setattr(release.asyncio, "create_subprocess_exec", fake_exec)
+    merged = await release.docker_logs_tail("moonmind-release-update-test")
+    assert "container stdout line" in merged
+    assert "Traceback: FileNotFoundError" in merged

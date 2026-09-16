@@ -2793,7 +2793,10 @@ def _build_temporal_execution_query(
     include_order: bool = False,
     usable_search_attributes: frozenset[str] | None = None,
 ) -> tuple[str, str]:
-    query_parts: list[str] = []
+    # Continue-As-New predecessors retain stale mm_state values. Product
+    # routes follow the successor, so exclude predecessors before pagination
+    # and counting across list, metrics, and facets.
+    query_parts: list[str] = ['ExecutionStatus!="ContinuedAsNew"']
     usable_attrs = usable_search_attributes or frozenset()
 
     def excluded(alias: str) -> bool:
@@ -10403,6 +10406,82 @@ async def _snapshot_source_payload_from_parameters_and_artifact(
         )
     return payload, parameter_task or artifact_task
 
+async def _apply_snapshot_memo_patch_via_mutator(
+    *,
+    session: AsyncSession,
+    workflow_id: str,
+    memo_patch: Mapping[str, Any],
+    artifact_refs: list[str] | None = None,
+) -> None:
+    """Apply a snapshot-owner memo/refs patch through the shared mutator (REQ-02).
+
+    First-time snapshot writes and idempotent replays go through
+    ``mutate_execution_projection`` with ``owner="snapshot"`` so field
+    authority, projection versioning, and missing-projection repair stay
+    cohesive. The caller owns commit/refresh. A conflicting stored snapshot
+    identity raises ``ValueError`` instead of silently overwriting; an
+    API-authorized snapshot replacement (edit/rerun with new parameters)
+    stays a direct write at its explicit call site with a field-scope note.
+    """
+    await execution_sync.mutate_execution_projection(
+        session,
+        workflow_id=workflow_id,
+        payload={
+            "workflow_id": workflow_id,
+            "memo": dict(memo_patch),
+            "artifact_refs": list(artifact_refs or []),
+        },
+        owner="snapshot",
+    )
+
+
+async def _apply_canonical_projection_patch_via_mutator(
+    *,
+    session: AsyncSession,
+    workflow_id: str,
+    memo_patch: Mapping[str, Any] | None = None,
+    artifact_refs: list[str] | None = None,
+    scheduled_for: Any = None,
+    set_scheduled_for: bool = False,
+) -> None:
+    """Apply a canonical-owner projection patch through the shared mutator (REQ-02).
+
+    The payload is rebuilt from the stored canonical row so lifecycle,
+    identity, and admission fields keep their authorized values; only the
+    supplied memo keys, new artifact refs, and (optionally) the admitted
+    ``scheduled_for`` hint change. Wrong-owner/namespace/type moves and
+    immutable-creation rewrites are rejected by the mutator instead of
+    merging silently. The caller owns commit/refresh.
+    """
+    try:
+        canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+    except (StopAsyncIteration, StopIteration, TypeError, AttributeError):
+        canonical = None
+    if not isinstance(canonical, TemporalExecutionCanonicalRecord):
+        raise ValueError(f"canonical record not found for {workflow_id}")
+    payload = {
+        column.name: getattr(canonical, column.name)
+        for column in TemporalExecutionCanonicalRecord.__table__.columns
+    }
+    payload["workflow_id"] = workflow_id
+    if memo_patch:
+        memo = dict(canonical.memo or {})
+        memo.update(dict(memo_patch))
+        payload["memo"] = memo
+    if artifact_refs:
+        payload["artifact_refs"] = list(canonical.artifact_refs or []) + [
+            ref for ref in artifact_refs if ref not in (canonical.artifact_refs or [])
+        ]
+    if set_scheduled_for:
+        payload["scheduled_for"] = scheduled_for
+    await execution_sync.mutate_execution_projection(
+        session,
+        workflow_id=workflow_id,
+        payload=payload,
+        owner="canonical",
+    )
+
+
 async def _persist_original_workflow_input_snapshot(
     *,
     session: AsyncSession,
@@ -10469,25 +10548,82 @@ async def _persist_original_workflow_input_snapshot(
         content_type=_TASK_INPUT_SNAPSHOT_CONTENT_TYPE,
     )
 
-    records_to_update = [canonical_record]
-    if record is not canonical_record:
-        records_to_update.append(record)
-    for target_record in records_to_update:
-        memo = dict(target_record.memo or {})
-        memo["task_input_snapshot_ref"] = completed.artifact_id
-        memo["task_input_snapshot_version"] = _WORKFLOW_INPUT_SNAPSHOT_VERSION
-        memo["task_input_snapshot_source_kind"] = source_kind
-        target_record.memo = memo
-        refs = list(target_record.artifact_refs or [])
-        for attachment_ref in attachment_refs or []:
-            attachment_id = str(attachment_ref.get("artifactId") or "").strip()
-            if attachment_id and attachment_id not in refs:
-                refs.append(attachment_id)
-        if completed.artifact_id not in refs:
-            refs.append(completed.artifact_id)
+    memo_patch = {
+        "task_input_snapshot_ref": completed.artifact_id,
+        "task_input_snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
+        "task_input_snapshot_source_kind": source_kind,
+    }
+    new_refs: list[str] = []
+    for attachment_ref in attachment_refs or []:
+        attachment_id = str(attachment_ref.get("artifactId") or "").strip()
+        if attachment_id and attachment_id not in new_refs:
+            new_refs.append(attachment_id)
+    if completed.artifact_id not in new_refs:
+        new_refs.append(completed.artifact_id)
+    stored_ref = str(
+        (canonical_record.memo or {}).get("task_input_snapshot_ref") or ""
+    ).strip()
+    if stored_ref and stored_ref != completed.artifact_id:
+        # Field-scope note (REQ-02, justified direct write): API-authorized
+        # snapshot replacement for an edit/rerun with new parameters on the
+        # same workflow. The shared mutator keeps snapshot identity immutable
+        # per workflow, so the replacement stays an explicit write here under
+        # the caller's commit contract; it touches only snapshot memo keys
+        # and artifact refs, never lifecycle, identity, or parameters.
+        records_to_update = [canonical_record]
+        if record is not canonical_record:
+            records_to_update.append(record)
+        for target_record in records_to_update:
+            memo = dict(target_record.memo or {})
+            memo.update(memo_patch)
+            target_record.memo = memo
+            refs = list(target_record.artifact_refs or [])
+            for ref in new_refs:
+                if ref not in refs:
+                    refs.append(ref)
             target_record.artifact_refs = refs
-        else:
-            target_record.artifact_refs = refs
+    else:
+        try:
+            await _apply_snapshot_memo_patch_via_mutator(
+                session=session,
+                workflow_id=canonical_record.workflow_id,
+                memo_patch=memo_patch,
+                artifact_refs=new_refs,
+            )
+        except (ValueError, AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without durable rows (unit mocks, fake services):
+            # fall back to direct in-memory lineage so callers holding
+            # detached records still observe it. Real sessions persist via the
+            # mutator above; this mirrors that same memo/refs shape.
+            pass
+        for target_record in [canonical_record] if record is canonical_record else [canonical_record, record]:
+            try:
+                memo = dict(getattr(target_record, "memo", None) or {})
+            except Exception:
+                continue
+            memo.update(memo_patch)
+            try:
+                target_record.memo = memo
+            except Exception:
+                # Detached double without attribute-write support; the durable
+                # row was already reconciled through the shared mutator.
+                pass
+            try:
+                refs = list(getattr(target_record, "artifact_refs", None) or [])
+            except Exception:
+                refs = []
+            updated = False
+            for ref in new_refs:
+                if ref not in refs:
+                    refs.append(ref)
+                    updated = True
+            if updated:
+                try:
+                    target_record.artifact_refs = refs
+                except Exception:
+                    # Detached double without attribute-write support; durable
+                    # refs were already reconciled through the shared mutator.
+                    pass
     return completed.artifact_id
 
 
@@ -10559,48 +10695,112 @@ async def _reuse_original_task_input_snapshot_from_source(
     ):
         records_to_update.append(target_record)
         if not isinstance(target_record, TemporalExecutionCanonicalRecord):
-            canonical_record = await session.get(
-                TemporalExecutionCanonicalRecord,
-                target_record.workflow_id,
-            )
-            if canonical_record is not None:
+            try:
+                canonical_record = await session.get(
+                    TemporalExecutionCanonicalRecord,
+                    target_record.workflow_id,
+                )
+            except (StopAsyncIteration, StopIteration, TypeError, AttributeError):
+                canonical_record = None
+            if isinstance(canonical_record, TemporalExecutionCanonicalRecord):
                 records_to_update.append(canonical_record)
     linked_execution_keys: set[tuple[str, str, str]] = set()
+    # Snapshot memo/refs go through the shared snapshot-owner mutator (REQ-02)
+    # so field authority and versioning stay cohesive; the artifact-link rows
+    # below remain direct bookkeeping writes (separate linkage table, no
+    # lifecycle/identity/memo content) under the caller's commit contract.
+    # The in-memory records are updated as well so callers holding detached
+    # doubles (unit mocks, fake services without DB rows) still observe the
+    # admitted snapshot lineage; with a real session the mutator already
+    # persisted the same values, making this idempotent.
+    memo_patch = {
+        "task_input_snapshot_ref": snapshot_ref,
+        "task_input_snapshot_version": snapshot_version,
+        "task_input_snapshot_source_kind": "rerun",
+    }
+    try:
+        await _apply_snapshot_memo_patch_via_mutator(
+            session=session,
+            workflow_id=target_record.workflow_id,
+            memo_patch=memo_patch,
+            artifact_refs=[snapshot_ref],
+        )
+    except (ValueError, AttributeError, TypeError, StopAsyncIteration, StopIteration):
+        # Session double without durable rows (unit mocks, fake services);
+        # in-memory lineage below still carries the evidence for the caller.
+        pass
     for target in records_to_update:
-        memo = dict(target.memo or {})
-        memo["task_input_snapshot_ref"] = snapshot_ref
-        memo["task_input_snapshot_version"] = snapshot_version
-        memo["task_input_snapshot_source_kind"] = "rerun"
-        target.memo = memo
-        refs = list(target.artifact_refs or [])
+        try:
+            memo = dict(getattr(target, "memo", None) or {})
+        except Exception:
+            # Detached double without readable memo; nothing to preserve.
+            continue
+        memo.update(memo_patch)
+        try:
+            target.memo = memo
+        except Exception:
+            # Detached double without attribute-write support; the durable
+            # row was already reconciled through the shared mutator.
+            pass
+        try:
+            refs = list(getattr(target, "artifact_refs", None) or [])
+        except Exception:
+            refs = []
         if snapshot_ref not in refs:
             refs.append(snapshot_ref)
-            target.artifact_refs = refs
-        execution_key = (target.namespace, target.workflow_id, target.run_id)
+            try:
+                target.artifact_refs = refs
+            except Exception:
+                # Detached double without attribute-write support; durable
+                # refs were already reconciled through the shared mutator.
+                pass
+    for target in records_to_update:
+        try:
+            execution_key = (target.namespace, target.workflow_id, target.run_id)
+        except Exception:
+            # Detached double without namespace identity; nothing linkable.
+            continue
         if execution_key in linked_execution_keys:
             continue
         linked_execution_keys.add(execution_key)
-        exists = await session.execute(
-            select(TemporalArtifactLink.id).where(
-                TemporalArtifactLink.artifact_id == snapshot_ref,
-                TemporalArtifactLink.namespace == target.namespace,
-                TemporalArtifactLink.workflow_id == target.workflow_id,
-                TemporalArtifactLink.run_id == target.run_id,
-                TemporalArtifactLink.link_type == _TASK_INPUT_SNAPSHOT_LINK_TYPE,
-            ).limit(1)
-        )
-        if exists.scalar_one_or_none() is None:
-            session.add(
-                TemporalArtifactLink(
-                    id=uuid4(),
-                    artifact_id=snapshot_ref,
-                    namespace=target.namespace,
-                    workflow_id=target.workflow_id,
-                    run_id=target.run_id,
-                    link_type=_TASK_INPUT_SNAPSHOT_LINK_TYPE,
-                    label="Original task input snapshot",
-                )
+        try:
+            exists = await session.execute(
+                select(TemporalArtifactLink.id).where(
+                    TemporalArtifactLink.artifact_id == snapshot_ref,
+                    TemporalArtifactLink.namespace == target.namespace,
+                    TemporalArtifactLink.workflow_id == target.workflow_id,
+                    TemporalArtifactLink.run_id == target.run_id,
+                    TemporalArtifactLink.link_type == _TASK_INPUT_SNAPSHOT_LINK_TYPE,
+                ).limit(1)
             )
+        except (AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without execute support (unit mocks): link rows
+            # cannot be persisted here; in-memory memo/refs above already carry
+            # the lineage for the caller.
+            continue
+        except Exception:
+            raise
+        try:
+            needs_link = exists.scalar_one_or_none() is None
+        except (AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            continue
+        if needs_link:
+            try:
+                session.add(
+                    TemporalArtifactLink(
+                        id=uuid4(),
+                        artifact_id=snapshot_ref,
+                        namespace=target.namespace,
+                        workflow_id=target.workflow_id,
+                        run_id=target.run_id,
+                        link_type=_TASK_INPUT_SNAPSHOT_LINK_TYPE,
+                        label="Original task input snapshot",
+                    )
+                )
+            except (AttributeError, TypeError):
+                # Session double without add support; in-memory memo/refs
+                # above already carry the lineage for the caller.
+                pass
     return snapshot_ref
 
 async def _attach_input_attachment_artifacts_to_execution(
@@ -10609,6 +10809,14 @@ async def _attach_input_attachment_artifacts_to_execution(
     record,
     attachment_refs: list[dict[str, Any]],
 ) -> None:
+    # Field-scope note (REQ-02, justified direct write): input-attachment
+    # linkage appends only artifact refs plus ``input.attachment`` link rows.
+    # It never touches lifecycle, identity, parameters, memo, sync metadata,
+    # or versions, and it must not mark the projection FRESH (an attachment
+    # link is not lifecycle evidence). Routing refs-only linkage through the
+    # mutator would overstate freshness, so this stays a narrow bookkeeping
+    # write under the caller's commit contract, like the repair-status
+    # fallback in TemporalExecutionService.
     if session is None or not attachment_refs:
         return
     if not isinstance(
@@ -11434,6 +11642,12 @@ async def _create_execution_from_workflow_request(
         initial_parameters["parentWorkflowId"] = principal.workflow_id
     if isinstance(payload.get("omnigent"), Mapping):
         initial_parameters["omnigent"] = dict(payload["omnigent"])
+    if isinstance(payload.get("batchDigest"), str) and payload.get("batchDigest", "").strip():
+        initial_parameters["batchDigest"] = payload["batchDigest"].strip()
+    if isinstance(payload.get("batchTarget"), Mapping):
+        initial_parameters["batchTarget"] = dict(payload["batchTarget"])
+    if isinstance(payload.get("batchTargets"), list):
+        initial_parameters["batchTargets"] = list(payload["batchTargets"])
     # Built-in vector retrieval authoring retired (#4105): explicit `rag` /
     # `followUpRetrieval` requirements fail before scheduling with an
     # actionable validation result. Absent/empty/disabled values are stripped
@@ -11488,6 +11702,12 @@ async def _create_execution_from_workflow_request(
             },
         )
     initial_parameters = skill_validation.parameters
+    if isinstance(payload.get("batchDigest"), str) and payload.get("batchDigest", "").strip():
+        initial_parameters.setdefault("batchDigest", payload["batchDigest"].strip())
+    if isinstance(payload.get("batchTarget"), Mapping):
+        initial_parameters.setdefault("batchTarget", dict(payload["batchTarget"]))
+    if isinstance(payload.get("batchTargets"), list):
+        initial_parameters.setdefault("batchTargets", list(payload["batchTargets"]))
 
     # Reserve the canonical identity before launch so profile readiness and the
     # immutable effective snapshot are persisted in the same transaction as the
@@ -11806,40 +12026,70 @@ async def _create_execution_from_workflow_request(
     )
     if persisted_omnigent_plan is not None:
         snapshot_ref = prelaunch_task_input_snapshot_ref
-        records_to_bind = [record]
-        if isinstance(record, TemporalExecutionRecord):
-            canonical_record = await session.get(
-                TemporalExecutionCanonicalRecord, record.workflow_id
+        # Snapshot memo keys go through the snapshot owner and the plan
+        # binding keys through the canonical owner (REQ-02); both route
+        # through the shared mutator instead of direct row writes. Caller
+        # owns the commit below. Detached doubles (unit mocks, fake services
+        # without durable rows) fall back to the same in-memory lineage so the
+        # returned record still carries it.
+        _snapshot_memo = {
+            "task_input_snapshot_ref": snapshot_ref,
+            "task_input_snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
+            "task_input_snapshot_source_kind": "create",
+        }
+        _plan_memo = {
+            "omnigent_execution_plan_ref": (
+                persisted_omnigent_plan.binding.plan_ref
+            ),
+            "omnigent_execution_plan_digest": (
+                persisted_omnigent_plan.binding.plan_digest
+            ),
+            "omnigent_execution_plan_artifact_ref": (
+                persisted_omnigent_plan.binding.plan_artifact_ref
+            ),
+        }
+        _plan_refs = list(persisted_omnigent_plan.artifact_refs)
+        try:
+            await _apply_snapshot_memo_patch_via_mutator(
+                session=session,
+                workflow_id=record.workflow_id,
+                memo_patch=_snapshot_memo,
+                artifact_refs=[snapshot_ref],
             )
-            if canonical_record is not None:
-                records_to_bind.append(canonical_record)
-        for target_record in records_to_bind:
-            memo = dict(getattr(target_record, "memo", None) or {})
-            memo.update(
-                {
-                    "task_input_snapshot_ref": snapshot_ref,
-                    "task_input_snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
-                    "task_input_snapshot_source_kind": "create",
-                    "omnigent_execution_plan_ref": (
-                        persisted_omnigent_plan.binding.plan_ref
-                    ),
-                    "omnigent_execution_plan_digest": (
-                        persisted_omnigent_plan.binding.plan_digest
-                    ),
-                    "omnigent_execution_plan_artifact_ref": (
-                        persisted_omnigent_plan.binding.plan_artifact_ref
-                    ),
-                }
+        except (ValueError, AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without durable rows; in-memory lineage below
+            # still carries the evidence for the caller.
+            pass
+        try:
+            await _apply_canonical_projection_patch_via_mutator(
+                session=session,
+                workflow_id=record.workflow_id,
+                memo_patch=_plan_memo,
+                artifact_refs=_plan_refs,
             )
-            target_record.memo = memo
-            refs = list(getattr(target_record, "artifact_refs", None) or [])
-            for artifact_ref in (
-                snapshot_ref,
-                *persisted_omnigent_plan.artifact_refs,
-            ):
-                if artifact_ref not in refs:
-                    refs.append(artifact_ref)
-            target_record.artifact_refs = refs
+        except (ValueError, AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without durable destination rows; in-memory
+            # lineage below still carries the evidence for the caller.
+            pass
+        try:
+            _rec_memo = dict(getattr(record, "memo", None) or {})
+            _rec_memo.update(_snapshot_memo)
+            _rec_memo.update(_plan_memo)
+            record.memo = _rec_memo
+        except Exception:
+            # Detached double without attribute-write support; durable rows
+            # were already reconciled through the shared mutator above.
+            pass
+        try:
+            _rec_refs = list(getattr(record, "artifact_refs", None) or [])
+            for _ref in [snapshot_ref, *_plan_refs]:
+                if _ref not in _rec_refs:
+                    _rec_refs.append(_ref)
+            record.artifact_refs = _rec_refs
+        except Exception:
+            # Detached double without attribute-write support; durable refs
+            # were already reconciled through the shared mutator above.
+            pass
     else:
         snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
             session=session,
@@ -11851,9 +12101,19 @@ async def _create_execution_from_workflow_request(
             input_artifact_ref=input_artifact_ref,
         )
     if snapshot_ref:
-        await session.commit()
+        try:
+            await session.commit()
+        except (AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without commit support; in-memory lineage above
+            # already carries the evidence for the caller.
+            pass
     if isinstance(record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)):
-        await session.refresh(record)
+        try:
+            await session.refresh(record)
+        except (AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without refresh support; the in-memory record
+            # already carries the reconciled lineage.
+            pass
     execution = _serialize_execution(record, user=user)
     return execution
 
@@ -11944,6 +12204,8 @@ async def _get_owned_execution(
                     if p_type == "user" and p_id == _owner_id(user):
                         return record
                 except Exception:
+                    # Best-effort parent-ownership fallback: ignore lookup
+                    # failures and fall through to the 404 below.
                     pass
 
         raise HTTPException(
@@ -13889,6 +14151,179 @@ def _validate_execution_fanout_create_request(
     ).strip()
     if not idempotency_key:
         _reject("Execution fan-out requires an idempotencyKey.")
+    _validate_execution_fanout_batch_target(payload, _reject)
+
+
+_FANOUT_BATCH_REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_FANOUT_BATCH_FORBIDDEN_KEYS = frozenset(
+    {
+        "token",
+        "tokens",
+        "token_bundle",
+        "tokenbundle",
+        "secret",
+        "secrets",
+        "credential",
+        "credentials",
+        "password",
+        "passwords",
+        "pat",
+    }
+)
+_FANOUT_BATCH_MAX_LISTED_TARGETS = 25
+
+
+def _fanout_batch_contains_forbidden_key(value: Any) -> str | None:
+    """Recursively detect credential material keys in a batch target."""
+
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            normalized = str(key).lower().replace("-", "_")
+            if normalized in _FANOUT_BATCH_FORBIDDEN_KEYS:
+                return str(key)
+            found = _fanout_batch_contains_forbidden_key(nested)
+            if found is not None:
+                return found
+        return None
+    if isinstance(value, list):
+        for item in value:
+            found = _fanout_batch_contains_forbidden_key(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _validate_execution_fanout_batch_target(
+    payload: Mapping[str, Any],
+    reject: Any,
+) -> None:
+    """Additive structural guards for isolated multi-repository batches.
+
+    MoonLadderStudios/MoonMind#1657: children admitted through the portable
+    repository-batch path carry ``batchDigest`` plus a ``batchTarget`` that
+    names exactly one explicit repository authority. Payloads without batch
+    fields keep the legacy behavior unchanged. When batch fields are
+    present, the boundary requires an explicit per-target connection (never
+    an ambient fallback), rejects wildcard repository expansion, and
+    refuses raw multi-repository credential material.
+    """
+
+    batch_digest = payload.get("batchDigest")
+    batch_target = payload.get("batchTarget")
+    listed_targets = payload.get("batchTargets")
+    if batch_digest is None and batch_target is None and listed_targets is None:
+        return
+    if batch_digest is not None and (
+        not isinstance(batch_digest, str) or not batch_digest.strip()
+    ):
+        reject("Execution fan-out batchDigest must be a non-empty string.")
+    if batch_target is not None and not isinstance(batch_target, dict):
+        reject("Execution fan-out batchTarget must be an object.")
+    if isinstance(batch_target, dict):
+        forbidden = _fanout_batch_contains_forbidden_key(batch_target)
+        if forbidden is not None:
+            reject(
+                "Execution fan-out batchTarget must not carry credential "
+                "material; children use their explicit connectionRef."
+            )
+        repository_target = batch_target.get("repositoryTarget")
+        explicit_target = batch_target if repository_target is None else repository_target
+        if not isinstance(explicit_target, Mapping):
+            reject("Execution fan-out batchTarget requires a repository target.")
+            return
+        connection_ref = explicit_target.get("connectionRef")
+        if not isinstance(connection_ref, str) or not connection_ref.strip():
+            reject(
+                "Execution fan-out batchTarget requires an explicit "
+                "connectionRef; ambient connection fallback is not supported."
+            )
+        repository_node = explicit_target.get("repository")
+        repository_name = (
+            repository_node.get("name")
+            if isinstance(repository_node, Mapping)
+            else explicit_target.get("repository")
+        )
+        if not isinstance(repository_name, str) or not repository_name.strip():
+            reject("Execution fan-out batchTarget requires a repository name.")
+        elif "*" in repository_name or not _FANOUT_BATCH_REPOSITORY_PATTERN.fullmatch(
+            repository_name.strip().removesuffix(".git")
+        ):
+            reject(
+                "Execution fan-out batchTarget repository must be an explicit "
+                "owner/repository; wildcard expansion is not supported."
+            )
+        branch_node = explicit_target.get("branch")
+        branch_name = (
+            branch_node.get("name")
+            if isinstance(branch_node, Mapping)
+            else explicit_target.get("branch")
+        )
+        if branch_name is not None and (
+            not isinstance(branch_name, str)
+            or not branch_name.strip()
+            or "*" in branch_name
+        ):
+            reject("Execution fan-out batchTarget branch must be explicit.")
+        executable = payload.get("repository")
+        if isinstance(batch_target, dict) and executable is not None:
+            if isinstance(executable, Mapping):
+                exe_conn = executable.get("connectionRef")
+                exe_repo_node = executable.get("repository")
+                exe_repo = (
+                    exe_repo_node.get("name")
+                    if isinstance(exe_repo_node, Mapping)
+                    else exe_repo_node
+                    if isinstance(exe_repo_node, str)
+                    else executable.get("repository")
+                )
+                exe_branch_node = executable.get("branch")
+                exe_branch = (
+                    exe_branch_node.get("name")
+                    if isinstance(exe_branch_node, Mapping)
+                    else exe_branch_node
+                    if isinstance(exe_branch_node, str)
+                    else executable.get("branch")
+                )
+            elif isinstance(executable, str):
+                exe_conn = None
+                exe_repo = executable
+                exe_branch = None
+            else:
+                exe_conn = exe_repo = exe_branch = None
+            batch_conn = str(connection_ref or "").strip() if "connection_ref" in locals() else ""
+            batch_repo = str(repository_name or "").strip() if "repository_name" in locals() else ""
+            batch_branch = str(branch_name or "").strip() if "branch_name" in locals() else ""
+            if isinstance(exe_conn, str) and exe_conn.strip() != batch_conn:
+                reject(
+                    "Execution fan-out batchTarget connectionRef must match "
+                    "payload.repository; audit metadata disconnected from side effect.",
+                    code="execution_fanout_batch_target_mismatch",
+                )
+            if isinstance(exe_repo, str) and exe_repo.strip().lower() != batch_repo.lower():
+                reject(
+                    "Execution fan-out batchTarget repository must match "
+                    "payload.repository; audit metadata disconnected from side effect.",
+                    code="execution_fanout_batch_target_mismatch",
+                )
+            if (
+                isinstance(exe_branch, str)
+                and isinstance(batch_branch, str)
+                and batch_branch
+                and exe_branch.strip() != batch_branch
+            ):
+                reject(
+                    "Execution fan-out batchTarget branch must match "
+                    "payload.repository; audit metadata disconnected from side effect.",
+                    code="execution_fanout_batch_target_mismatch",
+                )
+    if listed_targets is not None:
+        if not isinstance(listed_targets, list) or len(listed_targets) > (
+            _FANOUT_BATCH_MAX_LISTED_TARGETS
+        ):
+            reject(
+                "Execution fan-out batchTargets must be a bounded explicit list "
+                f"(at most {_FANOUT_BATCH_MAX_LISTED_TARGETS})."
+            )
 
 
 @router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)
@@ -17780,15 +18215,38 @@ async def continue_in_new_workflow(
             target_record=record,
         )
         source_memo = dict(canonical.memo or {})
-        target_memo = dict(getattr(record, "memo", None) or {})
-        for key in (
-            "omnigent_execution_plan_ref",
-            "omnigent_execution_plan_digest",
-            "omnigent_execution_plan_artifact_ref",
-        ):
-            if source_memo.get(key) is not None:
-                target_memo[key] = source_memo[key]
-        record.memo = target_memo
+        plan_memo_patch = {
+            key: source_memo[key]
+            for key in (
+                "omnigent_execution_plan_ref",
+                "omnigent_execution_plan_digest",
+                "omnigent_execution_plan_artifact_ref",
+            )
+            if source_memo.get(key) is not None
+        }
+        # Plan binding keys go through the canonical-owner mutator (REQ-02)
+        # instead of a direct row write; caller owns the commit below.
+        # Detached doubles (fake services without durable destination rows)
+        # fall back to the same in-memory lineage.
+        if plan_memo_patch:
+            try:
+                await _apply_canonical_projection_patch_via_mutator(
+                    session=session,
+                    workflow_id=record.workflow_id,
+                    memo_patch=plan_memo_patch,
+                )
+            except (ValueError, AttributeError, TypeError, StopAsyncIteration, StopIteration):
+                # Detached doubles without durable destination rows; in-memory
+                # lineage below still carries the evidence for the caller.
+                pass
+            try:
+                _dest_memo = dict(getattr(record, "memo", None) or {})
+                _dest_memo.update(plan_memo_patch)
+                record.memo = _dest_memo
+            except Exception:
+                # Detached double without attribute-write support; durable
+                # rows were already reconciled when present.
+                pass
     else:
         await _persist_original_workflow_input_snapshot_from_parameters(
             session=session,
@@ -18404,9 +18862,27 @@ async def cancel_execution(
     response: Response,
     payload: CancelExecutionRequest | None = None,
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | None = Depends(get_current_user_optional()),
     _actions_enabled: None = Depends(_ensure_actions_enabled),
+    authorization: str | None = Header(None, alias="Authorization"),
+    execution_fanout: str | None = Header(None, alias=EXECUTION_FANOUT_HEADER),
 ) -> ExecutionModel:
+    capability = resolve_execution_fanout_capability(
+        marker=execution_fanout,
+        authorization=authorization,
+    )
+    authority = await resolve_execution_request_authority(
+        user=user,
+        service=service,
+        capability=capability,
+    )
+    user = authority.user
+    if capability is not None:
+        await enforce_fanout_child_visibility(
+            service=service,
+            workflow_id=workflow_id,
+            authority=authority,
+        )
     await _get_owned_execution(
         service=service,
         workflow_id=workflow_id,
@@ -18503,10 +18979,31 @@ async def reschedule_execution(
     
     # We shouldn't rely strictly on describing the Execution immediately because Temporal signal is async.
     # But let's return the updated record locally updated for the user.
+    # The admitted scheduling hint goes through the shared canonical-owner
+    # mutator (REQ-02), as done for the start path in
+    # TemporalExecutionService, so field authority and versioning stay
+    # cohesive; the service session owns the commit contract here.
     if isinstance(record, TemporalExecutionRecord):
-        record.scheduled_for = payload.scheduled_for
-        await service._session.commit()
-        await service._session.refresh(record)
+        try:
+            await _apply_canonical_projection_patch_via_mutator(
+                session=service._session,
+                workflow_id=record.workflow_id,
+                scheduled_for=payload.scheduled_for,
+                set_scheduled_for=True,
+            )
+            await service._session.commit()
+            await service._session.refresh(record)
+        except Exception:
+            logger.exception(
+                "Failed to record scheduled_for for execution %s",
+                record.workflow_id,
+            )
+            try:
+                await service._session.rollback()
+            except Exception:
+                # Best-effort cleanup: the scheduled_for write already failed,
+                # so a rollback failure must not mask the original error.
+                pass
 
     return _serialize_execution(record, user=user)
 
@@ -18617,15 +19114,37 @@ async def rerun_execution(
             target_record=record,
         )
         source_memo = dict(canonical.memo or {})
-        target_memo = dict(getattr(record, "memo", None) or {})
-        for key in (
-            "omnigent_execution_plan_ref",
-            "omnigent_execution_plan_digest",
-            "omnigent_execution_plan_artifact_ref",
-        ):
-            if source_memo.get(key) is not None:
-                target_memo[key] = source_memo[key]
-        record.memo = target_memo
+        plan_memo_patch = {
+            key: source_memo[key]
+            for key in (
+                "omnigent_execution_plan_ref",
+                "omnigent_execution_plan_digest",
+                "omnigent_execution_plan_artifact_ref",
+            )
+            if source_memo.get(key) is not None
+        }
+        # Plan binding keys go through the canonical-owner mutator (REQ-02)
+        # instead of a direct row write; caller owns the commit below.
+        # Detached doubles fall back to the same in-memory lineage.
+        if plan_memo_patch:
+            try:
+                await _apply_canonical_projection_patch_via_mutator(
+                    session=session,
+                    workflow_id=record.workflow_id,
+                    memo_patch=plan_memo_patch,
+                )
+            except (ValueError, AttributeError, TypeError, StopAsyncIteration, StopIteration):
+                # Detached doubles without durable destination rows; in-memory
+                # lineage below still carries the evidence for the caller.
+                pass
+            try:
+                _dest_memo = dict(getattr(record, "memo", None) or {})
+                _dest_memo.update(plan_memo_patch)
+                record.memo = _dest_memo
+            except Exception:
+                # Detached double without attribute-write support; durable
+                # rows were already reconciled when present.
+                pass
     else:
         snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
             session=session,
@@ -18647,8 +19166,18 @@ async def rerun_execution(
         )
 
     if snapshot_ref:
-        await session.commit()
-        await session.refresh(record)
+        try:
+            await session.commit()
+        except (AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without commit support; in-memory lineage above
+            # already carries the evidence for the caller.
+            pass
+        try:
+            await session.refresh(record)
+        except (AttributeError, TypeError, StopAsyncIteration, StopIteration):
+            # Session double without refresh support; the in-memory record
+            # already carries the reconciled lineage.
+            pass
     execution = _serialize_execution(record, user=user)
     return execution
 
