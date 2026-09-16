@@ -781,6 +781,12 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "CLAUDE_VOLUME_PATH": "/home/app/.claude",
         "CLAUDE_CONFIG_DIR": "/home/app/.claude",
         "CLAUDE_CREDENTIAL_GENERATION": "${CLAUDE_CREDENTIAL_GENERATION:-1}",
+        "MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS": (
+            "${MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS:-1800}"
+        ),
+        "MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS": (
+            "${MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS:-600}"
+        ),
     }
 
     host_volumes = {
@@ -871,6 +877,12 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "CODEX_VOLUME_PATH": "/home/app/.codex",
         "CODEX_CREDENTIAL_GENERATION": "${CODEX_CREDENTIAL_GENERATION:-1}",
         "OMNIGENT_SERVER_URL": "http://omnigent:8000",
+        "MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS": (
+            "${MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS:-1800}"
+        ),
+        "MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS": (
+            "${MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS:-600}"
+        ),
         "OMNIGENT_EXECUTION_TIMEOUT_SECONDS": "${OMNIGENT_HOST_TIMEOUT_SECONDS:-5400}",
         "OMNIGENT_EXECUTION_TIMEOUT_OWNER": "temporal_workflow",
         "OMNIGENT_CAPTURE_OWNER": "moonmind_bridge",
