@@ -1044,7 +1044,8 @@ class OmnigentTurnAttempt(Base):
         # the durable boundary refuses any value outside it.
         CheckConstraint(
             "lineage_kind IN ("
-            "'initial', 'repository_continuation', 'remediation', "
+            "'initial', 'repository_continuation', 'terminal_contract_continuation', "
+            "'remediation', "
             "'workflow_chat', 'steering', 'approval_response', "
             "'checkpoint_resume', 'linked_branch')",
             name="ck_omnigent_turn_attempts_lineage_kind",

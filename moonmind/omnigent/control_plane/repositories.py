@@ -300,6 +300,12 @@ class _RepositoryBase:
                 self._session.add(obj)
                 await self._session.flush()
         except IntegrityError as exc:  # pragma: no cover - exercised via tests
+            # Only uniqueness violations establish an identity conflict. A
+            # CHECK, foreign-key, or NOT NULL failure must retain its cause.
+            if getattr(exc.orig, "sqlstate", None) != "23505" and getattr(
+                exc.orig, "sqlite_errorname", None
+            ) not in {"SQLITE_CONSTRAINT_UNIQUE", "SQLITE_CONSTRAINT_PRIMARYKEY"}:
+                raise
             raise on_conflict(exc) from exc
         await self._session.refresh(obj)
         return obj
