@@ -9,10 +9,65 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import tempfile
 import uuid
 from pathlib import Path
+
+
+_MAX_DIAGNOSTIC_CHARS = 4000
+_MAX_COMMAND_CHARS = 1000
+
+_URL_USERINFO_RE = re.compile(r"(://)[^/\s:]+:[^/\s@]+@")
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)(password|passwd|token|secret|authorization|cookie)(\s*[:=]\s*)(\S+)"
+)
+
+
+def _redact_diagnostics(text):
+    """Redact likely credential material while keeping registry diagnostics."""
+    redacted = _URL_USERINFO_RE.sub(r"\1***@", text or "")
+    return _SECRET_ASSIGNMENT_RE.sub(r"\1\2***", redacted)
+
+
+def _docker_pull_hint(combined_lower):
+    if (
+        "cannot connect to the docker daemon" in combined_lower
+        or "is the docker daemon running" in combined_lower
+        or "permission denied while trying to connect" in combined_lower
+    ):
+        return (
+            "Hint: the Docker daemon is unreachable; start Docker Desktop "
+            "(or check DOCKER_HOST and socket permissions) and retry."
+        )
+    if (
+        "unauthorized" in combined_lower
+        or "authentication required" in combined_lower
+        or "no basic auth credentials" in combined_lower
+        or "login required" in combined_lower
+        or "permission_denied" in combined_lower
+        or "denied: denied" in combined_lower
+        or "access denied" in combined_lower
+    ):
+        return (
+            "Hint: registry authentication failed; run `docker login ghcr.io` "
+            "with an account that can read the release repository and retry."
+        )
+    if (
+        "manifest unknown" in combined_lower
+        or "manifest for" in combined_lower
+        or "name unknown" in combined_lower
+        or "no such image" in combined_lower
+        or "not found" in combined_lower
+    ):
+        return (
+            "Hint: the fetched commit has no published image yet; check the "
+            "image publish workflow for that SHA, wait for it to publish, then "
+            "retry. Never substitute `latest` for the pinned sha-<commit> image; "
+            "for local development use --local-build instead."
+        )
+    return ""
 
 
 def run(args, *, cwd, env=None):
@@ -20,11 +75,32 @@ def run(args, *, cwd, env=None):
         args, cwd=cwd, env=env, capture_output=True, text=True, timeout=900
     )
     if result.returncode:
-        # Docker/Git diagnostics can contain registry or remote credentials.
-        raise RuntimeError(
-            f"{args[0]} {args[1]} failed (exit {result.returncode}); deployment remains owned by its recorded release job"
+        command = f"{args[0]} {args[1]}" if len(args) > 1 else str(args[0])
+        full_command = _redact_diagnostics(" ".join(str(part) for part in args))[
+            :_MAX_COMMAND_CHARS
+        ]
+        stdout = getattr(result, "stdout", "") or ""
+        stderr = getattr(result, "stderr", "") or ""
+        combined = f"{stdout}\n{stderr}".strip()
+        detail = _redact_diagnostics(combined).strip()[-_MAX_DIAGNOSTIC_CHARS:]
+        hint = ""
+        if len(args) > 1 and args[0] == "docker" and args[1] == "pull":
+            hint = _docker_pull_hint(combined.lower())
+        message = (
+            f"{command} failed (exit {result.returncode}); "
+            "deployment remains owned by its recorded release job"
+            f"\nCommand (redacted): {full_command}"
         )
-    return result.stdout.strip()
+        if detail:
+            message += f"\nDiagnostics (redacted):\n{detail}"
+        else:
+            message += "\nDiagnostics: no output captured."
+        if hint:
+            message += f"\n{hint}"
+        # Docker/Git diagnostics can contain registry or remote credentials,
+        # so only the redacted form above is reported.
+        raise RuntimeError(message)
+    return (getattr(result, "stdout", "") or "").strip()
 
 
 def main(argv=None):
@@ -98,7 +174,13 @@ def main(argv=None):
             ["git", "rev-parse", "--verify", "FETCH_HEAD^{commit}"], cwd=repo
         )
         image = f"{args.image_repository}:sha-{revision}"
-        run(["docker", "pull", image], cwd=repo)
+        try:
+            run(["docker", "pull", image], cwd=repo)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"Published image {image} for origin/{args.branch} revision "
+                f"{revision} is unavailable; {exc}"
+            ) from exc
         observed = json.loads(run(["docker", "image", "inspect", image], cwd=repo))[0]
         if (
             observed.get("Config", {})
