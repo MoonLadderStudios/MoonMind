@@ -53,8 +53,12 @@ defaults:
 
 Read the portable acceptance policy from the resolved `moonspec-verify` bundle
 before assessing, verifying, or completing work. Resolve it at
-`$MOONMIND_ACTIVE_SKILLS_DIR/moonspec-verify/references/acceptance-policy.md`;
-outside MoonMind use `.agents/skills/moonspec-verify/references/acceptance-policy.md`.
+`$MOONMIND_ACTIVE_SKILLS_DIR/moonspec-verify/references/acceptance-policy.md`
+inside MoonMind; outside MoonMind resolve it from the installed skills directory
+(the directory containing this `SKILL.md`, sibling
+`moonspec-verify/references/acceptance-policy.md`) without requiring
+MoonMind-only environment variables. A checked-in `.agents/skills` directory
+must never shadow the selected snapshot.
 It owns scope, mandatory versus optional evidence, reuse, and completion rules.
 Preserve the original scope and previously met requirements as regression constraints;
 prior reports are context, not current proof. Candidate success alone cannot close

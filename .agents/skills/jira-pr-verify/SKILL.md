@@ -11,8 +11,12 @@ metadata:
 
 Read the portable acceptance policy from the resolved `moonspec-verify` bundle
 before assessing, verifying, or completing work. Resolve it at
-`$MOONMIND_ACTIVE_SKILLS_DIR/moonspec-verify/references/acceptance-policy.md`;
-outside MoonMind use `.agents/skills/moonspec-verify/references/acceptance-policy.md`.
+`$MOONMIND_ACTIVE_SKILLS_DIR/moonspec-verify/references/acceptance-policy.md`
+inside MoonMind; outside MoonMind resolve it from the installed skills directory
+(the directory containing this `SKILL.md`, sibling
+`moonspec-verify/references/acceptance-policy.md`) without requiring
+MoonMind-only environment variables. A checked-in `.agents/skills` directory
+must never shadow the selected snapshot.
 It owns scope, mandatory versus optional evidence, reuse, and completion rules.
 Preserve the original scope and previously met requirements as regression constraints;
 prior reports are context, not current proof. Candidate success alone cannot close
@@ -148,7 +152,7 @@ Validation:
 7. Scan and post.
 - Before posting, scan the outgoing comment for secret-like patterns such as `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
 - If any secret-like content appears, do not post. Redact and re-scan.
-- If the bundled helper is materialized, post with `.agents/skills/jira-pr-verify/tools/post_pr_comment.py --repo <owner/repo> --pr <pr> --body-file <comment_file>`.
+- If the bundled helper is materialized, post with the helper from the resolved active bundle: `$MOONMIND_ACTIVE_SKILLS_DIR/jira-pr-verify/tools/post_pr_comment.py --repo <owner/repo> --pr <pr> --body-file <comment_file>` inside MoonMind, or `<installed-skill-dir>/tools/post_pr_comment.py` (the directory containing this `SKILL.md`) outside MoonMind. Never substitute the checked-in `.agents/skills` directory for the selected snapshot.
 - Otherwise post with the PR comment operation from [the provider command catalog](references/provider-commands.md).
 - If the helper fails, record the exact `gh` error, then optionally try the GitHub connector as a fallback.
 - If connector posting also fails, leave the comment body in a local artifact and report both the `gh` and connector blockers.
