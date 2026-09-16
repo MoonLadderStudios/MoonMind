@@ -28,6 +28,7 @@ from moonmind.omnigent.harness_platform.catalog_service import (
 from moonmind.omnigent.harness_platform.credential_bindings import (
     CredentialBindingSet,
     create_binding_set,
+    derive_repository_slot_requirements,
     model_bindings_of,
     parse_binding_set_ref,
 )
@@ -485,6 +486,16 @@ class OmnigentExecutionPlanningService:
                 "request": request.workspace_spec,
             }
             capture_payload = dict(profile.capture)
+            # MoonLadderStudios/MoonMind#4009: repository slot declarations
+            # derive from admitted profile authority only; agent-supplied
+            # binding keys never create declarations. No admitted profile
+            # field carries repository declarations yet (delivery #4011 /
+            # publication #1090 own that production lifecycle; issuance is
+            # #4007), so this stays fail-closed ({}) until those owners
+            # supply trusted declarations.
+            repository_slot_requirements = derive_repository_slot_requirements(
+                profile_document=dict(version_row.document),
+            )
             return compile_execution_plan(
                 agent_profile=profile,
                 harness_catalog=catalog_result.snapshot,
@@ -492,6 +503,7 @@ class OmnigentExecutionPlanningService:
                 trust_record=trust,
                 resolved_skills=skills,
                 credential_binding_set=binding_set,
+                repository_slot_requirements=repository_slot_requirements,
                 host_class_ref=host_class.ref,
                 host_class=host_class,
                 launch_policy_ref=policy.ref,
