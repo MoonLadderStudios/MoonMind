@@ -307,11 +307,11 @@ async def _default_deployment_inputs() -> Mapping[str, str]:
 async def _default_resolve_candidates(
     env: Mapping[str, str],
 ) -> dict[str, str]:
-    from moonmind.omnigent.bootstrap.image_resolution import (
+    from api_service.services.omnigent_policies import (
+        configured_bootstrap_image_refs,
         resolve_bootstrap_image_ref,
-        resolve_omnigent_images,
     )
-    from api_service.services.omnigent_policies import configured_bootstrap_image_refs
+    from moonmind.omnigent.bootstrap.image_resolution import resolve_omnigent_images
 
     state = await resolve_omnigent_images(dict(env))
     server_input, legacy_host_input = configured_bootstrap_image_refs(dict(env))
