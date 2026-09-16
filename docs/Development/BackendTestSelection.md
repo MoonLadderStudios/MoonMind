@@ -159,10 +159,13 @@ only fixed trusted pytest commands with ordinary quoted parameters.
 - Per-test (`--timeout 600` on fast rows, `--timeout 300` on reliability
   shards), step (`timeout 480s` around each reliability pytest invocation:
   the 8-minute hard step ceiling from MoonLadderStudios/MoonMind#4369), job
-  (`timeout-minutes: 12`: the 12-minute hard job ceiling from
-  MoonLadderStudios/MoonMind#4369 covering setup, test step, bounded
+  (`timeout-minutes: 20` covering setup, test step, bounded
   diagnostics and cleanup per shard), and cleanup (`always()` compose `down -v`,
-  wrapped in `timeout 100s`) bounds are preserved on every row. Reliability collection steps are additionally
+  wrapped in `timeout 100s`) bounds are preserved on every row. The 20-minute
+  job budget reserves teardown time: worst-case 180s dependency startup +
+  480s test step + 100s compose-logs + 60s manifest copy + 100s compose down
+  = 920s, leaving ~280s for the evidence summary, uploads, and runner
+  variance. Reliability collection steps are additionally
   wrapped in `timeout 100s`/`timeout 60s` so one slow diagnostic command
   cannot stall the row; each command records its own failure to
   `collection-status.txt` without stopping the remaining bounded collection
@@ -216,34 +219,14 @@ assigned round-robin (`index % 4`). The CI workflow implements this with
 implements the same rule in `reliability_shard_for_path()` so local
 ownership checks and CI execute each file in the same shard.
 
-#### Shard balance measurement (MoonLadderStudios/MoonMind#4365 R1/R8)
-
-Real collection run 2026-09-15 on the current candidate
-(`moonmind container python-tests -- tests/integration/reliability
---collect-only -q -m reliability_journey`,
-container-job:2ef0af441b3342abbd67d58e19e572a1,
-logsRef art_01M2JHZAA88KPG3YK0PPAKCBWK): 57 files expand to 616
-parameterized nodes (matching the epic's observed 616-test baseline).
-
-| Shard | Files | Nodes |
-| --- | ---: | ---: |
-| reliability-shard-1 | 15 | 99 |
-| reliability-shard-2 | 14 | 102 |
-| reliability-shard-3 | 14 | 301 |
-| reliability-shard-4 | 14 | 114 |
-
-File counts are balanced within one (pinned by
-`test_reliability_shard_file_counts_are_balanced`). Node counts are not:
-`test_escaped_failure_journeys.py` contributes 206 nodes to shard-3 and
-`test_omnigent_model_catalog_refresh.py` contributes 58 nodes to shard-1.
-Parameterized expansions stay on their file's shard by construction, so
-exact-once ownership holds despite the imbalance. No file reassignment is
-made on node counts alone: node count is not wall-time, and the heavy
-replay corpus may be fast per test. Wall-time rebalancing, if needed, uses
-the per-shard `pytest-backend-<suite>-durations.json` snapshots and slowest
-reports from CI runs under the enforced 8-minute step / 12-minute job
-ceilings; that timing evidence is still missing and remains the documented
-next step for R1/R10.
+File counts stay balanced within one (pinned by
+`test_reliability_shard_file_counts_are_balanced`). Parameterized expansions
+stay on their file's shard by construction, so exact-once ownership holds
+even when node counts differ across shards. No file reassignment is made on
+node counts alone: node count is not wall-time. Wall-time rebalancing, if
+needed, uses the per-shard `pytest-backend-<suite>-durations.json`
+snapshots and slowest reports from CI runs under the enforced 8-minute step
+/ 20-minute job ceilings.
 
 ### Reliability Docker Fixture Layers (MoonLadderStudios/MoonMind#4376)
 
@@ -287,8 +270,8 @@ success-path text log/JUnit upload, `-q` reliability verbosity):
 2. Fix the revision/configuration: compare runs on the same commit (or
    adjacent commits with no test/workflow changes), same workflow file,
     same fast-row (`--timeout 600`) and reliability-shard (`--timeout 300`
-    with a `timeout 480s` step cap) bounds, same `timeout-minutes: 12`
-    hard job ceiling, same runner class (`ubuntu-latest`).
+    with a `timeout 480s` step cap) bounds, same `timeout-minutes: 20`
+    job ceiling, same runner class (`ubuntu-latest`).
 3. Repeat each side at least twice to separate ordinary timing noise from a
    real shift; do not add a performance gate on the result.
 4. Separate cold and warm setup: record dependency-install/Compose-pull
@@ -500,7 +483,7 @@ durable artifact evidence to restore a distinct destination and retries the
 restore idempotently. It exercises production capture/restore engines and the
 artifact boundary, but does not substitute for the Temporal-to-managed-AgentRun
 journey. Each reliability pytest invocation is capped by an 8-minute step
-timeout with a 300-second per-test bound inside a 12-minute hard job
+timeout with a 300-second per-test bound inside a 20-minute job
 ceiling; per-shard Compose pull/setup variance must fit the remaining
 job budget after the step cap, bounded diagnostics (`timeout 100s` /
 `timeout 60s`) and bounded cleanup (`timeout 100s`).
