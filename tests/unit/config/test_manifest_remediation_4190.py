@@ -98,10 +98,16 @@ def test_worker_registry_and_catalog_have_no_manifest_bindings() -> None:
 
 def test_api_worker_cli_import_without_manifest_services() -> None:
     """API, worker composition, and CLI import with deleted services absent."""
-    import api_service.api.routers.executions  # noqa: F401
-    import moonmind.cli  # noqa: F401
-    import moonmind.workflows.temporal.activity_catalog  # noqa: F401
-    import moonmind.workflows.temporal.workflow_registry  # noqa: F401
+    # Use importlib for the smoke import so this module keeps a single
+    # static import style (``from ... import ...`` below) and does not
+    # trigger mixed import/static-analysis findings.
+    for module_name in (
+        "api_service.api.routers.executions",
+        "moonmind.cli",
+        "moonmind.workflows.temporal.activity_catalog",
+        "moonmind.workflows.temporal.workflow_registry",
+    ):
+        assert importlib.import_module(module_name) is not None
 
     for module_name in DELETED_PRODUCT_MODULES:
         try:
@@ -111,9 +117,11 @@ def test_api_worker_cli_import_without_manifest_services() -> None:
         assert spec is None, module_name
 
     registered_commands: list[str] = []
-    for command in getattr(moonmind.cli.app, "registered_commands", []):
+    from moonmind.cli import app as cli_app
+
+    for command in getattr(cli_app, "registered_commands", []):
         registered_commands.append(str(getattr(command, "name", "")))
-    for group in getattr(moonmind.cli.app, "registered_groups", []):
+    for group in getattr(cli_app, "registered_groups", []):
         registered_commands.append(str(getattr(group, "name", "")))
     assert not any(cmd == "manifest" for cmd in registered_commands)
 
@@ -179,7 +187,8 @@ def test_cli_starts_without_manifest_services() -> None:
         assert result.exit_code == 0, result.output
     top = runner.invoke(app, ["--help"], color=False)
     assert top.exit_code == 0, top.output
-    assert "no `manifest` command group" in (app.info.help or "")
+    # Behavioral requirement only: the retired `manifest` command group is
+    # absent (no help-prose wording contract; copy edits must not fail).
     retired = runner.invoke(app, ["manifest", "--help"], color=False)
     assert retired.exit_code != 0
 
@@ -290,16 +299,55 @@ def test_manifest_artifact_ref_has_surviving_generic_consumers() -> None:
     params = inspect.signature(TemporalExecutionService.create_execution).parameters
     assert "manifest_artifact_ref" in params
 
-    source = inspect.getsource(TemporalExecutionService.create_execution)
-    # The surviving consumer is the generic memo/validation path shared by
-    # ordinary UserWorkflow launches (validated as readable artifact ref,
-    # carried in memo manifest_ref), not a Manifest product launch.
-    assert 'memo["manifest_ref"] = manifest_artifact_ref' in source
-
     story_tools = (
         REPO_ROOT / "moonmind" / "workflows" / "temporal" / "story_output_tools.py"
     ).read_text()
     assert "manifest_artifact_ref=None" in story_tools
+
+
+@pytest.mark.asyncio
+async def test_manifest_artifact_ref_propagates_to_user_workflow_memo(
+    tmp_path: Path,
+) -> None:
+    """A surviving UserWorkflow launch carries the manifest ref to its memo.
+
+    Behavioral propagation proof (no source-spelling assertion): launch an
+    ordinary UserWorkflow with a manifest artifact ref and assert the
+    persisted record memo, the record artifact refs, and the Temporal start
+    memo all carry ``artifact://manifest/propagation-probe``. Refactors
+    that move the assignment keep passing as long as callers receive the
+    reference; a branch that drops it fails.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from moonmind.workflows.temporal.service import TemporalExecutionService
+
+    manifest_ref = "artifact://manifest/propagation-probe"
+    async with _temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._validate_readable_temporal_artifact_ref = AsyncMock()  # type: ignore[method-assign]
+        service._client_adapter.start_workflow = AsyncMock(  # type: ignore[attr-defined]
+            return_value=SimpleNamespace(run_id=f"run-{uuid4().hex[:8]}")
+        )
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="propagation probe",
+            input_artifact_ref="artifact://input/propagation-probe",
+            plan_artifact_ref=None,
+            manifest_artifact_ref=manifest_ref,
+            failure_policy=None,
+            initial_parameters={"workflow": {"instructions": "probe"}},
+            idempotency_key=f"propagation-{uuid4()}",
+            _skip_pause_guard=True,
+        )
+        assert created.memo["manifest_ref"] == manifest_ref
+        assert manifest_ref in list(created.artifact_refs or [])
+        launched_memo = service._client_adapter.start_workflow.await_args.kwargs[  # type: ignore[attr-defined]
+            "memo"
+        ]
+        assert launched_memo["manifest_ref"] == manifest_ref
 
 
 def test_retained_manifest_strings_are_guards_history_or_excluded() -> None:

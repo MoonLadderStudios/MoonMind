@@ -216,32 +216,27 @@ def _fake_temporal_cancel_confirmation(monkeypatch):
     Production cancel requires Temporal to report CANCELED before the DB
     projection turns terminal (_require_processable_graceful_cancellation).
     Contract containers have no workers to observe the request, so the live
-    describe stays RUNNING and the DB stays executing. Record accepted
-    cancels and report them as CANCELED; delegate everything else to the
-    live adapter so start/update/signal behavior is unchanged.
+    describe stays RUNNING and the DB stays executing. Record the accepted
+    cancel/terminate request and report it as CANCELED without invoking the
+    live adapter: there is no worker to observe a real cancel, and any live
+    transport failure here would be an environment artifact, not the
+    cancel-under-test. All other adapter behavior (start/update/signal/
+    describe of non-canceled rows) still delegates to the live adapter.
     """
     _CONTRACT_CANCELED_WORKFLOW_IDS.clear()
-    original_cancel = TemporalClientAdapter.cancel_workflow
-    original_terminate = TemporalClientAdapter.terminate_workflow
     original_describe = TemporalClientAdapter.describe_workflow
 
     async def _fake_cancel(self, workflow_id: str) -> None:
+        # Explicit no-worker stub: acceptance is recorded; no live call is
+        # made because no worker exists to observe it in contract containers.
         _CONTRACT_CANCELED_WORKFLOW_IDS.add(workflow_id)
-        try:
-            await original_cancel(self, workflow_id)
-        except Exception:
-            pass
 
     async def _fake_terminate(
         self, workflow_id: str, *, reason: str, run_id: str | None = None
     ) -> None:
+        # Same explicit stub as cancel: record acceptance, skip the live
+        # terminate which requires a running worker.
         _CONTRACT_CANCELED_WORKFLOW_IDS.add(workflow_id)
-        try:
-            await original_terminate(
-                self, workflow_id, reason=reason, run_id=run_id
-            )
-        except Exception:
-            pass
 
     async def _fake_describe(
         self, workflow_id: str, *, run_id: str | None = None
@@ -818,9 +813,13 @@ async def test_execution_lifecycle_endpoints_report_projection_contract(
             # the operator pause but correctly stays awaiting_external until
             # the integration poll/callback below completes.
             assert resume_body["state"] == "awaiting_external"
-            # Operator pause is cleared (no longer operator_paused) while the
-            # still-pending integration wait remains visible.
-            assert resume_body["waitingReason"] != "operator_paused"
+            # Resume clears the operator pause but restores the still-pending
+            # Jules integration wait: callbackSupported=True records
+            # waitingReason="external_callback" with attention_required=False
+            # at the record level. The detail serializer reports
+            # attentionRequired=True for any awaiting_external dashboard
+            # state, so the API-level assertion is True.
+            assert resume_body["waitingReason"] == "external_callback"
             assert resume_body["attentionRequired"] is True
             assert resume_body["dashboardStatus"] == "awaiting_action"
             assert resume_body["status"] == "awaiting_action"
@@ -1225,18 +1224,53 @@ async def test_execution_list_pagination_and_state_filter(tmp_path, query_state)
             assert run_only_body["count"] == 3
             assert all(item["entry"] == "user_workflow" for item in run_only_body["items"])
 
+            # MoonLadderStudios/MoonMind#4190: native ManifestIngest is
+            # retired, so new admissions above are rejected. Seed one
+            # retained historical row owned by the authorized principal and
+            # verify it stays visible through the authorized list and
+            # detail endpoints (generic authorized readers).
+            from api_service.db.models import (
+                MoonMindWorkflowState,
+                TemporalExecutionOwnerType,
+                TemporalWorkflowType,
+            )
+
+            historical_workflow_id = f"mm:historical-manifest:{uuid4().hex[:8]}"
+            async with db_base.async_session_maker() as seed_session:
+                seed_session.add(
+                    TemporalExecutionCanonicalRecord(
+                        workflow_id=historical_workflow_id,
+                        run_id=uuid4().hex,
+                        namespace="default",
+                        workflow_type=TemporalWorkflowType.MANIFEST_INGEST,
+                        owner_id=str(shared_user_id),
+                        owner_type=TemporalExecutionOwnerType.USER,
+                        state=MoonMindWorkflowState.COMPLETED,
+                        entry="manifest",
+                        manifest_ref="artifact://manifest/historical",
+                        parameters={"task": {"instructions": "historical manifest work"}},
+                    )
+                )
+                await seed_session.commit()
+
             manifest_only = await client.get(
                 "/api/executions",
                 params={"entry": "manifest", "ownerType": "user"},
             )
             assert manifest_only.status_code == 200
             manifest_body = manifest_only.json()
-            # MoonLadderStudios/MoonMind#4190: native ManifestIngest is
-            # retired, so this isolated database holds no manifest rows;
-            # new admissions above are rejected and historical rows stay
-            # readable only through the generic authorized readers.
-            assert manifest_body["count"] == 0
-            assert manifest_body["items"] == []
+            assert manifest_body["count"] == 1
+            assert manifest_body["items"][0]["workflowId"] == historical_workflow_id
+            assert manifest_body["items"][0]["entry"] == "manifest"
+
+            historical_detail = await client.get(
+                f"/api/executions/{historical_workflow_id}"
+            )
+            assert historical_detail.status_code == 200
+            assert (
+                historical_detail.json()["workflowId"] == historical_workflow_id
+            )
+            assert historical_detail.json()["entry"] == "manifest"
     finally:
         db_base.DATABASE_URL = original_db_url
         db_base.engine = original_engine
