@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "384_runtime_binding_repository_issuance"
+revision: str = "384_runtime_issuance"
 down_revision: Union[str, None] = "383_terminal_contract_source"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
