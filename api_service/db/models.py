@@ -1729,6 +1729,8 @@ __all__ = [
     "PresetRecent",
     "SecretStatus",
     "ManagedSecret",
+    "SecretMutationReceipt",
+    "SecretInvalidationOutbox",
     "AgentSkillSourceKind",
     "AgentSkillFormat",
     "AgentSkillDefinition",
@@ -1752,7 +1754,15 @@ class SecretStatus(str, enum.Enum):
 
 
 class ManagedSecret(Base):
-    """Encrypted durable storage for SecretRefs."""
+    """Encrypted durable storage for SecretRefs.
+
+    ``credential_revision`` advances only when the credential value (or its
+    owning actor/account identity) changes: create, value update, validated
+    rotation, validated repair, or overwriting import. ``policy_revision``
+    advances on metadata-only lifecycle transitions (status changes) that
+    fence acquisition without changing the value. Both are monotonic integers;
+    wall-clock timestamps are never generation authority.
+    """
 
     __tablename__ = "managed_secrets"
     __table_args__ = (
@@ -1776,6 +1786,12 @@ class ManagedSecret(Base):
         nullable=False,
         default=SecretStatus.ACTIVE,
     )
+    credential_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    policy_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
     details: Mapped[dict[str, Any]] = mapped_column(
         mutable_json_dict(), nullable=False, default=dict
     )
@@ -1789,6 +1805,61 @@ class ManagedSecret(Base):
         nullable=False,
         server_default=func.now(),
         onupdate=func.now(),
+    )
+
+
+class SecretMutationReceipt(Base):
+    """Stable request-identity receipt for one secret mutation (#4006).
+
+    A retry carrying the same ``request_id`` reconciles against this row and
+    never advances revisions twice; reuse of the same ``request_id`` with a
+    different operation/slug/candidate fingerprint is rejected as a conflict.
+    Only metadata is stored: slug, operation, revisions, outcome, and an
+    opaque key-bound candidate fingerprint — never plaintext, ciphertext, or
+    a publicly comparable token digest.
+    """
+
+    __tablename__ = "secret_mutation_receipts"
+
+    request_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    slug: Mapped[str] = mapped_column(String(255), nullable=False)
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    credential_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    candidate_fingerprint: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class SecretInvalidationOutbox(Base):
+    """Restart-safe revision/invalidation evidence for secret changes (#4006).
+
+    Rows are written in the same transaction as the secret activation, then
+    cache notifications are delivered after commit. Acquisition always checks
+    the authoritative revision, so a lost notification can never make stale
+    authority valid.
+    """
+
+    __tablename__ = "secret_invalidation_outbox"
+    __table_args__ = (
+        Index("ix_secret_invalidation_outbox_slug", "slug"),
+        Index("ix_secret_invalidation_outbox_delivered", "delivered"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    slug: Mapped[str] = mapped_column(String(255), nullable=False)
+    credential_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    cause: Mapped[str] = mapped_column(String(32), nullable=False)
+    delivered: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
 

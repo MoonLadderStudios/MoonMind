@@ -432,24 +432,29 @@ def test_managed_runtime_cleanup_defaults_match_api_and_agent_runtime_worker():
 def test_documented_compose_startup_config_succeeds_without_env_file(tmp_path):
     _require_docker_compose()
 
-    env_path = REPO_ROOT / ".env"
-    hidden_env_path = tmp_path / ".env"
-    env_was_hidden = False
-    if env_path.exists():
-        shutil.move(str(env_path), str(hidden_env_path))
-        env_was_hidden = True
-
-    try:
-        result = subprocess.run(
-            ["docker", "compose", "-f", "docker-compose.yaml", "config"],
-            cwd=REPO_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    finally:
-        if env_was_hidden:
-            shutil.move(str(hidden_env_path), str(env_path))
+    # Never hide/move the operator-owned REPO_ROOT/.env. Docker-backed runs
+    # execute this test as root against a rw bind mount while tmp_path lives
+    # on the container overlay: a hide/restore shutil.move then recreates
+    # .env as root:root (mode/mtime preserved, birth reset) and every later
+    # host `docker compose` invocation fails with permission denied.
+    # Rendering an isolated empty project directory proves the same
+    # documented-defaults claim without touching operator state, and stays
+    # safe under parallel xdist workers.
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(REPO_ROOT / "docker-compose.yaml"),
+            "--project-directory",
+            str(tmp_path),
+            "config",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
     assert result.returncode == 0, result.stderr
 

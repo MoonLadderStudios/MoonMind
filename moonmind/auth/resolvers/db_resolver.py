@@ -16,10 +16,19 @@ class DbEncryptedSecretResolver(SecretBackendResolver):
 
     async def resolve(self, ref: ParsedSecretRef) -> str:
         slug = ref.locator
-        
+
         async with async_session_maker() as session:
             try:
-                plaintext = await SecretsService.get_secret(session, slug)
+                plaintext = await SecretsService.get_secret(
+                    session,
+                    slug,
+                    expected_credential_revision=getattr(
+                        ref, "expected_credential_revision", None
+                    ),
+                    expected_policy_revision=getattr(
+                        ref, "expected_policy_revision", None
+                    ),
+                )
             except Exception as e:
                 # Catch Fernet decryption exceptions thrown by StringEncryptedType
                 logger.error("secret_decryption_failed", slug=slug, error=str(e))

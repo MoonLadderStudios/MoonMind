@@ -28,7 +28,7 @@ Skill directory: `bash "$UPDATE_MOONMIND_SKILL_DIR/scripts/run-update-moonmind.s
 
 ## Release authority and completion
 
-The entrypoint fetches the selected branch without checking out or resetting local files. It resolves the exact source SHA to its published `sha-<commit>` image, verifies the image's source-revision label, and pins the repository digest. An unpublished image is an actionable unavailable release; never substitute `latest` or rebuild a different source under that identity.
+The entrypoint fetches the selected branch without checking out or resetting local files. It walks the branch first-parent history (up to 20 commits) to the newest commit with a published `sha-<commit>` image, verifies that image's source-revision label, and pins the repository digest. A tip commit with no published image yet (for example a just-merged commit whose publish workflow is still running) is skipped with a printed notice naming the selected ancestor; only when no ancestor has a published image is the unavailable release actionable. Never substitute `latest` or rebuild a different source under that identity.
 
 The selected image supplies the canonical Compose definition, application code, migrations, portable Skills and release controller. Deployment-owned `.env`, interfaces, authentication and explicit configuration retain their existing authority. The image-owned controller is the portable semantic entrypoint for both this Skill and MoonMind's deployment tool. Docker, durable state storage and Temporal supply the execution substrate.
 
@@ -40,7 +40,7 @@ If the caller disappears, resume the printed submission with `--resume <submissi
 
 ## Options
 
-Optional arguments are `--compose-project <name>`, `--image-repository <repository>`, and `--dry-run` (show the intended release operation without fetching or deploying). The deployment-owned `docker-compose.override.yaml` (or `.yml`) accompanies the image's base configuration.
+Optional arguments are `--compose-project <name>`, `--image-repository <repository>`, and `--dry-run` (show the intended release operation without fetching or deploying). A `--dry-run` preview never establishes completion: it writes no submission and proves nothing about the installed deployment. The deployment-owned `docker-compose.override.yaml` (or `.yml`) accompanies the image's base configuration.
 
 `--local-build` is an explicit development-only escape hatch for exercising an
 unpublished working tree (for example a feature branch awaiting its published
@@ -52,6 +52,6 @@ afterwards, and verifies each `--operator-url` health check. Roll back with a
 plain `docker compose up -d`. Individual service restarts and source-only
 image rebuilds remain outside this contract.
 
-Use `--operator-url <existing-origin>` (repeatable) to declare the installed dashboard/API addresses for verification, especially for wildcard bindings without an authentication base URL. The declaration belongs to the immutable release submission and does not modify `.env`, authentication, or published bindings. Use addresses resolvable from the Docker backend, such as a full VPN hostname. Resume retains the original addresses. A configured `MOONMIND_PUBLIC_BASE_URL` remains a required verification target as well.
+Use `--operator-url <existing-origin>` (repeatable) to declare the installed dashboard/API addresses for verification. It is optional: a fixed published binding verifies its own address, and a wildcard binding (`MOONMIND_API_PUBLISH_HOST=0.0.0.0` or `::`) verifies the loopback origin it publishes on, so the default invocation needs no declaration. Declare an origin to additionally verify a LAN or VPN route. The declaration belongs to the immutable release submission and does not modify `.env`, authentication, or published bindings. Use addresses resolvable from the Docker backend, such as a full VPN hostname. Resume retains the original addresses. A configured `MOONMIND_PUBLIC_BASE_URL` remains a required verification target as well.
 
 Protected operator URLs require an existing authorized credential in the deployment-owned `deploy/state/operator-http-headers.json`, mapping each exact operator origin to its issued `Cookie` and/or `Authorization` header. Preserve this file as secret material outside Git. The updater sends credentials only to that origin, never mints a session or changes identity, and stops before replacement when authentication cannot be verified. Trusted-proxy identity remains owned by the proxy; do not supply asserted-user or forwarded headers.
