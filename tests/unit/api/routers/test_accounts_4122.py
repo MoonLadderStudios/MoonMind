@@ -52,7 +52,7 @@ def _test_session_config() -> q.MoonmindAuthConfig:
     )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def _module_db(tmp_path_factory):
     import asyncio as _asyncio
 
@@ -268,17 +268,16 @@ async def test_non_admin_cannot_create_invites_or_manage():
 
 @pytest.mark.asyncio
 async def test_disable_enforced_on_sessions_and_login():
-    async with _client() as client:
+    async with _client() as client, _client() as worker:
         await _setup_owner(client, login="boss4122@example.com")
         invite = await client.post("/api/v1/accounts/invites", json={"login": "worker4122@example.com"})
+        assert invite.status_code == 201, invite.text
         token = invite.json()["invite_token"]
-    async with _client() as worker:
         enrolled = await worker.post(
             "/api/v1/accounts/enroll",
             json={"login": "worker4122@example.com", "password": PASSWORD, "invite_token": token},
         )
         assert enrolled.status_code == 201
-    async with _client() as client:
         action = await client.post(
             "/api/v1/accounts/members/action",
             json={"target_login": "worker4122@example.com", "action": "grant_admin"},
@@ -299,7 +298,6 @@ async def test_disable_enforced_on_sessions_and_login():
         members = await client.get("/api/v1/accounts/members")
         flagged = {m["login"]: m for m in members.json()["members"]}
         assert flagged["worker4122@example.com"]["is_active"] is False
-    async with _client() as worker:
         # Cached session no longer validates.
         me = await worker.get("/api/v1/accounts/me")
         assert me.status_code in (401, 403)
