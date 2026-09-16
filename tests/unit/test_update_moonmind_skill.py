@@ -178,9 +178,143 @@ def test_main_pull_failure_names_branch_revision_and_image(tmp_path, monkeypatch
         assert args[1] == "pull"
         return SimpleNamespace(returncode=1, stdout="", stderr="manifest unknown")
     monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(update, "_PULL_RETRY_MAX_ATTEMPTS", 2)
     with pytest.raises(RuntimeError) as excinfo:
         update.main(["--repo", str(repo)])
     message = str(excinfo.value)
     assert revision in message
     assert f":sha-{revision}" in message
     assert "origin/main" in message
+
+
+def _pull_failure(stderr):
+    return SimpleNamespace(returncode=1, stdout="", stderr=stderr)
+
+
+@pytest.mark.parametrize(
+    ("daemon_output", "category"),
+    [
+        (
+            "Error response from daemon: manifest for ghcr.io/moonladderstudios/moonmind:sha-abc not found: manifest unknown",
+            "unpublished",
+        ),
+        (
+            'Error response from daemon: Head "https://ghcr.io/v2/x": unauthorized: authentication required',
+            "auth",
+        ),
+        (
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+            "daemon",
+        ),
+        ("Error: something entirely unexpected", "unknown"),
+    ],
+)
+def test_run_marks_docker_pull_failure_category(tmp_path, monkeypatch, daemon_output, category):
+    monkeypatch.setattr(
+        update.subprocess, "run", lambda *args, **kwargs: _pull_failure(daemon_output)
+    )
+    with pytest.raises(update.DockerPullError) as excinfo:
+        update.run(["docker", "pull", "ghcr.io/moonladderstudios/moonmind:sha-abc"], cwd=tmp_path)
+    assert excinfo.value.category == category
+
+
+def test_pull_release_image_waits_for_inflight_publish(tmp_path, monkeypatch, capsys):
+    attempts = []
+    responses = iter(
+        [
+            _pull_failure("Error response from daemon: manifest unknown"),
+            SimpleNamespace(returncode=0, stdout=""),
+        ]
+    )
+    def fake_run(args, **kwargs):
+        assert args[:2] == ["docker", "pull"]
+        attempts.append(list(args))
+        return next(responses)
+    sleeps = []
+    monkeypatch.setattr(update.subprocess, "run", fake_run)
+    monkeypatch.setattr(update, "_sleep", lambda seconds: sleeps.append(seconds))
+    update._pull_release_image(
+        "ghcr.io/moonladderstudios/moonmind:sha-abc",
+        repo=tmp_path,
+        branch="main",
+        revision="abc",
+    )
+    assert len(attempts) == 2
+    assert sleeps == [update._PULL_RETRY_INTERVAL_SECONDS]
+    assert "waiting" in capsys.readouterr().out
+
+
+def test_pull_release_image_exhaustion_keeps_revision_context(tmp_path, monkeypatch):
+    calls = []
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        return _pull_failure("Error response from daemon: manifest unknown")
+    monkeypatch.setattr(update.subprocess, "run", fake_run)
+    monkeypatch.setattr(update, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(update, "_PULL_RETRY_MAX_ATTEMPTS", 3)
+    with pytest.raises(RuntimeError) as excinfo:
+        update._pull_release_image(
+            "ghcr.io/moonladderstudios/moonmind:sha-abc123",
+            repo=tmp_path,
+            branch="main",
+            revision="abc123",
+        )
+    assert len(calls) == 3
+    message = str(excinfo.value)
+    assert "abc123" in message
+    assert ":sha-abc123" in message
+    assert "origin/main" in message
+
+
+def test_pull_release_image_auth_failure_fails_fast_without_wait(tmp_path, monkeypatch):
+    calls = []
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        return _pull_failure("unauthorized: authentication required")
+    sleeps = []
+    monkeypatch.setattr(update.subprocess, "run", fake_run)
+    monkeypatch.setattr(update, "_sleep", lambda seconds: sleeps.append(seconds))
+    with pytest.raises(RuntimeError, match="docker login"):
+        update._pull_release_image(
+            "ghcr.io/moonladderstudios/moonmind:sha-abc",
+            repo=tmp_path,
+            branch="main",
+            revision="abc",
+        )
+    assert len(calls) == 1
+    assert sleeps == []
+
+
+def test_main_waits_for_inflight_publish(tmp_path, monkeypatch):
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    git = _init_repo(repo)
+    revision = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    original_run = subprocess.run
+    pulls = []
+    digest = "sha256:" + "b" * 64
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        if args[1] == "pull":
+            pulls.append(list(args))
+            if len(pulls) == 1:
+                return _pull_failure("Error response from daemon: manifest unknown")
+            return SimpleNamespace(returncode=0, stdout="")
+        if args[1:3] == ["image", "inspect"]:
+            output = json.dumps([{"RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"], "Config": {"Labels": {"org.opencontainers.image.revision": revision}}}])
+            return SimpleNamespace(returncode=0, stdout=output)
+        if args[1:3] == ["compose", "config"]:
+            return SimpleNamespace(returncode=0, stdout='{"name":"existing-project"}')
+        if args[1] == "run":
+            return SimpleNamespace(returncode=0, stdout="services: {}")
+        if args[1] == "compose":
+            return SimpleNamespace(returncode=0, stdout="")
+        raise AssertionError(args)
+    monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update, "_sleep", lambda seconds: None)
+    assert update.main(["--repo", str(repo)]) == 0
+    assert len(pulls) == 2
+    assert pulls[0][2].endswith(f":sha-{revision}")
