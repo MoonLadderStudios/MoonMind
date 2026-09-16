@@ -174,7 +174,9 @@ def _candidate_fingerprint(candidate: str) -> str:
 
     HMAC (not a plain hash) so the stored fingerprint is not publicly
     comparable: an attacker with the fingerprint cannot test candidate
-    tokens against it without the server key.
+    tokens against it without the server key. This is a keyed change-detection
+    fingerprint, not password storage or password verification, so a
+    deliberately slow password hash (bcrypt/scrypt/argon2) does not apply.
     """
     try:
         from api_service.core.encryption import get_encryption_key
@@ -182,6 +184,8 @@ def _candidate_fingerprint(candidate: str) -> str:
         key = get_encryption_key()
     except Exception:
         key = "issue-4006-fallback-pepper"
+    # codeql[py/weak-sensitive-data-hashing]: keyed HMAC identity check, not
+    # password hashing; verification requires the server-side key.
     return hmac.new(
         key.encode("utf-8"), candidate.encode("utf-8"), hashlib.sha256
     ).hexdigest()
