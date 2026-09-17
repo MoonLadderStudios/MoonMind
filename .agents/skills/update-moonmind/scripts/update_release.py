@@ -251,6 +251,7 @@ def main(argv=None):
         )
         project = args.compose_project or rendered["name"]
         submission_id = str(uuid.uuid4())
+        operator_urls = list(args.operator_url)
         inputs = {
             "stack": "moonmind",
             "image": {
@@ -272,7 +273,7 @@ def main(argv=None):
                 "idempotency_key": f"host-update:{submission_id}",
                 "operator": "local-operator",
                 "operator_role": "operator",
-                **({"deployment_operator_urls": args.operator_url} if args.operator_url else {}),
+                **({"deployment_operator_urls": operator_urls} if operator_urls else {}),
             },
         }
         submissions.mkdir(parents=True, exist_ok=True)
@@ -331,6 +332,12 @@ def main(argv=None):
                 f"MOONMIND_DEPLOYMENT_PROJECT_NAME={record['project']}",
                 "-e",
                 f"MOONMIND_DEPLOYMENT_PROJECT_DIR={repo}",
+                # Same substrate protection as the process environment below,
+                # stated explicitly: `run -e` wins over service interpolation,
+                # so the deployment-control submitter and everything it
+                # launches inherit the exclusion even if interpolation drifts.
+                "-e",
+                "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=docker-proxy,sandbox-egress-proxy,postgres",
                 "temporal-worker-deployment-control",
                 "-m",
                 "moonmind.workflows.skills.deployment_release",
@@ -341,7 +348,23 @@ def main(argv=None):
         return subprocess.run(
             command,
             cwd=repo,
-            env={**os.environ, "MOONMIND_IMAGE": record["image"]},
+                env={
+                    **os.environ,
+                    "MOONMIND_IMAGE": record["image"],
+                    "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES": "docker-proxy,sandbox-egress-proxy,postgres",
+                    # The updater reaches Docker through docker-proxy, and
+                    # postgres/sandbox-egress-proxy are stateful substrate:
+                    # recreating them through a rewritten-bind render on every
+                    # release caused repeated proxy suicide (killing all
+                    # later docker calls) and a postgres removal. Host-
+                    # initiated updates still exclude that substrate from the
+                    # main pull/reconcile/verify stage while leaving it
+                    # running, so the controller never recreates its own
+                    # transport mid-update. The controller then reconciles
+                    # release-owned substrate whose definition drifted in a
+                    # staged pass after the main stack verifies, and fails
+                    # the release when that substrate does not converge.
+                },
             check=False,
         ).returncode
 

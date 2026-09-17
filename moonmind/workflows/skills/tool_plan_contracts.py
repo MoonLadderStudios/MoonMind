@@ -525,6 +525,10 @@ class ToolFailure(Exception):
     def __post_init__(self) -> None:
         _ensure_non_empty(self.error_code, field_name="error_code")
         _ensure_non_empty(self.message, field_name="message")
+        # BaseException stringifies from args; without this, tracebacks show a
+        # bare class name and hide the actionable message (e.g. failed phase,
+        # exit code, and command output carried in details).
+        object.__setattr__(self, "args", (self.message,))
 
     def __str__(self) -> str:
         # Dataclass exceptions carry no ``args``, so an uncaught ToolFailure
