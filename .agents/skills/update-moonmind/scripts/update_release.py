@@ -356,11 +356,13 @@ def main(argv=None):
                     # recreating them through a rewritten-bind render on every
                     # release caused repeated proxy suicide (killing all
                     # later docker calls) and a postgres removal. Host-
-                    # initiated updates exclude that substrate from
-                    # pull/reconcile/verify while leaving it running.
-                    # Manage substrate updates explicitly, e.g.
-                    # `docker compose up -d docker-proxy`.
-                    "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES": "docker-proxy,sandbox-egress-proxy,postgres",
+                    # initiated updates still exclude that substrate from the
+                    # main pull/reconcile/verify stage while leaving it
+                    # running, so the controller never recreates its own
+                    # transport mid-update. The controller then reconciles
+                    # release-owned substrate whose definition drifted in a
+                    # staged pass after the main stack verifies, and fails
+                    # the release when that substrate does not converge.
                 },
             check=False,
         ).returncode

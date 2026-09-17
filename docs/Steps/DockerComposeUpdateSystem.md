@@ -799,7 +799,13 @@ job. It is configured with:
 - `MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE` for the audit sidecar
 - `MOONMIND_DEPLOYMENT_LOCK_DIR` for durable per-stack lock files
 - `MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES` for explicit specialized maintenance;
-  a coherent release rejects exclusion of the deployment-control worker
+  a coherent release rejects exclusion of the deployment-control worker.
+  Release-owned substrate excluded from the main stage (for example the
+  docker transport proxy or stateful database services) is still reconciled
+  and verified in a staged pass after the main stack verifies: converged
+  substrate is left running, drifted substrate is pulled, recreated, and
+  re-verified, and substrate that does not converge fails the release
+  instead of reporting success on previous definitions.
 
 On Windows Docker Desktop, the Linux worker resolves Compose files through its
 local checkout mount and maps checkout bind sources into the daemon's
