@@ -522,7 +522,7 @@ async def execute_detached(executor, inputs, context):
                         tail = await docker_logs_tail(name)
                         diagnosis.append(
                             "updater-logs="
-                            + redact_sensitive_text(tail[-2000:] or "(empty)")
+                            + redact_sensitive_text(tail or "(empty)")[-2000:]
                         )
                     except (RuntimeError, OSError, TimeoutError) as exc:
                         # Auxiliary log collection must never replace the
@@ -577,50 +577,138 @@ class ReleaseCohort:
         self.runner, self.directory, self.owner = runner, directory, owner
         self.names = []
 
+    async def _discover_installed_serving_image(self):
+        """Image every installed fleet agrees on, without readiness evidence.
+
+        Worker readiness attests the egress gateway, so a broken gateway
+        fails every probe. Image identity is observable without it, which
+        lets the caller repair the gateway before requiring the readiness
+        proof that names the serving image.
+        """
+        from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
+
+        images = set()
+        for service in _FLEET_SERVICE_NAMES.values():
+            found = await self.runner._run_compose_command(
+                ("docker", "compose", "ps", "-q", service)
+            )
+            _ensure_command_succeeded("inspect previous release", found)
+            identifiers = found["stdout"].split()
+            if len(identifiers) != 1:
+                raise ValueError("Previous release has no coherent live worker owner")
+            observed = json.loads(await docker("inspect", identifiers[0]))[0]
+            images.add(observed["Image"])
+        if len(images) != 1:
+            raise ValueError("Previous release spans different images")
+        return images.pop()
+
+    async def resolve_serving_image(self, version, deployment):
+        """Serving image authority without gateway-dependent readiness.
+
+        Returns ``(retained, provenance)`` where provenance is ``receipt``
+        for a durable ``retained.json``, ``evidence`` for a successful
+        release or availability receipt, and ``installed`` for
+        live-container discovery. Only the ``installed`` provenance still
+        needs a readiness proof, which the caller performs after repairing
+        the gateway (see ``record_resolved_serving_image``).
+        """
+        record_file = self.directory / "retained.json"
+        if record_file.exists():
+            retained = json.loads(record_file.read_text())
+            if retained["owner"] != self.owner or retained["version"] != version:
+                raise ValueError("Retained release authority differs")
+            return retained, "receipt"
+        evidence = await successful_release_image(self.directory.parent, version)
+        if evidence is not None:
+            return {"owner": self.owner, "version": version, **evidence}, "evidence"
+        return {
+            "owner": self.owner,
+            "version": version,
+            "image": await self._discover_installed_serving_image(),
+            "retired": [],
+        }, "installed"
+
+    async def record_resolved_serving_image(self, version, deployment, resolved):
+        """Persist a resolved serving image, proving readiness when discovered.
+
+        Receipt and release-evidence provenances already carry their
+        authority. Live-container discovery still needs its coherent
+        readiness proof, which must run only after the caller has repaired
+        the egress gateway the probes attest.
+        """
+        from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
+
+        record_file = self.directory / "retained.json"
+        retained, provenance = resolved
+        if provenance == "receipt":
+            return retained
+        if provenance == "installed":
+            expected_digest = version.removeprefix(deployment + ".")
+            images = set()
+            for service in _FLEET_SERVICE_NAMES.values():
+                found = await self.runner._run_compose_command(
+                    ("docker", "compose", "ps", "-q", service)
+                )
+                _ensure_command_succeeded("inspect previous release", found)
+                identifiers = found["stdout"].split()
+                if len(identifiers) != 1 or not readiness_matches(
+                    await worker_readiness(identifiers[0]), expected_digest
+                ):
+                    raise ValueError(
+                        "Previous release has no coherent live worker owner"
+                    )
+                observed = json.loads(await docker("inspect", identifiers[0]))[0]
+                images.add(observed["Image"])
+            if len(images) != 1 or retained["image"] not in images:
+                raise ValueError("Previous release spans different images")
+        write_record(record_file, retained)
+        return retained
+
     async def record_serving_image(self, version, deployment):
         """Capture recovery authority while the serving image is observable.
 
         Recording an image does not launch another worker or change routing.
         The same receipt is consumed by normal updates and outage recovery.
         """
-        from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
+        return await self.record_resolved_serving_image(
+            version, deployment, await self.resolve_serving_image(version, deployment)
+        )
 
-        record_file = self.directory / "retained.json"
-        expected_digest = version.removeprefix(deployment + ".")
-        if record_file.exists():
-            retained = json.loads(record_file.read_text())
-            if retained["owner"] != self.owner or retained["version"] != version:
-                raise ValueError("Retained release authority differs")
-        else:
-            evidence = await successful_release_image(self.directory.parent, version)
-            if evidence is not None:
-                retained = {"owner": self.owner, "version": version, **evidence}
-            else:
-                images = set()
-                for service in _FLEET_SERVICE_NAMES.values():
-                    found = await self.runner._run_compose_command(
-                        ("docker", "compose", "ps", "-q", service)
-                    )
-                    _ensure_command_succeeded("inspect previous release", found)
-                    identifiers = found["stdout"].split()
-                    if len(identifiers) != 1 or not readiness_matches(
-                        await worker_readiness(identifiers[0]), expected_digest
-                    ):
-                        raise ValueError(
-                            "Previous release has no coherent live worker owner"
-                        )
-                    observed = json.loads(await docker("inspect", identifiers[0]))[0]
-                    images.add(observed["Image"])
-                if len(images) != 1:
-                    raise ValueError("Previous release spans different images")
-                retained = {
-                    "owner": self.owner,
-                    "version": version,
-                    "image": images.pop(),
-                    "retired": [],
-                }
-            write_record(record_file, retained)
-        return retained
+    async def _retained_definition_runner(self, image):
+        """Render the retained cohort from the definition its image owns.
+
+        A deployment checkout bind-mounts the *current* Compose file, whose
+        gateway definition may be incompatible with the retained image: the
+        v1 gateway used ``ubuntu/squid`` with legacy labels and a direct
+        config mount, while the current definition needs
+        ``/opt/moonmind-egress/policy.sh`` from the new image. Recreating
+        the gateway from the current definition with the retained image
+        leaves it exiting. Render the definition the retained image embeds
+        instead; the deployment-owned runner identity (project, environment,
+        override files) still accompanies the command through the replaced
+        runner.
+        """
+        digest = hashlib.sha256(image.encode()).hexdigest()[:16]
+        retained_compose = self.directory / f"retained-compose-{digest}.yaml"
+        if not retained_compose.exists():
+            try:
+                content = await docker(
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--entrypoint",
+                    "cat",
+                    image,
+                    "/app/release/docker-compose.yaml",
+                )
+            except RuntimeError:
+                # Images predating the embedded release definition keep
+                # the previous behavior: render from the deployment
+                # checkout instead of failing worker retention outright.
+                return self.runner
+            _atomic_write_bytes(retained_compose, content.encode())
+        return replace(self.runner, compose_file=str(retained_compose))
 
     async def preserve_previous(self, previous, deployment, candidate):
         """Keep the exact previous image polling until Temporal drains it."""
@@ -629,24 +717,16 @@ class ReleaseCohort:
         from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
 
         expected_digest = previous.removeprefix(deployment + ".")
-        retained = await self.record_serving_image(previous, deployment)
-        retained_runner = self.runner
-        if self.runner.compose_file == "/app/release/docker-compose.yaml":
-            retained_compose = self.directory / "retained-compose.yaml"
-            if not retained_compose.exists():
-                content = await docker(
-                    "run",
-                    "--rm",
-                    "--network",
-                    "none",
-                    "--entrypoint",
-                    "cat",
-                    retained["image"],
-                    "/app/release/docker-compose.yaml",
-                )
-                _atomic_write_bytes(retained_compose, content.encode())
-            retained_runner = replace(self.runner, compose_file=str(retained_compose))
+        # The serving image is discovered without gateway-dependent readiness
+        # so an initial installation without any release receipt can still
+        # reach the recovery below: worker readiness attests the gateway, so
+        # requiring the proof before the repair leaves the repair unreachable.
+        retained, provenance = await self.resolve_serving_image(previous, deployment)
+        retained_runner = await self._retained_definition_runner(retained["image"])
         gateway = await self.restore_gateway(retained_runner, retained["image"])
+        retained = await self.record_resolved_serving_image(
+            previous, deployment, (retained, provenance)
+        )
         for fleet, service in _FLEET_SERVICE_NAMES.items():
             name = f"mm-retained-{self.directory.name[:16]}-{fleet.replace('_', '-')}"
             existing = await inspect_owned(name, self.owner)
@@ -699,7 +779,7 @@ class ReleaseCohort:
                     "Previous release could not retain compatible pollers"
                     f" (fleet={fleet}; gateway={gateway or 'unknown'}; "
                     + "retained-logs="
-                    + redact_sensitive_text(str(tail)[-1500:] or "(empty)")
+                    + redact_sensitive_text(str(tail) or "(empty)")[-1500:]
                     + ")"
                 )
 

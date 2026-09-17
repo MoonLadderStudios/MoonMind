@@ -397,9 +397,13 @@ async def test_recording_serving_image_requires_coherent_installed_fleets(
     runner = SimpleNamespace(_run_compose_command=AsyncMock(side_effect=[
         {"exitCode": 0, "stdout": "workflow-id"},
         {"exitCode": 0, "stdout": "llm-id"},
+        {"exitCode": 0, "stdout": "workflow-id"},
+        {"exitCode": 0, "stdout": "llm-id"},
     ]))
     monkeypatch.setattr(release, "worker_readiness", AsyncMock(return_value={"ready": True, "buildId": "a"}))
     docker = AsyncMock(side_effect=[
+        json.dumps([{"Image": "sha256:a"}]),
+        json.dumps([{"Image": "sha256:a" if coherent else "sha256:b"}]),
         json.dumps([{"Image": "sha256:a"}]),
         json.dumps([{"Image": "sha256:a" if coherent else "sha256:b"}]),
     ])
@@ -668,6 +672,7 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
     from unittest.mock import AsyncMock
 
     from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
     from moonmind.workflows.temporal import workers
 
     monkeypatch.setattr(
@@ -689,8 +694,13 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
     )
     health = {"status": "starting" if repaired == "starting" else "unhealthy"}
     polls = {"count": 0}
+    embedded_compose = "services:\n  sandbox-egress-proxy:\n    image: ubuntu/squid\n"
 
     async def docker(*args, **kwargs):
+        if args[0] == "run":
+            assert args[-2] == "sha256:previous"
+            assert args[-1] == "/app/release/docker-compose.yaml"
+            return embedded_compose
         assert args[0] == "inspect" and args[1] == EGRESS_GATEWAY_REF
         polls["count"] += 1
         if repaired == "starting" and polls["count"] > 2:
@@ -698,7 +708,10 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
             health["status"] = "healthy"
         return json.dumps([{"State": {"Health": {"Status": health["status"]}}}])
 
-    async def compose(command, **kwargs):
+    compose_calls = []
+
+    async def fake_compose(self, command, **kwargs):
+        compose_calls.append((command, kwargs))
         assert command[:4] == ("docker", "compose", "up", "-d")
         assert command[-1] == EGRESS_GATEWAY_SERVICE
         assert "--force-recreate" in command
@@ -706,6 +719,8 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
         if repaired:
             health["status"] = "healthy"
         return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(HostDockerComposeRunner, "_run_compose_command", fake_compose)
 
     async def readiness(name):
         if health["status"] != "healthy":
@@ -724,10 +739,22 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
         "docker_logs_tail",
         AsyncMock(return_value="RuntimeError: restricted-egress gateway is not healthy"),
     )
-    runner = SimpleNamespace(
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
         compose_file="/deployment/docker-compose.yaml",
-        _run_compose_command=AsyncMock(side_effect=compose),
+        project_name="moonmind",
     )
+    captured = {}
+    original_restore = release.ReleaseCohort.restore_gateway
+
+    async def spy_restore(self, gateway_runner, image, **kwargs):
+        captured["compose_file"] = gateway_runner.compose_file
+        captured["project_name"] = gateway_runner.project_name
+        captured["project_dir"] = gateway_runner.project_dir
+        captured["image"] = image
+        return await original_restore(self, gateway_runner, image, **kwargs)
+
+    monkeypatch.setattr(release.ReleaseCohort, "restore_gateway", spy_restore)
     cohort = release.ReleaseCohort(runner, tmp_path, "owner")
     if repaired:
         # ``starting`` converges without a repair; ``True`` converges with one.
@@ -741,8 +768,189 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
         assert "fleet=agent_runtime" in message
         assert "gateway=unhealthy" in message
         assert "restricted-egress gateway is not healthy" in message
+    # The repair renders the definition the retained image owns — never the
+    # deployment checkout's newer gateway definition — while the
+    # deployment-owned runner identity accompanies the command.
+    expected_compose = (
+        tmp_path
+        / f"retained-compose-{hashlib.sha256(b'sha256:previous').hexdigest()[:16]}.yaml"
+    )
+    assert captured["compose_file"] == str(expected_compose)
+    assert captured["project_name"] == "moonmind"
+    assert captured["project_dir"] == str(tmp_path)
+    assert captured["image"] == "sha256:previous"
+    assert expected_compose.read_text() == embedded_compose
     # The repair is attempted once, never per readiness poll, and never at all
     # while the gateway is still starting on its own.
-    assert runner._run_compose_command.await_count == (
-        0 if repaired == "starting" else 1
+    assert len(compose_calls) == (0 if repaired == "starting" else 1)
+
+
+@pytest.mark.asyncio
+async def test_preserve_previous_repairs_gateway_before_serving_image_readiness_proof(
+    tmp_path, monkeypatch
+):
+    """The serving-image proof must not precede gateway recovery.
+
+    Regression (Codex P1): on an initial plain-Compose installation with no
+    release receipt and no availability-owned ``retained.json``,
+    ``record_serving_image`` probed every installed worker's ``/readyz``
+    before the new recovery path ran. Worker readiness attests the gateway,
+    so a broken gateway raised ``no coherent live worker owner`` and the
+    repair was never reached. The image must be discovered and validated
+    without gateway-dependent readiness, the gateway repaired, and only then
+    may coherent worker readiness be required.
+    """
+    from unittest.mock import AsyncMock
+
+    from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+    from moonmind.workflows.temporal import workers
+
+    monkeypatch.setattr(
+        workers,
+        "_FLEET_SERVICE_NAMES",
+        {"agent_runtime": "temporal-worker-agent-runtime"},
     )
+    monkeypatch.setattr(release.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(
+        release, "successful_release_image", AsyncMock(return_value=None)
+    )
+    digest = "sha256:" + "a" * 64
+    health = {"status": "unhealthy"}
+    embedded_compose = "services:\n  sandbox-egress-proxy:\n    image: ubuntu/squid\n"
+
+    async def docker(*args, **kwargs):
+        if args[0] == "run":
+            assert args[-2] == "sha256:previous"
+            assert args[-1] == "/app/release/docker-compose.yaml"
+            return embedded_compose
+        assert args[0] == "inspect"
+        if args[1] == EGRESS_GATEWAY_REF:
+            return json.dumps([{"State": {"Health": {"Status": health["status"]}}}])
+        assert args[1] == "installed-id"
+        return json.dumps([{"Image": "sha256:previous"}])
+
+    compose_calls = []
+
+    async def fake_compose(self, command, **kwargs):
+        compose_calls.append((command, kwargs))
+        if tuple(command[:3]) == ("docker", "compose", "ps"):
+            return {"exitCode": 0, "stdout": "installed-id"}
+        assert command[:4] == ("docker", "compose", "up", "-d")
+        assert command[-1] == EGRESS_GATEWAY_SERVICE
+        assert kwargs["requested_image"] == "sha256:previous"
+        health["status"] = "healthy"
+        return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(HostDockerComposeRunner, "_run_compose_command", fake_compose)
+
+    async def readiness(name):
+        if health["status"] != "healthy":
+            raise RuntimeError("restricted-egress gateway is not healthy")
+        return {"ready": True, "buildId": digest}
+
+    monkeypatch.setattr(release, "docker", AsyncMock(side_effect=docker))
+    monkeypatch.setattr(release, "worker_readiness", readiness)
+    monkeypatch.setattr(
+        release,
+        "inspect_owned",
+        AsyncMock(return_value={"Image": "sha256:previous", "State": {"Running": True}}),
+    )
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file="/deployment/docker-compose.yaml",
+        project_name="moonmind",
+    )
+    cohort = release.ReleaseCohort(runner, tmp_path, "owner")
+    await cohort.preserve_previous(f"fleet.{digest}", "fleet", "sha256:candidate")
+
+    retained = json.loads((tmp_path / "retained.json").read_text())
+    assert retained["image"] == "sha256:previous"
+    assert retained["version"] == f"fleet.{digest}"
+    # Discovery (ps) precedes the gateway repair (up), and the repair runs once.
+    kinds = [
+        "ps" if tuple(command[:3]) == ("docker", "compose", "ps") else command[2]
+        for command, _ in compose_calls
+    ]
+    assert kinds[0] == "ps"
+    assert kinds.count("up") == 1
+    assert kinds.index("up") > kinds.index("ps")
+
+
+@pytest.mark.asyncio
+async def test_retained_worker_diagnostic_redacts_before_truncating(
+    tmp_path, monkeypatch
+):
+    """A long retained log must not leak a credential cut off by truncation.
+
+    Regression (Codex P2): slicing the 1,500-character tail before redacting
+    removes the ``TOKEN=`` context ``redact_sensitive_text`` needs while
+    leaving the complete credential in the failure message. Redact the full
+    text first and only then take the bounded tail.
+    """
+    from unittest.mock import AsyncMock
+
+    import hashlib
+
+    from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+    from moonmind.workflows.temporal import workers
+
+    monkeypatch.setattr(
+        workers,
+        "_FLEET_SERVICE_NAMES",
+        {"agent_runtime": "temporal-worker-agent-runtime"},
+    )
+    monkeypatch.setattr(release.asyncio, "sleep", AsyncMock())
+    digest = "sha256:" + "a" * 64
+    (tmp_path / "retained.json").write_text(
+        json.dumps(
+            {
+                "owner": "owner",
+                "version": f"fleet.{digest}",
+                "image": "sha256:previous",
+                "retired": [],
+            }
+        )
+    )
+    embedded_compose = "services:\n  sandbox-egress-proxy:\n    image: ubuntu/squid\n"
+
+    async def docker(*args, **kwargs):
+        if args[0] == "run":
+            return embedded_compose
+        assert args[0] == "inspect" and args[1] == EGRESS_GATEWAY_REF
+        return json.dumps([{"State": {"Health": {"Status": "unhealthy"}}}])
+
+    async def fake_compose(self, command, **kwargs):
+        return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(HostDockerComposeRunner, "_run_compose_command", fake_compose)
+    monkeypatch.setattr(release, "docker", AsyncMock(side_effect=docker))
+
+    async def readiness(name):
+        raise RuntimeError("restricted-egress gateway is not healthy")
+
+    monkeypatch.setattr(release, "worker_readiness", readiness)
+    monkeypatch.setattr(
+        release,
+        "inspect_owned",
+        AsyncMock(return_value={"Image": "sha256:previous", "State": {"Running": True}}),
+    )
+    secret = "S" * 3000
+    monkeypatch.setattr(
+        release,
+        "docker_logs_tail",
+        AsyncMock(return_value="event happened\n" * 200 + "MY_TOKEN=" + secret),
+    )
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file="/deployment/docker-compose.yaml",
+        project_name="moonmind",
+    )
+    cohort = release.ReleaseCohort(runner, tmp_path, "owner")
+    with pytest.raises(RuntimeError, match="retain compatible pollers") as failure:
+        await cohort.preserve_previous(f"fleet.{digest}", "fleet", "sha256:candidate")
+    message = str(failure.value)
+    assert "gateway=unhealthy" in message
+    assert "[REDACTED]" in message
+    assert "S" * 20 not in message
