@@ -988,6 +988,12 @@ services:
       # and the singular release record is never created.
       - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
       - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
+      # The migration's catalog sync builds the generic host services, so the
+      # endpoint and owner must resolve here exactly as they do for the
+      # runtime-facing services.
+      - MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=${MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED:-true}
+      - MOONMIND_OMNIGENT_HOST_SERVER_URL=${MOONMIND_OMNIGENT_HOST_SERVER_URL:-http://omnigent:8000}
+      - MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER=${MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER:-local}
     env_file:
       - path: .env
         required: false
