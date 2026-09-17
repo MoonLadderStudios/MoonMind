@@ -33,6 +33,8 @@ from moonmind.workflows.skills.deployment_execution import (
     _remove_services_from_command_args,
     _service_is_excluded,
     _service_name_matches,
+    _substrate_reconciliation_targets,
+    _substrate_service_mismatches,
     _tail_text,
     _target_image_audit,
     _target_image_build_id,
@@ -2559,3 +2561,237 @@ def test_daemon_bind_source_reports_no_evidence_outside_a_container(monkeypatch)
     monkeypatch.setattr(deployment_execution, "_read_self_container_id", lambda: None)
 
     assert deployment_execution.daemon_bind_source("/workspace/host_project") is None
+
+
+_SUBSTRATE_CONFIGURED = [
+    "api",
+    "postgres",
+    "docker-proxy",
+    "sandbox-egress-proxy",
+    "temporal-worker-deployment-control",
+]
+_SUBSTRATE_IMAGES = {
+    "api": "ghcr.io/moonladderstudios/moonmind:latest",
+    "postgres": "postgres:17",
+    "docker-proxy": "tecnativa/docker-socket-proxy:0.1.1",
+    "sandbox-egress-proxy": "tecnativa/docker-socket-proxy:0.1.1",
+    "temporal-worker-deployment-control": "ghcr.io/moonladderstudios/moonmind:latest",
+}
+_SUBSTRATE_EXCLUDED = (
+    "temporal-worker-deployment-control",
+    "docker-proxy",
+    "sandbox-egress-proxy",
+    "postgres",
+)
+
+
+def _substrate_ps(*, postgres_image: str, proxy_image: str) -> list[dict[str, str]]:
+    return [
+        {
+            "ID": "api1",
+            "Name": "moonmind-api-1",
+            "Service": "api",
+            "State": "running",
+            "Image": "ghcr.io/moonladderstudios/moonmind:latest",
+        },
+        {
+            "ID": "pg1",
+            "Name": "moonmind-postgres-1",
+            "Service": "postgres",
+            "State": "running",
+            "Image": postgres_image,
+        },
+        {
+            "ID": "proxy1",
+            "Name": "moonmind-docker-proxy-1",
+            "Service": "docker-proxy",
+            "State": "running",
+            "Image": proxy_image,
+        },
+        {
+            "ID": "egress1",
+            "Name": "moonmind-sandbox-egress-proxy-1",
+            "Service": "sandbox-egress-proxy",
+            "State": "running",
+            "Image": "tecnativa/docker-socket-proxy:0.1.1",
+        },
+    ]
+
+
+class SubstrateRunner(RecordingRunner):
+    """Replays a before state and a post-substrate state for staged handoff."""
+
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        before_services: list[dict[str, str]],
+        substrate_services: list[dict[str, str]],
+    ) -> None:
+        super().__init__(events)
+        self.before_services = before_services
+        self.substrate_services = substrate_services
+
+    async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
+        self.events.append(f"runner:capture:{phase}")
+        running = self.substrate_services if phase == "substrate" else self.before_services
+        return {
+            "stack": stack,
+            "phase": phase,
+            "configuredServices": list(_SUBSTRATE_CONFIGURED),
+            "configuredServiceImages": dict(_SUBSTRATE_IMAGES),
+            "services": running,
+            "images": [],
+        }
+
+
+def test_substrate_targets_cover_configured_exclusions_but_never_the_runner():
+    before = {
+        "configuredServices": list(_SUBSTRATE_CONFIGURED),
+        "configuredServiceImages": dict(_SUBSTRATE_IMAGES),
+    }
+    assert _substrate_reconciliation_targets(
+        before_state=before, excluded_services=_SUBSTRATE_EXCLUDED
+    ) == ("postgres", "docker-proxy", "sandbox-egress-proxy")
+    assert _substrate_reconciliation_targets(
+        before_state=before,
+        excluded_services=("temporal-worker-deployment-control",),
+    ) == ()
+    assert _substrate_reconciliation_targets(before_state=before, excluded_services=()) == ()
+    assert _substrate_reconciliation_targets(
+        before_state={"configuredServices": ["api"]},
+        excluded_services=_SUBSTRATE_EXCLUDED,
+    ) == ()
+
+
+def test_substrate_mismatches_detect_stale_and_missing_services():
+    drifted = {
+        "services": _substrate_ps(
+            postgres_image="postgres:16",
+            proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+        ),
+        "images": [],
+    }
+    mismatches = _substrate_service_mismatches(
+        state=drifted,
+        targets=("postgres", "docker-proxy", "sandbox-egress-proxy"),
+        expected_images=_SUBSTRATE_IMAGES,
+    )
+    assert [item["service"] for item in mismatches] == ["postgres"]
+    assert mismatches[0]["expectedImage"] == "postgres:17"
+
+    converged = {
+        "services": _substrate_ps(
+            postgres_image="postgres:17",
+            proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+        ),
+        "images": [],
+    }
+    assert (
+        _substrate_service_mismatches(
+            state=converged,
+            targets=("postgres", "docker-proxy", "sandbox-egress-proxy"),
+            expected_images=_SUBSTRATE_IMAGES,
+        )
+        == []
+    )
+
+    missing = {
+        "services": [
+            entry for entry in converged["services"] if entry["Service"] != "postgres"
+        ],
+        "images": [],
+    }
+    absent = _substrate_service_mismatches(
+        state=missing,
+        targets=("postgres",),
+        expected_images=_SUBSTRATE_IMAGES,
+    )
+    assert [item["service"] for item in absent] == ["postgres"]
+    assert "running" in absent[0]["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_update_reconciles_and_verifies_drifted_substrate_before_completion(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    runner = SubstrateRunner(
+        events,
+        before_services=_substrate_ps(
+            postgres_image="postgres:16",
+            proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+        ),
+        substrate_services=_substrate_ps(
+            postgres_image="postgres:17",
+            proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+        ),
+    )
+    executor, _store, evidence, _runner, _events = _executor(
+        runner=runner, events=events, excluded_services=_SUBSTRATE_EXCLUDED
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    kinds = [command[0] for command in runner.commands]
+    assert kinds[:2] == ["pull", "up"]
+    main_up = runner.commands[1][1]
+    assert "postgres" not in main_up
+    assert "docker-proxy" not in main_up
+    substrate_pull = runner.commands[2][1]
+    substrate_up = runner.commands[3][1]
+    assert tuple(substrate_pull[-1:]) == ("postgres",)
+    assert "--no-deps" in substrate_up
+    assert "postgres" in substrate_up
+    assert "temporal-worker-deployment-control" not in substrate_up
+    assert "runner:capture:substrate" in events
+    verification = next(
+        payload for kind, payload in evidence.records if kind == "verification"
+    )
+    assert verification["substrate"]["remaining"] == []
+    assert verification["substrate"]["reconciled"] == ["postgres"]
+
+
+@pytest.mark.asyncio
+async def test_update_skips_substrate_stage_when_already_converged(monkeypatch) -> None:
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    converged = _substrate_ps(
+        postgres_image="postgres:17",
+        proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+    )
+    runner = SubstrateRunner(
+        events, before_services=converged, substrate_services=converged
+    )
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner, events=events, excluded_services=_SUBSTRATE_EXCLUDED
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    assert [command[0] for command in runner.commands] == ["pull", "up"]
+    assert "runner:capture:substrate" not in events
+
+
+@pytest.mark.asyncio
+async def test_update_fails_when_substrate_does_not_converge(monkeypatch) -> None:
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    drifted = _substrate_ps(
+        postgres_image="postgres:16",
+        proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+    )
+    runner = SubstrateRunner(
+        events, before_services=drifted, substrate_services=drifted
+    )
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner, events=events, excluded_services=_SUBSTRATE_EXCLUDED
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "FAILED"
+    assert "substrate" in str(result.outputs.get("failure", {}).get("reason", "")).lower()

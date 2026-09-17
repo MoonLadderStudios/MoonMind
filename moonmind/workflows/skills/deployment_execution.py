@@ -30,6 +30,7 @@ DEPLOYMENT_UPDATE_MODES = frozenset({"changed_services", "force_recreate"})
 DEPLOYMENT_UPDATE_STACKS = frozenset({"moonmind"})
 DEPLOYMENT_FINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "PARTIALLY_VERIFIED"})
 DEPLOYMENT_ONE_SHOT_SERVICES = frozenset({"init-db"})
+DEPLOYMENT_CONTROL_SERVICE = "temporal-worker-deployment-control"
 _REDACTED = "[REDACTED]"
 _STACK_PATH_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _DOCKER_DESKTOP_HOST_MOUNT_ROOT = PurePosixPath("/run/desktop/mnt/host")
@@ -1739,6 +1740,103 @@ class DeploymentUpdateExecutor:
             )
         return recovery_ref
 
+    async def _reconcile_excluded_substrate(
+        self,
+        *,
+        stack: str,
+        parsed: Mapping[str, Any],
+        command_plan: ComposeCommandPlan,
+        before_state: Mapping[str, Any],
+        execution_image: str,
+        progress_events: list[dict[str, str]],
+        command_log: dict[str, Any],
+        verified: bool,
+    ) -> dict[str, Any] | None:
+        """Reconcile release-owned substrate excluded from the main update.
+
+        Returns the substrate evidence report, or None when the main update
+        excluded nothing the selected release configures. The staged pass
+        runs only after the main stack verifies, so the controller never
+        recreates its own transport mid-update; substrate that is already
+        converged is left running, and substrate that does not converge
+        fails the release instead of reporting success on stale definitions.
+        """
+        targets = _substrate_reconciliation_targets(
+            before_state=before_state,
+            excluded_services=self.excluded_services,
+        )
+        if not targets:
+            return None
+        configured_images = before_state.get("configuredServiceImages")
+        expected_images = (
+            configured_images if isinstance(configured_images, Mapping) else {}
+        )
+        pending = _substrate_service_mismatches(
+            state=before_state,
+            targets=targets,
+            expected_images=expected_images,
+        )
+        pending_services = [str(item["service"]) for item in pending]
+        report: dict[str, Any] = {
+            "targets": list(targets),
+            "pendingBefore": list(pending_services),
+            "reconciled": [],
+            "remaining": [],
+        }
+        if not pending_services or not verified:
+            command_log["substrate"] = report
+            return report
+        _add_progress(
+            progress_events,
+            "RECONCILING_SUBSTRATE",
+            "Reconciling excluded release substrate.",
+        )
+        substrate_plan = build_compose_command_plan(
+            mode=str(parsed["mode"]),
+            remove_orphans=bool(parsed["removeOrphans"]),
+            wait=bool(parsed["wait"]),
+            runner_mode=command_plan.runner_mode,
+        )
+        pull_command = (*substrate_plan.pull_args, *pending_services)
+        pull_result = await self.runner.pull(
+            stack=stack,
+            command=pull_command,
+            requested_image=execution_image,
+        )
+        command_log["substratePull"] = {
+            "command": list(pull_command),
+            "result": dict(pull_result) if isinstance(pull_result, Mapping) else pull_result,
+        }
+        _ensure_command_succeeded("substrate-pull", pull_result)
+        up_command = (*substrate_plan.up_args, "--no-deps", *pending_services)
+        up_result = await self.runner.up(
+            stack=stack,
+            command=up_command,
+            requested_image=execution_image,
+        )
+        command_log["substrateUp"] = {
+            "command": list(up_command),
+            "result": dict(up_result) if isinstance(up_result, Mapping) else up_result,
+        }
+        _ensure_command_succeeded("substrate-up", up_result)
+        substrate_state = await self.runner.capture_state(
+            stack=stack, phase="substrate"
+        )
+        remaining = _substrate_service_mismatches(
+            state=substrate_state,
+            targets=tuple(pending_services),
+            expected_images=expected_images,
+        )
+        remaining_services = {str(item["service"]) for item in remaining}
+        report["reconciled"] = [
+            service
+            for service in pending_services
+            if service not in remaining_services
+        ]
+        report["remaining"] = remaining
+        command_log["substrate"] = report
+        return report
+
     async def execute(
         self,
         inputs: Mapping[str, Any],
@@ -1978,15 +2076,43 @@ class DeploymentUpdateExecutor:
                 final_status = _verification_final_status(verification)
                 if final_status != "SUCCEEDED":
                     failure_reason = _verification_failure_reason(verification)
+                substrate_report = await self._reconcile_excluded_substrate(
+                    stack=parsed["stack"],
+                    parsed=parsed,
+                    command_plan=command_plan,
+                    before_state=before_state,
+                    execution_image=execution_image,
+                    progress_events=progress_events,
+                    command_log=command_log,
+                    verified=final_status == "SUCCEEDED",
+                )
+                if substrate_report is not None:
+                    # The substrate stage mutated command_log after the
+                    # earlier command-log write: rewrite it so the artifact
+                    # carries the staged handoff alongside the main plan.
+                    command_ref = await write_evidence("command-log", command_log)
+                    remaining = substrate_report.get("remaining") or []
+                    if remaining:
+                        final_status = "FAILED"
+                        failure_reason = (
+                            "Excluded release substrate did not converge: "
+                            + ", ".join(
+                                str(item.get("service") or "unknown")
+                                for item in remaining
+                                if isinstance(item, Mapping)
+                            )
+                        )
+                verification_payload: dict[str, Any] = {
+                    "succeeded": verification.succeeded,
+                    "status": final_status,
+                    "details": dict(verification.details),
+                    "requestedImage": requested_image,
+                    "resolvedDigest": resolved_digest,
+                }
+                if substrate_report is not None:
+                    verification_payload["substrate"] = substrate_report
                 verification_ref = await write_evidence(
-                    "verification",
-                    {
-                        "succeeded": verification.succeeded,
-                        "status": final_status,
-                        "details": dict(verification.details),
-                        "requestedImage": requested_image,
-                        "resolvedDigest": resolved_digest,
-                    },
+                    "verification", verification_payload
                 )
             except Exception as exc:
                 final_status = "FAILED"
@@ -2491,6 +2617,142 @@ def _command_plan_targeting_stack_services(
             *reconciliation_services,
         ),
     )
+
+
+def _substrate_reconciliation_targets(
+    *,
+    before_state: Mapping[str, Any],
+    excluded_services: Sequence[str],
+) -> tuple[str, ...]:
+    """Excluded services the staged substrate pass still reconciles.
+
+    The main update excludes substrate (docker-proxy, sandbox-egress-proxy,
+    postgres, ...) so the controller never recreates its own transport
+    mid-update. Those services are still release-owned: when the selected
+    release configures them, a final staged pass reconciles them after the
+    main stack verifies instead of reporting success on stale substrate.
+    The deployment-control runner itself and one-shot services are never
+    substrate targets.
+    """
+    excluded = _normalized_service_names(excluded_services)
+    if not excluded:
+        return ()
+    protected = _normalized_service_names(
+        (DEPLOYMENT_CONTROL_SERVICE, *DEPLOYMENT_ONE_SHOT_SERVICES)
+    )
+    targets: list[str] = []
+    for service_name in _configured_service_names_from_state(before_state):
+        normalized = str(service_name or "").strip().lower()
+        if not normalized or normalized in protected:
+            continue
+        if _service_is_excluded(service_name, excluded):
+            targets.append(str(service_name).strip())
+    return tuple(targets)
+
+
+def _normalize_configured_image(value: Any) -> str:
+    """Normalize a configured service image for convergence comparison."""
+    text = str(value or "").strip()
+    if "@" in text:
+        text = text.split("@", 1)[0].strip()
+    return text
+
+
+def _running_service_images(
+    state: Mapping[str, Any], service_name: str
+) -> tuple[str, ...]:
+    """Candidate image references for one running Compose service."""
+    services = state.get("services")
+    images = state.get("images")
+    candidates: list[str] = []
+    containers: list[str] = []
+    if isinstance(services, Sequence) and not isinstance(services, (str, bytes)):
+        for entry in services:
+            if not isinstance(entry, Mapping):
+                continue
+            if str(entry.get("State") or "").strip().lower() != "running":
+                continue
+            if not _service_name_matches(
+                entry.get("Service") or entry.get("Name") or "",
+                str(service_name or "").strip().lower(),
+            ):
+                continue
+            image = _normalize_configured_image(entry.get("Image"))
+            if image:
+                candidates.append(image)
+            for key in ("Name", "ID"):
+                value = str(entry.get(key) or "").strip()
+                if value:
+                    containers.append(value)
+    if isinstance(images, Sequence) and not isinstance(images, (str, bytes)):
+        for image in images:
+            if not isinstance(image, Mapping):
+                continue
+            if containers and str(image.get("ContainerName") or "").strip() not in containers:
+                continue
+            repository = str(
+                image.get("Repository") or image.get("repository") or ""
+            ).strip()
+            tag = str(image.get("Tag") or image.get("tag") or "").strip()
+            if repository and tag:
+                candidates.append(f"{repository}:{tag}")
+            elif repository:
+                candidates.append(repository)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for candidate in candidates:
+        if candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+    return tuple(ordered)
+
+
+def _substrate_service_mismatches(
+    *,
+    state: Mapping[str, Any],
+    targets: Sequence[str],
+    expected_images: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Prove each staged substrate service runs its release configuration.
+
+    A target is converged when a running container resolves to the image the
+    selected release configures for it; anything else (stopped, missing, or
+    a previous image) is a mismatch the release must not report as success.
+    """
+    mismatches: list[dict[str, Any]] = []
+    for target in targets:
+        service = str(target or "").strip()
+        if not service:
+            continue
+        running = _running_service_images(state, service)
+        expected = None
+        if isinstance(expected_images, Mapping):
+            for key in (service, service.lower()):
+                if key in expected_images:
+                    expected = _normalize_configured_image(expected_images[key])
+                    break
+        if not running:
+            mismatches.append(
+                {
+                    "service": service,
+                    "expectedImage": expected,
+                    "actualImages": [],
+                    "reason": "substrate service is not running",
+                }
+            )
+            continue
+        if expected and expected not in running:
+            mismatches.append(
+                {
+                    "service": service,
+                    "expectedImage": expected,
+                    "actualImages": list(running),
+                    "reason": (
+                        "substrate service is not running the release image"
+                    ),
+                }
+            )
+    return mismatches
 
 
 def _one_shot_services_from_plan(command_plan: ComposeCommandPlan) -> tuple[str, ...]:

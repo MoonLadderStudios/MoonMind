@@ -49,6 +49,10 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
             assert payload["context"].get("deployment_operator_urls") == ([operator_url] if operator_url else None)
             assert "--submit" in args
             assert kwargs["env"]["MOONMIND_IMAGE"].endswith("@" + digest)
+            # The updater reaches Docker through docker-proxy; host updates
+            # must not recreate that substrate through itself.
+            assert kwargs["env"]["MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES"] == "docker-proxy,sandbox-egress-proxy,postgres"
+            assert "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=docker-proxy,sandbox-egress-proxy,postgres" in args
             output = ""
         else:
             assert args[1] == "pull"
@@ -85,6 +89,54 @@ def test_dry_run_never_fetches_or_launches(tmp_path, monkeypatch):
     assert calls == [["git", "check-ref-format", "--branch", "main"]]
 
 
+@pytest.mark.parametrize(
+    "rendered",
+    [
+        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "0.0.0.0", "published": "7000", "target": 8000}]}}},
+        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "", "published": "7000", "target": 8000}]}}},
+        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "::", "published": "7000", "target": 8000}]}}},
+        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "192.0.2.4", "published": "7000", "target": 8000}]}}},
+        {"name": "existing-project", "services": {"api": {"environment": {"MOONMIND_PUBLIC_BASE_URL": "https://auth.example"}, "ports": [{"host_ip": "0.0.0.0", "published": "7000", "target": 8000}]}}},
+    ],
+)
+def test_bare_invocation_never_invents_operator_urls(tmp_path, monkeypatch, rendered):
+    """A bare invocation records no operator URLs: wildcard bindings require
+    an explicit --operator-url (or MOONMIND_PUBLIC_BASE_URL) so release
+    probes validate the actual operator route instead of loopback."""
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+    git("init", "-b", "main")
+    git("config", "user.email", "qualification@example.invalid")
+    git("config", "user.name", "Qualification")
+    (repo / "source.txt").write_text("committed source")
+    git("add", ".")
+    git("commit", "-m", "source")
+    revision = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    original_run = subprocess.run
+    digest = "sha256:" + "b" * 64
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        if args[1:3] == ["image", "inspect"]:
+            output = json.dumps([{"RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"], "Config": {"Labels": {"org.opencontainers.image.revision": revision}}}])
+        elif args[1:3] == ["compose", "config"]:
+            output = json.dumps(rendered)
+        elif args[1] == "run":
+            output = "services: {}"
+        elif args[1] == "compose":
+            output = ""
+        else:
+            assert args[1] == "pull"
+            output = ""
+        return SimpleNamespace(returncode=0, stdout=output)
+    monkeypatch.setattr(update.subprocess, "run", command)
+    assert update.main(["--repo", str(repo)]) == 0
+    submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
+    payload = json.loads(submission.read_text())
+    assert "deployment_operator_urls" not in payload["context"]
 def _init_repo(path):
     def git(*args):
         return subprocess.check_output(["git", "-C", str(path), *args], text=True).strip()
