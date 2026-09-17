@@ -127,6 +127,17 @@ async def worker_readiness(container):
     )
 
 
+async def container_health(name):
+    """Observed health of one container; ``None`` when it reports none."""
+    try:
+        observed = json.loads(await docker("inspect", name))[0]
+        return (observed["State"].get("Health") or {}).get("Status")
+    except (RuntimeError, ValueError, LookupError, TypeError):
+        # A missing, foreign or unreadable container reports no health rather
+        # than replacing the caller's failure with an inspection error.
+        return None
+
+
 def readiness_matches(state, digest):
     if state.get("ready") is not True:
         return False
@@ -635,6 +646,7 @@ class ReleaseCohort:
                 )
                 _atomic_write_bytes(retained_compose, content.encode())
             retained_runner = replace(self.runner, compose_file=str(retained_compose))
+        gateway = await self.restore_gateway(retained_runner, retained["image"])
         for fleet, service in _FLEET_SERVICE_NAMES.items():
             name = f"mm-retained-{self.directory.name[:16]}-{fleet.replace('_', '-')}"
             existing = await inspect_owned(name, self.owner)
@@ -675,9 +687,60 @@ class ReleaseCohort:
                     pass
                 await asyncio.sleep(2)
             else:
+                from moonmind.utils.logging import redact_sensitive_text
+
+                try:
+                    tail = await docker_logs_tail(name)
+                except (RuntimeError, OSError, TimeoutError) as exc:
+                    # Auxiliary log collection must never replace the
+                    # established retention failure with an unrelated one.
+                    tail = f"unavailable:{exc}"
                 raise RuntimeError(
                     "Previous release could not retain compatible pollers"
+                    f" (fleet={fleet}; gateway={gateway or 'unknown'}; "
+                    + "retained-logs="
+                    + redact_sensitive_text(str(tail)[-1500:] or "(empty)")
+                    + ")"
                 )
+
+    async def restore_gateway(self, runner, image, attempts=60):
+        """Repair the deployment-owned egress gateway the cohort depends on.
+
+        Workers attest the singular restricted-egress gateway before they
+        report ready, so a gateway left unhealthy by an out-of-band change
+        blocks every release — including the one that installs its
+        replacement. The gateway is recreated from the definition this
+        cohort's own image owns, never from a newer one, so the release that
+        follows still owns the upgrade. Its observed health is returned for
+        the caller's diagnosis whether or not the repair converged.
+        """
+        from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
+
+        repaired = False
+        for attempt in range(attempts):
+            health = await container_health(EGRESS_GATEWAY_REF)
+            if health == "healthy":
+                return health
+            # A gateway that is still starting owns the first half of the
+            # window on its own: recovery must not bounce deployment state
+            # that was about to converge.
+            if not repaired and (health != "starting" or attempt * 2 >= attempts):
+                repaired = True
+                result = await runner._run_compose_command(
+                    (
+                        "docker",
+                        "compose",
+                        "up",
+                        "-d",
+                        "--no-deps",
+                        "--force-recreate",
+                        EGRESS_GATEWAY_SERVICE,
+                    ),
+                    requested_image=image,
+                )
+                _ensure_command_succeeded("restore release egress gateway", result)
+            await asyncio.sleep(2)
+        return health
 
     async def qualify_api(self, image):
         name = f"mm-candidate-{self.directory.name[:16]}-api"

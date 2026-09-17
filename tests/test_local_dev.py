@@ -275,7 +275,7 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     )
     assert "moonmind-api-db" in sandbox_env["NO_PROXY"]
 
-    squid_config = Path("docker/sandbox-egress-proxy/squid.conf").read_text(
+    squid_config = Path("docker/moonmind-egress/squid.conf").read_text(
         encoding="utf-8"
     )
     expected_proxy_domains = {

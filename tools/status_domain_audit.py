@@ -351,10 +351,23 @@ def _iter_candidate_files(root: Path) -> Iterable[Path]:
         "artifacts",
         "artifacts-root-owned-context",
         "var",
+        # Nested checkouts of this same repository. Their sources belong to
+        # their own branch and audit run, not to this working tree's.
+        ".worktrees",
     }
+    # Deployment-owned runtime state, not source. A live deployment writes it
+    # as root through the state volume, so walking it makes this source audit
+    # (and the test entry point that runs it) fail on every real installation.
+    ignored_paths = {Path("deploy/state")}
     suffixes = {".py", ".ts", ".tsx", ".js", ".jsx", ".json", ".yaml", ".yml", ".md"}
     for dirpath, dirs, filenames in os.walk(root):
-        dirs[:] = [directory for directory in dirs if directory not in ignored_dirs]
+        current = Path(dirpath)
+        dirs[:] = [
+            directory
+            for directory in dirs
+            if directory not in ignored_dirs
+            and _relative(current / directory, root) not in ignored_paths
+        ]
         for filename in filenames:
             path = Path(dirpath) / filename
             if path.suffix in suffixes:

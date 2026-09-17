@@ -649,3 +649,100 @@ async def test_docker_logs_tail_merges_stdout_and_stderr(tmp_path, monkeypatch):
     merged = await release.docker_logs_tail("moonmind-release-update-test")
     assert "container stdout line" in merged
     assert "Traceback: FileNotFoundError" in merged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repaired", [True, False, "starting"])
+async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_required(
+    tmp_path, monkeypatch, repaired
+):
+    """A broken egress gateway must not make a deployment un-updatable.
+
+    Regression: workers attest the singular restricted-egress gateway before
+    they report ready, so an out-of-band change that left it unhealthy stopped
+    the previous release from retaining pollers. Every later release then
+    failed in ``preserve_previous`` — including the one that installs the
+    gateway's replacement. The cohort repairs it from the definition its own
+    image owns, and reports the fleet and gateway when it still cannot.
+    """
+    from unittest.mock import AsyncMock
+
+    from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
+    from moonmind.workflows.temporal import workers
+
+    monkeypatch.setattr(
+        workers,
+        "_FLEET_SERVICE_NAMES",
+        {"agent_runtime": "temporal-worker-agent-runtime"},
+    )
+    monkeypatch.setattr(release.asyncio, "sleep", AsyncMock())
+    digest = "sha256:" + "a" * 64
+    (tmp_path / "retained.json").write_text(
+        json.dumps(
+            {
+                "owner": "owner",
+                "version": f"fleet.{digest}",
+                "image": "sha256:previous",
+                "retired": [],
+            }
+        )
+    )
+    health = {"status": "starting" if repaired == "starting" else "unhealthy"}
+    polls = {"count": 0}
+
+    async def docker(*args, **kwargs):
+        assert args[0] == "inspect" and args[1] == EGRESS_GATEWAY_REF
+        polls["count"] += 1
+        if repaired == "starting" and polls["count"] > 2:
+            # A gateway that converges on its own is never recreated.
+            health["status"] = "healthy"
+        return json.dumps([{"State": {"Health": {"Status": health["status"]}}}])
+
+    async def compose(command, **kwargs):
+        assert command[:4] == ("docker", "compose", "up", "-d")
+        assert command[-1] == EGRESS_GATEWAY_SERVICE
+        assert "--force-recreate" in command
+        assert kwargs["requested_image"] == "sha256:previous"
+        if repaired:
+            health["status"] = "healthy"
+        return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    async def readiness(name):
+        if health["status"] != "healthy":
+            raise RuntimeError("restricted-egress gateway is not healthy")
+        return {"ready": True, "buildId": digest}
+
+    monkeypatch.setattr(release, "docker", AsyncMock(side_effect=docker))
+    monkeypatch.setattr(release, "worker_readiness", readiness)
+    monkeypatch.setattr(
+        release,
+        "inspect_owned",
+        AsyncMock(return_value={"Image": "sha256:previous", "State": {"Running": True}}),
+    )
+    monkeypatch.setattr(
+        release,
+        "docker_logs_tail",
+        AsyncMock(return_value="RuntimeError: restricted-egress gateway is not healthy"),
+    )
+    runner = SimpleNamespace(
+        compose_file="/deployment/docker-compose.yaml",
+        _run_compose_command=AsyncMock(side_effect=compose),
+    )
+    cohort = release.ReleaseCohort(runner, tmp_path, "owner")
+    if repaired:
+        # ``starting`` converges without a repair; ``True`` converges with one.
+        await cohort.preserve_previous(f"fleet.{digest}", "fleet", "sha256:candidate")
+    else:
+        with pytest.raises(RuntimeError, match="retain compatible pollers") as failure:
+            await cohort.preserve_previous(
+                f"fleet.{digest}", "fleet", "sha256:candidate"
+            )
+        message = str(failure.value)
+        assert "fleet=agent_runtime" in message
+        assert "gateway=unhealthy" in message
+        assert "restricted-egress gateway is not healthy" in message
+    # The repair is attempted once, never per readiness poll, and never at all
+    # while the gateway is still starting on its own.
+    assert runner._run_compose_command.await_count == (
+        0 if repaired == "starting" else 1
+    )
