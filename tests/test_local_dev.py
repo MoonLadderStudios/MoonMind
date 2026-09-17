@@ -461,8 +461,19 @@ def test_moonmind_application_services_use_deployment_image_variable():
         ), f"{service_name} must use MOONMIND_IMAGE for deployment updates"
 
 
-def test_agent_runtime_worker_mounts_agent_skill_catalog():
-    """Selected managed-session skills resolve from the deployment skill catalog."""
+def test_release_services_never_mount_the_checkout_over_a_release_root():
+    """Selected managed-session skills resolve from the image, not the checkout.
+
+    This service once mounted ``./.agents`` at ``/app/.agents`` so managed
+    sessions could materialize skills. ``.agents`` is a release root, so that
+    mount makes ``source_overlaid`` true and ``installed_release`` return
+    ``None`` — the immutable identity every worker publishes as its build id
+    and the release updater refuses to run without. The image owns the catalog
+    instead (``COPY .agents /app/.agents/``), and the resolved snapshot reaches
+    managed sessions through ``MOONMIND_ACTIVE_SKILLS_DIR``.
+    """
+    from moonmind.release_identity import RELEASE_ROOTS
+
     compose_path = Path("docker-compose.yaml")
     assert (
         compose_path.exists()
@@ -470,14 +481,30 @@ def test_agent_runtime_worker_mounts_agent_skill_catalog():
 
     compose_data = yaml.safe_load(compose_path.read_text())
     services = compose_data.get("services", {})
-    service_config = services.get("temporal-worker-agent-runtime")
     assert isinstance(
-        service_config, dict
+        services.get("temporal-worker-agent-runtime"), dict
     ), "temporal-worker-agent-runtime service is missing from docker-compose.yaml"
 
-    assert _has_volume_mount(service_config, "./.agents", "/app/.agents"), (
-        "temporal-worker-agent-runtime must mount ./.agents at /app/.agents so "
-        "selected agent skills can be materialized for managed sessions"
+    overlaid = []
+    for name, config in services.items():
+        if not isinstance(config, dict) or "MOONMIND_IMAGE" not in str(
+            config.get("image", "")
+        ):
+            continue
+        for volume in config.get("volumes") or []:
+            if not isinstance(volume, str) or ":" not in volume:
+                continue
+            source, target = volume.split(":")[:2]
+            # A named volume carries no checkout content over the image.
+            if not source.startswith((".", "/", "$")):
+                continue
+            for root in RELEASE_ROOTS:
+                if target == f"/app/{root}" or target.startswith(f"/app/{root}/"):
+                    overlaid.append((name, volume, root))
+
+    assert not overlaid, (
+        "release services must not mount the checkout over a release root; "
+        f"these invalidate the immutable release identity: {overlaid}"
     )
 
 
