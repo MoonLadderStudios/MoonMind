@@ -75,7 +75,14 @@ destinations take effect for real workloads.
 
 The gateway uses the managed MoonMind image, which bundles Squid and the
 executable policy under `/opt/moonmind-egress`; checkout mounts cannot obscure
-those files. Only provider data is read from the deployment mount at
+those files. The image-owned policy keeps its own source directory,
+`docker/moonmind-egress`, and is never published through the deployment-mounted
+directory: a live v1 gateway bind-mounts `docker/sandbox-egress-proxy/squid.conf`
+as its entire configuration and pins the reviewed v1 digest in both its health
+check and its attestation, so rewriting that file for a newer enforcer would
+leave every running v1 gateway permanently unhealthy. That file therefore stays
+frozen at the reviewed v1 bytes and is removed with the transition below. Only
+provider data is read from the deployment mount at
 `/app/docker/sandbox-egress-proxy` by default. To use a custom directory, set
 `MOONMIND_EGRESS_POLICY_DIRECTORY` in `.env` to an absolute host directory;
 Compose mounts it read-only at that same path and passes the setting to the
@@ -95,9 +102,22 @@ by the v1 suffix allowlist. The attestation records the actual v1 enforcer and
 config digest, not v2 evidence. OpenRouter and other new destinations require
 v2: first promote the image with the installed destinations unchanged, then
 edit the provider file and restart the gateway and its consumers. Remove this
-transition once the minimum supported upgrade source ships v2 and no retained
-v1 gateway remains; until then it permits qualification before the release
-controller's normal service-recreation phase without weakening integrity.
+transition, and the frozen v1 config it mounts, once the minimum supported
+upgrade source ships v2 and no retained v1 gateway remains; until then it
+permits qualification before the release controller's normal
+service-recreation phase without weakening integrity.
+
+Because every worker attests the gateway before it reports ready, an unhealthy
+gateway would otherwise block each later release, including the one that
+installs its replacement. The release controller therefore recreates an
+unhealthy or absent gateway from the definition owned by the image whose
+pollers need it — the previous release's for the retained cohort — before it
+requires those pollers, and reports the fleet and the observed gateway health
+when retention still does not converge. The repair reinstalls no newer
+enforcer: the normal service-recreation phase still owns that upgrade. A
+deployment whose gateway container is absent or publishes no health is left
+alone; creating one belongs to the stack's own `up`, never to this recovery
+path.
 
 The proxy permits only HTTPS `CONNECT` to port 443 for approved provider,
 source-control, artifact, and retrieval domains. All other methods, ports, IP

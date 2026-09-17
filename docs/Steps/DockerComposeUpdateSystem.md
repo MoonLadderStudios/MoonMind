@@ -839,6 +839,10 @@ the handoff. A live route is never displaced whatever image backs it, so
 deliberate moves of a serving route stay on the managed update path.
 
 Before promotion, the controller retains pollers from the exact previous image.
+Those pollers attest deployment-owned singleton infrastructure before they
+report ready, so the controller first repairs an unhealthy or absent
+restricted-egress gateway from the previous release's own definition; a
+gateway broken out of band must not make the deployment un-updatable.
 Pinned work remains owned by that version after normal Compose services change.
 The existing maintenance schedule retires those temporary pollers only when
 Temporal reports the version drained. Inactive private candidates require a
