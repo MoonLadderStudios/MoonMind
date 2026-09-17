@@ -586,9 +586,15 @@ def validate_binding_set_for_plan(
     Repository slot declarations derive from the admitted
     workspace/tool/Skill/publication requirements, never from
     agent-supplied keys. Each declaration names the authority kind
-    (always repository for these slots) plus allowed materializers and
-    roles, so a source read grant cannot be relabeled as publication
-    authority. Undeclared-slot rejection is preserved.
+    (always repository for these slots) plus allowed materializers,
+    roles, admitted snapshot refs, and expected connection, so a source
+    read grant cannot be relabeled as publication authority and a
+    fabricated digest-shaped snapshot ref cannot satisfy an allowed
+    role. Snapshot content (endpoint/repository, principal/workspace
+    scope, admitted operations, policy revision) is owned by the
+    declaration producer (delivery #4011 / publication #1090): only
+    snapshots present in the trusted declaration's admitted set are
+    accepted here. Undeclared-slot rejection is preserved.
     """
     for slot in required_slots:
         if slot not in binding_set.bindings:
@@ -624,6 +630,29 @@ def validate_binding_set_for_plan(
             raise _slot_unbound(
                 f"credential slot {slot} role {binding.repositoryRole} not admitted; "
                 "a source read grant cannot be relabeled as publication authority"
+            )
+        allowed_snapshots = decl.get("allowedSnapshotRefs")
+        if allowed_snapshots is not None and (
+            binding.repositoryAccessSnapshotRef not in tuple(allowed_snapshots)
+        ):
+            raise _slot_unbound(
+                f"credential slot {slot} snapshot {binding.repositoryAccessSnapshotRef} "
+                "not admitted; a fabricated digest-shaped snapshot ref cannot "
+                "satisfy an allowed role"
+            )
+        expected_connection = decl.get("expectedConnectionRef")
+        if expected_connection is not None and (
+            binding.connectionRef != str(expected_connection)
+        ):
+            raise _slot_unbound(
+                f"credential slot {slot} connection {binding.connectionRef} not admitted"
+            )
+        allowed_connections = decl.get("allowedConnectionRefs")
+        if allowed_connections is not None and (
+            binding.connectionRef not in tuple(allowed_connections)
+        ):
+            raise _slot_unbound(
+                f"credential slot {slot} connection {binding.connectionRef} not admitted"
             )
     if declared_slots is not None:
         for slot in declared_slots:
@@ -927,7 +956,12 @@ def derive_repository_slot_requirements(
     undeclared until #4011/#1090 supply trusted declarations through
     ``trusted_repository_declarations``. Supplied declarations are checked
     against the closed role/materializer sets before they reach the
-    planner.
+    planner. Per-slot ``allowedSnapshotRefs`` (admitted snapshot digest
+    refs) and ``expectedConnectionRef`` / ``allowedConnectionRefs`` fence
+    the binding's self-declared snapshot and connection to the trusted
+    declaration: the declaration producer owns snapshot content
+    (endpoint/repository, scope, operations, policy revision) and only
+    its admitted refs are accepted at plan admission.
     """
     _ = profile_document
     if not trusted_repository_declarations:
@@ -954,11 +988,58 @@ def derive_repository_slot_requirements(
                     raise _slot_unbound(
                         f"credential slot {slot_name} materializer {materializer} not admitted"
                     )
+        allowed_snapshots = decl_map.get("allowedSnapshotRefs")
+        if allowed_snapshots is not None:
+            snapshots = tuple(allowed_snapshots)
+            if not snapshots:
+                raise _slot_unbound(
+                    f"credential slot {slot_name} snapshot allowlist must not be empty"
+                )
+            for snapshot_ref in snapshots:
+                if not _SNAPSHOT_REF_RE.fullmatch(str(snapshot_ref)):
+                    raise _slot_unbound(
+                        f"credential slot {slot_name} snapshot {snapshot_ref} not admitted"
+                    )
+                for pattern in _SECRET_MATERIAL_PATTERNS:
+                    if pattern in str(snapshot_ref):
+                        raise _slot_unbound(
+                            "repository snapshot refs must not carry raw credential material"
+                        )
+        expected_connection = decl_map.get("expectedConnectionRef")
+        if expected_connection is not None and not str(expected_connection).strip():
+            raise _slot_unbound(
+                f"credential slot {slot_name} connection not admitted"
+            )
+        allowed_connections = decl_map.get("allowedConnectionRefs")
+        if allowed_connections is not None:
+            connections = tuple(allowed_connections)
+            if not connections:
+                raise _slot_unbound(
+                    f"credential slot {slot_name} connection allowlist must not be empty"
+                )
+            for connection_ref in connections:
+                if not str(connection_ref).strip():
+                    raise _slot_unbound(
+                        f"credential slot {slot_name} connection not admitted"
+                    )
         derived[slot_name] = {
             "allowedRoles": tuple(allowed_roles) if allowed_roles is not None else None,
             "allowedMaterializers": (
                 tuple(allowed_materializers)
                 if allowed_materializers is not None
+                else None
+            ),
+            "allowedSnapshotRefs": (
+                tuple(allowed_snapshots) if allowed_snapshots is not None else None
+            ),
+            "expectedConnectionRef": (
+                str(expected_connection)
+                if expected_connection is not None
+                else None
+            ),
+            "allowedConnectionRefs": (
+                tuple(allowed_connections)
+                if allowed_connections is not None
                 else None
             ),
         }

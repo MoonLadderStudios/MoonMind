@@ -18,6 +18,14 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
+__all__ = [
+    "revision",
+    "down_revision",
+    "branch_labels",
+    "depends_on",
+    "upgrade",
+    "downgrade",
+]
 
 revision: str = "385_runtime_issuance"
 down_revision: Union[str, None] = "384_secret_rotation_4006"
