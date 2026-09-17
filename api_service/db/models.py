@@ -4932,6 +4932,13 @@ class OmnigentRuntimeBindingRecord(Base):
     credential_runtime_handles_json: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False, default=dict
     )
+    # Acquired repository issuance evidence (compact refs/digests only, never
+    # raw credential material). Persisted alongside provider leases so host
+    # attestation, session binding, and lease reconciliation preserve it
+    # atomically instead of dropping it from the recreated binding digest.
+    repository_issuance_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
     attestation_refs_json: Mapped[dict[str, Any]] = mapped_column(
         JSON, nullable=False, default=dict
     )

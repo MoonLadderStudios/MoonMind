@@ -11,6 +11,13 @@ from typing import Any
 from temporalio import activity
 
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+from moonmind.omnigent.harness_platform.credential_bindings import (
+    attenuated_child_grants_for,
+    model_bindings_of,
+    plan_bindings_have_repository_authority,
+    repository_authority_bindings,
+    validate_child_snapshot_coverage,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 _IMMUTABLE_RECOVERY_DIMENSIONS = (
@@ -57,6 +64,52 @@ class _OnDemandTemporalArtifactService:
 
     async def write_complete(self, *, artifact_id: str, **kwargs: Any) -> Any:
         return await self._invoke("write_complete", artifact_id=artifact_id, **kwargs)
+
+
+def _parent_repository_binding_set(parent_plan: Any) -> Any:
+    """Rebuild the parent binding set for child-inheritance checks.
+
+    The plan payload carries the admitted bindings plus the binding-set ref;
+    the set is rebuilt through the versioned constructor so unknown kinds,
+    conflicting aliases, and digest mismatches fail closed before any child
+    grant is composed. Only used for REQ-07 coverage/attenuation checks;
+    it never acquires capacity or issuance.
+    """
+
+    from pydantic import BaseModel
+
+    from moonmind.omnigent.harness_platform.credential_bindings import (
+        SCHEMA_V1,
+        SCHEMA_V2,
+        create_binding_set,
+        is_repository_authority,
+        parse_binding_set_ref,
+    )
+
+    raw_bindings = dict(parent_plan.payload.credentialBindings or {})
+    normalized: dict[str, Any] = {}
+    for slot, binding in raw_bindings.items():
+        if isinstance(binding, BaseModel):
+            normalized[slot] = binding.model_dump(by_alias=True, mode="json")
+        elif isinstance(binding, Mapping):
+            normalized[slot] = dict(binding)
+        else:
+            normalized[slot] = binding
+    has_repo = any(
+        is_repository_authority(binding) for binding in normalized.values()
+    )
+    try:
+        binding_set_id, version, _digest = parse_binding_set_ref(
+            str(parent_plan.payload.credentialBindingSetRef)
+        )
+    except Exception:
+        binding_set_id, version = "parent-plan-bindings", 1
+    return create_binding_set(
+        bindingSetId=binding_set_id,
+        version=version,
+        bindings=normalized,
+        schema_version=SCHEMA_V2 if has_repo else SCHEMA_V1,
+    )
 
 
 @activity.defn(name="omnigent.prepare_child_execution_plan")
@@ -114,6 +167,76 @@ async def omnigent_prepare_child_execution_plan_activity(
         parent_binding_value = parent_parameters.get("omnigentExecutionPlan")
     parent_binding = OmnigentExecutionPlanBinding.model_validate(parent_binding_value)
     parent_plan = await _load_verified_execution_plan(parent_binding)
+    # REQ-07/ACC-05 (MoonLadderStudios/MoonMind#4009): inherited repository
+    # authority is bound to the child target/attempt with a freshly admitted
+    # attenuated snapshot. Parent visibility alone is not permission, and the
+    # child plan re-derives model authority through its own admission, so
+    # model slots are never copied here. When the parent carries repository
+    # authority the caller must supply ``childRepositorySnapshotRefs`` from
+    # trusted delivery/publication admission (#4011/#1090); absence fails
+    # closed instead of silently widening or dropping scope. Workspace
+    # restore likewise cannot restore grants: it must supply fresh snapshots.
+    parent_repo_slots: dict[str, Any] = {}
+    child_trusted_repository_declarations: dict[str, dict[str, Any]] = {}
+    child_repository_bindings: dict[str, dict[str, Any]] = {}
+    child_snapshot_refs_value = payload.get("childRepositorySnapshotRefs")
+    child_snapshot_refs: dict[str, str] = (
+        dict(child_snapshot_refs_value)
+        if isinstance(child_snapshot_refs_value, Mapping)
+        else {}
+    )
+    # Lightweight probe first so model-only history and minimal test
+    # doubles never pay for (or crash on) a full set rebuild. Only a
+    # positive probe rebuilds through the versioned constructor, where
+    # unknown kinds, conflicting aliases, and digest mismatches fail
+    # closed before any child grant is composed.
+    parent_refs = getattr(parent_plan.payload, "repositoryAuthorityRefs", None)
+    if plan_bindings_have_repository_authority(
+        getattr(parent_plan.payload, "credentialBindings", None)
+    ) or (isinstance(parent_refs, Mapping) and dict(parent_refs)):
+        parent_binding_set = _parent_repository_binding_set(parent_plan)
+        parent_repo_slots = dict(
+            repository_authority_bindings(parent_binding_set)
+        )
+    if parent_repo_slots:
+        validate_child_snapshot_coverage(
+            parent_binding_set=parent_binding_set,
+            child_snapshot_refs=child_snapshot_refs,
+        )
+        child_grants = attenuated_child_grants_for(
+            parent_binding_set=parent_binding_set,
+            child_target_ref=child_workflow_id,
+            child_attempt_ref=str(
+                payload.get("childAttemptRef") or child_workflow_id
+            ),
+            child_snapshot_refs=child_snapshot_refs,
+        )
+        initial_parameters["childRepositoryGrants"] = {
+            slot: grant.model_dump(by_alias=True, mode="json")
+            for slot, grant in child_grants.items()
+        }
+        # The child compiler builds a model-only binding set unless the
+        # re-admitted repository authority is carried explicitly. Derive
+        # the child's trusted repository declarations and bindings from
+        # the attenuated grants composed above so the compiled child plan
+        # retains the repository authority that was just re-admitted
+        # (MoonLadderStudios/MoonMind#4009 REQ-07). Each declaration admits
+        # only the attenuated grant's own role and delivery contract.
+        child_trusted_repository_declarations = {
+            slot: {
+                "allowedRoles": (grant.binding.repositoryRole,),
+                "allowedMaterializers": (grant.binding.materializerRef,),
+            }
+            for slot, grant in child_grants.items()
+        }
+        child_repository_bindings = {
+            slot: grant.binding.model_dump(by_alias=True, mode="json")
+            for slot, grant in child_grants.items()
+        }
+    elif child_snapshot_refs:
+        raise ValueError(
+            "child repository snapshots name no parent repository slot"
+        )
     profile_snapshot_ref = str(
         parent_plan.payload.agentProfileSnapshotRef or ""
     ).strip()
@@ -122,9 +245,13 @@ async def omnigent_prepare_child_execution_plan_activity(
     agent_profile_snapshot = await _read_json_artifact(
         profile_snapshot_ref.removeprefix("artifact:")
     )
+    # Model authority only (MoonLadderStudios/MoonMind#4009): repository
+    # slots use issuance and never enter Provider Profile derivation.
     provider_profile_refs = {
         binding.providerProfileRef
-        for binding in parent_plan.payload.credentialBindings.values()
+        for binding in model_bindings_of(
+            parent_plan.payload.credentialBindings
+        ).values()
     }
     if len(provider_profile_refs) != 1:
         raise ValueError("parent execution plan has ambiguous Provider Profile authority")
@@ -203,6 +330,10 @@ async def omnigent_prepare_child_execution_plan_activity(
             task_input_snapshot_ref=input_snapshot_ref,
             task_input_snapshot_digest=input_snapshot_digest,
             db_session=db_session,
+            trusted_repository_declarations=(
+                child_trusted_repository_declarations or None
+            ),
+            repository_bindings=(child_repository_bindings or None),
         )
     initial_parameters["omnigentExecutionPlan"] = child_plan.binding.model_dump(
         mode="json", by_alias=True, exclude_none=True
