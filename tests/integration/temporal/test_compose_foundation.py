@@ -605,8 +605,10 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
         "sandbox-egress-proxy"
     ]["condition"] == "service_started"
 
+    # The enforcer's own policy is image-owned; the deployment mount only
+    # carries provider data and the frozen v1 config a live v1 gateway serves.
     squid_config = (
-        REPO_ROOT / "docker" / "sandbox-egress-proxy" / "squid.conf"
+        REPO_ROOT / "docker" / "moonmind-egress" / "squid.conf"
     ).read_text(encoding="utf-8")
     expected_proxy_domains = {
         "." + "".join(parts)

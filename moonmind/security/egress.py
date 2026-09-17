@@ -39,6 +39,16 @@ EGRESS_POLICY_DIRECTORY = Path(
     or Path(__file__).resolve().parents[2] / "docker/sandbox-egress-proxy"
 )
 EGRESS_PROVIDER_POLICY_PATH = EGRESS_POLICY_DIRECTORY / "omnigent-provider-domains.txt"
+# The enforcer's own policy is image-owned (copied to /opt/moonmind-egress) and
+# keeps its own source directory. A live v1 gateway bind-mounts
+# ``docker/sandbox-egress-proxy/squid.conf`` as its whole configuration and
+# pins _LEGACY_CONFIG_DIGEST in both its health check and its attestation, so
+# that file stays frozen at the reviewed v1 bytes until the transition is
+# removed. Publishing a newer enforcer through it would leave every running v1
+# gateway permanently unhealthy, before any release could replace it.
+EGRESS_BUNDLED_POLICY_DIRECTORY = (
+    Path(__file__).resolve().parents[2] / "docker/moonmind-egress"
+)
 EGRESS_LIVE_DIRECTORY = "/run/moonmind-egress"
 # Deployment-owned network names. Compose resolves these same overrides when it
 # creates the networks (``restricted-egress-network`` /
@@ -56,6 +66,9 @@ OMNIGENT_EGRESS_NETWORK_REF = os.environ.get(
 )
 CONTROL_PLANE_NETWORK_REF = resolve_control_plane_network()
 EGRESS_GATEWAY_REF = "moonmind-sandbox-egress-proxy"
+# Compose service that owns the gateway container above, so a release can
+# reconcile deployment-owned gateway state without re-deriving the name.
+EGRESS_GATEWAY_SERVICE = "sandbox-egress-proxy"
 PROXY_URL = "http://sandbox-egress-proxy:3128"
 OMNIGENT_PROXY_URL = "http://omnigent-egress-proxy:3129"
 _EXPECTED_GATEWAY_NETWORKS = frozenset(
