@@ -190,14 +190,41 @@ def test_compose_policy_selection_reaches_gateway_and_consumers(
     )
     for name in consumers:
         service = services[name]
-        assert (
-            service.get("environment", {}).get("MOONMIND_EGRESS_POLICY_DIRECTORY")
-            == target
-        ), name
+        assert service.get("environment", {}).get(
+            "MOONMIND_EGRESS_POLICY_DIRECTORY"
+        ) == ("" if selection in ("omitted", "blank") else str(policy)), name
         mount = next(item for item in service["volumes"] if item["target"] == target)
         assert mount["type"] == "bind"
         assert mount["source"] == str(policy)
         assert mount["read_only"] is True
+
+    for _ in range(2):
+        inherited = services["temporal-worker-deployment-control"]["environment"]
+        rendered = subprocess.run(
+            result.args,
+            env={
+                **{
+                    key: os.environ[key]
+                    for key in ("PATH", "HOME")
+                    if key in os.environ
+                },
+                **{
+                    key: str(value)
+                    for key, value in inherited.items()
+                    if value is not None
+                },
+            },
+            capture_output=True,
+            text=True,
+        )
+        assert rendered.returncode == 0, rendered.stderr
+        services = json.loads(rendered.stdout)["services"]
+        for name in consumers:
+            mount = next(
+                item for item in services[name]["volumes"] if item["target"] == target
+            )
+            assert mount["source"] == str(policy), name
+            assert mount["read_only"] is True
 
     monkeypatch.setenv("MOONMIND_EGRESS_POLICY_DIRECTORY", str(policy))
     spec = importlib.util.spec_from_file_location(
