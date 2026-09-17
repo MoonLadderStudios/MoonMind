@@ -114,7 +114,10 @@ unhealthy or absent gateway from the definition owned by the image whose
 pollers need it — the previous release's for the retained cohort — before it
 requires those pollers, and reports the fleet and the observed gateway health
 when retention still does not converge. The repair reinstalls no newer
-enforcer: the normal service-recreation phase still owns that upgrade.
+enforcer: the normal service-recreation phase still owns that upgrade. A
+deployment whose gateway container is absent or publishes no health is left
+alone; creating one belongs to the stack's own `up`, never to this recovery
+path.
 
 The proxy permits only HTTPS `CONNECT` to port 443 for approved provider,
 source-control, artifact, and retrieval domains. All other methods, ports, IP
