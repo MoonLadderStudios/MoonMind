@@ -36,6 +36,8 @@ from moonmind.omnigent.harness_platform.catalog_service import (
 from moonmind.omnigent.harness_platform.credential_bindings import (
     CredentialBindingSet,
     create_binding_set,
+    derive_repository_slot_requirements,
+    model_bindings_of,
     parse_binding_set_ref,
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
@@ -248,7 +250,13 @@ class OmnigentExecutionPlanningService:
         )
 
     async def plan(
-        self, request: AgentExecutionRequest
+        self,
+        request: AgentExecutionRequest,
+        *,
+        trusted_repository_declarations: Mapping[str, Mapping[str, Any]] | None = None,
+        workspace_source_kind: str | None = None,
+        workspace_access_snapshot_ref: str | None = None,
+        worker_authority_kinds: tuple[str, ...] | list[str] | None = None,
     ) -> OmnigentExecutionPlanEnvelope:
         selection = AgentProfileSelection.from_request(request)
         workflow_id = (
@@ -264,9 +272,41 @@ class OmnigentExecutionPlanningService:
         request_payload = request.model_dump(
             by_alias=True, mode="json", exclude_none=True
         )
+        # These authority inputs shape the immutable plan through
+        # ``compile_once`` but are not part of the request model. Bind them
+        # into the persisted request identity so an idempotency-key retry
+        # that changes repository declarations, workspace snapshots, source
+        # kinds, or worker capabilities cannot silently reuse a previously
+        # bound plan compiled under different authority constraints.
+        request_payload["_authorityInputs"] = json.loads(
+            json.dumps(
+                {
+                    "trustedRepositoryDeclarations": (
+                        dict(trusted_repository_declarations)
+                        if trusted_repository_declarations is not None
+                        else None
+                    ),
+                    "workspaceSourceKind": workspace_source_kind,
+                    "workspaceAccessSnapshotRef": workspace_access_snapshot_ref,
+                    "workerAuthorityKinds": (
+                        [str(kind) for kind in worker_authority_kinds]
+                        if worker_authority_kinds is not None
+                        else None
+                    ),
+                },
+                sort_keys=True,
+                default=str,
+            )
+        )
 
         async def compile_once() -> OmnigentExecutionPlanEnvelope:
-            return await self._compile(request, selection)
+            return await self._compile(
+                request, selection,
+                trusted_repository_declarations=trusted_repository_declarations,
+                workspace_source_kind=workspace_source_kind,
+                workspace_access_snapshot_ref=workspace_access_snapshot_ref,
+                worker_authority_kinds=worker_authority_kinds,
+            )
 
         return await self._usages.load_or_bind(
             identity=ExecutionPlanUsageIdentity(
@@ -282,6 +322,11 @@ class OmnigentExecutionPlanningService:
         self,
         request: AgentExecutionRequest,
         selection: AgentProfileSelection,
+        *,
+        trusted_repository_declarations: Mapping[str, Mapping[str, Any]] | None = None,
+        workspace_source_kind: str | None = None,
+        workspace_access_snapshot_ref: str | None = None,
+        worker_authority_kinds: tuple[str, ...] | list[str] | None = None,
     ) -> OmnigentExecutionPlanEnvelope:
         from api_service.db.models import (
             ManagedAgentProviderProfile,
@@ -413,7 +458,10 @@ class OmnigentExecutionPlanningService:
                 omnigent_version=catalog_result.snapshot.omnigentVersion,
                 integration_mode=integration_mode,
                 materializer_refs=[
-                    item.materializerRef for item in binding_set.bindings.values()
+                    item.materializerRef
+                    for item in model_bindings_of(
+                        binding_set.bindings
+                    ).values()
                 ],
                 architecture=host_architecture,
                 requested_host_mode=policy.hostMode,
@@ -484,6 +532,15 @@ class OmnigentExecutionPlanningService:
                 "request": request.workspace_spec,
             }
             capture_payload = dict(profile.capture)
+            # MoonLadderStudios/MoonMind#4009: repository slot declarations
+            # derive from admitted profile authority plus trusted delivery /
+            # publication declarations when those owners supply them (#4011 /
+            # #1090; issuance is #4007). Agent-supplied binding keys never
+            # create declarations. Fail-closed ({}) without trusted input.
+            repository_slot_requirements = derive_repository_slot_requirements(
+                profile_document=dict(version_row.document),
+                trusted_repository_declarations=trusted_repository_declarations,
+            )
             return compile_execution_plan(
                 agent_profile=profile,
                 harness_catalog=catalog_result.snapshot,
@@ -491,6 +548,10 @@ class OmnigentExecutionPlanningService:
                 trust_record=trust,
                 resolved_skills=skills,
                 credential_binding_set=binding_set,
+                repository_slot_requirements=repository_slot_requirements,
+                workspace_source_kind=workspace_source_kind,
+                workspace_access_snapshot_ref=workspace_access_snapshot_ref,
+                worker_authority_kinds=worker_authority_kinds,
                 host_class_ref=host_class.ref,
                 host_class=host_class,
                 launch_policy_ref=policy.ref,
@@ -964,7 +1025,9 @@ class OmnigentPlannedHostResolver:
             integration_mode=harness.capabilities.integrationMode or "native-server",
             materializer_refs=[
                 item.materializerRef
-                for item in plan.payload.credentialBindings.values()
+                for item in model_bindings_of(
+                    plan.payload.credentialBindings
+                ).values()
             ],
             architecture=plan.payload.hostArchitecture or self._architecture,
             requested_host_mode=policy.hostMode,
