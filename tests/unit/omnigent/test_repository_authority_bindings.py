@@ -877,6 +877,107 @@ def test_derive_repository_slot_requirements_validates_trusted_declarations():
         )
 
 
+def test_repository_snapshot_fenced_to_trusted_declaration():
+    """MoonLadderStudios/MoonMind#4409: a fabricated digest-shaped snapshot
+    ref must not satisfy an allowed role; only snapshots in the trusted
+    declaration's admitted set (with the expected connection) are accepted."""
+    admitted = REPO_SNAPSHOT
+    fabricated = "repository-access-snapshot:sha256:" + "f" * 64
+    decl = {
+        "allowedRoles": ("source_read",),
+        "allowedMaterializers": ("repository-broker@1",),
+        "allowedSnapshotRefs": (admitted,),
+        "expectedConnectionRef": "repo-conn-main",
+    }
+    admitted_set = create_binding_set(
+        bindingSetId="bs",
+        version=1,
+        bindings={
+            "primary-model": {
+                "authorityKind": "provider_profile",
+                "providerProfileRef": "opencode-go-default",
+                "materializerRef": "opencode-auth-json@1",
+            },
+            "src": _v2_repo_slot(),
+        },
+        schema_version="moonmind.omnigent-credential-bindings.v2",
+    )
+    cb.validate_binding_set_for_plan(
+        binding_set=admitted_set,
+        required_slots=["primary-model"],
+        declared_slots=["primary-model"],
+        declared_repository_slots={"src": dict(decl)},
+    )
+    fabricated_set = create_binding_set(
+        bindingSetId="bs",
+        version=1,
+        bindings={
+            "primary-model": {
+                "authorityKind": "provider_profile",
+                "providerProfileRef": "opencode-go-default",
+                "materializerRef": "opencode-auth-json@1",
+            },
+            "src": _v2_repo_slot(repositoryAccessSnapshotRef=fabricated),
+        },
+        schema_version="moonmind.omnigent-credential-bindings.v2",
+    )
+    with pytest.raises(HarnessPlatformError):
+        cb.validate_binding_set_for_plan(
+            binding_set=fabricated_set,
+            required_slots=["primary-model"],
+            declared_slots=["primary-model"],
+            declared_repository_slots={"src": dict(decl)},
+        )
+    wrong_conn_set = create_binding_set(
+        bindingSetId="bs",
+        version=1,
+        bindings={
+            "primary-model": {
+                "authorityKind": "provider_profile",
+                "providerProfileRef": "opencode-go-default",
+                "materializerRef": "opencode-auth-json@1",
+            },
+            "src": _v2_repo_slot(connectionRef="other-conn"),
+        },
+        schema_version="moonmind.omnigent-credential-bindings.v2",
+    )
+    with pytest.raises(HarnessPlatformError):
+        cb.validate_binding_set_for_plan(
+            binding_set=wrong_conn_set,
+            required_slots=["primary-model"],
+            declared_slots=["primary-model"],
+            declared_repository_slots={"src": dict(decl)},
+        )
+
+
+def test_derive_preserves_snapshot_and_connection_fencing():
+    """MoonLadderStudios/MoonMind#4409: derivation preserves admitted
+    snapshot/connection fencing for the planner to enforce."""
+    derived = cb.derive_repository_slot_requirements(
+        profile_document={},
+        trusted_repository_declarations={
+            "src": {
+                "allowedRoles": ("source_read",),
+                "allowedMaterializers": ("repository-broker@1",),
+                "allowedSnapshotRefs": (REPO_SNAPSHOT,),
+                "expectedConnectionRef": "repo-conn-main",
+            }
+        },
+    )
+    assert derived["src"]["allowedSnapshotRefs"] == (REPO_SNAPSHOT,)
+    assert derived["src"]["expectedConnectionRef"] == "repo-conn-main"
+    with pytest.raises(HarnessPlatformError):
+        cb.derive_repository_slot_requirements(
+            profile_document={},
+            trusted_repository_declarations={
+                "src": {
+                    "allowedRoles": ("source_read",),
+                    "allowedSnapshotRefs": ("not-a-snapshot",),
+                }
+            },
+        )
+
+
 # --------------------------------------------------------------------------
 # Remediation: production lifecycle wiring (REQ-03/06/07/08, ACC-01/05/06/07)
 # --------------------------------------------------------------------------
