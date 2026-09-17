@@ -108,3 +108,84 @@ def test_tool_failure_rendering_includes_its_cause() -> None:
     rendered = str(failure)
     assert "outer failed" in rendered
     assert "inner failed" in rendered
+
+
+def test_tool_failure_survives_context_manager_traceback_bookkeeping() -> None:
+    """A ToolFailure raised inside a `with` block keeps its own diagnosis.
+
+    Regression: contextlib assigns ``__traceback__`` on the exception it
+    re-raises. The frozen dataclass setter rejected that assignment with an
+    unrelated ``TypeError: super(type, obj)...``, so a release that failed
+    inside ``async with get_async_session_context()`` recorded that noise as
+    its terminal error instead of the real failure.
+    """
+
+    import contextlib
+
+    from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
+
+    @contextlib.contextmanager
+    def scope():
+        yield
+
+    def fail() -> None:
+        raise ToolFailure(
+            error_code="DEPLOYMENT_RELEASE_FAILED",
+            message="real cause",
+            retryable=False,
+        )
+
+    with pytest.raises(ToolFailure) as caught:
+        with scope():
+            fail()
+
+    assert caught.value.error_code == "DEPLOYMENT_RELEASE_FAILED"
+    assert caught.value.message == "real cause"
+    assert caught.value.__traceback__ is not None
+
+
+@pytest.mark.asyncio
+async def test_tool_failure_survives_async_context_manager_bookkeeping() -> None:
+    """The release path raises through `async with`, so cover it too."""
+
+    import contextlib
+
+    from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
+
+    @contextlib.asynccontextmanager
+    async def scope():
+        yield
+
+    def fail() -> None:
+        raise ToolFailure(
+            error_code="DEPLOYMENT_RELEASE_FAILED",
+            message="real async cause",
+            retryable=False,
+        )
+
+    with pytest.raises(ToolFailure) as caught:
+        async with scope():
+            fail()
+
+    assert caught.value.message == "real async cause"
+
+
+def test_tool_failure_fields_stay_immutable() -> None:
+    """Exception bookkeeping is allowed; the failure envelope stays frozen."""
+
+    from dataclasses import FrozenInstanceError
+
+    from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
+
+    failure = ToolFailure(error_code="X", message="y", retryable=False)
+
+    for attribute, value in (
+        ("error_code", "changed"),
+        ("message", "changed"),
+        ("retryable", True),
+        ("details", {}),
+        ("cause", None),
+        ("unrelated", "changed"),
+    ):
+        with pytest.raises(FrozenInstanceError):
+            setattr(failure, attribute, value)
