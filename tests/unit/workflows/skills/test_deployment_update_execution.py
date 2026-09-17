@@ -2248,28 +2248,42 @@ async def test_desktop_rewrite_requires_a_local_checkout_for_daemon_input(
     probe.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_desktop_rewrite_defers_to_the_daemon_recorded_checkout_source(
-    tmp_path, monkeypatch
-):
-    """Evidence from the daemon outranks the namespace guess.
+@pytest.fixture
+def host_dir_evidence(monkeypatch):
+    """Model what the daemon reports, without touching a real daemon."""
 
-    Regression: Docker Desktop serves a WSL ``/mnt/<drive>`` checkout at that
-    same path and leaves ``/run/desktop/mnt/host/<drive>`` empty, so rewriting
-    it launched updater containers whose ``/workspace/deployment_state`` bind
-    was an empty directory and whose request file never existed.
-    """
-
-    from unittest.mock import AsyncMock
-
+    state = {"installed": (), "self": None}
+    monkeypatch.setattr(deployment_execution, "_host_dir_evidence_cache", {})
     monkeypatch.setattr(
-        deployment_execution, "_daemon_bind_source_cache", {}
+        deployment_execution,
+        "installed_bind_sources",
+        lambda local_mount, *, project_name: state["installed"],
     )
     monkeypatch.setattr(
         deployment_execution,
         "daemon_bind_source",
-        lambda mount: "/mnt/d/code/MoonMind" if mount == str(tmp_path) else None,
+        lambda local_mount, **kwargs: state["self"],
     )
+    return state
+
+
+@pytest.mark.asyncio
+async def test_installed_containers_decide_the_compose_project_directory(
+    tmp_path, monkeypatch, host_dir_evidence
+):
+    """The deployment's own containers settle which host path Compose receives.
+
+    Docker Desktop records two spellings for the same WSL checkout, and Compose
+    hashes the bind source string into every container's config. Following this
+    worker's own ephemeral mount instead recreated every service mid-release —
+    including the socket proxy the updater talks to — so the installed
+    containers decide.
+    """
+
+    from unittest.mock import AsyncMock
+
+    host_dir_evidence["installed"] = ("/mnt/d/code/MoonMind",)
+    host_dir_evidence["self"] = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/x"
     desktop = AsyncMock(return_value=True)
     monkeypatch.setattr(
         deployment_execution, "_probe_docker_desktop_daemon", desktop
@@ -2278,25 +2292,69 @@ async def test_desktop_rewrite_defers_to_the_daemon_recorded_checkout_source(
         project_dir="/mnt/d/code/MoonMind", local_project_dir=str(tmp_path)
     )
 
+    assert await runner._record_daemon_host_dir() == "/mnt/d/code/MoonMind"
     assert await runner._use_desktop_host_rewrite() is False
     assert runner._host_dir() == Path("/mnt/d/code/MoonMind")
     desktop.assert_not_awaited()
 
 
 @pytest.mark.asyncio
+async def test_installed_spelling_survives_a_differently_written_project_dir(
+    tmp_path, host_dir_evidence
+):
+    """An equivalent spelling must not rewrite every container's config hash."""
+
+    share = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/abc"
+    host_dir_evidence["installed"] = (share,)
+    runner = HostDockerComposeRunner(
+        project_dir="/mnt/d/code/MoonMind", local_project_dir=str(tmp_path)
+    )
+
+    assert await runner._record_daemon_host_dir() == share
+
+
+@pytest.mark.asyncio
+async def test_configured_project_dir_wins_when_the_deployment_proves_it(
+    tmp_path, host_dir_evidence
+):
+    """A declared path the deployment already uses is never replaced."""
+
+    host_dir_evidence["installed"] = (
+        "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/abc",
+        "/mnt/d/code/MoonMind",
+    )
+    runner = HostDockerComposeRunner(
+        # Compose interpolation can leave a doubled separator; the same path.
+        project_dir="//mnt/d/code/MoonMind",
+        local_project_dir=str(tmp_path),
+    )
+
+    assert await runner._record_daemon_host_dir() == "/mnt/d/code/MoonMind"
+
+
+@pytest.mark.asyncio
+async def test_worker_mount_decides_before_the_deployment_has_containers(
+    tmp_path, host_dir_evidence
+):
+    """A first install has nothing to match, so our own mount is the evidence."""
+
+    host_dir_evidence["self"] = "/mnt/d/code/MoonMind"
+    runner = HostDockerComposeRunner(
+        project_dir="/mnt/d/code/MoonMind", local_project_dir=str(tmp_path)
+    )
+
+    assert await runner._record_daemon_host_dir() == "/mnt/d/code/MoonMind"
+    assert await runner._use_desktop_host_rewrite() is False
+
+
+@pytest.mark.asyncio
 async def test_desktop_rewrite_still_guesses_without_daemon_evidence(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, host_dir_evidence
 ):
     """Outside a container the path shape remains the only available signal."""
 
     from unittest.mock import AsyncMock
 
-    monkeypatch.setattr(
-        deployment_execution, "_daemon_bind_source_cache", {}
-    )
-    monkeypatch.setattr(
-        deployment_execution, "daemon_bind_source", lambda mount: None
-    )
     monkeypatch.setattr(
         deployment_execution,
         "_probe_docker_desktop_daemon",
@@ -2311,10 +2369,10 @@ async def test_desktop_rewrite_still_guesses_without_daemon_evidence(
 
 
 @pytest.mark.asyncio
-async def test_compose_uses_the_checkout_source_its_daemon_recorded(
-    tmp_path, monkeypatch
+async def test_compose_uses_the_checkout_source_its_deployment_resolves(
+    tmp_path, monkeypatch, host_dir_evidence
 ):
-    """Compose runs against the host path the daemon resolves for this checkout.
+    """Compose runs against the host path this deployment already resolves.
 
     The detached release updater inherits these bind sources, so a project
     directory the daemon cannot resolve gives it an empty state volume instead
@@ -2328,14 +2386,7 @@ async def test_compose_uses_the_checkout_source_its_daemon_recorded(
     )
     host_dir = tmp_path / "host-checkout"
     host_dir.symlink_to(local_dir, target_is_directory=True)
-    monkeypatch.setattr(
-        deployment_execution, "_daemon_bind_source_cache", {}
-    )
-    monkeypatch.setattr(
-        deployment_execution,
-        "daemon_bind_source",
-        lambda mount: str(host_dir) if mount == str(local_dir) else None,
-    )
+    host_dir_evidence["installed"] = (str(host_dir),)
     calls: list[tuple[str, ...]] = []
 
     class FakeProcess:
@@ -2366,6 +2417,60 @@ async def test_compose_uses_the_checkout_source_its_daemon_recorded(
     assert len(calls) == 1
     assert calls[0][calls[0].index("--project-directory") + 1] == str(host_dir)
     assert calls[0][calls[0].index("-f") + 1] == str(local_dir / "docker-compose.yaml")
+
+
+def test_installed_bind_sources_reads_the_deployment_containers(monkeypatch):
+    """Installed services are ranked by how many of them share a spelling."""
+
+    import subprocess
+
+    share = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/abc"
+    recorded: list[list[str]] = []
+
+    def _fake_run(args, **kwargs):
+        recorded.append(list(args))
+        if args[1] == "ps":
+            return SimpleNamespace(stdout="aaa\nbbb\nccc\n", stderr="", returncode=0)
+        mounts = [
+            [{"Source": "/mnt/d/code/MoonMind", "Destination": "/workspace/host_project"}],
+            [{"Source": share, "Destination": "/workspace/host_project"}],
+            [
+                {"Source": "/mnt/d/code/MoonMind", "Destination": "/workspace/host_project/"},
+                {"Source": "/elsewhere", "Destination": "/workspace/other"},
+            ],
+        ]
+        return SimpleNamespace(
+            stdout="\n".join(json.dumps(row) for row in mounts),
+            stderr="",
+            returncode=0,
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    assert deployment_execution.installed_bind_sources(
+        "/workspace/host_project", project_name="moonmind"
+    ) == ("/mnt/d/code/MoonMind", share)
+    assert "label=com.docker.compose.project=moonmind" in recorded[0]
+    # Release cohorts and `compose run` containers are transient, not installed.
+    assert "label=com.docker.compose.oneoff=False" in recorded[0]
+    assert recorded[1][-3:] == ["aaa", "bbb", "ccc"]
+
+
+def test_installed_bind_sources_reports_nothing_without_containers(monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda args, **kwargs: SimpleNamespace(stdout="", stderr="", returncode=0),
+    )
+
+    assert (
+        deployment_execution.installed_bind_sources(
+            "/workspace/host_project", project_name="moonmind"
+        )
+        == ()
+    )
 
 
 def test_daemon_bind_source_reads_the_worker_container_mount_table(monkeypatch):
