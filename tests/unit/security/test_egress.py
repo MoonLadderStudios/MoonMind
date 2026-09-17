@@ -28,17 +28,30 @@ from moonmind.security.egress import (
 )
 
 
-def test_openrouter_destination_is_scoped_to_omnigent():
-    from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
+def test_openrouter_destination_is_scoped_to_omnigent(configured_egress):
+    module = configured_egress("openrouter.ai\n")
 
     assert any(
         destination.dns_name == "openrouter.ai" and destination.ports == (443,)
-        for destination in OMNIGENT_EGRESS_PROFILE.destinations
+        for destination in module.OMNIGENT_EGRESS_PROFILE.destinations
     )
     assert all(
         destination.dns_name != "openrouter.ai"
-        for destination in DEFAULT_EGRESS_PROFILE.destinations
+        for destination in module.DEFAULT_EGRESS_PROFILE.destinations
     )
+
+
+@pytest.mark.asyncio
+async def test_default_candidate_qualifies_against_v1_gateway():
+    from moonmind.security import egress
+
+    for profile in (egress.DEFAULT_EGRESS_PROFILE, egress.OMNIGENT_EGRESS_PROFILE):
+        evidence = await egress.attest_docker_egress(
+            runner=_legacy_gateway_runner(), profile=profile, backend_ref="candidate"
+        )
+        assert evidence.validation_result == "passed"
+        assert evidence.enforcer_implementation == "docker-internal-proxy/v1"
+        assert evidence.config_digest == _LEGACY_CONFIG_DIGEST
 
 
 @pytest.mark.parametrize(

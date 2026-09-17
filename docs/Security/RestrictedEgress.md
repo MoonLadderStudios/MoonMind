@@ -76,11 +76,15 @@ destinations take effect for real workloads.
 The gateway uses the managed MoonMind image, which bundles Squid and the
 executable policy under `/opt/moonmind-egress`; checkout mounts cannot obscure
 those files. Only provider data is read from the deployment mount at
-`/app/docker/sandbox-egress-proxy` (or `MOONMIND_EGRESS_POLICY_DIRECTORY` when
-configured consistently for the backend and gateway). An absent provider file
+`/app/docker/sandbox-egress-proxy` by default. To use a custom directory, set
+`MOONMIND_EGRESS_POLICY_DIRECTORY` in `.env` to an absolute host directory;
+Compose mounts it read-only at that same path and passes the setting to the
+gateway and every application consumer. Omitted or empty settings retain the
+default checkout-directory mount. An absent provider file
 means no extra destinations, exactly like an empty file, preserving existing
-installations during image-only updates. It does not enable the image's
-OpenRouter example implicitly. The main Squid policy is always image-owned.
+installations during image-only updates. The shipped provider file is empty so
+candidate qualification against a v1 gateway does not implicitly enable
+OpenRouter. The main Squid policy is always image-owned.
 The updater does not rewrite the provider file, so explicit future destinations
 survive image changes and restarts.
 

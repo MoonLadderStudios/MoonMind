@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -122,6 +123,112 @@ def test_image_policy_survives_old_checkout_and_restart(
         )
     assert not (checkout / "policy.sh").exists()
     assert (checkout / "squid.conf").read_text() == "old checkout config\n"
+
+
+@pytest.mark.parametrize(
+    "selection", ["omitted", "blank", "explicit-default", "custom"]
+)
+def test_compose_policy_selection_reaches_gateway_and_consumers(
+    tmp_path, monkeypatch, selection
+):
+    from moonmind.security import egress
+
+    root = Path(__file__).resolve().parents[3]
+    project = tmp_path / "project"
+    project.mkdir()
+    shutil.copyfile(root / "docker-compose.yaml", project / "docker-compose.yaml")
+    default_policy = project / "docker/sandbox-egress-proxy"
+    shutil.copytree(root / "docker/sandbox-egress-proxy", default_policy)
+    policy = default_policy
+    if selection == "custom":
+        policy = tmp_path / "custom policy"
+        policy.mkdir()
+        (policy / "omnigent-provider-domains.txt").write_text("openrouter.ai\n")
+    value = "" if selection == "blank" else str(policy)
+    (project / ".env").write_text(
+        "" if selection == "omitted" else f"MOONMIND_EGRESS_POLICY_DIRECTORY={value}\n"
+    )
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--project-name",
+            "moonmind-test-egress-policy",
+            "--project-directory",
+            str(project),
+            "--env-file",
+            str(project / ".env"),
+            "-f",
+            str(project / "docker-compose.yaml"),
+            "config",
+            "--format",
+            "json",
+        ],
+        env={key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    services = json.loads(result.stdout)["services"]
+    consumers = [
+        "api",
+        "omnigent-runtime-bootstrap",
+        "init-db",
+        "sandbox-egress-proxy",
+        "temporal-worker-workflow",
+        "temporal-worker-artifacts",
+        "temporal-worker-llm",
+        "temporal-worker-sandbox",
+        "temporal-worker-agent-runtime",
+        "temporal-worker-deployment-control",
+        "temporal-worker-integrations",
+    ]
+    target = (
+        "/app/docker/sandbox-egress-proxy"
+        if selection in ("omitted", "blank")
+        else str(policy)
+    )
+    for name in consumers:
+        service = services[name]
+        assert (
+            service.get("environment", {}).get("MOONMIND_EGRESS_POLICY_DIRECTORY")
+            == target
+        ), name
+        mount = next(item for item in service["volumes"] if item["target"] == target)
+        assert mount["type"] == "bind"
+        assert mount["source"] == str(policy)
+        assert mount["read_only"] is True
+
+    monkeypatch.setenv("MOONMIND_EGRESS_POLICY_DIRECTORY", str(policy))
+    spec = importlib.util.spec_from_file_location(
+        "compose_policy_egress", egress.__file__
+    )
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    for attempt in range(2):
+        live = tmp_path / f"live-{attempt}"
+        prepared = subprocess.run(
+            [
+                "sh",
+                str(root / "docker/sandbox-egress-proxy/policy.sh"),
+                "prepare",
+                "",
+                str(live),
+            ],
+            capture_output=True,
+        )
+        assert prepared.returncode == 0, prepared.stderr
+        assert module.EGRESS_FILE_DIGESTS["omnigent-provider-domains.txt"] == (
+            "sha256:"
+            + hashlib.sha256(
+                (live / "omnigent-provider-domains.txt").read_bytes()
+            ).hexdigest()
+        )
+        extra = {d.dns_name for d in module.OMNIGENT_EGRESS_PROFILE.destinations} - {
+            d.dns_name for d in module.DEFAULT_EGRESS_PROFILE.destinations
+        }
+        assert extra == ({"openrouter.ai"} if selection == "custom" else set())
 
 
 @pytest.mark.asyncio

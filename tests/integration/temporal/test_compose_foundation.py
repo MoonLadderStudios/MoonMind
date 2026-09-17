@@ -585,7 +585,8 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
         "CMD", "/bin/sh", "/opt/moonmind-egress/policy.sh", "check"
     ]
     assert proxy_service["volumes"] == [
-        "./docker/sandbox-egress-proxy:/app/docker/sandbox-egress-proxy:ro"
+        "${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:"
+        "${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro"
     ]
 
     sandbox_env = _env_map(services["temporal-worker-sandbox"]["environment"])
