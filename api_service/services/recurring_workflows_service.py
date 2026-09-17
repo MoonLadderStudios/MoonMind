@@ -1042,7 +1042,14 @@ class RecurringWorkflowsService:
                 refreshed += 1
             except Exception as exc:
                 await self._session.rollback()
-                failed.append(str(definition_id))
+                # The caller may be a release updater whose container is gone
+                # by the time an operator looks, so carry the reason with the
+                # identifier instead of leaving it only in this log line.
+                from moonmind.utils.logging import redact_sensitive_text
+
+                failed.append(
+                    f"{definition_id}: {redact_sensitive_text(str(exc))[:500]}"
+                )
                 logger.warning(
                     "Failed to refresh managed bootstrap schedule %s: %s",
                     definition_id,
