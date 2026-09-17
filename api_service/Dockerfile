@@ -249,6 +249,11 @@ FROM runtime-dependencies AS runtime-base
 # Copy source code AFTER installing locked dependencies so code changes only
 # invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
+COPY docker/sandbox-egress-proxy /app/docker/sandbox-egress-proxy/
+COPY docker/sandbox-egress-proxy /opt/moonmind-egress/
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends squid
 # The embedded host-auth adapter executes verifier sources from the exact
 # pinned submodule revision. Keep that immutable source available in every API
 # and worker runtime derived from this stage.
