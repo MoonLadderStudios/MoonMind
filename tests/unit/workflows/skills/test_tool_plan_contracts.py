@@ -128,13 +128,16 @@ def test_tool_failure_survives_context_manager_traceback_bookkeeping() -> None:
     def scope():
         yield
 
+    def fail() -> None:
+        raise ToolFailure(
+            error_code="DEPLOYMENT_RELEASE_FAILED",
+            message="real cause",
+            retryable=False,
+        )
+
     with pytest.raises(ToolFailure) as caught:
         with scope():
-            raise ToolFailure(
-                error_code="DEPLOYMENT_RELEASE_FAILED",
-                message="real cause",
-                retryable=False,
-            )
+            fail()
 
     assert caught.value.error_code == "DEPLOYMENT_RELEASE_FAILED"
     assert caught.value.message == "real cause"
@@ -153,13 +156,16 @@ async def test_tool_failure_survives_async_context_manager_bookkeeping() -> None
     async def scope():
         yield
 
+    def fail() -> None:
+        raise ToolFailure(
+            error_code="DEPLOYMENT_RELEASE_FAILED",
+            message="real async cause",
+            retryable=False,
+        )
+
     with pytest.raises(ToolFailure) as caught:
         async with scope():
-            raise ToolFailure(
-                error_code="DEPLOYMENT_RELEASE_FAILED",
-                message="real async cause",
-                retryable=False,
-            )
+            fail()
 
     assert caught.value.message == "real async cause"
 
