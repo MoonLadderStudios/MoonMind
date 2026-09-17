@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from moonmind.omnigent.harness_platform.harness_registry import harness_registration
-
 import hashlib
 import json
 import re
@@ -63,6 +61,7 @@ from moonmind.omnigent.harness_platform import (
     HarnessPlatformError,
     assert_catalog_refresh_attests,
 )
+from moonmind.omnigent.harness_platform.harness_registry import harness_registration
 from moonmind.workflows.temporal.artifacts import TemporalArtifactService
 
 router = APIRouter(
@@ -466,7 +465,7 @@ async def ensure_builtin_opencode_agent_profile(
                 {
                     "id": "primary-model",
                     "acceptedAuthModels": ["own-auth", "none"],
-                    "acceptedProviderIds": ["opencode-go", "opencode"],
+                    "acceptedProviderIds": [],
                 }
             ],
             "model": {},

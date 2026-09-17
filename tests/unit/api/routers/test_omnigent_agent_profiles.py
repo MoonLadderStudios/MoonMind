@@ -7,8 +7,8 @@ from pydantic import ValidationError
 from api_service.api.routers.omnigent_agent_profiles import (
     AgentProfileDocument,
     GuidedProfileCreate,
-    _default_builtin_opencode_launch_policy_refs,
     _catalog_refresh_preserves_builtin_binding,
+    _default_builtin_opencode_launch_policy_refs,
     _digest,
     _normalized,
     _preserve_builtin_opencode_model,
@@ -156,6 +156,130 @@ async def test_builtin_opencode_profile_binds_current_policy_defaults(
         "omnigent-on-demand@7",
         "opencode-on-demand@9",
     ]
+
+
+@pytest.mark.asyncio
+async def test_builtin_opencode_advances_provider_policy_without_rewriting_snapshots(
+    monkeypatch,
+):
+    from copy import deepcopy
+    from unittest.mock import AsyncMock
+
+    from api_service.api.routers import omnigent_agent_profiles as api
+    from api_service.db.models import (
+        OmnigentAgentProfile,
+        OmnigentAgentProfileVersion,
+        OmnigentHarnessCatalogSnapshotRecord,
+    )
+    from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
+    from moonmind.omnigent.harness_platform.catalog import TrustState
+    from moonmind.omnigent.harness_platform.planning_service import (
+        OmnigentExecutionPlanningService,
+    )
+
+    snapshot = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="1.2.3",
+        omnigentBuildDigest="sha256:" + "2" * 64,
+        sourceDigest="sha256:" + "3" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "label": "OpenCode",
+                "implementation": {
+                    "sourceKind": "core",
+                    "package": "omnigent",
+                    "version": "1.2.3",
+                    "digest": "sha256:" + "1" * 64,
+                },
+            }
+        ],
+    )
+    catalog = SimpleNamespace(
+        snapshot=snapshot,
+        trust_records=[
+            SimpleNamespace(
+                implementationRef=snapshot.harnesses[
+                    0
+                ].implementation.implementation_ref(),
+                trustState=TrustState.core_trusted,
+            )
+        ],
+        diagnostics={
+            "agents": [{"name": "opencode-native-ui", "id": "agent", "version": "1"}]
+        },
+    )
+    versions = []
+    profiles = []
+
+    class Session:
+        async def get(self, kind, key):
+            if kind is OmnigentAgentProfile:
+                return profiles[0] if profiles else None
+            if kind is OmnigentHarnessCatalogSnapshotRecord:
+                return SimpleNamespace(snapshot_json=snapshot.model_dump(mode="json"))
+            return SimpleNamespace(metadata_snapshot={"id": "agent"})
+
+        async def execute(self, statement):
+            return SimpleNamespace(scalars=lambda: versions)
+
+        def add(self, row):
+            (
+                versions if isinstance(row, OmnigentAgentProfileVersion) else profiles
+            ).append(row)
+
+        async def commit(self):
+            pass
+
+    monkeypatch.setattr(api, "synchronize_upstream_inventory", AsyncMock())
+    monkeypatch.setattr(
+        api,
+        "_default_builtin_opencode_launch_policy_refs",
+        AsyncMock(return_value=["omnigent-on-demand@1"]),
+    )
+    monkeypatch.setattr(
+        "api_service.services.omnigent_agent_bootstrap_service.reconcile_managed_default_agent_profile",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.host_classes.OmnigentHostClassSelector.select",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.settings.opencode_support_enabled", lambda: True
+    )
+    session = Session()
+    await api.ensure_builtin_opencode_agent_profile(session=session, catalog=catalog)
+    fresh = deepcopy(versions[0].document)
+    versions[0].document = deepcopy(fresh)
+    versions[0].document["credentialSlots"][0]["acceptedProviderIds"] = [
+        "opencode-go",
+        "opencode",
+    ]
+    versions[0].digest = _digest(versions[0].document)
+    old_document = deepcopy(versions[0].document)
+    old_digest = versions[0].digest
+    await api.ensure_builtin_opencode_agent_profile(session=session, catalog=catalog)
+    assert len(versions) == 2
+    assert versions[0].document == old_document
+    assert versions[0].digest == old_digest
+    assert profiles[0].active_version == 2
+    provider = SimpleNamespace(
+        enabled=True,
+        auth_state="connected",
+        runtime_id="opencode",
+        provider_id="openrouter",
+        profile_id="custom",
+    )
+    OmnigentExecutionPlanningService._verify_provider_profile(
+        OmnigentAgentProfileV2.model_validate(versions[1].document), provider
+    )
+    with pytest.raises(Exception, match="incompatible with slot"):
+        OmnigentExecutionPlanningService._verify_provider_profile(
+            OmnigentAgentProfileV2.model_validate(old_document), provider
+        )
+    await api.ensure_builtin_opencode_agent_profile(session=session, catalog=catalog)
+    assert len(versions) == 2
 
 
 def test_guided_profile_rejects_unqualified_pi_preset() -> None:

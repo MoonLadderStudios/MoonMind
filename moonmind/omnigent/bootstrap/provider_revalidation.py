@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Collection, Mapping
@@ -42,7 +43,6 @@ logger = logging.getLogger(__name__)
 # image while retaining distinct credential materializers.
 OPENCODE_RUNTIME_ID = "opencode"
 OPENCODE_PROVIDER_ID = "opencode-go"
-OPENCODE_PROVIDER_IDS = (OPENCODE_PROVIDER_ID, "opencode")
 OPENCODE_SECRET_ROLE = "opencode_api_key"
 OPENCODE_DEPLOYMENT_SECRET_REF = "env://OPENCODE_API_KEY"
 
@@ -419,18 +419,18 @@ async def _opencode_profiles(session_factory: Any) -> list[Any]:
     from api_service.db.models import ManagedAgentProviderProfile
 
     async with session_factory() as session:
-        return list(
-            (
-                await session.execute(
-                    select(ManagedAgentProviderProfile).where(
-                        ManagedAgentProviderProfile.runtime_id == OPENCODE_RUNTIME_ID,
-                        ManagedAgentProviderProfile.provider_id.in_(
-                            OPENCODE_PROVIDER_IDS
-                        ),
-                    )
+        rows = (
+            await session.execute(
+                select(ManagedAgentProviderProfile).where(
+                    ManagedAgentProviderProfile.runtime_id == OPENCODE_RUNTIME_ID,
                 )
-            ).scalars()
-        )
+            )
+        ).scalars()
+        return [
+            row
+            for row in rows
+            if re.fullmatch(r"[a-z0-9][a-z0-9._-]*", str(row.provider_id or ""))
+        ]
 
 
 async def _deployment_key_changed(profile: Any, api_key: str) -> bool:
@@ -1121,7 +1121,6 @@ __all__ = [
     "MAX_REVALIDATION_ATTEMPTS",
     "MODEL_CATALOG_PROBE_CONTRACT_VERSION",
     "OPENCODE_PROVIDER_ID",
-    "OPENCODE_PROVIDER_IDS",
     "OPENCODE_RUNTIME_ID",
     "OPENCODE_SECRET_ROLE",
     "REVALIDATION_FAILURE_KEY",
