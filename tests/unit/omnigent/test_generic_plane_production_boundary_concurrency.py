@@ -257,6 +257,70 @@ def _compile_kwargs(catalog, run: str) -> dict[str, Any]:
     )
 
 
+@pytest.mark.parametrize("provider_id", ["openrouter", "vendor.v2_test"])
+def test_generic_keyed_provider_compiles_selected_route_with_isolated_host(provider_id):
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
+    from moonmind.omnigent.harness_platform.materializers import (
+        materializer_ref_for_provider,
+    )
+    from moonmind.omnigent.harness_platform.planning_service import (
+        OmnigentExecutionPlanningService,
+    )
+
+    catalog = _catalog()
+    kwargs = _compile_kwargs(catalog, "1")
+    document = kwargs["agent_profile"].model_dump(mode="json")
+    document["credentialSlots"][0].update(
+        acceptedAuthModels=["own-auth", "none"], acceptedProviderIds=[]
+    )
+    profile = OmnigentAgentProfileV2.model_validate(document)
+    provider = SimpleNamespace(
+        profile_id="selected-account",
+        runtime_id="opencode",
+        provider_id=provider_id,
+        enabled=True,
+        auth_state="connected",
+    )
+    OmnigentExecutionPlanningService._verify_provider_profile(profile, provider)
+    materializer = materializer_ref_for_provider(
+        provider.runtime_id, provider.provider_id
+    )
+    kwargs.update(
+        agent_profile=profile,
+        credential_binding_set=create_binding_set(
+            bindingSetId="selected-provider",
+            version=1,
+            bindings={
+                "primary-model": {
+                    "providerProfileRef": provider.profile_id,
+                    "materializerRef": materializer,
+                }
+            },
+        ),
+        model_qualified_id=f"{provider_id}/author/model:free",
+        model_route_ref=provider_id,
+    )
+    plan = compile_execution_plan(**kwargs)
+    restored = type(plan).model_validate_json(plan.model_dump_json(by_alias=True))
+    assert restored == plan
+    assert plan.payload.modelConfig.qualifiedId == f"{provider_id}/author/model:free"
+    assert plan.payload.modelConfig.routeRef == provider_id
+    assert (
+        plan.payload.credentialBindings["primary-model"].providerProfileRef
+        == "selected-account"
+    )
+    assert (
+        plan.payload.credentialBindings["primary-model"].materializerRef
+        == "opencode-auth-json@1"
+    )
+    assert plan.payload.executionRealizerRef == GENERIC_REALIZER_REF
+    assert kwargs["host_class"].features["restrictedEgress"] is True
+    assert kwargs["host_class"].features["readOnlyRoot"] is True
+    document["credentialSlots"][0]["acceptedAuthModels"] = ["oauth_volume"]
+    with pytest.raises(HarnessPlatformError, match="auth model"):
+        compile_execution_plan(**{**kwargs, "agent_profile": document})
+
+
 @pytest.mark.parametrize("concurrency", CONCURRENCY_LEVELS)
 @pytest.mark.asyncio
 async def test_n_submissions_compile_into_n_immutable_generic_plans(

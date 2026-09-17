@@ -2265,3 +2265,132 @@ def test_fix_comments_skill_requires_fresh_comments_and_remote_verification() ->
     assert "mergeAutomationDisposition=manual_review" in skill_text
     assert "every\n  non-outdated comment in that thread" in skill_text
     assert "leave the entire thread unresolved" in skill_text
+
+
+def test_fetch_review_thread_status_paginates_nested_thread_comments(
+    get_pr_comments_module: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Threads with more than one page of comments must be fully inventoried."""
+    fetch_status = get_pr_comments_module["fetch_review_thread_status"]
+    globals_dict = fetch_status.__globals__
+
+    def fake_post(url: str, payload: dict[str, Any], token: str | None) -> dict[str, Any]:
+        variables = payload.get("variables", {})
+        if "threadId" in variables:
+            assert variables["threadId"] == "PRRT_T1"
+            return {
+                "data": {
+                    "node": {
+                        "id": "PRRT_T1",
+                        "isResolved": False,
+                        "isOutdated": False,
+                        "comments": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [{"databaseId": 2}],
+                        },
+                    }
+                }
+            }
+        return {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [
+                                {
+                                    "id": "PRRT_T1",
+                                    "isResolved": False,
+                                    "isOutdated": False,
+                                    "comments": {
+                                        "pageInfo": {
+                                            "hasNextPage": True,
+                                            "endCursor": "c1",
+                                        },
+                                        "nodes": [{"databaseId": 1}],
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                }
+            }
+        }
+
+    monkeypatch.setitem(globals_dict, "api_post_json", fake_post)
+
+    status, complete = fetch_status("org", "repo", 1, "token")
+
+    assert complete is True
+    assert status[1]["threadId"] == "PRRT_T1"
+    assert status[2]["threadId"] == "PRRT_T1"
+
+
+def test_fetch_review_thread_status_flags_incomplete_on_graphql_error(
+    get_pr_comments_module: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed thread page must never present as a successful empty inventory."""
+
+    def fake_post(url: str, payload: dict[str, Any], token: str | None) -> dict[str, Any]:
+        raise RuntimeError("boom")
+
+    fetch_status = get_pr_comments_module["fetch_review_thread_status"]
+    monkeypatch.setitem(fetch_status.__globals__, "api_post_json", fake_post)
+
+    status, complete = fetch_status("org", "repo", 1, "token")
+
+    assert status == {}
+    assert complete is False
+
+
+def test_fetch_review_thread_status_without_token_is_incomplete(
+    get_pr_comments_module: dict[str, Any],
+) -> None:
+    """Without a token the GraphQL inventory cannot be proven complete."""
+    status, complete = get_pr_comments_module["fetch_review_thread_status"](
+        "org", "repo", 1, None
+    )
+
+    assert status == {}
+    assert complete is False
+
+
+def test_branch_wrapper_forwards_thread_inventory_flag(
+    get_branch_pr_comments_module: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The branch wrapper must not drop the helper's completeness flag."""
+    import sys
+
+    main = get_branch_pr_comments_module["main"]
+    globals_dict = main.__globals__
+    monkeypatch.setitem(globals_dict, "detect_current_branch", lambda: "feature/x")
+    monkeypatch.setitem(
+        globals_dict,
+        "resolve_pr_metadata",
+        lambda selector: {
+            "number": 1,
+            "title": "t",
+            "url": "u",
+            "headRefName": "feature/x",
+            "baseRefName": "main",
+        },
+    )
+    monkeypatch.setitem(
+        globals_dict,
+        "fetch_comments",
+        lambda **kwargs: {
+            "repository": "org/repo",
+            "comment_count": 0,
+            "comments": [],
+            "thread_inventory_complete": False,
+        },
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["get_branch_pr_comments.py", "--output", "out.json"])
+
+    assert main() == 0
+
+    payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
+    assert payload["thread_inventory_complete"] is False

@@ -28,6 +28,18 @@ ISOLATION_LOCK_REASON = (
 )
 MAX_ISOLATION_KEYS = 32
 _ENV_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_SAFE_PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_OPENCODE_API_KEY_CLEAR_ENV_KEYS = (
+    "OPENCODE_AUTH_CONTENT",
+    "OPENCODE_CONFIG",
+    "OPENCODE_CONFIG_CONTENT",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+)
+
+
+def is_safe_provider_id(provider_id: str) -> bool:
+    return _SAFE_PROVIDER_ID_PATTERN.fullmatch(provider_id) is not None
 
 # Keys that must never be cleared because they would break the launch or
 # clear unrelated process state.
@@ -124,20 +136,6 @@ _STRATEGY_TABLE: dict[tuple[str, str, str], tuple[str, ...]] = {
         "ANTHROPIC_BASE_URL",
         "CLAUDE_API_KEY",
         "OPENAI_API_KEY",
-    ),
-    ("opencode", "opencode-go", "api_key"): (
-        "OPENCODE_AUTH_CONTENT",
-        "OPENCODE_CONFIG",
-        "OPENCODE_CONFIG_CONTENT",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-    ),
-    ("opencode", "opencode", "api_key"): (
-        "OPENCODE_AUTH_CONTENT",
-        "OPENCODE_CONFIG",
-        "OPENCODE_CONFIG_CONTENT",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
     ),
     # MoonLadderStudios/MoonMind#4021: the credentialless Zen route must still
     # clear ambient model keys/auth caches at the launch boundary, including
@@ -301,6 +299,8 @@ def derive_isolation_policy(
     if not runtime or not provider or not method:
         return None
     keys = _STRATEGY_TABLE.get((runtime, provider, method))
+    if runtime == "opencode" and method == "api_key" and is_safe_provider_id(provider):
+        keys = _OPENCODE_API_KEY_CLEAR_ENV_KEYS
     if keys is None:
         return None
     return IsolationPolicy(

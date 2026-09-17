@@ -42,6 +42,28 @@ def _load_module(skill_id: str = "batch-workflows") -> dict[str, Any]:
     )
 
 
+def _loopback_env(extra: dict[str, str]) -> dict[str, str]:
+    """Hermetic subprocess env for the loopback HTTP double.
+
+    The double serves 127.0.0.1 and must never be routed through an ambient
+    egress proxy inherited from the test worker environment (same isolation
+    as tests/unit/test_repository_batch_targets.py::_run_helper).
+    """
+    env = {**os.environ, **extra}
+    for proxy_var in (
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+    ):
+        env.pop(proxy_var, None)
+    env["no_proxy"] = "127.0.0.1,localhost"
+    env["NO_PROXY"] = "127.0.0.1,localhost"
+    return env
+
+
 def test_provider_entrypoints_load_the_shared_portable_engine() -> None:
     for skill_id in ("batch-workflows", "batch-github-workflows"):
         module = _load_module(skill_id)
@@ -1015,13 +1037,14 @@ def test_materialized_snapshot_queues_five_targets_from_external_repo(tmp_path):
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    env = {
-        **os.environ,
-        "PYTHONPATH": str(trap),
-        "MOONMIND_URL": f"http://127.0.0.1:{server.server_port}",
-        "MOONMIND_STEP_EXECUTION_ID": "step-external-1",
-        "MOONMIND_ACTIVE_SKILLS_DIR": str(snapshot),
-    }
+    env = _loopback_env(
+        {
+            "PYTHONPATH": str(trap),
+            "MOONMIND_URL": f"http://127.0.0.1:{server.server_port}",
+            "MOONMIND_STEP_EXECUTION_ID": "step-external-1",
+            "MOONMIND_ACTIVE_SKILLS_DIR": str(snapshot),
+        }
+    )
     try:
         completed = subprocess.run(
             [
@@ -1135,7 +1158,7 @@ def test_materialized_helper_failure_matrix_preserves_authoritative_evidence(tmp
     targets_path.write_text(json.dumps(targets), encoding="utf-8")
 
     def run(*, url: str, execution_ref: str | None = "step-matrix"):
-        env = {**os.environ, "MOONMIND_URL": url, "MOONMIND_ACTIVE_SKILLS_DIR": str(snapshot)}
+        env = _loopback_env({"MOONMIND_URL": url, "MOONMIND_ACTIVE_SKILLS_DIR": str(snapshot)})
         if execution_ref is None:
             env.pop("MOONMIND_STEP_EXECUTION_ID", None)
         else:

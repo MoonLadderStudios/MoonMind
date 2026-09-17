@@ -147,9 +147,29 @@ GATE_SOURCE="run_dood_unreal_tactics.sh"
 GATE_TIMESTAMP=""
 
 write_gate_result() {
+  # A dry-run preview is explicitly non-mutating: it must never create,
+  # overwrite, or erase the gate artifact (MoonLadderStudios/MoonMind#4277).
+  # The preview reports SKIPPED on stdout only so a prior verified PASS
+  # result survives the preview.
+  if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+    return 0
+  fi
   [[ -n "${GATE_FILE:-}" ]] || return 0
   mkdir -p "$(dirname "$GATE_FILE")"
   GATE_TIMESTAMP="${GATE_TIMESTAMP:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  # Phase-aware log evidence: only logs for phases that ran are named, so a
+  # verifier following the gate never rejects a successful single-phase run
+  # for a skipped phase's absent log file. Only logs for phases marked `pass`
+  # are required.
+  local log_fields=""
+  if [[ -n "${build_log:-}" ]]; then
+    log_fields+=",
+  \"buildLog\": \"$(json_escape "$build_log")\""
+  fi
+  if [[ -n "${test_log:-}" ]]; then
+    log_fields+=",
+  \"testLog\": \"$(json_escape "$test_log")\""
+  fi
   cat >"$GATE_FILE" <<EOF
 {
   "status": "$(json_escape "$GATE_STATUS")",
@@ -161,9 +181,7 @@ write_gate_result() {
   "dockerStatus": "$(json_escape "$GATE_DOCKER_STATUS")",
   "buildStatus": "$(json_escape "$GATE_BUILD_STATUS")",
   "testStatus": "$(json_escape "$GATE_TEST_STATUS")",
-  "resultsDir": "$(json_escape "$results_host_dir")",
-  "buildLog": "$(json_escape "$build_log")",
-  "testLog": "$(json_escape "$test_log")"
+  "resultsDir": "$(json_escape "$results_host_dir")"$log_fields
 }
 EOF
 }
@@ -323,6 +341,9 @@ fi
 
 if [[ -n "$CCACHE_VOLUME" ]]; then
   CCACHE_MOUNT="type=volume,src=$CCACHE_VOLUME,dst=/home/ue4/.ccache"
+elif [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+  # Dry-run preview is non-mutating: do not create host cache dirs.
+  CCACHE_MOUNT="type=bind,src=$CCACHE_DIR,dst=/home/ue4/.ccache"
 else
   mkdir -p "$CCACHE_DIR"
   CCACHE_DIR="$(realpath "$CCACHE_DIR")"
@@ -331,6 +352,9 @@ fi
 
 if [[ -n "$UBT_VOLUME" ]]; then
   UBT_MOUNT="type=volume,src=$UBT_VOLUME,dst=/home/ue4/.config/Epic/UnrealBuildTool"
+elif [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+  # Dry-run preview is non-mutating: do not create host metadata dirs.
+  UBT_MOUNT="type=bind,src=$UBT_DIR,dst=/home/ue4/.config/Epic/UnrealBuildTool"
 else
   mkdir -p "$UBT_DIR"
   UBT_DIR="$(realpath "$UBT_DIR")"
@@ -359,8 +383,17 @@ fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 results_host_dir="$REPO_DIR/$RESULTS_SUBDIR/$timestamp"
-build_log="$results_host_dir/build.log"
-test_log="$results_host_dir/test.log"
+# Phase-aware log paths: only phases that run name a log file.
+if [[ "$PHASE" == "all" || "$PHASE" == "build" ]]; then
+  build_log="$results_host_dir/build.log"
+else
+  build_log=""
+fi
+if [[ "$PHASE" == "all" || "$PHASE" == "test" ]]; then
+  test_log="$results_host_dir/test.log"
+else
+  test_log=""
+fi
 
 build_container_name="mm-dood-tactics-build-${timestamp,,}"
 test_container_name="mm-dood-tactics-test-${timestamp,,}"
@@ -443,6 +476,8 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "Test command:"
     print_cmd "${test_cmd[@]}"
   fi
+  echo
+  echo 'Gate preview: status="SKIPPED" (dry-run; no gate artifact written)'
   exit 0
 fi
 

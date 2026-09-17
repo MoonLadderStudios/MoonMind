@@ -432,24 +432,29 @@ def test_managed_runtime_cleanup_defaults_match_api_and_agent_runtime_worker():
 def test_documented_compose_startup_config_succeeds_without_env_file(tmp_path):
     _require_docker_compose()
 
-    env_path = REPO_ROOT / ".env"
-    hidden_env_path = tmp_path / ".env"
-    env_was_hidden = False
-    if env_path.exists():
-        shutil.move(str(env_path), str(hidden_env_path))
-        env_was_hidden = True
-
-    try:
-        result = subprocess.run(
-            ["docker", "compose", "-f", "docker-compose.yaml", "config"],
-            cwd=REPO_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-    finally:
-        if env_was_hidden:
-            shutil.move(str(hidden_env_path), str(env_path))
+    # Never hide/move the operator-owned REPO_ROOT/.env. Docker-backed runs
+    # execute this test as root against a rw bind mount while tmp_path lives
+    # on the container overlay: a hide/restore shutil.move then recreates
+    # .env as root:root (mode/mtime preserved, birth reset) and every later
+    # host `docker compose` invocation fails with permission denied.
+    # Rendering an isolated empty project directory proves the same
+    # documented-defaults claim without touching operator state, and stays
+    # safe under parallel xdist workers.
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(REPO_ROOT / "docker-compose.yaml"),
+            "--project-directory",
+            str(tmp_path),
+            "config",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
     assert result.returncode == 0, result.stderr
 
@@ -571,13 +576,18 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
         proxy_service,
         "omnigent-egress-network",
     )
-    assert proxy_service["labels"][
-        "moonmind.egress.profile-set-digest"
-    ].startswith("sha256:")
-    assert proxy_service["labels"]["moonmind.egress.config-digest"].startswith(
-        "sha256:"
-    )
-    assert "squid -k parse" in proxy_service["healthcheck"]["test"][1]
+    assert proxy_service["labels"]["moonmind.egress.enforcer"] == "docker-internal-proxy/v2"
+    assert proxy_service["image"] == services["api"]["image"]
+    assert proxy_service["entrypoint"] == [
+        "/bin/sh", "/opt/moonmind-egress/policy.sh", "start"
+    ]
+    assert proxy_service["healthcheck"]["test"] == [
+        "CMD", "/bin/sh", "/opt/moonmind-egress/policy.sh", "check"
+    ]
+    assert proxy_service["volumes"] == [
+        "${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:"
+        "${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro"
+    ]
 
     sandbox_env = _env_map(services["temporal-worker-sandbox"]["environment"])
     assert sandbox_env["WORKFLOW_WORKSPACE_ROOT"] == "/work/agent_jobs"
@@ -781,6 +791,12 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "CLAUDE_VOLUME_PATH": "/home/app/.claude",
         "CLAUDE_CONFIG_DIR": "/home/app/.claude",
         "CLAUDE_CREDENTIAL_GENERATION": "${CLAUDE_CREDENTIAL_GENERATION:-1}",
+        "MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS": (
+            "${MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS:-1800}"
+        ),
+        "MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS": (
+            "${MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS:-600}"
+        ),
     }
 
     host_volumes = {
@@ -871,6 +887,12 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
         "CODEX_VOLUME_PATH": "/home/app/.codex",
         "CODEX_CREDENTIAL_GENERATION": "${CODEX_CREDENTIAL_GENERATION:-1}",
         "OMNIGENT_SERVER_URL": "http://omnigent:8000",
+        "MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS": (
+            "${MOONMIND_OMNIGENT_STATIC_CREDENTIAL_TIMEOUT_SECONDS:-1800}"
+        ),
+        "MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS": (
+            "${MOONMIND_OMNIGENT_STATIC_SKILL_TIMEOUT_SECONDS:-600}"
+        ),
         "OMNIGENT_EXECUTION_TIMEOUT_SECONDS": "${OMNIGENT_HOST_TIMEOUT_SECONDS:-5400}",
         "OMNIGENT_EXECUTION_TIMEOUT_OWNER": "temporal_workflow",
         "OMNIGENT_CAPTURE_OWNER": "moonmind_bridge",

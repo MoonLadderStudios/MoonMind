@@ -176,9 +176,13 @@ def resolve_model_by_display(
     # If catalog available, verify alias exists in catalog via exact match.
     if available_models is not None:
         qualified = alias["qualifiedId"]
-        if not any(str(m.get("qualifiedId") or "") == qualified for m in available_models):
+        if not any(
+            str(m.get("qualifiedId") or "") == qualified for m in available_models
+        ):
             # Provide live alternatives in error detail
-            alternatives = ", ".join(str(m.get("qualifiedId") or "") for m in available_models[:5])
+            alternatives = ", ".join(
+                str(m.get("qualifiedId") or "") for m in available_models[:5]
+            )
             raise ValueError(
                 f"Requested model {display!r} is unavailable for {_route_label(display)}. "
                 f"Available: {alternatives or 'none'}"
@@ -189,19 +193,28 @@ def resolve_model_by_display(
 def resolve_bootstrap_model(
     display: str,
     available_models: list[dict[str, Any]] | None = None,
+    *,
+    provider_id: str | None = None,
 ) -> dict[str, str]:
-    """Resolve one bootstrap model through the coordinated first-result path.
+    """Preserve selected-provider IDs for image resolution, not execution.
 
-    MoonLadderStudios/MoonMind#4021 req-1/req-3: the credentialless
-    ``opencode/*`` route never resolves pre-validation. A qualified
-    ``opencode/<model>`` request requires the exact observed catalog and an
-    exact qualified-ID match via :func:`resolve_model_exact`; otherwise it
-    fails closed with an actionable error instead of silently substituting.
-    Display aliases remain valid only for the keyed ``opencode-go`` route and
-    for historical/display loading, never for credentialless execution
-    selection.
+    An explicit provider permits deferring catalog validation until exact-host
+    qualification. A supplied catalog always requires the exact qualified ID.
+    Without provider authority, credentialless IDs require an observed catalog;
+    friendly aliases remain historical/display helpers only.
     """
     text = display.strip()
+    if provider_id is not None and "/" in text:
+        prefix, _, model = text.partition("/")
+        if prefix != provider_id or not model or any(c.isspace() for c in text):
+            raise ValueError("model must be qualified by the selected provider")
+        if available_models is not None:
+            return resolve_model_exact(text, available_models)
+        return {
+            "displayName": text,
+            "providerModelId": model,
+            "qualifiedId": text,
+        }
     if "/" in text and text.split("/", 1)[0].strip() == "opencode":
         # Credentialless route: exact catalog match is mandatory, even when
         # the alias table happens to contain the seeded ID. This gates the
@@ -215,7 +228,9 @@ def validate_effort(effort: str, available_efforts: list[str] | None = None) -> 
     allowed = {"minimal", "low", "medium", "high", "xhigh"}
     if normalized not in allowed:
         raise ValueError(f"effort {effort!r} is not supported")
-    if available_efforts is not None and normalized not in {e.lower() for e in available_efforts}:
+    if available_efforts is not None and normalized not in {
+        e.lower() for e in available_efforts
+    }:
         raise ValueError(f"effort {effort!r} is not supported by the selected model")
     return normalized
 
