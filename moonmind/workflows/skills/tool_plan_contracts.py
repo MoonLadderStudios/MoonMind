@@ -7,7 +7,7 @@ These models implement the runtime contracts described in
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import FrozenInstanceError, dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Mapping
 
@@ -546,6 +546,33 @@ class ToolFailure(Exception):
         if self.cause is not None:
             payload["cause"] = self.cause.to_payload()
         return payload
+
+# Python records traceback and chaining state on any exception it propagates,
+# and contextlib assigns ``__traceback__`` directly on the failure it re-raises.
+# A frozen dataclass rejects every assignment, and with ``slots=True`` its
+# generated setter raises an unrelated ``TypeError: super(type, obj)...`` that
+# replaced the real diagnosis. Accept the interpreter's own exception state;
+# the failure envelope itself stays immutable.
+_EXCEPTION_STATE_ATTRIBUTES = frozenset(
+    {
+        "__traceback__",
+        "__cause__",
+        "__context__",
+        "__suppress_context__",
+        "__notes__",
+    }
+)
+
+
+def _set_tool_failure_attribute(self: ToolFailure, name: str, value: Any) -> None:
+    if name in _EXCEPTION_STATE_ATTRIBUTES:
+        BaseException.__setattr__(self, name, value)
+        return
+    raise FrozenInstanceError(f"cannot assign to field {name!r}")
+
+
+ToolFailure.__setattr__ = _set_tool_failure_attribute
+
 
 @dataclass(frozen=True, slots=True)
 class ToolResult:
