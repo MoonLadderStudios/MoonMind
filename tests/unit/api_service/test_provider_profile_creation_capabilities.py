@@ -13,8 +13,8 @@ from api_service.services.provider_profile_creation import (
     provider_api_key_strategy,
     provider_profile_creation_capabilities,
     required_secret_roles,
-    validate_manual_credential_contract,
     validate_credential_contract,
+    validate_manual_credential_contract,
 )
 
 
@@ -34,9 +34,10 @@ def test_first_party_openai_creation_capabilities_are_guided_and_locked() -> Non
         "editable": False,
         "lock_reason": "OAuth enrollment owns the credential source.",
     }
-    assert methods["oauth"]["fields"]["runtime_materialization_mode"][
-        "value"
-    ] == "oauth_home"
+    assert (
+        methods["oauth"]["fields"]["runtime_materialization_mode"]["value"]
+        == "oauth_home"
+    )
     assert methods["oauth"]["imported_volume"] == {
         "supported": True,
         "mount_path": "/home/app/.codex",
@@ -77,9 +78,7 @@ def test_credential_free_method_requires_authoritative_backend_capability(
 
     assert unsupported["supported"] is False
     assert unsupported["authentication_methods"] == []
-    assert [method["id"] for method in authorized["authentication_methods"]] == [
-        "none"
-    ]
+    assert [method["id"] for method in authorized["authentication_methods"]] == ["none"]
     assert authorized["authentication_methods"][0]["label"] == "No credentials"
 
 
@@ -96,20 +95,75 @@ def test_opencode_zen_is_credential_free_while_go_requires_an_api_key() -> None:
     assert [method["id"] for method in zen["authentication_methods"]] == ["none"]
     assert zen["authentication_methods"][0]["secret_roles"] == []
     assert provider_api_key_strategy("opencode", "opencode") is None
-    assert [method["id"] for method in go["authentication_methods"]] == [
-        "api_key"
-    ]
+    assert [method["id"] for method in go["authentication_methods"]] == ["api_key"]
     assert provider_api_key_strategy("opencode", "opencode-go") is not None
     assert required_secret_roles("opencode", "opencode") == ()
-    assert required_secret_roles("opencode", "opencode-go") == (
-        "opencode_api_key",
+    assert required_secret_roles("opencode", "opencode-go") == ("opencode_api_key",)
+
+
+@pytest.mark.parametrize(
+    "provider_id", ["openrouter", "opencode-go", "future-provider"]
+)
+def test_opencode_api_key_creation_is_provider_generic(provider_id: str) -> None:
+    capabilities = provider_profile_creation_capabilities(
+        runtime_id="opencode", provider_id=provider_id
     )
+    assert capabilities["supported"] is True
+    assert [method["id"] for method in capabilities["authentication_methods"]] == [
+        "api_key"
+    ]
+    strategy = provider_api_key_strategy("opencode", provider_id)
+    assert strategy is not None
+    assert strategy.auth_strategy == "opencode_auth_json"
+    assert required_secret_roles("opencode", provider_id) == ("opencode_api_key",)
+
+
+@pytest.mark.parametrize(
+    "provider_id", ["openrouter", "opencode-go", "future.v2_provider-1"]
+)
+def test_opencode_api_key_preset_matches_strategy(provider_id: str) -> None:
+    from api_service.services.provider_profile_creation_presets import (
+        get_provider_profile_creation_preset,
+    )
+
+    preset = get_provider_profile_creation_preset(
+        runtime_id="opencode", provider_id=provider_id, authentication_method="api_key"
+    )
+    strategy = provider_api_key_strategy("opencode", provider_id)
+    assert preset.supported is True
+    assert strategy is not None
+    assert preset.fields["runtime_materialization_mode"].value == "composite"
+    assert preset.fields["secret_ref_roles"].value == [strategy.secret_role]
+    assert (
+        preset.fields["command_behavior"].value["auth_strategy"]
+        == strategy.auth_strategy
+    )
+    assert preset.fields["clear_env_keys"].value == list(strategy.clear_env_keys)
+    assert preset.fields["env_template"].value == {}
+    assert preset.fields["enabled"].value is False
+    assert preset.fields["credential_source"].value == "none"
+    assert "first-party" not in preset.fields["system_tags"].value
+
+
+@pytest.mark.parametrize(
+    "provider_id", ["", "../provider", "a/b", "a b", "A", "-a", "a;cmd", "a\nb"]
+)
+def test_opencode_creation_rejects_unsafe_provider_ids(provider_id: str) -> None:
+    from api_service.services.provider_profile_creation_presets import (
+        get_provider_profile_creation_preset,
+    )
+
+    assert provider_api_key_strategy("opencode", provider_id) is None
+    assert not provider_profile_creation_capabilities(
+        runtime_id="opencode", provider_id=provider_id
+    )["supported"]
+    assert not get_provider_profile_creation_preset(
+        runtime_id="opencode", provider_id=provider_id, authentication_method="api_key"
+    ).supported
 
 
 def test_required_secret_roles_are_backend_declared() -> None:
-    assert required_secret_roles("claude_code", "anthropic") == (
-        "anthropic_api_key",
-    )
+    assert required_secret_roles("claude_code", "anthropic") == ("anthropic_api_key",)
     assert required_secret_roles("custom_runtime", "custom_provider") == ()
 
 
@@ -242,9 +296,7 @@ def test_expert_minimax_capability_requires_provider_launch_templates() -> None:
     method = capabilities["authentication_methods"][0]
 
     assert method["launch_ready_after_setup"] is False
-    assert [role["role"] for role in method["secret_roles"]] == [
-        "provider_api_key"
-    ]
+    assert [role["role"] for role in method["secret_roles"]] == ["provider_api_key"]
     common = {
         "runtime_id": "codex_cli",
         "provider_id": "minimax",
@@ -264,9 +316,7 @@ def test_expert_minimax_capability_requires_provider_launch_templates() -> None:
     )
     assert expert_manual_credential_launch_ready(
         **common,
-        env_template={
-            "MINIMAX_API_KEY": {"from_secret_ref": "provider_api_key"}
-        },
+        env_template={"MINIMAX_API_KEY": {"from_secret_ref": "provider_api_key"}},
         file_templates=[{"path": "config.toml", "content": "profile"}],
         home_path_overrides={"CODEX_HOME": "{{runtime_support_dir}}/codex-home"},
     )

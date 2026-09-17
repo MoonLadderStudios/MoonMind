@@ -17,6 +17,8 @@ from moonmind.auth.github_credentials import (
     GitHubCredentialSource,
     ResolvedGitHubCredential,
 )
+from moonmind.omnigent.bootstrap import store
+from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
 from moonmind.omnigent.credential_materializers import (
     CredentialMaterializationContext,
     CredentialRuntimeHandle,
@@ -44,10 +46,6 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.host_classes import HostClass, get_launch_policy
-from moonmind.omnigent.bootstrap import store
-from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
-from moonmind.omnigent.host_image_drift import compatible_deployed_fallback
-from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from moonmind.omnigent.harness_platform.planning_service import (
     OmnigentExecutionPlanningService,
     OmnigentPlannedHostResolver,
@@ -59,7 +57,9 @@ from moonmind.omnigent.harness_platform.stores import (
     InMemoryExecutionPlanStore,
     InMemoryExecutionPlanUsageStore,
 )
+from moonmind.omnigent.host_image_drift import compatible_deployed_fallback
 from moonmind.omnigent.host_leases import InMemoryOmnigentHostLeaseRepository
+from moonmind.omnigent.host_ports import HostLaunchSpec, expected_omnigent_host_id
 from moonmind.omnigent.host_services.attestation import (
     DockerOmnigentHostAttestor,
     _assert_exact_omnigent_build,
@@ -72,11 +72,7 @@ from moonmind.omnigent.host_services.github_credentials import (
     OmnigentGithubCredentialService,
     github_repository_from_request,
 )
-from moonmind.omnigent.host_ports import HostLaunchSpec, expected_omnigent_host_id
 from moonmind.omnigent.host_services.launcher import DockerOmnigentHostLauncher
-from moonmind.omnigent.host_services.runtime_scripts import (
-    OmnigentRuntimeScriptService,
-)
 from moonmind.omnigent.host_services.mounted_tools import (
     OmnigentMountedToolService,
     deployment_mounted_tool_names,
@@ -84,11 +80,8 @@ from moonmind.omnigent.host_services.mounted_tools import (
 from moonmind.omnigent.host_services.runtime_environment import (
     OmnigentRuntimeEnvironmentService,
 )
+from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
-from moonmind.workflows.temporal.runtime.workspace_locators import (
-    SandboxWorkspaceRecord,
-    SandboxWorkspaceRecordStore,
-)
 from moonmind.omnigent.provider_leases import (
     AcquiredProviderLease,
     OmnigentProviderLeaseCoordinator,
@@ -106,10 +99,15 @@ from moonmind.provider_profiles.lease_client import (
     CredentialLease,
     CredentialLeasePurpose,
 )
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
 from moonmind.security.execution_fanout_capabilities import (
     verify_execution_fanout_capability,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
+)
 
 
 def test_exact_host_attestation_requires_catalog_build_label() -> None:
@@ -561,6 +559,45 @@ def test_profile_model_intent_does_not_depend_on_discovery(evidence):
     profile = SimpleNamespace(model={"qualifiedId": "opencode-go/different", "effort": "low"})
     model, effort, route = service._resolve_model(request, profile, provider)
     assert (model, effort, route) == ("opencode/selected", "high", "opencode")
+
+
+@pytest.mark.parametrize("runtime", ["codex_cli", "claude_code", "omnigent"])
+def test_generic_opencode_slot_rejects_unrelated_provider_runtimes(runtime):
+    profile = SimpleNamespace(
+        harness=SimpleNamespace(id="opencode-native"), credentialSlots=[]
+    )
+    provider = SimpleNamespace(enabled=True, auth_state="connected", runtime_id=runtime)
+    with pytest.raises(HarnessPlatformError):
+        OmnigentExecutionPlanningService._verify_provider_profile(profile, provider)
+
+
+@pytest.mark.parametrize("provider_id", ["openrouter", "vendor.v2_test"])
+def test_generic_opencode_planning_preserves_selected_nested_route(provider_id):
+    service = object.__new__(OmnigentExecutionPlanningService)
+    service._deployment_default_model = ""
+    profile = SimpleNamespace(
+        harness=SimpleNamespace(id="opencode-native"), credentialSlots=[]
+    )
+    provider = SimpleNamespace(
+        enabled=True,
+        auth_state="connected",
+        runtime_id="opencode",
+        provider_id=provider_id,
+        default_model=f"{provider_id}/author/model:free",
+        default_effort=None,
+        model_tiers=None,
+        default_model_tier=1,
+        model_catalog_evidence_json=None,
+    )
+    service._verify_provider_profile(profile, provider)
+    assert service._resolve_model(_request(), profile, provider) == (
+        f"{provider_id}/author/model:free",
+        None,
+        provider_id,
+    )
+    request = _request().model_copy(update={"parameters": {"model": "other/model"}})
+    with pytest.raises(HarnessPlatformError):
+        service._resolve_model(request, profile, provider)
 
 
 class _Session:
@@ -1333,11 +1370,12 @@ async def test_host_volume_initializers_use_setup_authority(
 def test_generic_container_capability_reaches_python_test_submission(
     harness_id, relative_path
 ):
+    from fastapi import HTTPException
+
     from api_service.api.routers.mcp_tools import (
         ToolCallRequest,
         _enforce_container_capability_scope,
     )
-    from fastapi import HTTPException
     from moonmind.container_job_cli import python_test_submission
     from moonmind.security.container_job_capabilities import (
         verify_container_job_session_capability,
@@ -1549,9 +1587,10 @@ def test_generic_host_mints_scoped_fanout_from_step_authority(
 
 
 @pytest.mark.asyncio
-async def test_opencode_volume_materialization_transports_secret_only_on_stdin() -> (
-    None
-):
+@pytest.mark.parametrize("provider_id", ["opencode-go", "openrouter", "vendor.v2_test"])
+async def test_opencode_volume_materialization_transports_secret_only_on_stdin(
+    provider_id,
+) -> None:
     secret = "super-sensitive-open-code-key"
     backend = _DockerBackend()
     artifacts = _Artifacts()
@@ -1584,7 +1623,7 @@ async def test_opencode_volume_materialization_transports_secret_only_on_stdin()
             secrets=secrets,
             writer_image_ref="ghcr.io/example/opencode@sha256:" + "1" * 64,
             artifact_gateway=artifacts,
-            provider_route_ref="opencode-go",
+            provider_route_ref=provider_id,
         )
     )
     backend.runtime_ref = handle.credentialRuntimeRef
@@ -1602,9 +1641,9 @@ async def test_opencode_volume_materialization_transports_secret_only_on_stdin()
     stdin_payloads = [payload for _argv, payload in backend.calls if payload]
     assert len(stdin_payloads) == 1
     assert json.loads(stdin_payloads[0]) == {
-        "opencode-go": {"type": "api", "key": secret},
+        provider_id: {"type": "api", "key": secret},
     }
-    assert artifacts.payloads[0]["providerRouteRef"] == "opencode-go"
+    assert artifacts.payloads[0]["providerRouteRef"] == provider_id
     writer_argv = next(argv for argv, payload in backend.calls if payload)
     assert writer_argv[0:7] == [
         "docker",
@@ -4271,7 +4310,10 @@ async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
 @pytest.mark.asyncio
 async def test_ready_host_retry_preserves_materialized_input_paths(monkeypatch):
     """Revoke the first Activity after host readiness, before sending its turn."""
-    from moonmind.omnigent.execute import _build_omnigent_first_message, _first_message_text
+    from moonmind.omnigent.execute import (
+        _build_omnigent_first_message,
+        _first_message_text,
+    )
 
     harness = await _generic_publication_harness(_PUSHED_PUBLICATION)
     plan = _plan('opencode-go/model')

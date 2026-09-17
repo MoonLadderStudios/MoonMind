@@ -1327,25 +1327,25 @@ function claudeCredentialActions(profile: ProviderProfile): ClaudeAuthAction[] {
     .filter((action): action is ClaudeAuthAction => action !== null);
 }
 
-function isOpencodeGoProfile(profile: ProviderProfile): boolean {
-  return profile.runtime_id === 'opencode' && profile.provider_id === 'opencode-go';
+function hasGuidedApiKeySetup(profile: ProviderProfile): boolean {
+  const capabilities = profile.creation_capabilities;
+  return Boolean(
+    capabilities?.supported &&
+      capabilities.runtime_id === profile.runtime_id &&
+      capabilities.provider_id === profile.provider_id &&
+      capabilities.authentication_methods.some((method) =>
+        method.id === 'api_key' &&
+        setupContinuationAvailableForCreate('api_key', method.setup_action, method.launch_ready_after_setup, false),
+      ),
+  );
 }
 
 function isOpencodeCredentialMethodProfile(profile: ProviderProfile): boolean {
-  return profile.runtime_id === 'opencode' && (profile.provider_id === 'opencode-go' || profile.provider_id === 'opencode');
-}
-
-function defaultOpencodeCredentialActions(profile: ProviderProfile): string[] {
-  if (!isOpencodeGoProfile(profile)) {
-    return [];
-  }
-  return ['use_api_key'];
+  return profile.runtime_id === 'opencode';
 }
 
 function opencodeCredentialActions(profile: ProviderProfile): OpencodeAuthAction[] {
-  const actionIds = commandBehaviorStringArray(profile, 'auth_actions');
-  const resolvedActionIds = actionIds ?? defaultOpencodeCredentialActions(profile);
-  return resolvedActionIds
+  return (hasGuidedApiKeySetup(profile) ? ['use_api_key'] : [])
     .map((actionId) => {
       const label = OPENCODE_AUTH_ACTION_LABELS[actionId];
       return label ? { id: actionId, label } : null;
@@ -1393,7 +1393,7 @@ function apiKeyEnrollmentCopy(profile: ProviderProfile): ApiKeyEnrollmentCopy {
     providerName: 'OpenCode',
     credentialLabel: 'OpenCode API key',
     description:
-      'Use an OpenCode Go API key for OpenCode launches. Paste the key here, then validate and save it as a managed provider credential.',
+      `Use an API key from ${profile.provider_label || profile.provider_id} for OpenCode launches. Paste the key here, then validate and save it as a managed provider credential.`,
     readyLabel: 'OpenCode API key ready',
   };
 }
@@ -3698,9 +3698,7 @@ export function ProviderProfilesManager({
                 const canStartOAuth = authModel.kind === 'codex_oauth';
                 const canUseGenericApiKey = Boolean(
                   ((profile.runtime_id === 'codex_cli' && profile.provider_id === 'openai') ||
-                    profile.creation_capabilities?.authentication_methods.some(
-                      (method) => method.id === 'api_key',
-                    )) &&
+                    hasGuidedApiKeySetup(profile)) &&
                     !isClaudeCredentialMethodProfile(profile) &&
                     !isOpencodeCredentialMethodProfile(profile),
                 );
