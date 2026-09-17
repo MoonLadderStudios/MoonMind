@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -890,9 +891,7 @@ async def test_retained_worker_diagnostic_redacts_before_truncating(
     """
     from unittest.mock import AsyncMock
 
-    import hashlib
-
-    from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
+    from moonmind.security.egress import EGRESS_GATEWAY_REF
     from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
     from moonmind.workflows.temporal import workers
 
