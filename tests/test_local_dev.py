@@ -258,12 +258,13 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     }
     assert proxy_service.get("expose") == ["3128", "3129"]
     assert proxy_service["container_name"] == "moonmind-sandbox-egress-proxy"
-    assert proxy_service["labels"][
-        "moonmind.egress.profile-set-digest"
-    ].startswith("sha256:")
     assert proxy_service["labels"]["moonmind.egress.enforcer"] == (
-        "docker-internal-proxy/v1"
+        "docker-internal-proxy/v2"
     )
+    assert proxy_service["image"] == services["api"]["image"]
+    assert proxy_service["entrypoint"] == [
+        "/bin/sh", "/opt/moonmind-egress/policy.sh", "start"
+    ]
 
     sandbox_env = _env_map(sandbox_worker.get("environment"))
     assert sandbox_env["HTTPS_PROXY"] == (

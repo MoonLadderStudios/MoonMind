@@ -576,13 +576,18 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
         proxy_service,
         "omnigent-egress-network",
     )
-    assert proxy_service["labels"][
-        "moonmind.egress.profile-set-digest"
-    ].startswith("sha256:")
-    assert proxy_service["labels"]["moonmind.egress.config-digest"].startswith(
-        "sha256:"
-    )
-    assert "squid -k parse" in proxy_service["healthcheck"]["test"][1]
+    assert proxy_service["labels"]["moonmind.egress.enforcer"] == "docker-internal-proxy/v2"
+    assert proxy_service["image"] == services["api"]["image"]
+    assert proxy_service["entrypoint"] == [
+        "/bin/sh", "/opt/moonmind-egress/policy.sh", "start"
+    ]
+    assert proxy_service["healthcheck"]["test"] == [
+        "CMD", "/bin/sh", "/opt/moonmind-egress/policy.sh", "check"
+    ]
+    assert proxy_service["volumes"] == [
+        "${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:"
+        "${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro"
+    ]
 
     sandbox_env = _env_map(services["temporal-worker-sandbox"]["environment"])
     assert sandbox_env["WORKFLOW_WORKSPACE_ROOT"] == "/work/agent_jobs"
