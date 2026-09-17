@@ -351,6 +351,7 @@ def main(argv=None):
                 env={
                     **os.environ,
                     "MOONMIND_IMAGE": record["image"],
+                    "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES": "docker-proxy,sandbox-egress-proxy,postgres",
                     # The updater reaches Docker through docker-proxy, and
                     # postgres/sandbox-egress-proxy are stateful substrate:
                     # recreating them through a rewritten-bind render on every
