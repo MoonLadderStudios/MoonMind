@@ -657,7 +657,7 @@ async def test_docker_logs_tail_merges_stdout_and_stderr(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("repaired", [True, False, "starting"])
+@pytest.mark.parametrize("repaired", [True, False, "starting", "absent"])
 async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_required(
     tmp_path, monkeypatch, repaired
 ):
@@ -693,7 +693,11 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
             }
         )
     )
-    health = {"status": "starting" if repaired == "starting" else "unhealthy"}
+    health = {
+        "status": None
+        if repaired == "absent"
+        else ("starting" if repaired == "starting" else "unhealthy")
+    }
     polls = {"count": 0}
     embedded_compose = "services:\n  sandbox-egress-proxy:\n    image: ubuntu/squid\n"
 
@@ -707,6 +711,8 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
         if repaired == "starting" and polls["count"] > 2:
             # A gateway that converges on its own is never recreated.
             health["status"] = "healthy"
+        if health["status"] is None:
+            raise RuntimeError("Docker inspect failed: No such object")
         return json.dumps([{"State": {"Health": {"Status": health["status"]}}}])
 
     compose_calls = []
@@ -724,6 +730,9 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
     monkeypatch.setattr(HostDockerComposeRunner, "_run_compose_command", fake_compose)
 
     async def readiness(name):
+        if repaired == "absent":
+            # A deployment that runs no gateway has nothing to attest here.
+            return {"ready": True, "buildId": digest}
         if health["status"] != "healthy":
             raise RuntimeError("restricted-egress gateway is not healthy")
         return {"ready": True, "buildId": digest}
@@ -738,7 +747,12 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
     monkeypatch.setattr(
         release,
         "docker_logs_tail",
-        AsyncMock(return_value="RuntimeError: restricted-egress gateway is not healthy"),
+        AsyncMock(
+            return_value="RuntimeError: restricted-egress gateway is not healthy\n"
+            + "x" * 50
+            + "password=supersecret-value"
+            + "y" * 1489
+        ),
     )
     runner = HostDockerComposeRunner(
         project_dir=str(tmp_path),
@@ -768,7 +782,9 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
         message = str(failure.value)
         assert "fleet=agent_runtime" in message
         assert "gateway=unhealthy" in message
-        assert "restricted-egress gateway is not healthy" in message
+        # Redaction runs over the whole text before the bound, so a tail that
+        # would split the marker from its value cannot publish the value.
+        assert "supersecret-value" not in message
     # The repair renders the definition the retained image owns — never the
     # deployment checkout's newer gateway definition — while the
     # deployment-owned runner identity accompanies the command.
@@ -776,6 +792,11 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
         tmp_path
         / f"retained-compose-{hashlib.sha256(b'sha256:previous').hexdigest()[:16]}.yaml"
     )
+    if repaired == "absent":
+        # The retained definition is still rendered for the pollers, but no
+        # gateway is recreated or waited on when the deployment runs none.
+        assert not compose_calls
+        return
     assert captured["compose_file"] == str(expected_compose)
     assert captured["project_name"] == "moonmind"
     assert captured["project_dir"] == str(tmp_path)

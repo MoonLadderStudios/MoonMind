@@ -506,8 +506,8 @@ async def execute_detached(executor, inputs, context):
                             diagnosis.append(
                                 "last-error="
                                 + redact_sensitive_text(
-                                    str(last_error.get("error") or last_error)[:500]
-                                )
+                                    str(last_error.get("error") or last_error)
+                                )[:500]
                             )
                     except (OSError, ValueError):
                         diagnosis.append("last-error=unreadable")
@@ -529,7 +529,7 @@ async def execute_detached(executor, inputs, context):
                         # established exhaustion with an unrelated failure.
                         diagnosis.append(
                             "updater-logs=unavailable:"
-                            + redact_sensitive_text(str(exc)[:200])
+                            + redact_sensitive_text(str(exc))[:200]
                         )
                     recovery_hint = f"release job {key} (owner {name})"
                     if owner.startswith("host-update:"):
@@ -800,6 +800,12 @@ class ReleaseCohort:
         for attempt in range(attempts):
             health = await container_health(EGRESS_GATEWAY_REF)
             if health == "healthy":
+                return health
+            if health is None:
+                # No gateway container, or one that publishes no health: this
+                # deployment either does not run a gateway or has not been
+                # brought up. Creating one belongs to the stack's own ``up``,
+                # never to this recovery path.
                 return health
             # A gateway that is still starting owns the first half of the
             # window on its own: recovery must not bounce deployment state
