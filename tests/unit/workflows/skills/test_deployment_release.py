@@ -588,6 +588,42 @@ async def test_exhausted_deliveries_surface_updater_evidence_and_recovery_hint(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bounded", [False, True])
+async def test_docker_failure_preserves_redacted_multiline_diagnostic(
+    monkeypatch, bounded
+):
+    reason = "Error response from daemon: port is already allocated"
+    diagnostic = f"{reason}\npassword=example-secret\n"
+    expected = f"{reason}\npassword=[REDACTED]\n"
+    if bounded:
+        padding = "x" * (990 - len(diagnostic)) + " "
+        diagnostic += padding + "ghp_" + "A" * 36 + "\n" + "y" * 1200 + "\n"
+        expected += padding + "[REDACTED]\n" + "y" * 1200 + "\n"
+    summary = "Error: failed to start containers: release-test"
+    diagnostic += summary
+    expected += summary
+
+    class FakeProcess:
+        returncode = 1
+
+        async def communicate(self, input_bytes):
+            return b"", diagnostic.encode()
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(release.asyncio, "create_subprocess_exec", fake_exec)
+    with pytest.raises(RuntimeError) as exc_info:
+        await release.docker("start", "release-test")
+    message = str(exc_info.value)
+    assert reason in message
+    assert "example-secret" not in message
+    assert "ghp_" not in message
+    assert message == f"Docker start failed: {expected[:1000]}"
+    assert len(message) <= len("Docker start failed: ") + 1000
+
+
+@pytest.mark.asyncio
 async def test_docker_logs_tail_merges_stdout_and_stderr(tmp_path, monkeypatch):
     """Tracebacks reach the logs command over stderr; stdout alone hides them."""
 
