@@ -12,6 +12,14 @@ from typing import Any, Mapping, Protocol
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from moonmind.omnigent.bootstrap.free_model_eligibility import (
+    FREE_PROFILE_ID,
+    FREE_PROVIDER_ID,
+    NO_ELIGIBLE_FREE_MODEL_CODE,
+    catalog_ids_from_evidence,
+    require_exact_catalog_match,
+    zen_free_route_blocked_reason,
+)
 from moonmind.omnigent.bridge_artifacts import OmnigentArtifactGateway
 from moonmind.omnigent.harness_platform.agent_profile import (
     OmnigentAgentProfileV2,
@@ -52,14 +60,6 @@ from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.stores import (
     ExecutionPlanUsageIdentity,
     OmnigentExecutionPlanUsageStore,
-)
-from moonmind.omnigent.bootstrap.free_model_eligibility import (
-    FREE_PROFILE_ID,
-    FREE_PROVIDER_ID,
-    NO_ELIGIBLE_FREE_MODEL_CODE,
-    catalog_ids_from_evidence,
-    require_exact_catalog_match,
-    zen_free_route_blocked_reason,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.executions.model_resolver import resolve_model_effort
@@ -658,6 +658,14 @@ class OmnigentExecutionPlanningService:
         if not provider.enabled or state != "connected":
             raise HarnessPlatformError(
                 "selected Provider Profile is not launch ready",
+                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+            )
+        if (
+            profile.harness.id == "opencode-native"
+            and provider.runtime_id != "opencode"
+        ):
+            raise HarnessPlatformError(
+                "OpenCode requires an OpenCode Provider Profile",
                 code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
             )
         for slot in profile.credentialSlots:

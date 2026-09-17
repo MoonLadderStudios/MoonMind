@@ -173,12 +173,11 @@ def qualification_boundary(monkeypatch, tmp_path):
     )
 
     import api_service.db.base as db_base
+    import moonmind.omnigent.bootstrap.controller as controller_module_for_fixture
     import moonmind.omnigent.bootstrap.evidence as evidence_module
     import moonmind.omnigent.bootstrap.qualification as qualification_module
     import moonmind.omnigent.bootstrap.store as store_module
     from moonmind.omnigent.harness_platform import catalog_service
-
-    import moonmind.omnigent.bootstrap.controller as controller_module_for_fixture
 
     monkeypatch.setattr(
         controller_module_for_fixture,
@@ -297,7 +296,9 @@ async def _qualify_with_record(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("shared_image", [False, True])
 async def test_qualification_attests_the_launch_policy_admission_selects(
-    qualification_boundary, monkeypatch, shared_image,
+    qualification_boundary,
+    monkeypatch,
+    shared_image,
 ) -> None:
     """Qualification derives the launch policy from the Agent Profile.
 
@@ -441,9 +442,7 @@ async def test_qualification_accepts_current_immutable_policy_version(
 
     evidence = await _qualify(qualification_boundary)
 
-    assert evidence["supportIdentity"]["launchPolicyRef"] == (
-        "omnigent-on-demand@2"
-    )
+    assert evidence["supportIdentity"]["launchPolicyRef"] == ("omnigent-on-demand@2")
 
 
 @pytest.mark.asyncio
@@ -496,6 +495,172 @@ def test_model_resolution_accepts_a_qualified_opencode_model_before_live_validat
         "providerModelId": "gpt-5.6-luna",
         "qualifiedId": "opencode-go/gpt-5.6-luna",
     }
+
+
+@pytest.mark.parametrize("provider_id", ["openrouter", "vendor.v2_test", "opencode"])
+def test_image_resolution_preserves_selected_provider_exact_model(provider_id):
+    from moonmind.omnigent.bootstrap.opencode import resolve_bootstrap_model
+
+    qualified = f"{provider_id}/author/Model.v2:free"
+    assert resolve_bootstrap_model(qualified, provider_id=provider_id) == {
+        "displayName": qualified,
+        "providerModelId": "author/Model.v2:free",
+        "qualifiedId": qualified,
+    }
+    with pytest.raises(ValueError):
+        resolve_bootstrap_model(qualified, [], provider_id=provider_id)
+    with pytest.raises(ValueError):
+        resolve_bootstrap_model(qualified, provider_id="other")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_id", ["openrouter", "vendor.v2_test"])
+@pytest.mark.parametrize("entrypoint", ["default-switch", "restart", "initialize"])
+@pytest.mark.parametrize("catalog_matches", [True, False])
+async def test_generic_default_requalification_preserves_exact_selection(
+    monkeypatch, qualification_boundary, provider_id, entrypoint, catalog_matches
+):
+    from api_service.db.models import (
+        ProviderCredentialSource,
+        ProviderProfileAuthState,
+        RuntimeMaterializationMode,
+    )
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        ProviderReconcileOutcome,
+    )
+
+    qualified = f"{provider_id}/author/Model.v2:free"
+    current = SimpleNamespace(
+        profile_id="selected-default",
+        provider_id=provider_id,
+        runtime_id="opencode",
+        is_default=True,
+        enabled=True,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None,
+        max_parallel_runs=1,
+        credential_source=ProviderCredentialSource.SECRET_REF,
+        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+        cooldown_after_429_seconds=0,
+        secret_refs={"opencode_api_key": "db://selected-key"},
+        clear_env_keys=[
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ],
+        command_behavior={},
+        default_model=qualified,
+        default_effort="high",
+        credential_generation=2,
+        model_catalog_evidence_json={
+            "models": [{"qualifiedId": qualified}],
+            "imageRef": _HOST_IMAGE_REF,
+            "credentialGeneration": 2,
+        },
+    )
+    previous = SimpleNamespace(**vars(current))
+    previous.profile_id = "previous"
+    previous.is_default = False
+    stored = BootstrapRecord(
+        state=BootstrapState.ready,
+        providerProfileRef=(
+            "previous" if entrypoint == "default-switch" else current.profile_id
+        ),
+        desired=BootstrapDesired(modelDisplayName="opencode-go/old-model"),
+    )
+    records = [] if entrypoint == "initialize" else [stored]
+
+    class _SelectedSession(_Session):
+        async def get(self, model, identity):
+            if model.__name__ == "ManagedAgentProviderProfile":
+                return previous if identity == "previous" else current
+            return await super().get(model, identity)
+
+        async def scalar(self, statement):
+            if "omnigent_agent_profile_versions" in str(statement):
+                return self.version
+            return current
+
+        async def execute(self, statement):
+            if "managed_agent_provider_profiles" in str(statement):
+                return SimpleNamespace(
+                    scalars=lambda: SimpleNamespace(all=lambda: [current])
+                )
+            return await super().execute(statement)
+
+    qualification_boundary.session = _SelectedSession(_version_row(_profile_document()))
+    monkeypatch.setattr(
+        controller_module,
+        "load_bootstrap_record",
+        lambda: records[-1] if records else None,
+    )
+    monkeypatch.setattr(controller_module, "save_bootstrap_record", records.append)
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service._managed_secret_statuses_for_profiles",
+        AsyncMock(return_value={"selected-key": "active"}),
+    )
+    revalidate = AsyncMock(return_value=ProviderReconcileOutcome(ready=True))
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.provider_revalidation.reconcile_opencode_provider_readiness",
+        revalidate,
+    )
+    resolved = ResolvedOmnigentDeploymentState(
+        serverImageRef=_SERVER_IMAGE_REF,
+        opencodeHostImageRef=_HOST_IMAGE_REF,
+        omnigentBuildDigest="sha256:" + "a" * 64,
+    )
+    resolved = resolved.model_copy(update={"details": _resolved_state().details})
+    monkeypatch.setattr(
+        controller_module,
+        "publish_resolved_omnigent_images",
+        AsyncMock(return_value=resolved),
+    )
+    monkeypatch.setattr(store, "load_resolved_state", lambda: resolved)
+    controller = controller_module.BootstrapController(
+        session_factory=qualification_boundary.session_factory
+    )
+
+    async def sync_catalog(_resolved):
+        if not catalog_matches:
+            current.model_catalog_evidence_json["models"] = [
+                {"qualifiedId": f"{provider_id}/author/other-model"}
+            ]
+
+    monkeypatch.setattr(controller, "_sync_catalog", sync_catalog)
+    monkeypatch.setattr(
+        controller,
+        "_ensure_agent_profile",
+        AsyncMock(return_value="omnigent-opencode-default@27"),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_ensure_launchable_materializer_qualifications",
+        AsyncMock(return_value=True),
+    )
+
+    if entrypoint == "default-switch":
+        await controller.requalify()
+    else:
+        await controller.reconcile_deployment_qualification()
+    result = records[-1]
+    if not catalog_matches:
+        assert result.state == BootstrapState.failed
+        assert "exact-host model authority rejected" in result.failure["message"]
+        assert result.last_evidence_ref is None
+        assert result.resolved.qualified_model_id == qualified
+        return
+    assert result.state == BootstrapState.ready, result.failure
+    assert result.provider_profile_ref == current.profile_id
+    assert result.desired.provider == provider_id
+    assert result.resolved.qualified_model_id == qualified
+    assert result.resolved.provider_model_id == "author/Model.v2:free"
+    assert result.resolved.host_image_ref == _HOST_IMAGE_REF
+    assert result.desired.effort == "high"
+    if entrypoint != "initialize":
+        revalidate.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1482,9 +1647,7 @@ async def test_launchable_materializer_classes_are_qualified_once(
     controller = controller_module.BootstrapController(
         session_factory=lambda: _session_scope()
     )
-    qualify = AsyncMock(
-        side_effect=lambda **kwargs: ({}, kwargs["record"])
-    )
+    qualify = AsyncMock(side_effect=lambda **kwargs: ({}, kwargs["record"]))
     monkeypatch.setattr(controller, "_qualify_and_publish", qualify)
 
     record = _ready_bootstrap_record(agent_profile_ref="omnigent-opencode-default@8")

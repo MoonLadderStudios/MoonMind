@@ -599,44 +599,6 @@ def _supported_presets() -> dict[
                 runtime_id="claude_code", provider_id="anthropic", method="oauth"
             ),
         ),
-        _api_key_preset(
-            runtime_id="codex_cli",
-            provider_id="openai",
-            materialization_mode="api_key_env",
-            secret_role="openai_api_key",
-            clear_env_keys=_derived_clear_keys(
-                runtime_id="codex_cli", provider_id="openai", method="api_key"
-            ),
-            env_template={
-                "OPENAI_API_KEY": {"from_secret_ref": "openai_api_key"}
-            },
-            auth_strategy="api_key_env",
-        ),
-        _api_key_preset(
-            runtime_id="claude_code",
-            provider_id="anthropic",
-            materialization_mode="api_key_env",
-            secret_role="anthropic_api_key",
-            clear_env_keys=_derived_clear_keys(
-                runtime_id="claude_code", provider_id="anthropic", method="api_key"
-            ),
-            env_template={
-                "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}
-            },
-            auth_strategy="api_key_env",
-        ),
-        _api_key_preset(
-            runtime_id="opencode",
-            provider_id="opencode-go",
-            materialization_mode="composite",
-            secret_role="opencode_api_key",
-            clear_env_keys=_derived_clear_keys(
-                runtime_id="opencode", provider_id="opencode-go", method="api_key"
-            ),
-            env_template={},
-            auth_strategy="opencode_auth_json",
-            system_tags=["api-key", "opencode", "go"],
-        ),
     ]
     return {
         (preset.runtime_id, preset.provider_id, preset.authentication_method): preset
@@ -661,6 +623,40 @@ def get_provider_profile_creation_preset(
     )
     if preset is not None:
         return preset
+
+    if method == ProviderProfileAuthenticationMethod.API_KEY:
+        from api_service.services.provider_profile_creation import (
+            provider_api_key_strategy,
+        )
+
+        strategy = provider_api_key_strategy(
+            normalized_runtime_id, normalized_provider_id
+        )
+        if strategy is not None:
+            is_opencode = strategy.auth_strategy == "opencode_auth_json"
+            system_tags = (
+                ["api-key", "opencode"] if is_opencode else ["api-key", "first-party"]
+            )
+            if is_opencode and strategy.provider_id == "opencode-go":
+                system_tags.append("go")
+            return _api_key_preset(
+                runtime_id=strategy.runtime_id,
+                provider_id=strategy.provider_id,
+                materialization_mode=strategy.materialization_mode,
+                secret_role=strategy.secret_role,
+                clear_env_keys=_derived_clear_keys(
+                    runtime_id=strategy.runtime_id,
+                    provider_id=strategy.provider_id,
+                    method="api_key",
+                ),
+                env_template=(
+                    {strategy.env_key: {"from_secret_ref": strategy.secret_role}}
+                    if strategy.auth_strategy == "api_key_env"
+                    else {}
+                ),
+                auth_strategy=strategy.auth_strategy,
+                system_tags=system_tags,
+            )
 
     if method == ProviderProfileAuthenticationMethod.NONE:
         # Import lazily so the preset module remains the policy implementation

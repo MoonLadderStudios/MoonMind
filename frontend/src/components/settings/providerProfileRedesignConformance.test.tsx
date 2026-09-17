@@ -529,8 +529,11 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
     await waitFor(() => expect(document.body.textContent).not.toContain('sk-ant-conformance-secret'));
   });
 
-  it('continues OpenCode Go API-key creation through the composite-materialization drawer', async () => {
-    const creationClass = CREATION_CLASSES.find((item) => item.providerId === 'opencode-go')!;
+  it.each(['opencode-go', 'openrouter', 'future-provider'])('continues %s API-key creation through the composite-materialization drawer', async (providerId) => {
+    const creationClass = {
+      ...CREATION_CLASSES.find((item) => item.providerId === 'opencode-go')!,
+      providerId,
+    };
     const profileId = 'conformance-opencode-api-key';
     const fetchSpy = creationFetch(creationClass, profileId);
     renderManager();
@@ -538,7 +541,10 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
     // MoonLadderStudios/MoonMind#4002: guided continuation.
     fireEvent.click(screen.getByRole('button', { name: 'Create and connect' }));
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Continue to API key paste' }));
+    await screen.findByRole('dialog', { name: /API key enrollment/ });
+    expect(screen.getByText(/Paste the key here/).textContent).not.toContain('OpenCode Go');
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
+    expect((screen.getByLabelText('OpenCode API key') as HTMLInputElement).type).toBe('password');
     fireEvent.change(screen.getByLabelText('OpenCode API key'), {
       target: { value: 'oc-conformance-secret' },
     });
@@ -553,8 +559,80 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
         ),
       ).toBe(true),
     );
+    expect(postPayload(fetchSpy)).toMatchObject({ runtime_id: 'opencode', provider_id: providerId, authentication_method: 'api_key' });
     expect(postPayload(fetchSpy)).not.toHaveProperty('runtime_materialization_mode');
+    expect(JSON.stringify(postPayload(fetchSpy))).not.toContain('oc-conformance-secret');
+    const credentialCall = fetchSpy.mock.calls.find(([url]) => String(url).endsWith('/credentials/api-key'));
+    expect(JSON.parse(String(credentialCall?.[1]?.body))).toEqual({ api_key: 'oc-conformance-secret' });
+    await waitFor(() => expect(screen.queryByDisplayValue('oc-conformance-secret')).toBeNull());
     await waitFor(() => expect(document.body.textContent).not.toContain('oc-conformance-secret'));
+  });
+
+  it.each(
+    ['opencode-go', 'openrouter', 'future-provider'].flatMap((providerId) =>
+      ['api_key_pending', 'connected', 'validation_failed'].map((authState) => ({ providerId, authState })),
+    ),
+  )('connects, retries, and replaces saved $providerId credentials in $authState state using backend capabilities', async ({ providerId, authState }) => {
+    const creationClass = {
+      ...CREATION_CLASSES.find((item) => item.providerId === 'opencode-go')!,
+      providerId,
+    };
+    const profileId = `saved-${providerId}`;
+    const profile = savedProfileFor(creationClass, profileId);
+    profile.auth_state = authState;
+    profile.enabled = authState === 'connected';
+    profile.disabled_reason = profile.enabled ? null : 'missing_credentials';
+    profile.secret_refs = { opencode_api_key: 'db:existing-key' };
+    profile.command_behavior = { auth_actions: [] };
+    const fetchSpy = creationFetch(creationClass, profileId);
+    const baseFetch = fetchSpy.getMockImplementation()!;
+    let attempts = 0;
+    fetchSpy.mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/credentials/api-key') && ++attempts === 1) {
+        return { ok: false, json: async () => ({ detail: 'Invalid key: test-secret-first' }) } as Response;
+      }
+      return baseFetch(input, init);
+    });
+    const { onNotice } = renderManager([profile]);
+    expect(screen.getByText('opencode_api_key')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: `Use OpenCode API key ${profileId}` }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('OpenCode API key'), { target: { value: 'test-secret-first' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenCode API key' }));
+    await screen.findByText('Invalid key: [REDACTED]');
+    expect(screen.queryByDisplayValue('test-secret-first')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Return to API key paste' }));
+    expect((screen.getByLabelText('OpenCode API key') as HTMLInputElement).value).toBe('');
+    fireEvent.change(screen.getByLabelText('OpenCode API key'), { target: { value: 'test-secret-replacement' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenCode API key' }));
+    await waitFor(() => expect(onNotice).toHaveBeenCalledWith({
+      level: 'ok', text: `OpenCode API key enrollment completed for "${profileId}".`,
+    }));
+    const credentialCalls = fetchSpy.mock.calls.filter(([url]) => String(url).endsWith('/credentials/api-key'));
+    expect(credentialCalls.map(([url, init]) => [url, init?.method, JSON.parse(String(init?.body))])).toEqual([
+      [`/api/v1/provider-profiles/${profileId}/credentials/api-key`, 'POST', { api_key: 'test-secret-first' }],
+      [`/api/v1/provider-profiles/${profileId}/credentials/api-key`, 'POST', { api_key: 'test-secret-replacement' }],
+    ]);
+    expect(fetchSpy.mock.calls.some(([url]) => url === '/api/v1/provider-profiles')).toBe(false);
+    expect(screen.queryByDisplayValue('test-secret-replacement')).toBeNull();
+  });
+
+  it.each(['missing', 'unsupported', 'manual', 'not-ready', 'wrong-identity', 'credentialless'])('does not infer saved API-key enrollment from %s capabilities', (scenario) => {
+    const creationClass = {
+      ...CREATION_CLASSES.find((item) => item.providerId === 'opencode-go')!,
+      providerId: scenario === 'credentialless' ? 'opencode' : 'opencode-go',
+    };
+    const profile = savedProfileFor(creationClass, 'not-guided');
+    const capabilities = profile.creation_capabilities!;
+    profile.command_behavior = { auth_actions: ['use_api_key'] };
+    if (scenario === 'missing') profile.creation_capabilities = null;
+    if (scenario === 'unsupported') capabilities.supported = false;
+    if (scenario === 'manual') capabilities.authentication_methods[0]!.setup_action = 'manual';
+    if (scenario === 'not-ready') capabilities.authentication_methods[0]!.launch_ready_after_setup = false;
+    if (scenario === 'wrong-identity') capabilities.provider_id = 'another-provider';
+    if (scenario === 'credentialless') capabilities.authentication_methods = [];
+    renderManager([profile]);
+    expect(screen.queryByRole('button', { name: /Use .* API key/ })).toBeNull();
   });
 
   it('starts Claude Code + Anthropic OAuth enrollment without asking for volume data', async () => {
