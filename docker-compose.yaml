@@ -83,6 +83,7 @@ services:
       - "${MOONMIND_API_PUBLISH_HOST:-127.0.0.1}:${MOONMIND_API_HOST_PORT:-7000}:8000"
     environment:
       - PYTHONPATH=/app
+      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
       - POSTGRES_HOST=${POSTGRES_HOST:-moonmind-api-db}
@@ -259,7 +260,7 @@ services:
       # published evidence and never produces it.
       - ${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}:/workspace/omnigent-evidence:rw
       - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
-      - ./docker/sandbox-egress-proxy:/app/docker/sandbox-egress-proxy:ro
+      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
       - moonmind_secrets:/app/var/secrets
       # Browser-session signing key isolated to the API/session owner: worker
       # trust domains (workflow, artifact, LLM, agent-runtime,
@@ -476,6 +477,7 @@ services:
       moonmind.runtime_source_revision: "${MOONMIND_RUNTIME_SOURCE_REVISION:-untracked}"
     environment:
       - PYTHONPATH=/app
+      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
@@ -506,7 +508,7 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./docker/sandbox-egress-proxy:/app/docker/sandbox-egress-proxy:ro
+      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
       - moonmind_secrets:/app/var/secrets
       - agent_workspaces:/work/agent_jobs
     entrypoint:
@@ -544,6 +546,7 @@ services:
       - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
       - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
+      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
@@ -564,7 +567,7 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./docker/sandbox-egress-proxy:/app/docker/sandbox-egress-proxy:ro
+      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
       - moonmind_secrets:/app/var/secrets
     entrypoint:
       - /bin/sh
@@ -603,6 +606,7 @@ services:
       - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
       - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
+      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
@@ -628,7 +632,7 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./docker/sandbox-egress-proxy:/app/docker/sandbox-egress-proxy:ro
+      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
       - moonmind_secrets:/app/var/secrets
     entrypoint:
       - /bin/sh
@@ -665,6 +669,7 @@ services:
       - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
       - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
+      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
@@ -706,7 +711,7 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./docker/sandbox-egress-proxy:/app/docker/sandbox-egress-proxy:ro
+      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
       - moonmind_secrets:/app/var/secrets
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
@@ -754,6 +759,7 @@ services:
       - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
       - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
+      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
@@ -890,7 +896,7 @@ services:
     volumes:
       - .:/workspace/host_project:ro
       - ./deploy/state:/workspace/deployment_state:rw
-      - ./docker/sandbox-egress-proxy:/app/docker/sandbox-egress-proxy:ro
+      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
       - moonmind_secrets:/app/var/secrets
       - ./var/omnigent-evidence:/workspace/omnigent-evidence:rw
       - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
@@ -943,6 +949,7 @@ services:
       - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
       - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
+      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
@@ -987,7 +994,7 @@ services:
     volumes:
       - .:/workspace/host_project:ro
       - ./deploy/state:/workspace/deployment_state:rw
-      - ./docker/sandbox-egress-proxy:/app/docker/sandbox-egress-proxy:ro
+      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
       - moonmind_secrets:/app/var/secrets
       - ./var/omnigent-evidence:/workspace/omnigent-evidence:rw
       - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
@@ -1029,6 +1036,7 @@ services:
       - TEMPORAL_WORKER_DEPLOYMENT_NAME=${TEMPORAL_WORKER_DEPLOYMENT_NAME:-moonmind-workflow-fleet}
       - MOONMIND_DEPLOYMENT_MODE=${MOONMIND_DEPLOYMENT_MODE:-auto}
       - PYTHONPATH=/app
+      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - PYTHONUNBUFFERED=1
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
@@ -1059,7 +1067,7 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./docker/sandbox-egress-proxy:/app/docker/sandbox-egress-proxy:ro
+      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
       - moonmind_secrets:/app/var/secrets
     entrypoint:
       - /bin/sh
@@ -1102,6 +1110,7 @@ services:
     init: true
     environment:
       - PYTHONPATH=/app
+      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}
       - OMNIGENT_IMAGE=${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}
       - OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG:-latest}
       - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
@@ -1116,7 +1125,7 @@ services:
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
     volumes:
       - ./var:/app/var:rw
-      - ./docker/sandbox-egress-proxy:/app/docker/sandbox-egress-proxy:ro
+      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
       - moonmind_secrets:/app/var/secrets
     command: ["python", "-m", "moonmind.omnigent.bootstrap.infrastructure"]
     networks:
@@ -1427,6 +1436,7 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@${POSTGRES_HOST:-moonmind-api-db}:5432/${POSTGRES_DB:-moonmind}
       - PYTHONPATH=/app
+      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
       # MoonLadderStudios/MoonMind#4115: vector-free release wires no QDRANT_URL.
@@ -1435,7 +1445,7 @@ services:
       - path: .env
         required: false
     volumes:
-      - ./docker/sandbox-egress-proxy:/app/docker/sandbox-egress-proxy:ro
+      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
       - moonmind_secrets:/app/var/secrets
     command: sh /app/init_db/init_db_entrypoint.sh
     networks:
@@ -1629,8 +1639,10 @@ services:
     labels:
       moonmind.egress.enforcer: docker-internal-proxy/v2
     entrypoint: ["/bin/sh", "/opt/moonmind-egress/policy.sh", "start"]
+    environment:
+      - MOONMIND_EGRESS_POLICY_DIRECTORY=${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}
     volumes:
-      - ./docker/sandbox-egress-proxy:/app/docker/sandbox-egress-proxy:ro
+      - ${MOONMIND_EGRESS_POLICY_DIRECTORY:-./docker/sandbox-egress-proxy}:${MOONMIND_EGRESS_POLICY_DIRECTORY:-/app/docker/sandbox-egress-proxy}:ro
     tmpfs:
       - /run/moonmind-egress:rw,noexec,nosuid,size=1m
     expose:
