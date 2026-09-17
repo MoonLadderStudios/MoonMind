@@ -47,8 +47,8 @@ async def docker(*args, input_bytes=None):
     if process.returncode:
         from moonmind.utils.logging import redact_sensitive_text
 
-        diagnostic = stderr.decode(errors="replace").strip().splitlines()
-        reason = redact_sensitive_text(diagnostic[-1] if diagnostic else "no diagnostic")
+        diagnostic = stderr.decode(errors="replace").strip()
+        reason = redact_sensitive_text(diagnostic or "no diagnostic")
         raise RuntimeError(f"Docker {args[0]} failed: {reason[:1000]}")
     return stdout.decode().strip()
 
