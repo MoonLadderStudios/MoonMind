@@ -290,3 +290,40 @@ async def test_every_documented_binding_resolves_without_a_declared_origin(
     )
     assert result["exitCode"] == 0, result
     assert operator_urls(json.loads(result["stdout"])) == expected
+
+
+async def test_release_controller_carries_the_omnigent_settings_it_uses(tmp_path):
+    """The worker that runs the release must see the deployment's own Omnigent
+    configuration.
+
+    Regression: the singular Omnigent migration runs inside
+    `temporal-worker-deployment-control`, and its catalog sync builds the
+    generic host services. Those settings were declared only on the
+    runtime-facing services, so a default `update-moonmind.sh` completed the
+    fleet update and then failed three times with "generic Omnigent host
+    endpoint and owner configuration is incomplete".
+    """
+
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file=str(Path(__file__).resolve().parents[3] / "docker-compose.yaml"),
+        project_name="moonmind-test-release-controller-omnigent",
+    )
+
+    result = await runner._run_compose_command(
+        ("docker", "compose", "config", "--format", "json"), max_stdout_chars=None
+    )
+
+    assert result["exitCode"] == 0, result
+    services = json.loads(result["stdout"])["services"]
+    controller = services["temporal-worker-deployment-control"]["environment"]
+    runtime = services["temporal-worker-agent-runtime"]["environment"]
+    for setting in (
+        "OMNIGENT_ENABLED",
+        "OMNIGENT_SERVER_URL",
+        "MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED",
+        "MOONMIND_OMNIGENT_HOST_SERVER_URL",
+        "MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER",
+    ):
+        assert controller.get(setting) == runtime.get(setting) != ""
