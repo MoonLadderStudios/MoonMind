@@ -515,6 +515,79 @@ def _read_self_container_id() -> str | None:
         return None
 
 
+def _normalized_bind_path(path: str) -> str:
+    """Compare host paths by what they address, not by their spelling."""
+
+    text = str(path or "").strip().replace("\\", "/")
+    while "//" in text:
+        text = text.replace("//", "/")
+    return text.rstrip("/") or "/"
+
+
+def _docker_output(
+    args: Sequence[str], *, attempts: int = 1, backoff_seconds: float = 0.0
+) -> str | None:
+    """Run a read-only Docker query and return its stdout, or None."""
+
+    import subprocess  # local import — only needed when evidence is consulted.
+    import time
+
+    for attempt in range(max(1, attempts)):
+        try:
+            result = subprocess.run(
+                list(args),
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+        except (
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            OSError,
+        ):
+            if attempt + 1 < max(1, attempts):
+                time.sleep(backoff_seconds * (attempt + 1))
+            continue
+        return result.stdout
+    return None
+
+
+def _docker_json_lines(
+    args: Sequence[str], *, attempts: int = 1, backoff_seconds: float = 0.0
+) -> list[Any]:
+    """Decode a Docker query that answers with one JSON document per line."""
+
+    output = _docker_output(args, attempts=attempts, backoff_seconds=backoff_seconds)
+    decoded: list[Any] = []
+    for line in (output or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            decoded.append(json.loads(line))
+        except ValueError:
+            continue
+    return decoded
+
+
+def _mount_sources(mounts: Any, local_mount: str) -> list[str]:
+    """Host sources a container's mount table records for ``local_mount``."""
+
+    target = _normalized_bind_path(local_mount)
+    found: list[str] = []
+    for mount in mounts if isinstance(mounts, list) else []:
+        if not isinstance(mount, Mapping):
+            continue
+        if _normalized_bind_path(str(mount.get("Destination") or "")) != target:
+            continue
+        source = str(mount.get("Source") or "").strip()
+        if source:
+            found.append(source)
+    return found
+
+
 def daemon_bind_source(
     local_mount: str,
     *,
@@ -540,67 +613,101 @@ def daemon_bind_source(
     container_id = _read_self_container_id()
     if not container_id:
         return None
-    import subprocess  # local import — only needed when evidence is consulted.
-    import time
-
-    target = str(local_mount).rstrip("/") or "/"
-    for attempt in range(max(1, attempts)):
-        try:
-            result = subprocess.run(
-                ["docker", "inspect", "--format", "{{json .Mounts}}", container_id],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=10,
-            )
-        except (
-            subprocess.TimeoutExpired,
-            subprocess.CalledProcessError,
-            FileNotFoundError,
-            OSError,
-        ):
-            if attempt + 1 < max(1, attempts):
-                time.sleep(backoff_seconds * (attempt + 1))
-            continue
-        try:
-            mounts = json.loads(result.stdout)
-        except (ValueError, TypeError):
-            return None
-        if not isinstance(mounts, list):
-            return None
-        for mount in mounts:
-            if not isinstance(mount, Mapping):
-                continue
-            destination = str(mount.get("Destination") or "").rstrip("/") or "/"
-            if destination != target:
-                continue
-            source = str(mount.get("Source") or "").strip()
-            if source:
-                return source
-        return None
+    for mounts in _docker_json_lines(
+        ["docker", "inspect", "--format", "{{json .Mounts}}", container_id],
+        attempts=attempts,
+        backoff_seconds=backoff_seconds,
+    ):
+        sources = _mount_sources(mounts, local_mount)
+        if sources:
+            return sources[0]
     return None
 
 
-_daemon_bind_source_cache: dict[tuple[str, str], str | None] = {}
+def installed_bind_sources(local_mount: str, *, project_name: str) -> tuple[str, ...]:
+    """Return host sources this deployment's own containers use, common first.
 
+    Docker Desktop records more than one host path for the same WSL checkout —
+    the ``/mnt/<drive>`` path and a managed ``docker-desktop-bind-mounts``
+    share — depending on which client created the container. Both resolve, but
+    Compose hashes the bind source *string* into each container's config, so
+    switching spelling mid-life recreates every service, including the socket
+    proxy the updater itself talks to. The installed containers therefore
+    decide: their source is proven resolvable and keeps Compose idempotent.
+    """
 
-async def _resolve_daemon_bind_source(local_mount: str) -> str | None:
-    """Cache the daemon's recorded source for ``local_mount`` per daemon."""
-
-    target = str(local_mount).rstrip("/") or "/"
-    key = (os.environ.get("DOCKER_HOST", ""), target)
-    if key not in _daemon_bind_source_cache:
-        _daemon_bind_source_cache[key] = await asyncio.to_thread(
-            daemon_bind_source, target
+    identifiers = (
+        _docker_output(
+            [
+                "docker",
+                "ps",
+                "-q",
+                "--filter",
+                f"label=com.docker.compose.project={project_name}",
+                # One-off containers (`compose run`, release cohorts) are
+                # transient; only the installed services define the deployment.
+                "--filter",
+                "label=com.docker.compose.oneoff=False",
+            ]
         )
-    return _daemon_bind_source_cache[key]
+        or ""
+    ).split()
+    if not identifiers:
+        return ()
+    counted: dict[str, int] = {}
+    for mounts in _docker_json_lines(
+        ["docker", "inspect", "--format", "{{json .Mounts}}", *identifiers]
+    ):
+        for source in _mount_sources(mounts, local_mount):
+            counted[source] = counted.get(source, 0) + 1
+    return tuple(sorted(counted, key=lambda source: (-counted[source], source)))
 
 
-def _observed_daemon_bind_source(local_mount: str) -> str | None:
-    """Read already-resolved evidence without blocking on the daemon."""
+_host_dir_evidence_cache: dict[tuple[str, str, str], str | None] = {}
 
-    target = str(local_mount).rstrip("/") or "/"
-    return _daemon_bind_source_cache.get((os.environ.get("DOCKER_HOST", ""), target))
+
+async def _resolve_host_dir_evidence(
+    *, local_mount: str, project_name: str, configured: str
+) -> str | None:
+    """Decide, once per daemon and project, which host path Compose receives."""
+
+    key = (
+        os.environ.get("DOCKER_HOST", ""),
+        _normalized_bind_path(local_mount),
+        project_name,
+    )
+    if key not in _host_dir_evidence_cache:
+        _host_dir_evidence_cache[key] = await asyncio.to_thread(
+            _host_dir_evidence, local_mount, project_name, configured
+        )
+    return _host_dir_evidence_cache[key]
+
+
+def _host_dir_evidence(
+    local_mount: str, project_name: str, configured: str
+) -> str | None:
+    installed = installed_bind_sources(local_mount, project_name=project_name)
+    if installed:
+        # The configured path wins whenever the deployment proves it works, so
+        # an operator's declared value is never quietly replaced by an
+        # equivalent spelling.
+        for source in installed:
+            if _normalized_bind_path(source) == _normalized_bind_path(configured):
+                return source
+        return installed[0]
+    return daemon_bind_source(local_mount)
+
+
+def _observed_host_dir_evidence(local_mount: str, project_name: str) -> str | None:
+    """Read an already-resolved decision without blocking on the daemon."""
+
+    return _host_dir_evidence_cache.get(
+        (
+            os.environ.get("DOCKER_HOST", ""),
+            _normalized_bind_path(local_mount),
+            project_name,
+        )
+    )
 
 
 _desktop_daemon_probe_cache: dict[str, bool | None] = {}
@@ -894,13 +1001,17 @@ class HostDockerComposeRunner:
 
         if not self.local_project_dir:
             return None
-        return await _resolve_daemon_bind_source(str(self._local_dir()))
+        return await _resolve_host_dir_evidence(
+            local_mount=str(self._local_dir()),
+            project_name=self.project_name,
+            configured=str(self.project_dir),
+        )
 
     def _host_dir(self) -> Path:
-        # The daemon's own record of this checkout's bind source outranks the
-        # configured path: it is the path the daemon demonstrably resolves.
+        # A host path this deployment demonstrably resolves outranks one
+        # inferred from the configured path's shape.
         observed = (
-            _observed_daemon_bind_source(str(self._local_dir()))
+            _observed_host_dir_evidence(str(self._local_dir()), self.project_name)
             if self.local_project_dir
             else None
         )
