@@ -198,6 +198,7 @@ def test_list_executions_source_temporal_defaults_to_workflow_scope(client) -> N
 
         assert response.status_code == 200
         expected_query = (
+            'ExecutionStatus!="ContinuedAsNew" AND '
             'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
             'AND mm_owner_id="user-123"'
         )
@@ -267,6 +268,7 @@ def test_list_executions_source_temporal_default_scope_uses_workflow_query(
 
         assert response.status_code == 200
         expected_query = (
+            'ExecutionStatus!="ContinuedAsNew" AND '
             'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
             'AND mm_owner_id="user-123"'
         )
@@ -358,6 +360,9 @@ def test_execution_metrics_source_temporal_returns_operational_aggregates(
     assert body["cost"]["observedCount"] == 2
     assert body["sampleSize"] == 2
     assert mock_client.count_workflows.await_count == 4
+    for call in mock_client.count_workflows.await_args_list:
+        assert 'ExecutionStatus!="ContinuedAsNew"' in call.kwargs["query"]
+    assert 'ExecutionStatus!="ContinuedAsNew"' in mock_client.list_workflows.call_args.kwargs["query"]
     assert mock_client.list_workflows.call_args.kwargs["page_size"] == 200
     assert 'mm_repo="MoonLadderStudios/MoonMind"' in mock_client.list_workflows.call_args.kwargs["query"]
 
@@ -424,6 +429,7 @@ def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_workf
 
         assert response.status_code == 200
         expected_query = (
+            'ExecutionStatus!="ContinuedAsNew" AND '
             'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
             'AND mm_owner_id="user-123"'
         )

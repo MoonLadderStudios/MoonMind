@@ -58,20 +58,75 @@ def test_operator_origin_comes_from_preserved_fixed_binding(host, expected):
     assert operator_urls(config) == ["https://moonmind.example.invalid"]
 
 
+@pytest.mark.parametrize(
+    "host,expected",
+    [
+        ("", "http://127.0.0.1:7000"),
+        ("0.0.0.0", "http://127.0.0.1:7000"),
+        ("::", "http://[::1]:7000"),
+    ],
+)
+def test_wildcard_binding_probes_its_own_loopback_listener(host, expected):
+    """A wildcard bind always answers on loopback, so no origin is invented."""
+    config = {
+        "services": {
+            "api": {"ports": [{"host_ip": host, "published": "7000", "target": 8000}]}
+        }
+    }
+    assert operator_urls(config) == [expected]
+
+
 @pytest.mark.parametrize("host", ["", "0.0.0.0", "::"])
-def test_wildcard_never_invents_an_operator_host(host):
-    with pytest.raises(ValueError, match="operator URL"):
-        operator_urls(
-            {
-                "services": {
-                    "api": {
-                        "ports": [
-                            {"host_ip": host, "published": "7000", "target": 8000}
-                        ]
-                    }
-                }
+def test_wildcard_binding_keeps_declared_origins_authoritative(host):
+    """Declared operator origins still replace the derived loopback probe."""
+    config = {
+        "services": {
+            "api": {
+                "environment": {
+                    "MOONMIND_PUBLIC_BASE_URL": "https://moonmind.example.invalid"
+                },
+                "ports": [{"host_ip": host, "published": "7000", "target": 8000}],
             }
-        )
+        }
+    }
+    assert operator_urls(config) == ["https://moonmind.example.invalid"]
+    config["services"]["api"]["environment"]["MOONMIND_PUBLIC_BASE_URL"] = ""
+    assert operator_urls(config, declared_urls=["http://vpn.example:7000"]) == [
+        "http://vpn.example:7000"
+    ]
+
+
+@pytest.mark.parametrize("host", ["", "0.0.0.0", "::", "127.0.0.1", "192.0.2.4"])
+@pytest.mark.parametrize("public_url", [None, "", "   "])
+def test_header_operator_origin_requires_ingress_not_api_binding(host, public_url):
+    config = {
+        "services": {
+            "api": {
+                "environment": {
+                    "AUTH_PROVIDER": "header",
+                    "MOONMIND_PUBLIC_BASE_URL": public_url,
+                    "MOONMIND_TRUSTED_INGRESS": "1",
+                    "MOONMIND_TRUSTED_PROXIES": "192.0.2.0/24",
+                },
+                "ports": [{"host_ip": host, "published": "7000", "target": 8000}],
+            }
+        }
+    }
+    for declared in (None, []):
+        with pytest.raises(
+            ValueError,
+            match="AUTH_PROVIDER=header.*MOONMIND_PUBLIC_BASE_URL.*--operator-url",
+        ):
+            operator_urls(config, declared_urls=declared)
+    ingress = "https://ingress.example.invalid"
+    assert operator_urls(config, declared_urls=[ingress]) == [ingress]
+    config["services"]["api"]["environment"]["MOONMIND_PUBLIC_BASE_URL"] = ingress
+    assert operator_urls(config) == [ingress]
+
+
+def test_operator_verification_still_requires_a_published_binding():
+    with pytest.raises(ValueError, match="published API binding"):
+        operator_urls({"services": {"api": {"ports": []}}})
 
 
 @pytest.mark.asyncio
@@ -132,6 +187,7 @@ async def test_operator_probe_uses_host_namespace_and_verifies_receipt(
 async def test_release_cannot_replace_api_before_operator_path_is_verified(
     tmp_path, monkeypatch, host, declared_urls
 ):
+    from moonmind import release_identity
     from moonmind.workflows.skills.deployment_execution import (
         DeploymentUpdateExecutor,
         DeploymentUpdateLockManager,
@@ -140,7 +196,6 @@ async def test_release_cannot_replace_api_before_operator_path_is_verified(
         InMemoryEvidenceWriter,
     )
     from moonmind.workflows.temporal import worker_runtime
-    from moonmind import release_identity
 
     runner = HostDockerComposeRunner(project_dir=str(tmp_path))
     executor = DeploymentUpdateExecutor(
@@ -195,16 +250,31 @@ async def test_release_cannot_replace_api_before_operator_path_is_verified(
         assert targets == {"owner": "owner", "urls": declared_urls}
 
 
-@pytest.mark.parametrize("invalid", ["http://host:7000", [""], [None], ["file:///tmp/app"], ["http://user:password@host"], ["http://host"] * 33])
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "http://host:7000",
+        [""],
+        [None],
+        ["file:///tmp/app"],
+        ["http://user:password@host"],
+        ["http://host"] * 33,
+    ],
+)
 def test_declared_operator_origins_reject_invalid_authority(invalid):
     with pytest.raises(ValueError):
         operator_urls({}, declared_urls=invalid)
 
 
 def test_declared_origins_do_not_hide_configured_authentication_origin():
-    config = {"services": {"api": {"environment": {"MOONMIND_PUBLIC_BASE_URL": "https://auth.example"}}}}
+    config = {
+        "services": {
+            "api": {"environment": {"MOONMIND_PUBLIC_BASE_URL": "https://auth.example"}}
+        }
+    }
     assert operator_urls(config, declared_urls=["http://vpn.example:7000"]) == [
-        "http://vpn.example:7000", "https://auth.example",
+        "http://vpn.example:7000",
+        "https://auth.example",
     ]
 
 
@@ -220,6 +290,7 @@ def test_gateway_preserves_http_host_and_verified_tls_identity(
     monkeypatch, host, endpoint
 ):
     from unittest.mock import MagicMock
+
     from moonmind.workflows.skills import deployment_surface as surface
 
     connection = MagicMock()
@@ -247,6 +318,7 @@ def test_gateway_preserves_http_host_and_verified_tls_identity(
 def test_surface_receipt_stdout_is_pure_json_with_real_http_server(capsys):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
+
     from moonmind.workflows.skills.deployment_surface import verify_surface
 
     paths = []
@@ -293,6 +365,7 @@ def test_surface_receipt_stdout_is_pure_json_with_real_http_server(capsys):
 async def test_verified_primary_resume_does_not_repeat_operator_admission(
     tmp_path, monkeypatch
 ):
+    from moonmind import release_identity
     from moonmind.workflows.skills.deployment_execution import (
         DeploymentUpdateExecutor,
         DeploymentUpdateLockManager,
@@ -301,7 +374,6 @@ async def test_verified_primary_resume_does_not_repeat_operator_admission(
         InMemoryEvidenceWriter,
     )
     from moonmind.workflows.temporal import worker_runtime
-    from moonmind import release_identity
 
     executor = DeploymentUpdateExecutor(
         DeploymentUpdateLockManager(),
@@ -374,6 +446,7 @@ def test_operator_credentials_cannot_change_request_authority(headers):
 )
 def test_operator_credentials_never_cross_origin(monkeypatch, destination, expected):
     from unittest.mock import MagicMock
+
     from moonmind.workflows.skills import deployment_surface as surface
 
     connection = MagicMock()

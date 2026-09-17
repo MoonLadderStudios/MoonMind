@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from moonmind.schemas.workload_models import UnrestrictedDockerRequest, WorkloadRequest
 from moonmind.security.egress import (
     CONTROL_PLANE_NETWORK_REF,
     DEFAULT_EGRESS_PROFILE,
@@ -18,7 +19,6 @@ from moonmind.security.egress import (
 from moonmind.security.egress_conformance_evidence import (
     parse_and_verify_conformance_evidence,
 )
-from moonmind.schemas.workload_models import UnrestrictedDockerRequest, WorkloadRequest
 from moonmind.workloads.docker_launcher import (
     DockerContainerJanitor,
     DockerWorkloadConcurrencyLimiter,
@@ -28,6 +28,7 @@ from moonmind.workloads.docker_launcher import (
 from moonmind.workloads.registry import RunnerProfileRegistry
 
 WORKSPACE_ROOT = Path("/work/agent_jobs")
+
 
 def _profile_payload(
     *,
@@ -82,6 +83,7 @@ def _profile_payload(
     payload.update(overrides)
     return payload
 
+
 def _registry(
     tmp_path: Path,
     *,
@@ -96,6 +98,7 @@ def _registry(
         registry_path,
         workspace_root=workspace_root,
     )
+
 
 def _validated_request(
     tmp_path: Path,
@@ -132,6 +135,7 @@ def _validated_request(
         )
     return registry.validate_request(WorkloadRequest.model_validate(payload))
 
+
 def _helper_profile_payload(
     *,
     workspace_root: Path = WORKSPACE_ROOT,
@@ -159,6 +163,7 @@ def _helper_profile_payload(
     )
     payload.update(overrides)
     return payload
+
 
 def _validated_helper_request(
     tmp_path: Path,
@@ -188,6 +193,7 @@ def _validated_helper_request(
         profiles=profiles or [_helper_profile_payload(workspace_root=workspace_root)],
         **payload,
     )
+
 
 class _Process:
     def __init__(
@@ -235,6 +241,7 @@ class _Process:
         self.returncode = returncode
         self._closed.set()
 
+
 class _Pipe:
     def __init__(self, process: _Process, data: bytes) -> None:
         self._process = process
@@ -249,6 +256,7 @@ class _Pipe:
         chunk = bytes(self._data[:size])
         del self._data[:size]
         return chunk
+
 
 @pytest.mark.asyncio
 async def test_launcher_builds_deterministic_docker_run_and_cleans_up(
@@ -293,7 +301,9 @@ async def test_launcher_builds_deterministic_docker_run_and_cleans_up(
     assert "--entrypoint" in run_args
     assert run_args[run_args.index("--entrypoint") + 1] == "/bin/bash"
     assert "type=volume,source=agent_workspaces,target=/work/agent_jobs" in run_args
-    assert "type=volume,source=unreal_ccache_volume,target=/work/cache/ccache" in run_args
+    assert (
+        "type=volume,source=unreal_ccache_volume,target=/work/cache/ccache" in run_args
+    )
     assert (
         "type=volume,source=unreal_ubt_volume,target=/work/cache/ubt,readonly"
         in run_args
@@ -306,8 +316,11 @@ async def test_launcher_builds_deterministic_docker_run_and_cleans_up(
     assert result.status == "succeeded"
     assert result.exit_code == 0
     assert result.metadata["containerName"] == "mm-workload-task-1-step-test-2"
-    assert result.metadata["artifactsDir"] == "/work/agent_jobs/task-1/artifacts/step-test"
+    assert (
+        result.metadata["artifactsDir"] == "/work/agent_jobs/task-1/artifacts/step-test"
+    )
     assert result.metadata["stdout"] == "tests passed\n"
+
 
 def test_launcher_wraps_multi_part_shell_command_as_single_arg(
     tmp_path: Path,
@@ -317,6 +330,7 @@ def test_launcher_wraps_multi_part_shell_command_as_single_arg(
     )
 
     assert run_args[-3:] == ["python:3.12-slim", "-lc", "python -V"]
+
 
 def test_unrestricted_docker_request_replaces_leading_docker_binary(
     tmp_path: Path,
@@ -339,6 +353,7 @@ def test_unrestricted_docker_request_replaces_leading_docker_binary(
 
     assert args == ["podman", "ps"]
 
+
 def test_unrestricted_helper_request_reuses_unrestricted_arg_builder(
     tmp_path: Path,
 ) -> None:
@@ -356,9 +371,13 @@ def test_unrestricted_helper_request_reuses_unrestricted_arg_builder(
     registry = _registry(tmp_path)
     validated = registry.validate_request(request)
 
-    args = DockerWorkloadLauncher(docker_binary="podman").build_helper_run_args(validated)
+    args = DockerWorkloadLauncher(docker_binary="podman").build_helper_run_args(
+        validated
+    )
 
     assert args == ["podman", "images"]
+
+
 @pytest.mark.asyncio
 async def test_unrestricted_launcher_timeout_stops_and_kills_without_remove_on_exit(
     tmp_path: Path,
@@ -403,9 +422,21 @@ async def test_unrestricted_launcher_timeout_stops_and_kills_without_remove_on_e
 
     assert result.status == "timed_out"
     assert result.timeout_reason == "workload exceeded timeoutSeconds"
-    assert ["docker", "stop", "-t", "30", "mm-workload-task-unrestricted-docker-cli-1"] in created
+    assert [
+        "docker",
+        "stop",
+        "-t",
+        "30",
+        "mm-workload-task-unrestricted-docker-cli-1",
+    ] in created
     assert ["docker", "kill", "mm-workload-task-unrestricted-docker-cli-1"] in created
-    assert ["docker", "rm", "-f", "mm-workload-task-unrestricted-docker-cli-1"] not in created
+    assert [
+        "docker",
+        "rm",
+        "-f",
+        "mm-workload-task-unrestricted-docker-cli-1",
+    ] not in created
+
 
 @pytest.mark.asyncio
 async def test_unrestricted_launcher_cancel_stops_and_kills_without_remove_on_exit(
@@ -452,11 +483,23 @@ async def test_unrestricted_launcher_cancel_stops_and_kills_without_remove_on_ex
     assert done == {task}
     assert pending == set()
     assert task.cancelled()
-    assert ["docker", "stop", "-t", "30", "mm-workload-task-unrestricted-docker-cli-1"] in created
+    assert [
+        "docker",
+        "stop",
+        "-t",
+        "30",
+        "mm-workload-task-unrestricted-docker-cli-1",
+    ] in created
     assert ["docker", "kill", "mm-workload-task-unrestricted-docker-cli-1"] in created
-    assert ["docker", "rm", "-f", "mm-workload-task-unrestricted-docker-cli-1"] not in created
+    assert [
+        "docker",
+        "rm",
+        "-f",
+        "mm-workload-task-unrestricted-docker-cli-1",
+    ] not in created
     assert run_process is not None
     assert run_process.terminated
+
 
 def test_unreal_profile_launch_args_include_cache_volumes_and_safe_posture() -> None:
     registry = RunnerProfileRegistry.load_file(
@@ -512,6 +555,7 @@ def test_unreal_profile_launch_args_include_cache_volumes_and_safe_posture() -> 
     assert "/var/run/docker.sock" not in " ".join(run_args)
     assert "read:packages" not in " ".join(run_args)
 
+
 def test_launcher_mounts_only_explicit_credential_declarations(
     tmp_path: Path,
 ) -> None:
@@ -538,6 +582,7 @@ def test_launcher_mounts_only_explicit_credential_declarations(
     )
     assert "OAuth enrollment repair" not in " ".join(run_args)
     assert "approvalRef" not in " ".join(run_args)
+
 
 def test_launcher_rejects_artifacts_dir_outside_profile_mount(
     tmp_path: Path,
@@ -584,6 +629,7 @@ def test_launcher_rejects_artifacts_dir_outside_profile_mount(
     with pytest.raises(DockerWorkloadLauncherError, match="artifactsDir"):
         DockerWorkloadLauncher().build_run_args(validated)
 
+
 @pytest.mark.asyncio
 async def test_launcher_removes_container_after_nonzero_exit(
     tmp_path: Path,
@@ -608,6 +654,7 @@ async def test_launcher_removes_container_after_nonzero_exit(
     assert result.exit_code == 7
     assert result.metadata["stderr"] == "failed\n"
     assert created[-1] == ["docker", "rm", "-f", "mm-workload-task-1-step-test-2"]
+
 
 @pytest.mark.asyncio
 async def test_launcher_publishes_runtime_artifacts_and_diagnostics_metadata(
@@ -663,6 +710,7 @@ async def test_launcher_publishes_runtime_artifacts_and_diagnostics_metadata(
     assert result.metadata["workload"]["identityKind"] == "workload"
     assert "managedSessionIdentity" not in result.metadata["workload"]
 
+
 @pytest.mark.asyncio
 async def test_launcher_diagnostics_omit_env_values_and_auth_paths(
     tmp_path: Path,
@@ -712,13 +760,16 @@ async def test_launcher_diagnostics_omit_env_values_and_auth_paths(
     assert auth_path not in workload_metadata_text
     assert "envOverrides" not in diagnostics
 
+
 @pytest.mark.asyncio
 async def test_launcher_redacts_secret_like_runtime_output_and_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace_root = tmp_path / "workspace"
-    artifact_dir = workspace_root / "agent-runtime-redaction" / "artifacts" / "step-test"
+    artifact_dir = (
+        workspace_root / "agent-runtime-redaction" / "artifacts" / "step-test"
+    )
     artifact_dir.mkdir(parents=True, exist_ok=True)
     raw_secret = "sk-test-workload-secret-value"
     private_key = "-----BEGIN PRIVATE KEY-----\\nabc123\\n-----END PRIVATE KEY-----"
@@ -759,6 +810,7 @@ async def test_launcher_redacts_secret_like_runtime_output_and_metadata(
     assert "token=[REDACTED]" in stdout_text
     assert result.metadata["stdout"] == stdout_text
     assert result.metadata["stderr"] == stderr_text
+
 
 @pytest.mark.asyncio
 async def test_launcher_publishes_failure_artifacts_with_session_association(
@@ -805,6 +857,7 @@ async def test_launcher_publishes_failure_artifacts_with_session_association(
     assert "session.summary" not in result.output_refs
     assert "session.step_checkpoint" not in result.output_refs
 
+
 @pytest.mark.asyncio
 async def test_launcher_reports_artifact_publication_failure_in_result_metadata(
     tmp_path: Path,
@@ -835,13 +888,16 @@ async def test_launcher_reports_artifact_publication_failure_in_result_metadata(
     assert result.diagnostics_ref is None
     assert result.output_refs == {}
     assert result.metadata["artifactPublication"]["status"] == "failed"
-    assert result.metadata["artifactPublication"]["error"] == "artifact store unavailable"
+    assert (
+        result.metadata["artifactPublication"]["error"] == "artifact store unavailable"
+    )
     assert result.metadata["artifactPublication"]["errors"] == {
         "runtime.stdout": "artifact store unavailable",
         "runtime.stderr": "artifact store unavailable",
         "runtime.diagnostics": "artifact store unavailable",
     }
     assert result.metadata["stdout"] == "before publish failure\n"
+
 
 @pytest.mark.asyncio
 async def test_launcher_preserves_refs_when_artifact_publication_partly_fails(
@@ -898,6 +954,7 @@ async def test_launcher_preserves_refs_when_artifact_publication_partly_fails(
         "runtime.stderr": "stderr store unavailable"
     }
 
+
 @pytest.mark.asyncio
 async def test_launcher_links_declared_output_artifacts_under_artifacts_dir(
     tmp_path: Path,
@@ -939,9 +996,8 @@ async def test_launcher_links_declared_output_artifacts_under_artifacts_dir(
     assert diagnostics["declaredOutputRefs"] == {
         "test.report": str(report_path.resolve())
     }
-    assert diagnostics["missingDeclaredOutputs"] == {
-        "output.summary": "summary.json"
-    }
+    assert diagnostics["missingDeclaredOutputs"] == {"output.summary": "summary.json"}
+
 
 @pytest.mark.asyncio
 async def test_launcher_collects_workspace_artifacts_via_generic_globs(
@@ -988,7 +1044,9 @@ async def test_launcher_collects_workspace_artifacts_via_generic_globs(
     report_key = "collected:.artifacts/dood-unreal-tactics/20260621T120000Z/report.json"
     gate_key = "collected:.artifacts/dood-unreal-tactics/latest/gate.json"
     log_key = "collected:logs/build.log"
-    assert result.output_refs[report_key] == str((timestamped / "report.json").resolve())
+    assert result.output_refs[report_key] == str(
+        (timestamped / "report.json").resolve()
+    )
     assert result.output_refs[gate_key] == str((latest_gate / "gate.json").resolve())
     assert result.output_refs[log_key] == str((build_log / "build.log").resolve())
     # Runtime + collected refs coexist; collection does not displace them.
@@ -999,8 +1057,11 @@ async def test_launcher_collects_workspace_artifacts_via_generic_globs(
     assert diagnostics["collectedOutputRefs"][report_key] == str(
         (timestamped / "report.json").resolve()
     )
-    statuses = {entry["pattern"]: entry["status"] for entry in diagnostics["collectedOutputs"]}
+    statuses = {
+        entry["pattern"]: entry["status"] for entry in diagnostics["collectedOutputs"]
+    }
     assert statuses == {".artifacts/**/*.json": "matched", "logs/*.log": "matched"}
+
 
 @pytest.mark.asyncio
 async def test_launcher_collection_is_noop_without_collect_globs(
@@ -1039,6 +1100,7 @@ async def test_launcher_collection_is_noop_without_collect_globs(
     assert diagnostics["collectGlobs"] == []
     assert diagnostics["collectedOutputRefs"] == {}
     assert diagnostics["collectedOutputs"] == []
+
 
 @pytest.mark.asyncio
 async def test_launcher_collection_enforces_cap_and_skips_remaining_globs(
@@ -1101,6 +1163,7 @@ async def test_launcher_collection_enforces_cap_and_skips_remaining_globs(
     assert entries["reports/*.json"]["matched"] == []
     assert not any(key.endswith("late.json") for key in collected)
 
+
 @pytest.mark.asyncio
 async def test_launcher_skips_collected_files_resolving_outside_workspace(
     tmp_path: Path,
@@ -1142,13 +1205,16 @@ async def test_launcher_skips_collected_files_resolving_outside_workspace(
     assert not any(key.startswith("collected:") for key in result.output_refs)
     diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
     escape_entry = next(
-        entry for entry in diagnostics["collectedOutputs"] if entry["pattern"] == "*.json"
+        entry
+        for entry in diagnostics["collectedOutputs"]
+        if entry["pattern"] == "*.json"
     )
     assert escape_entry["status"] == "empty"
     assert len(escape_entry["skippedOutsideWorkspace"]) == 1
     assert escape_entry["skippedOutsideWorkspace"][0].endswith("leak.json")
     # The out-of-workspace target path is never leaked into collected refs.
     assert str(outside) not in json.dumps(result.output_refs)
+
 
 @pytest.mark.asyncio
 async def test_launcher_timeout_stops_kills_and_removes_container(
@@ -1180,6 +1246,7 @@ async def test_launcher_timeout_stops_kills_and_removes_container(
     assert ["docker", "kill", "mm-workload-task-1-step-test-2"] in created
     assert ["docker", "rm", "-f", "mm-workload-task-1-step-test-2"] in created
 
+
 @pytest.mark.asyncio
 async def test_launcher_cancel_stops_kills_removes_and_propagates_cancel(
     tmp_path: Path,
@@ -1200,7 +1267,9 @@ async def test_launcher_cancel_stops_kills_removes_and_propagates_cancel(
         "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
         _fake_create_subprocess_exec,
     )
-    task = asyncio.create_task(DockerWorkloadLauncher().run(_validated_request(tmp_path)))
+    task = asyncio.create_task(
+        DockerWorkloadLauncher().run(_validated_request(tmp_path))
+    )
     await asyncio.sleep(0)
 
     task.cancel()
@@ -1214,6 +1283,7 @@ async def test_launcher_cancel_stops_kills_removes_and_propagates_cancel(
     assert ["docker", "rm", "-f", "mm-workload-task-1-step-test-2"] in created
     assert run_process is not None
     assert run_process.terminated
+
 
 @pytest.mark.asyncio
 async def test_launcher_captures_bounded_process_output(
@@ -1236,6 +1306,7 @@ async def test_launcher_captures_bounded_process_output(
 
     assert len(result.metadata["stdout"]) == 64_000
     assert result.metadata["stdout"].endswith("tail\n")
+
 
 @pytest.mark.asyncio
 async def test_launcher_runs_unrestricted_requests_without_profile_concurrency_metadata(
@@ -1282,18 +1353,21 @@ async def test_launcher_runs_unrestricted_requests_without_profile_concurrency_m
         "unrestricted"
     )
 
+
 @pytest.mark.asyncio
 async def test_launcher_exposes_explicit_mode_access_and_report_publication_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace_root = tmp_path / "workspace"
-    artifact_dir = workspace_root / "task-unrestricted-artifacts" / "artifacts" / "docker-cli"
+    artifact_dir = (
+        workspace_root / "task-unrestricted-artifacts" / "artifacts" / "docker-cli"
+    )
     primary_report = artifact_dir / "reports" / "result.json"
     summary_report = artifact_dir / "reports" / "summary.json"
     primary_report.parent.mkdir(parents=True, exist_ok=True)
-    primary_report.write_text('{\"ok\":true}\n', encoding='utf-8')
-    summary_report.write_text('{\"summary\":true}\n', encoding='utf-8')
+    primary_report.write_text('{"ok":true}\n', encoding="utf-8")
+    summary_report.write_text('{"summary":true}\n', encoding="utf-8")
 
     async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
         if args[1] == "ps":
@@ -1439,6 +1513,7 @@ async def test_launcher_enforces_profile_concurrency_limit(
     result = await first
     assert result.status == "succeeded"
 
+
 @pytest.mark.asyncio
 async def test_container_janitor_lists_orphans_by_labels(
     monkeypatch: pytest.MonkeyPatch,
@@ -1475,6 +1550,7 @@ async def test_container_janitor_lists_orphans_by_labels(
         "{{.ID}}",
     ]
 
+
 @pytest.mark.asyncio
 async def test_container_janitor_sweeps_expired_workload_orphans(
     monkeypatch: pytest.MonkeyPatch,
@@ -1508,6 +1584,7 @@ async def test_container_janitor_sweeps_expired_workload_orphans(
     assert ["docker", "rm", "-f", "expired123"] in created
     assert ["docker", "rm", "-f", "fresh456"] not in created
     assert ["docker", "rm", "-f", "missing789"] not in created
+
 
 @pytest.mark.asyncio
 async def test_launcher_starts_bounded_helper_detached_and_waits_for_readiness(
@@ -1561,6 +1638,7 @@ async def test_launcher_starts_bounded_helper_detached_and_waits_for_readiness(
     assert result.metadata["helper"]["ttlSeconds"] == 300
     assert result.metadata["helper"]["sessionContext"] is None
 
+
 @pytest.mark.asyncio
 async def test_launcher_holds_helper_concurrency_lease_until_stop(
     tmp_path: Path,
@@ -1604,6 +1682,7 @@ async def test_launcher_holds_helper_concurrency_lease_until_stop(
     second_result = await launcher.start_helper(second)
     assert second_result.status == "ready"
 
+
 @pytest.mark.asyncio
 async def test_launcher_reports_unhealthy_helper_after_bounded_readiness_retries(
     tmp_path: Path,
@@ -1637,6 +1716,7 @@ async def test_launcher_reports_unhealthy_helper_after_bounded_readiness_retries
     assert result.status == "unhealthy"
     assert result.metadata["helper"]["readiness"]["status"] == "unhealthy"
     assert result.metadata["helper"]["readiness"]["attempts"] == 3
+
 
 @pytest.mark.asyncio
 async def test_launcher_kills_timed_out_readiness_probe_process(
@@ -1696,6 +1776,7 @@ async def test_launcher_kills_timed_out_readiness_probe_process(
     assert len(timed_out_processes) == 1
     assert all(process.killed for process in timed_out_processes)
 
+
 @pytest.mark.asyncio
 async def test_launcher_omits_raw_readiness_output_from_helper_metadata(
     tmp_path: Path,
@@ -1734,6 +1815,7 @@ async def test_launcher_omits_raw_readiness_output_from_helper_metadata(
     assert readiness["stdoutBytes"] == len(secret_value)
     assert secret_value not in serialized
 
+
 @pytest.mark.asyncio
 async def test_launcher_publishes_helper_declared_outputs(
     tmp_path: Path,
@@ -1770,6 +1852,7 @@ async def test_launcher_publishes_helper_declared_outputs(
     assert result.output_refs["ready"].endswith("/ready.json")
     assert result.metadata["helper"]["artifactPublication"]["status"] == "complete"
 
+
 @pytest.mark.asyncio
 async def test_launcher_tears_down_bounded_helper_after_multiple_sub_steps(
     tmp_path: Path,
@@ -1801,7 +1884,9 @@ async def test_launcher_tears_down_bounded_helper_after_multiple_sub_steps(
         start_result.metadata["helper"]["containerName"],
         start_result.metadata["helper"]["containerName"],
     ]
-    stop_result = await launcher.stop_helper(validated, reason="bounded_window_complete")
+    stop_result = await launcher.stop_helper(
+        validated, reason="bounded_window_complete"
+    )
 
     assert sub_step_observations == [
         "mm-helper-task-helper-step-service-1",
@@ -1866,6 +1951,7 @@ async def test_helper_cleanup_failure_holds_lease_for_every_network_policy(
 
     assert limiter._active_total == 1
 
+
 @pytest.mark.asyncio
 async def test_container_janitor_sweeps_expired_bounded_helpers(
     monkeypatch: pytest.MonkeyPatch,
@@ -1906,6 +1992,8 @@ async def test_container_janitor_sweeps_expired_bounded_helpers(
         "--format",
         '{{.ID}}\t{{.Names}}\t{{.Label "moonmind.expires_at"}}',
     ]
+
+
 def test_restricted_profile_resolves_to_attested_network(tmp_path: Path) -> None:
     request = _validated_request(
         tmp_path,
@@ -1938,8 +2026,6 @@ def test_docker_proxy_profile_preserves_its_target_specific_route(
     assert args[args.index("--network") + 1] == "custom_docker_proxy"
     assert not any(value.startswith("HTTPS_PROXY=") for value in args)
     assert not any("moonmind.egress.profile=" in value for value in args)
-
-
 
 
 @pytest.mark.asyncio
@@ -1980,9 +2066,8 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
 
     from moonmind.security.egress import (
         DEFAULT_EGRESS_PROFILE,
-        EGRESS_CONFIG_DIGEST,
+        EGRESS_FILE_DIGESTS,
         EGRESS_NETWORK_REF,
-        EGRESS_PROFILE_SET_DIGEST,
         ENFORCER_IMPLEMENTATION,
         OMNIGENT_EGRESS_NETWORK_REF,
     )
@@ -1996,7 +2081,12 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
     }
     applied = {
         "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
-        "configDigest": EGRESS_CONFIG_DIGEST,
+        "configDigest": "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                EGRESS_FILE_DIGESTS, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest(),
         "gatewayImageDigest": "sha256:gateway-image",
         "internal": True,
         "ipv6": False,
@@ -2004,9 +2094,12 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
         "gatewayNetworks": sorted(gateway_networks),
         "enforcer": ENFORCER_IMPLEMENTATION,
     }
-    applied_rule_digest = "sha256:" + hashlib.sha256(
-        json.dumps(applied, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    applied_rule_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(applied, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
     if subcommand == "network":
         return _Process(
             stdout=json.dumps({"Internal": True, "EnableIPv6": False}).encode()
@@ -2014,9 +2107,7 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
     if subcommand == "inspect":
         if "health" not in args[3]:
             image_ref = (
-                "redis:7.2-alpine"
-                if "helper" in str(args[-1])
-                else "python:3.12-slim"
+                "redis:7.2-alpine" if "helper" in str(args[-1]) else "python:3.12-slim"
             )
             return _Process(
                 stdout=json.dumps(
@@ -2046,9 +2137,7 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
             stdout=json.dumps(
                 {
                     "labels": {
-                        "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
                         "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
-                        "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
                     },
                     "networks": gateway_networks,
                     "image": "sha256:gateway-image",
@@ -2061,12 +2150,14 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
             return _Process(stdout=b"")
         if args[2] != DEFAULT_EGRESS_PROFILE.gateway_ref:
             return _Process(stdout=b"PONG\n")
-        return _Process(
-            stdout=(
-                f"{EGRESS_CONFIG_DIGEST.removeprefix('sha256:')}  "
-                "/etc/squid/squid.conf\n"
-            ).encode()
-        )
+        if args[3] == "sha256sum":
+            return _Process(
+                stdout="".join(
+                    f"{EGRESS_FILE_DIGESTS[p.rsplit('/', 1)[-1]].removeprefix('sha256:')}  {p}\n"
+                    for p in args[4:]
+                ).encode()
+            )
+        return _Process(stdout=b"")
     if subcommand == "run":
         return _Process(returncode=0, stdout=b"restricted workload ok\n")
     if subcommand == "image":
@@ -2414,9 +2505,7 @@ async def test_restricted_helper_stop_recovers_durable_authority_after_worker_re
     assert terminal["leaseAuthority"]["releaseResult"] == (
         "released_after_reconciliation"
     )
-    assert terminal["runtimeProvenance"] == (
-        "docker_workload_launcher/docker-engine"
-    )
+    assert terminal["runtimeProvenance"] == ("docker_workload_launcher/docker-engine")
     assert terminal["hostMode"] == "managed_helper"
     assert terminal["workloadClass"] == "managed_helper"
 
@@ -2549,9 +2638,7 @@ async def test_restricted_helper_failed_cleanup_persists_reconciliation_evidence
     assert launcher._concurrency_limiter._active_total == 1
 
     cleanup_blocked = False
-    stopped = await launcher.stop_helper(
-        validated, reason="janitor_reconciliation"
-    )
+    stopped = await launcher.stop_helper(validated, reason="janitor_reconciliation")
     terminal = parse_and_verify_conformance_evidence(
         Path(stopped.output_refs["security.egress.authority"]).read_bytes(),
         location="restricted-helper-cleanup-reconciled-test",

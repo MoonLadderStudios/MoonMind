@@ -154,7 +154,11 @@ def build_tier_capabilities(
     runtime_id = (runtime_id or "").strip() or "unknown"
     provider_id = (provider_id or "").strip() or "unknown"
     defaults = _runtime_defaults(runtime_id)
-    resolved_model_options = model_options if model_options is not None else _model_options(provider_id)
+    resolved_model_options = (
+        model_options
+        if model_options is not None
+        else ([] if runtime_id == "opencode" else _model_options(provider_id))
+    )
     effort_options = _DEFAULT_EFFORT_OPTIONS
 
     evidence_payload: dict[str, Any] = {
