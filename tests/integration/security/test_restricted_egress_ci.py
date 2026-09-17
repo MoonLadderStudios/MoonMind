@@ -61,6 +61,8 @@ def deployment_policy(tmp_path, monkeypatch):
     shutil.copyfile(egress.__file__, source)
     policy = root / "docker/sandbox-egress-proxy"
     shutil.copytree(egress.EGRESS_POLICY_DIRECTORY, policy)
+    bundled = root / "docker/moonmind-egress"
+    shutil.copytree(egress.EGRESS_BUNDLED_POLICY_DIRECTORY, bundled)
     (policy / "omnigent-provider-domains.txt").write_text(
         "openrouter.ai\napi.future-provider.com\n"
     )
@@ -70,11 +72,38 @@ def deployment_policy(tmp_path, monkeypatch):
     spec.loader.exec_module(module)
     live = tmp_path / "loaded"
     result = subprocess.run(
-        ["sh", str(policy / "policy.sh"), "prepare", str(policy), str(live)],
+        ["sh", str(bundled / "policy.sh"), "prepare", str(policy), str(live)],
         capture_output=True,
     )
     assert result.returncode == 0, result.stderr
-    return module, policy, live
+    return module, policy, live, bundled
+
+
+def test_new_checkout_never_rewrites_the_live_v1_gateway_policy():
+    """A newer enforcer must not publish through the v1 gateway's mount.
+
+    A v1 gateway bind-mounts ``docker/sandbox-egress-proxy/squid.conf`` as its
+    entire configuration and pins the reviewed v1 digest in both its health
+    check and its attestation. Shipping a newer enforcer through that same file
+    leaves every running v1 gateway permanently unhealthy and blocks the very
+    release that would replace it, so the two policies keep separate paths.
+    """
+
+    from moonmind.security import egress
+
+    mounted = egress.EGRESS_POLICY_DIRECTORY / "squid.conf"
+    bundled = egress.EGRESS_BUNDLED_POLICY_DIRECTORY / "squid.conf"
+    assert mounted.resolve() != bundled.resolve()
+    assert "sha256:" + hashlib.sha256(mounted.read_bytes()).hexdigest() == (
+        egress._LEGACY_CONFIG_DIGEST
+    )
+    assert "sha256:" + hashlib.sha256(bundled.read_bytes()).hexdigest() == (
+        egress.EGRESS_MAIN_CONFIG_DIGEST
+    )
+    # The executable policy is image-owned too; only provider data is read from
+    # the deployment mount.
+    assert (egress.EGRESS_BUNDLED_POLICY_DIRECTORY / "policy.sh").exists()
+    assert not (egress.EGRESS_POLICY_DIRECTORY / "policy.sh").exists()
 
 
 @pytest.mark.parametrize(
@@ -87,7 +116,7 @@ def test_image_policy_survives_old_checkout_and_restart(
 
     image = tmp_path / "image"
     bundled = image / "opt/moonmind-egress"
-    shutil.copytree(egress.EGRESS_POLICY_DIRECTORY, bundled)
+    shutil.copytree(egress.EGRESS_BUNDLED_POLICY_DIRECTORY, bundled)
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     (checkout / "squid.conf").write_text("old checkout config\n")
@@ -238,7 +267,7 @@ def test_compose_policy_selection_reaches_gateway_and_consumers(
         prepared = subprocess.run(
             [
                 "sh",
-                str(root / "docker/sandbox-egress-proxy/policy.sh"),
+                str(root / "docker/moonmind-egress/policy.sh"),
                 "prepare",
                 "",
                 str(live),
@@ -273,7 +302,7 @@ def test_compose_policy_selection_reaches_gateway_and_consumers(
 async def test_deployment_data_drives_runtime_and_proxy_attestation(
     deployment_policy, tamper
 ):
-    module, policy, live = deployment_policy
+    module, policy, live, bundled = deployment_policy
     destinations = module.OMNIGENT_EGRESS_PROFILE.destinations
     assert {d.dns_name for d in destinations} - {
         d.dns_name for d in module.DEFAULT_EGRESS_PROFILE.destinations
@@ -283,10 +312,13 @@ async def test_deployment_data_drives_runtime_and_proxy_attestation(
     )
     assert all(d.ports == (443,) for d in destinations)
     if tamper:
-        directory = policy if tamper.startswith("mounted") else live
-        target = directory / (
-            "squid.conf" if tamper.endswith("main") else "omnigent-provider-domains.txt"
-        )
+        if tamper.endswith("main"):
+            # The main config is image-owned; only provider data is mounted.
+            target = (bundled if tamper.startswith("mounted") else live) / "squid.conf"
+        else:
+            target = (
+                policy if tamper.startswith("mounted") else live
+            ) / "omnigent-provider-domains.txt"
         target.chmod(0o644)
         if tamper == "missing-extra":
             target.unlink()
@@ -316,7 +348,12 @@ async def test_deployment_data_drives_runtime_and_proxy_attestation(
         assert args[2] == "sha256sum"
         rows = []
         for name in args[3:]:
-            directory = policy if name.startswith("/etc/squid/") else live
+            if not name.startswith("/etc/squid/"):
+                directory = live
+            elif name.endswith("squid.conf"):
+                directory = bundled
+            else:
+                directory = policy
             path = directory / Path(name).name
             if not path.exists():
                 return 1, b"", b"missing policy"
@@ -358,7 +395,7 @@ async def test_deployment_data_drives_runtime_and_proxy_attestation(
 def test_proxy_startup_rejects_invalid_deployment_destinations(
     deployment_policy, value
 ):
-    module, policy, live = deployment_policy
+    module, policy, live, bundled = deployment_policy
     (policy / "omnigent-provider-domains.txt").write_text(value + "\n")
     with pytest.raises(ValueError):
         module.load_omnigent_provider_destinations(
@@ -367,7 +404,7 @@ def test_proxy_startup_rejects_invalid_deployment_destinations(
     result = subprocess.run(
         [
             "sh",
-            str(policy / "policy.sh"),
+            str(bundled / "policy.sh"),
             "prepare",
             str(policy),
             str(live.parent / "invalid"),

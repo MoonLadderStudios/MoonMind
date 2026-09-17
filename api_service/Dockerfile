@@ -250,7 +250,11 @@ FROM runtime-dependencies AS runtime-base
 # invalidate the lightweight project install.
 COPY moonmind /app/moonmind/
 COPY docker/sandbox-egress-proxy /app/docker/sandbox-egress-proxy/
-COPY docker/sandbox-egress-proxy /opt/moonmind-egress/
+# The enforcer's own policy is image-owned and lives in its own source
+# directory. It must never be copied out of the deployment-mounted directory:
+# a live v1 gateway bind-mounts that directory's squid.conf, so rewriting it
+# for a newer enforcer invalidates every running v1 gateway on the host.
+COPY docker/moonmind-egress /opt/moonmind-egress/
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends squid
