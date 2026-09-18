@@ -6,6 +6,7 @@ from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     OPS_DIAGNOSE_STACK_TOOL_NAME,
+    RELEASE_SUPERVISION_MAX_ATTEMPTS,
     build_deployment_update_tool_definition_payload,
     build_ops_diagnose_stack_tool_definition_payload,
 )
@@ -106,7 +107,10 @@ def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
     assert definition.to_payload()["security"]["opsRuntime"] == raw_payload[
         "security"
     ]["opsRuntime"]
-    assert definition.policies.retries.max_attempts == 1
+    # The release is detached and outlives its supervising Activity, so the
+    # attempt budget is derived from the job budget rather than pinned here.
+    # See test_deployment_update_policy_supervises_the_detached_release_budget.
+    assert definition.policies.retries.max_attempts == RELEASE_SUPERVISION_MAX_ATTEMPTS
     assert definition.policies.retries.non_retryable_error_codes == (
         "INVALID_INPUT",
         "PERMISSION_DENIED",
@@ -310,3 +314,47 @@ def test_deployment_update_plan_rejects_shell_path_and_runner_overrides(
 
     with pytest.raises(PlanValidationError, match=f"Unexpected field '{field}'"):
         validate_plan_payload(payload=payload, registry_snapshot=snapshot)
+
+
+def test_deployment_update_policy_supervises_the_detached_release_budget() -> None:
+    """The supervising activity must outlive the job it supervises.
+
+    Regression: the detached updater owns a two-hour budget and retries three
+    times inside it, while ``deployment.update_compose_stack`` was declared
+    with a single 900-second attempt. Promotion replaces every worker fleet,
+    including the one running this activity, so a single attempt could
+    neither wait out a long release nor re-attach after its own worker was
+    replaced. Temporal failed the workflow while the release succeeded.
+    """
+
+    from moonmind.workflows.skills.deployment_release import (
+        RELEASE_JOB_BUDGET_SECONDS,
+    )
+
+    definition = parse_tool_definition(
+        build_deployment_update_tool_definition_payload()
+    )
+    timeouts = definition.policies.timeouts
+    retries = definition.policies.retries
+
+    # Promotion replaces this activity's own worker, so re-attachment - and
+    # therefore more than one attempt - is the normal path, not the edge case.
+    assert retries.max_attempts > 1
+    # The job's own deadline decides when a release stops, so the activity
+    # must still be scheduled when that deadline arrives.
+    assert timeouts.schedule_to_close_seconds >= RELEASE_JOB_BUDGET_SECONDS
+    # Attempts cover the budget end to end; no release inside its own budget
+    # can exhaust the supervisor first.
+    assert (
+        retries.max_attempts * timeouts.start_to_close_seconds
+        >= RELEASE_JOB_BUDGET_SECONDS
+    )
+    # A supervision window that never ends cannot notice a replaced worker.
+    assert timeouts.start_to_close_seconds < RELEASE_JOB_BUDGET_SECONDS
+    # A terminal release failure stays terminal.
+    assert retries.non_retryable_error_codes == (
+        "INVALID_INPUT",
+        "PERMISSION_DENIED",
+        "POLICY_VIOLATION",
+        "DEPLOYMENT_LOCKED",
+    )

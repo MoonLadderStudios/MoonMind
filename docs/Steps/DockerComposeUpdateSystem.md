@@ -825,6 +825,16 @@ stack changes and job ownership; PID age cannot transfer authority across
 container namespaces. The updater has a two-hour cumulative deadline and at
 most three attempts, preserved across restarts.
 
+Promotion recreates every worker fleet, including the one running the Activity
+that submitted the release, so the updater routinely outlives its own
+supervisor. The supervising Activity is therefore budgeted from the same
+two-hour deadline rather than from a single attempt: its schedule-to-close
+covers the whole job budget, and each start-to-close window only bounds how
+long a replaced supervisor goes unnoticed. A supervision timeout re-attaches
+to the running job by its durable identity and never launches a second
+updater; the job's own deadline, never the supervisor's, decides when a
+release stops. Terminal release failures remain terminal and are not retried.
+
 Candidate workers first register all workflow and Activity queues. A stable,
 pinned canary verifies their image identity through each queue. The controller
 also qualifies a candidate API's health, dashboard, assets and read-only API.
@@ -848,7 +858,11 @@ Before promotion, the controller retains pollers from the exact previous image.
 Those pollers attest deployment-owned singleton infrastructure before they
 report ready, so the controller first repairs an unhealthy or absent
 restricted-egress gateway from the previous release's own definition; a
-gateway broken out of band must not make the deployment un-updatable.
+gateway broken out of band must not make the deployment un-updatable. A
+recreate that does not take is retried within that repair window, each attempt
+keeping a cooldown to converge on its own, so a gateway needing more than one
+recreate is repaired inside the current release attempt instead of failing
+retention and waiting for the job to retry the whole update.
 Pinned work remains owned by that version after normal Compose services change.
 The existing maintenance schedule retires those temporary pollers only when
 Temporal reports the version drained. Inactive private candidates require a
