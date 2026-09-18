@@ -251,6 +251,69 @@ async def test_current_manager_cleans_then_grants_and_replays(
 
 
 @pytest.mark.asyncio
+async def test_lease_cleanup_redrive_marker_pins_redrive_order() -> None:
+    """The #1089 redrive must be versioned independently of the transition contract.
+
+    Pre-#4330 histories recorded only request-cleanup + retry-unresolved per
+    loop. Post-#4330 histories add deliver-cleanup + complete-direct per loop.
+    Without an independent marker the two generations are indistinguishable and
+    replay wedges with Activity-vs-Timer nondeterminism, blocking the
+    credential-maintenance lease and thus deployment requalification for
+    opencode-go-default (no admissible execution evidence).
+    """
+    from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+        LEASE_CLEANUP_REDRIVE_PATCH,
+    )
+
+    runtime_id = "opencode"
+    activities = _ProfileActivities(runtime_id, fail_cleanup=False)
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-lease-cleanup-redrive",
+            workflows=[MoonMindProviderProfileManagerWorkflow, _SlotRequester],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ), Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                activities.list_profiles,
+                activities.sync_leases,
+                activities.pending_order,
+                activities.verify,
+            ],
+        ):
+            manager = await env.client.start_workflow(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": runtime_id},
+                id=f"provider-profile-manager:{runtime_id}",
+                task_queue="test-lease-cleanup-redrive",
+            )
+            await asyncio.wait_for(activities.cleaned.wait(), timeout=15)
+            with env.auto_time_skipping_disabled():
+                await manager.signal("shutdown")
+                assert (await manager.result())["status"] == "shutdown"
+            history = await manager.fetch_history()
+
+    patch_ids: list[str] = []
+    for event in history.events:
+        if event.HasField("marker_recorded_event_attributes"):
+            attrs = event.marker_recorded_event_attributes
+            if attrs.marker_name == "core_patch":
+                payload = (
+                    await DataConverter.default.decode(
+                        attrs.details["patch-data"].payloads
+                    )
+                )[0]
+                patch_ids.append(payload["id"])
+    assert LEASE_CLEANUP_REDRIVE_PATCH in patch_ids
+    await Replayer(
+        workflows=[MoonMindProviderProfileManagerWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
 async def test_the_lease_transition_contract_replays_from_its_own_history() -> None:
     """The durable ordering contract is pinned by production replay.
 
