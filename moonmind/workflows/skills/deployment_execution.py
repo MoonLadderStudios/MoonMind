@@ -19,7 +19,7 @@ from moonmind.deployment_access import DeploymentAccessError, check_compose_acce
 
 from .deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
-    DEPLOYMENT_UPDATE_TOOL_VERSION,
+    RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS,
 )
 from .tool_plan_contracts import ToolFailure, ToolResult
 
@@ -837,7 +837,9 @@ class HostDockerComposeRunner:
     project_dir: str
     compose_file: str | None = None
     project_name: str = "moonmind"
-    command_timeout_seconds: int = 900
+    # The release supervision window is sized from this same number, so the
+    # Activity watching a release can never be shorter than one command.
+    command_timeout_seconds: int = RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS
     local_project_dir: str | None = None
     env_file: str | None = None
     excluded_services: tuple[str, ...] = ()

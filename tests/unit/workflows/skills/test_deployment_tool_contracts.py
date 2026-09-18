@@ -394,3 +394,29 @@ def test_supervision_window_never_interrupts_pre_launch_work() -> None:
         RELEASE_SUPERVISION_SCHEDULE_TO_CLOSE_SECONDS
         >= RELEASE_JOB_BUDGET_SECONDS + RELEASE_SUPERVISION_WINDOW_SECONDS
     )
+
+
+def test_supervision_window_leaves_headroom_beyond_the_runner_timeout() -> None:
+    """A command that uses its whole timeout must still reach launch.
+
+    Regression (Codex P2 round 2 on #4422): the window merely equalled the
+    runner's command timeout. The Activity clock starts before the compose
+    subprocess does, and after the pull the updater must still be inspected
+    and ``request.json`` published, so a pull that succeeded near its
+    supported timeout was cancelled anyway - forcing another pull on retry
+    and spending the durable budget on repeated pre-launch work.
+    """
+
+    from moonmind.workflows.skills.deployment_tools import (
+        RELEASE_PRELAUNCH_HEADROOM_SECONDS,
+        RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS,
+        RELEASE_SUPERVISION_WINDOW_SECONDS,
+    )
+
+    assert RELEASE_PRELAUNCH_HEADROOM_SECONDS > 0
+    assert (
+        RELEASE_SUPERVISION_WINDOW_SECONDS
+        == RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS + RELEASE_PRELAUNCH_HEADROOM_SECONDS
+    )
+    # Strictly greater: equality is what round 2 rejected.
+    assert RELEASE_SUPERVISION_WINDOW_SECONDS > RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS
