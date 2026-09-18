@@ -848,7 +848,11 @@ Before promotion, the controller retains pollers from the exact previous image.
 Those pollers attest deployment-owned singleton infrastructure before they
 report ready, so the controller first repairs an unhealthy or absent
 restricted-egress gateway from the previous release's own definition; a
-gateway broken out of band must not make the deployment un-updatable.
+gateway broken out of band must not make the deployment un-updatable. When
+retention still does not converge, the recorded failure names the fleet, the
+observed gateway health and the retained container's redacted log tail, and
+the bound that keeps that record small preserves both ends of the diagnosis
+so the exception line naming the cause survives to every operator surface.
 Pinned work remains owned by that version after normal Compose services change.
 The existing maintenance schedule retires those temporary pollers only when
 Temporal reports the version drained. Inactive private candidates require a
