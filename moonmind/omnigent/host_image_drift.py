@@ -304,7 +304,28 @@ def describe_policy_hostclass_drift(
     policy = str(policy_ref or "").strip() or "<unknown-policy>"
     planned = str(policy_host_image_ref or "").strip()
     selected = str(selected_host_image_ref or "").strip()
-    if not planned or not selected or planned == selected:
+    if planned == selected:
+        return None
+    if planned and not selected:
+        # The release record lost authority for a host family the policy
+        # still pins (for example a transiently empty resolution dropped it
+        # from the candidate record). Treating this as no drift would let
+        # qualification succeed while policies stay pinned to an image the
+        # release no longer supplies; fence until the recorded host is
+        # preserved or resolution recovers.
+        return {
+            "policyRef": policy,
+            "plannedHostImageRef": planned,
+            "selectedHostImageRef": selected,
+            "compatibleRebuild": False,
+            "fencePromotion": True,
+            "recovery": (
+                f"release record is missing authority for {policy} "
+                f"(planned={planned[:120]}); preserve the recorded host or "
+                "resolve release candidates before promoting"
+            ),
+        }
+    if not planned or not selected:
         return None
     if (
         not _is_digest_pinned(planned)

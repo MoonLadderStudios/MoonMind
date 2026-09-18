@@ -42,6 +42,19 @@ def test_placeholders_never_auto_advance():
     assert disposition["compatibleRebuild"] is False
 
 
+def test_missing_selected_host_fences_with_missing_authority():
+    """P1: an empty selected ref must not read as no drift."""
+    planned = "ghcr.io/example/host@sha256:" + "a" * 64
+    disposition = describe_policy_hostclass_drift(
+        "omnigent-on-demand@14", planned, ""
+    )
+    assert disposition is not None
+    assert disposition["fencePromotion"] is True
+    assert disposition["compatibleRebuild"] is False
+    assert "missing authority" in disposition["recovery"]
+    assert planned[:32] in disposition["recovery"]
+
+
 @pytest.mark.asyncio
 async def test_foreign_repository_compile_fails_with_actionable_evidence(
     monkeypatch,
