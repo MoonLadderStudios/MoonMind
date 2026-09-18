@@ -13,6 +13,42 @@ OPS_DIAGNOSE_STACK_TOOL_VERSION = "1.0.0"
 DEPLOYMENT_OVERVIEW_TOOL_NAME = "moonmind.deployment_overview"
 DEPLOYMENT_OVERVIEW_TOOL_VERSION = "1.0.0"
 
+# One owner for the release budget. The detached updater's deadline and the
+# Activity budget that supervises it are derived from the same number, so
+# they cannot drift apart: a supervisor that expires first reports a failure
+# for a release that is still running.
+RELEASE_JOB_BUDGET_SECONDS = 7200
+# How long one supervising attempt watches the detached job. Timing out is
+# not a failure: promotion recreates every worker fleet, including the one
+# running the supervising Activity, so the supervisor is expected to be
+# replaced mid-release and ``execute_detached`` re-attaches on the next
+# attempt. The window therefore only bounds how long a replaced supervisor
+# goes unnoticed, which is why it is far shorter than the budget.
+#
+# It must still outlast one pre-launch compose command with room to spare.
+# ``HostDockerComposeRunner`` reads its own command timeout from here, and
+# lets the updater pull consume all of it; the Activity clock additionally
+# starts before that subprocess does, and after the pull the image is still
+# inspected and ``request.json`` published. A window that merely equalled the
+# command timeout therefore cancelled a pull that had in fact succeeded,
+# forcing another pull on retry and spending the durable budget on repeated
+# pre-launch work.
+RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS = 900
+RELEASE_PRELAUNCH_HEADROOM_SECONDS = 300
+RELEASE_SUPERVISION_WINDOW_SECONDS = (
+    RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS + RELEASE_PRELAUNCH_HEADROOM_SECONDS
+)
+# Enough attempts to re-attach across the whole budget, so the job's own
+# deadline - never the attempt count - decides when a release stops.
+RELEASE_SUPERVISION_MAX_ATTEMPTS = (
+    -(-RELEASE_JOB_BUDGET_SECONDS // RELEASE_SUPERVISION_WINDOW_SECONDS) + 1
+)
+# One window of margin lets the final re-attachment read the terminal
+# receipt that the job wrote as its own deadline arrived.
+RELEASE_SUPERVISION_SCHEDULE_TO_CLOSE_SECONDS = (
+    RELEASE_JOB_BUDGET_SECONDS + RELEASE_SUPERVISION_WINDOW_SECONDS
+)
+
 _MOONMIND_REPOSITORY = "ghcr.io/moonladderstudios/moonmind"
 _NON_RETRYABLE_DEPLOYMENT_ERRORS = (
     "INVALID_INPUT",
@@ -155,11 +191,17 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
         "requirements": {"capabilities": ["deployment_control", "docker_admin"]},
         "policies": {
             "timeouts": {
-                "start_to_close_seconds": 900,
-                "schedule_to_close_seconds": 1800,
+                "start_to_close_seconds": RELEASE_SUPERVISION_WINDOW_SECONDS,
+                "schedule_to_close_seconds": (
+                    RELEASE_SUPERVISION_SCHEDULE_TO_CLOSE_SECONDS
+                ),
             },
             "retries": {
-                "max_attempts": 1,
+                # The release runs detached and survives its supervisor, so a
+                # supervision timeout re-attaches instead of failing the run.
+                # Terminal release failures stay terminal: they surface as a
+                # non-retryable ToolFailure, not as a timeout.
+                "max_attempts": RELEASE_SUPERVISION_MAX_ATTEMPTS,
                 "non_retryable_error_codes": list(_NON_RETRYABLE_DEPLOYMENT_ERRORS),
             },
         },
