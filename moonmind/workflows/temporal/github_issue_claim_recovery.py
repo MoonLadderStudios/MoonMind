@@ -239,6 +239,79 @@ async def _closed_execution_tree(client, receipt, now):
     return agents
 
 
+#: MoonMind's own low-cardinality harness codes that mean the deployment could
+#: not give the attempt a runtime at all (``harness_platform.failures``). These
+#: say nothing about the issue: they apply identically to every candidate, so a
+#: single launcher outage must not be charged to the whole backlog. Failures
+#: that describe the work itself (bad profile, unavailable model, failed
+#: verification) are deliberately absent and still cost an attempt.
+RUNTIME_PROVISIONING_FAILURES: tuple[str, ...] = (
+    "OMNIGENT_HOST_LAUNCH_FAILED",
+    "OMNIGENT_HOST_CAPACITY_UNAVAILABLE",
+    "OMNIGENT_HOST_REGISTRATION_TIMEOUT",
+    "OMNIGENT_HOST_HARNESS_NOT_READY",
+    "OMNIGENT_HOST_CLASS_UNAVAILABLE",
+    "OMNIGENT_GENERIC_REALIZER_NOT_READY",
+    "OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE",
+)
+
+
+def runtime_provisioning_failure(detail: Any) -> bool:
+    """Return True when *detail* carries a typed host-provisioning failure.
+
+    These are MoonMind's own enumerated codes, not vendor log text: the
+    taxonomy exists precisely so decisions key on a bounded code instead of
+    provider prose. A test asserts this tuple stays a subset of the enum.
+    """
+    text = str(detail or "")
+    return any(code in text for code in RUNTIME_PROVISIONING_FAILURES)
+
+
+async def _runtime_provisioning_failed(client, receipt) -> bool:
+    """Return True when the controlling run failed for want of a runtime.
+
+    Best-effort and read-only: an unreadable or differently-shaped failure
+    keeps the ordinary accounting, so an attempt is never excused from the
+    allowance on a guess.
+    """
+    namespace, workflow_id = receipt.owner.split("/", 1)
+    try:
+        handle = client.get_workflow_handle(workflow_id)
+        await handle.result()
+    except Exception as exc:  # noqa: BLE001 - the failure itself is the evidence
+        detail = str(exc)
+        cause = getattr(exc, "cause", None)
+        while cause is not None:
+            detail = f"{detail} {cause}"
+            cause = getattr(cause, "cause", None)
+        return runtime_provisioning_failure(detail)
+    return False
+
+
+def recovery_disposition_evidence(*, agent_started: bool, remaining: int, runtime_unavailable: bool = False) -> dict[str, Any]:
+    """Build the terminal disposition evidence for one recovered claim.
+
+    A typed host-provisioning failure with no agent child started means the
+    deployment could not run this attempt and nothing was learned about the
+    issue. That is a runtime fault, not an exhausted issue budget: reporting it
+    as exhaustion escalated whole backlogs to needs-attention during a single
+    launcher outage.
+    """
+    if runtime_unavailable and not agent_started:
+        return {
+            "trustworthyNoWork": True,
+            "runtimeUnavailable": True,
+            "freshRetryAllowed": True,
+            "retryRemaining": max(0, int(remaining)),
+        }
+    return {
+        "trustworthyNoWork": True,
+        "freshRetryAllowed": remaining > 0,
+        "budgetExhausted": remaining <= 0,
+        "retryRemaining": remaining,
+    }
+
+
 async def _runtime_no_work(store, agents, receipt, service):
     from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
 
@@ -427,6 +500,11 @@ async def reconcile_local_claims(
                     # retain the reservation forever.
                     agents = []
                 checkpoints = await _runtime_no_work(store, agents, receipt, service)
+                # Only asked when no agent child started: the narrow case where
+                # the run may have died before any runtime existed.
+                runtime_unavailable = not agents and await _runtime_provisioning_failed(
+                    client, receipt
+                )
                 if unannounced:
                     released = await store.abandon_unannounced(
                         receipt.owner, receipt.attempt_id
@@ -490,16 +568,15 @@ async def reconcile_local_claims(
                                 "saveMethod": "explicit_no_work",
                                 "trustworthyNoWork": True,
                             },
-                            disposition_evidence={
-                                "trustworthyNoWork": True,
-                                "freshRetryAllowed": remaining > 0,
-                                "budgetExhausted": remaining <= 0,
-                                "retryRemaining": remaining,
-                            },
+                            disposition_evidence=recovery_disposition_evidence(
+                                agent_started=bool(agents),
+                                remaining=remaining,
+                                runtime_unavailable=runtime_unavailable,
+                            ),
                             reason="Automatic recovery: controlling run stopped without new repository work; saved checkpoints: "
                             + (", ".join(checkpoints) or "no agent started"),
                             next_action="fresh_retry"
-                            if remaining
+                            if remaining or runtime_unavailable
                             else "obtain_attention",
                             service=service,
                             claim_store=store,

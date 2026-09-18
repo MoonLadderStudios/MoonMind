@@ -69,7 +69,11 @@ def _bind_verified_target(service, candidate):
         (["status: code-review"], "open", SETTLED_CODE_REVIEW, False),
         (["status: needs-attention"], "open", SETTLED_NEEDS_ATTENTION, False),
         (["status: in-progress", "status: code-review"], "open", SETTLED_BLOCKED_MIXED, False),
-        (["status: in-progress", "status: needs-attention"], "open", SETTLED_BLOCKED_MIXED, False),
+        # Declared attention escalation (design section 2.1): needs-attention
+        # deliberately coexists with the old writer's status, so it settles as
+        # Needs attention and keeps its authorized-resolution exit.
+        (["status: in-progress", "status: needs-attention"], "open", SETTLED_NEEDS_ATTENTION, False),
+        (["status: code-review", "status: needs-attention"], "open", SETTLED_BLOCKED_MIXED, False),
         # Ordinary labels that merely start with "status" are not workflow states.
         (["statuspage"], "open", SETTLED_AVAILABLE, True),
         (["statusreport", "bug"], "open", SETTLED_AVAILABLE, True),
