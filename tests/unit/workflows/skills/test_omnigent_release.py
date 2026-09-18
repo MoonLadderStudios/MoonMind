@@ -683,13 +683,8 @@ async def test_qualify_host_drift_fails_when_policy_load_fails(monkeypatch):
     class _Policy:
         default_version = 14
 
-    async def _get_policy(_self, _policy_id):
-        return _Policy()
-
     async def _get_version(_self, _policy_id, _version):
         raise RuntimeError("transient db error")
-
-    captured: dict[str, object] = {}
 
     class _Service:
         def __init__(self, _session):
