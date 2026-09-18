@@ -67,6 +67,7 @@ from moonmind.omnigent.host_services.attestation import (
     _read_exact_host_model_options,
     _run_exact_host_opencode_command,
     _run_exact_host_runner_command,
+    _skill_projection_probe_message,
 )
 from moonmind.omnigent.host_services.github_credentials import (
     OmnigentGithubCredentialService,
@@ -81,6 +82,7 @@ from moonmind.omnigent.host_services.runtime_environment import (
     OmnigentRuntimeEnvironmentService,
 )
 from moonmind.omnigent.host_services.runtime_scripts import OmnigentRuntimeScriptService
+from moonmind.omnigent.host_services.skills import OmnigentSkillDeliveryService
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.omnigent.provider_leases import (
     AcquiredProviderLease,
@@ -4227,7 +4229,7 @@ def _grant_expires_at() -> str:
 
 
 @pytest.mark.asyncio
-async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
+async def test_workspace_attachment_mounts_the_deployment_volume_subpath(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace_root = tmp_path / "worker"
@@ -4236,17 +4238,17 @@ async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
     monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
 
     async def runner(argv):
-        assert argv[-1] == "agent-workspaces"
-        return 0, "/daemon/agent_workspaces\n", ""
+        raise AssertionError(
+            "a remote daemon mount must not depend on an inspected volume "
+            f"mountpoint: {argv}"
+        )
 
     # MoonLadderStudios/MoonMind#4014 removed raw workspacePath precedence:
     # an existing workspace needs a server-issued ownership/use grant. The
     # daemon translation below exercises the granted path, not a raw mount.
     # Newly authored grants must carry an HMAC issuance signature bound to
     # the target workflow, so the fixture issues a signed grant.
-    monkeypatch.setenv(
-        "MOONMIND_WORKSPACE_GRANT_SECRET", "test-workspace-grant-secret"
-    )
+    monkeypatch.setenv("MOONMIND_WORKSPACE_GRANT_SECRET", "test-workspace-grant-secret")
     workspace_id = "granted-ws-1"
     granted = workspace_root / "temporal_sandbox" / workspace_id / "repo"
     granted.mkdir(parents=True)
@@ -4292,18 +4294,19 @@ async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
 
     attachment = await service.materialize(request)
 
-    assert (
-        attachment["sourceRef"]
-        == "/daemon/agent_workspaces/temporal_sandbox/granted-ws-1/repo"
-    )
+    # The daemon does not share the worker filesystem, and the volume
+    # mountpoint it reports is not reachable as a bind source on every
+    # supported daemon. Docker resolves the volume itself.
+    assert attachment["kind"] == "volume"
+    assert attachment["sourceRef"] == "agent-workspaces"
+    assert attachment["subPath"] == "temporal_sandbox/granted-ws-1/repo"
     assert attachment["accessMode"] == "read-only"
 
     read_only_attachment = await service.materialize(request, mutation="read_only")
 
-    assert (
-        read_only_attachment["sourceRef"]
-        == "/daemon/agent_workspaces/temporal_sandbox/granted-ws-1/repo"
-    )
+    assert read_only_attachment["kind"] == "volume"
+    assert read_only_attachment["sourceRef"] == "agent-workspaces"
+    assert read_only_attachment["subPath"] == "temporal_sandbox/granted-ws-1/repo"
     assert read_only_attachment["accessMode"] == "read-only"
 
 
@@ -4345,3 +4348,197 @@ async def test_ready_host_retry_preserves_materialized_input_paths(monkeypatch):
     result = await harness.realizer._execute_lifecycle(harness.publish_request, plan)
     assert result.summary == 'done'
     assert harness.events.count('host-ready') == 1
+
+
+@pytest.mark.asyncio
+async def test_skill_attachment_mounts_the_deployment_volume_subpath(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A remote daemon receives the volume and subpath, not a host path.
+
+    The daemon's reported volume mountpoint is not reachable as a bind source
+    on every supported daemon; Docker creates the missing directory instead of
+    refusing it, so the host would mount an empty projection whose directory
+    still passes ``test -d``.
+    """
+
+    workspace_root = tmp_path / "worker"
+    workspace_root.mkdir(parents=True)
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(workspace_root))
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
+
+    resolved_skillset = {
+        "snapshot_id": "skillset_abc",
+        "resolved_at": "2026-01-01T00:00:00+00:00",
+        "skills": [],
+    }
+
+    class Gateway:
+        async def read_bytes(self, artifact_id: str) -> bytes:
+            assert artifact_id == "art_skillset"
+            return json.dumps(resolved_skillset).encode("utf-8")
+
+    service = OmnigentSkillDeliveryService(
+        workspace_root=workspace_root,
+        workspace_volume="agent-workspaces",
+        artifact_gateway=Gateway(),
+    )
+
+    attachment = await service.anticipated_attachment(
+        {
+            "resolvedSkillSetRef": "art_skillset",
+            "resolvedSkillSetDigest": "sha256:" + "a" * 64,
+            "skillDeliveryRef": "skill-delivery:1",
+        },
+        owner_ref="idem-1",
+    )
+
+    assert attachment["kind"] == "volume"
+    assert attachment["sourceRef"] == "agent-workspaces"
+    assert attachment["subPath"].startswith(".skill-projections/")
+    assert attachment["subPath"].endswith("/runtime/skills_active/skillset_abc")
+    assert attachment["targetPath"] == "/opt/moonmind-skills"
+    assert attachment["accessMode"] == "read-only"
+    # Cleanup stays worker-owned: the projection is removed through the
+    # worker filesystem, never through the daemon's view of the volume.
+    assert attachment["cleanupSourceRef"].startswith(str(workspace_root))
+
+
+@pytest.mark.asyncio
+async def test_launch_renders_volume_subpath_mounts_and_rejects_escapes() -> None:
+    calls: list[list[str]] = []
+
+    class Backend:
+        async def run(self, argv, **kwargs):
+            calls.append(list(argv))
+            return (0, "container-id" if argv[1] == "create" else "", "")
+
+    class Scripts:
+        def build_entrypoint(self, **kwargs):
+            return "exec true", {}
+
+    launcher = DockerOmnigentHostLauncher(
+        backend=Backend(),
+        runtime_scripts=Scripts(),
+        server_url="http://omnigent:8000",
+    )
+    host_class = HostClass.model_validate(
+        {
+            "hostClassId": "omnigent-opencode",
+            "version": 1,
+            "imageRef": "ghcr.io/example/opencode@sha256:" + "f" * 64,
+            "omnigentVersion": "0.11.0",
+            "omnigentBuildDigest": "sha256:" + "1" * 64,
+            "architectures": ["linux/amd64"],
+            "declaredHarnessImplementations": [],
+            "integrationModes": ["native-server"],
+            "materializerRefs": ["opencode-auth-json@1"],
+            "features": {"readOnlyRoot": True},
+            "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+        }
+    )
+
+    def _spec(skill_subpath: str) -> HostLaunchSpec:
+        return HostLaunchSpec.model_validate(
+            {
+                "executionPlanRef": "plan:one",
+                "stepExecutionId": "step-1",
+                "runtimeBindingId": "binding-1",
+                "hostLeaseRef": "host-lease:one",
+                "hostLeaseGeneration": 1,
+                "hostClassRef": host_class.ref,
+                "imageRef": host_class.imageRef,
+                "serverEndpointRef": "default",
+                "serverUrl": "http://omnigent:8000",
+                "networkRef": "moonmind_default",
+                "limits": {"cpuMillis": 2000},
+                "runtime": {},
+                "correlationName": "mm-host-subpath",
+                "workspaceAttachment": {
+                    "kind": "volume",
+                    "sourceRef": "agent-workspaces",
+                    "subPath": "temporal_sandbox/ws-1/repo",
+                    "targetPath": "/workspaces/run",
+                    "accessMode": "read-write",
+                },
+                "skillAttachment": {
+                    "kind": "volume",
+                    "sourceRef": "agent-workspaces",
+                    "subPath": skill_subpath,
+                    "targetPath": "/opt/moonmind-skills",
+                    "accessMode": "read-only",
+                },
+                "stateAttachment": {
+                    "kind": "volume",
+                    "sourceRef": "mm-host-state-test",
+                    "targetPath": "/home/app/.omnigent",
+                    "accessMode": "read-write",
+                },
+                "labels": {},
+            }
+        )
+
+    await launcher.launch(
+        spec=_spec(".skill-projections/key/runtime/skills_active/snap"),
+        host_class=host_class,
+        launch_policy=get_launch_policy("omnigent-on-demand@1"),
+        credential_handles=[],
+    )
+
+    create = next(argv for argv in calls if argv[:2] == ["docker", "create"])
+    mounts = [
+        create[index + 1] for index, value in enumerate(create) if value == "--mount"
+    ]
+    assert (
+        "type=volume,src=agent-workspaces,dst=/workspaces/run,"
+        "volume-subpath=temporal_sandbox/ws-1/repo"
+    ) in mounts
+    assert (
+        "type=volume,src=agent-workspaces,dst=/opt/moonmind-skills,"
+        "volume-subpath=.skill-projections/key/runtime/skills_active/snap,readonly"
+    ) in mounts
+    # The state volume has no subpath and keeps the whole-volume mount.
+    assert "type=volume,src=mm-host-state-test,dst=/home/app/.omnigent" in mounts
+
+    for escape in ("../outside", "/absolute", "with,comma"):
+        with pytest.raises(HarnessPlatformError) as exc:
+            await launcher.launch(
+                spec=_spec(escape),
+                host_class=host_class,
+                launch_policy=get_launch_policy("omnigent-on-demand@1"),
+                credential_handles=[],
+            )
+        assert exc.value.code == HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED
+
+
+def test_skill_projection_probe_names_the_failed_invariant() -> None:
+    """The probe's four invariants must not collapse into one sentence."""
+
+    message = _skill_projection_probe_message(
+        "exact runner environment",
+        "moonmind-skill-projection-check:projection-manifest-missing\n",
+        "",
+        "/opt/moonmind-skills",
+    )
+    assert "projection-manifest-missing" in message
+    assert "_manifest.json" in message
+    assert "/opt/moonmind-skills" in message
+
+    env_message = _skill_projection_probe_message(
+        "OpenCode shell environment",
+        "moonmind-skill-projection-check:step-execution-id-mismatch\n",
+        "",
+        "/opt/moonmind-skills",
+    )
+    assert "MOONMIND_STEP_EXECUTION_ID" in env_message
+    assert "OpenCode shell environment" in env_message
+
+    # A probe that could not report a reason carries its own diagnostics
+    # instead of a sentence that names none.
+    transport = _skill_projection_probe_message(
+        "exact runner environment",
+        "",
+        "Error response from daemon: container not running",
+        "/opt/moonmind-skills",
+    )
+    assert "container not running" in transport
