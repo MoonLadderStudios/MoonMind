@@ -1173,12 +1173,73 @@ async def _reconcile_bootstrap_authority(
                 expected_parent_ref=expected_parent_ref,
             )
         else:
-            logger.warning(
-                "Omnigent bootstrap refresh for %s deferred because a "
-                "later policy version owns evolution",
-                policy_id,
+            # Default < latest-active deadlock (#4379): an older active
+            # non-default version (e.g. default v14 + active v15) owns the
+            # parent chain, so the bootstrap draft fast-path cannot advance.
+            # Recover the way the manual surgery did: reuse a later active
+            # version that already carries the desired digest, otherwise
+            # create the successor parented at the latest version with the
+            # default document + new image and promote it to default.
+            # History is preserved; only the default pointer moves.
+            latest_ref = f"{policy_id}@{later_versions[-1].version}"
+            matching = next(
+                (
+                    version
+                    for version in reversed(later_versions)
+                    if version.digest == desired_digest
+                    and version.state == PolicyState.ACTIVE.value
+                    and version.created_by == "bootstrap"
+                    and version.validation_json.get("valid")
+                ),
+                None,
             )
-            continue
+            if matching is not None:
+                candidate = matching
+            else:
+                try:
+                    candidate = await service.new_version(
+                        policy_id=policy_id,
+                        document=desired_document,
+                        actor="bootstrap",
+                        expected_parent_ref=latest_ref,
+                    )
+                except PolicyConflict:
+                    refreshed = await service.versions(policy_id)
+                    retry_later = sorted(
+                        (
+                            version
+                            for version in refreshed
+                            if version.version > current.version
+                        ),
+                        key=lambda version: version.version,
+                    )
+                    retry_match = next(
+                        (
+                            version
+                            for version in reversed(retry_later)
+                            if version.digest == desired_digest
+                            and version.state == PolicyState.ACTIVE.value
+                            and version.validation_json.get("valid")
+                        ),
+                        None,
+                    )
+                    if retry_match is not None:
+                        candidate = retry_match
+                    else:
+                        logger.warning(
+                            "Omnigent bootstrap refresh for %s deferred: "
+                            "default @%s, latest %s, expected parent %s; "
+                            "a later policy version owns evolution. Recover by "
+                            "advancing the bootstrap default past the stale "
+                            "active version (e.g. create a bootstrap successor "
+                            "parented at the latest version with the new image "
+                            "and make it default).",
+                            policy_id,
+                            current.version,
+                            latest_ref,
+                            latest_ref,
+                        )
+                        continue
         if (
             candidate.state not in {
                 PolicyState.DRAFT.value,
@@ -1200,6 +1261,32 @@ async def _reconcile_bootstrap_authority(
             )
 
         candidate_ref = f"{policy_id}@{candidate.version}"
+        # Advance active Agent Profiles across this same-policy cutover so
+        # long-lived schedules can refresh without manual profile edits
+        # (#4379 R3). Best effort: profile advancement never blocks the
+        # policy reconcile itself. In-flight runs keep recorded authority
+        # because usages are never rewritten here.
+        advanced_profiles: list[dict] = []
+        try:
+            from api_service.services.omnigent_agent_profile_selection import (
+                advance_agent_profiles_for_policy_cutover,
+            )
+
+            advanced_profiles = (
+                await advance_agent_profiles_for_policy_cutover(
+                    session,
+                    cutovers={current_ref: candidate_ref},
+                    actor="bootstrap",
+                )
+            )
+        except Exception:
+            logger.warning(
+                "Omnigent bootstrap profile cutover for %s to %s failed; "
+                "schedules keep their pinned profile version",
+                policy_id,
+                candidate_ref,
+                exc_info=True,
+            )
         candidate_versions = await service.versions(policy_id)
         predecessor_refs = tuple(
             f"{policy_id}@{version.version}"
@@ -1228,6 +1315,7 @@ async def _reconcile_bootstrap_authority(
                 "resources": desired_resources,
                 "updatedBindingCount": updated_binding_count,
                 "deferredBindingCount": deferred_binding_count,
+                "advancedProfileCount": len(advanced_profiles),
             },
         )
         await session.commit()
