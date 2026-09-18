@@ -867,7 +867,11 @@ gateway broken out of band must not make the deployment un-updatable. A
 recreate that does not take is retried within that repair window, each attempt
 keeping a cooldown to converge on its own, so a gateway needing more than one
 recreate is repaired inside the current release attempt instead of failing
-retention and waiting for the job to retry the whole update.
+retention and waiting for the job to retry the whole update. When
+retention still does not converge, the recorded failure names the fleet, the
+observed gateway health and the retained container's redacted log tail, and
+the bound that keeps that record small preserves both ends of the diagnosis
+so the exception line naming the cause survives to every operator surface.
 Pinned work remains owned by that version after normal Compose services change.
 The existing maintenance schedule retires those temporary pollers only when
 Temporal reports the version drained. Inactive private candidates require a

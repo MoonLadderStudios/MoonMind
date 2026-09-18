@@ -29,6 +29,28 @@ from moonmind.workflows.skills.deployment_tools import RELEASE_JOB_BUDGET_SECOND
 
 CONTROL_SERVICE = "temporal-worker-deployment-control"
 
+DIAGNOSIS_BOUND = 1000
+_DIAGNOSIS_ELISION = "\n...[elided]...\n"
+
+
+def bounded_diagnosis(text, limit=DIAGNOSIS_BOUND):
+    """Bound a recorded failure without discarding the line that names it.
+
+    A release failure identifies itself at both ends: the opening names the
+    fleet and the observed gateway health, while the retained worker's log
+    tail ends in the exception Python raised. Keeping only the head published
+    frame stacks and dropped the ``RuntimeError: ...`` line, leaving every
+    operator surface fed from this record unable to say why the release
+    failed. Redaction runs over the whole text before this bound, so neither
+    retained end can publish a value the redaction removed.
+    """
+    if len(text) <= limit:
+        return text
+    keep = limit - len(_DIAGNOSIS_ELISION)
+    head = keep // 2
+    return text[:head] + _DIAGNOSIS_ELISION + text[len(text) - (keep - head) :]
+
+
 # Polls one gateway recreate keeps to itself before another may replace it.
 # The gateway healthcheck runs every 10s after a 10s start period and needs
 # three passes, so a recreate that is going to work reports healthy well
@@ -1449,7 +1471,9 @@ async def run_job(request_file):
                     await _run_job_body(request_file)
                 return
             except Exception as exc:
-                error = redact_sensitive_text(str(exc) or type(exc).__name__)[:1000]
+                error = bounded_diagnosis(
+                    redact_sensitive_text(str(exc) or type(exc).__name__)
+                )
                 write_record(
                     request_file.parent / "last-error.json",
                     {"owner": owner, "attempt": attempts, "error": error},
