@@ -247,6 +247,18 @@ def _stale_paths(plan: Projection, repo_root: Path) -> Iterator[Path]:
             yield path
 
 
+def _canonical_mode(mode: int) -> int:
+    """Reduce a filesystem mode to the two modes Git records.
+
+    Git tracks only the owner-execute bit, and a checkout widens the rest by
+    the umask: the same commit lands as 0755/0644 under umask 022 and as
+    0775/0664 under umask 002. Comparing raw modes therefore reports drift
+    that depends on whose machine ran the check, so every comparison and every
+    mode this projection writes uses the canonical form instead.
+    """
+    return 0o755 if mode & stat.S_IXUSR else 0o644
+
+
 def _expected_mode(item: PlannedFile) -> int:
     source_mode = stat.S_IMODE(item.source.stat().st_mode)
     if (
@@ -255,8 +267,8 @@ def _expected_mode(item: PlannedFile) -> int:
         and "scripts" in item.target.parts
         and "bash" in item.target.parts
     ):
-        return source_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-    return source_mode
+        return 0o755
+    return _canonical_mode(source_mode)
 
 
 def _target_matches(item: PlannedFile) -> bool:
@@ -265,7 +277,7 @@ def _target_matches(item: PlannedFile) -> bool:
     target_mode = stat.S_IMODE(item.target.stat().st_mode)
     return (
         item.target.read_bytes() == item.source.read_bytes()
-        and target_mode == _expected_mode(item)
+        and _canonical_mode(target_mode) == _expected_mode(item)
     )
 
 
@@ -286,7 +298,9 @@ def _drift(plan: Projection, repo_root: Path) -> list[str]:
         else:
             if item.target.read_bytes() != item.source.read_bytes():
                 drift.append(f"content differs from moonspec/bundle: {rel}")
-            target_mode = stat.S_IMODE(item.target.stat().st_mode)
+            target_mode = _canonical_mode(
+                stat.S_IMODE(item.target.stat().st_mode)
+            )
             expected_mode = _expected_mode(item)
             if target_mode != expected_mode:
                 drift.append(
