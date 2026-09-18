@@ -1042,6 +1042,14 @@ async def advance_agent_profiles_for_policy_cutover(
                 break
             if candidate is None:
                 continue
+        validation = candidate.validation_result
+        if not isinstance(validation, Mapping) or validation.get("ready") is not True:
+            # Never activate an unvalidated matching version: normal
+            # resolution rejects a not-ready active version as not
+            # launch-ready, wedging new launches and schedule refreshes.
+            # Leave the current active pointer until the candidate is
+            # validated.
+            continue
         if observed_version != candidate.version:
             # Condition the pointer move on the previously observed active
             # version so an automatic cutover cannot silently undo an explicit

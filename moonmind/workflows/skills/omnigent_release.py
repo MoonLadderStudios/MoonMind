@@ -682,11 +682,17 @@ async def _default_cut_policy_versions(
                 # R3). `previous_default_ref` was captured before the cut;
                 # usages keep recorded authority for in-flight runs.
                 if previous_default_ref != candidate_ref:
-                    await advance_agent_profiles_for_policy_cutover(
-                        session,
-                        cutovers={previous_default_ref: candidate_ref},
-                        actor=actor,
-                    )
+                    # Isolate best-effort advancement in a savepoint: a database
+                    # error inside the helper (for example an IntegrityError
+                    # from concurrent version allocation) must not poison this
+                    # session, or the following audit insert and commit would
+                    # fail and abort the release after policy cutover.
+                    async with session.begin_nested():
+                        await advance_agent_profiles_for_policy_cutover(
+                            session,
+                            cutovers={previous_default_ref: candidate_ref},
+                            actor=actor,
+                        )
             except Exception:
                 # Profile advancement is convergent; a later reconcile retry
                 # completes it. Never fail the policy cut itself here.

@@ -279,3 +279,36 @@ async def test_profile_cutover_keeps_concurrent_activation(tmp_path):
         assert advanced == []
         profile = await session.get(OmnigentAgentProfile, "profile-1")
         assert profile.active_version == 2
+
+
+@pytest.mark.asyncio
+async def test_profile_cutover_skips_unvalidated_matching_version(tmp_path):
+    """P2: never activate a matching version whose validation is not ready."""
+    from api_service.services.omnigent_agent_profile_selection import (
+        _profile_document_digest,
+    )
+
+    async with profile_db(tmp_path) as sessions, sessions() as session:
+        await _seed_profile(session)
+        # An identical inactive version exists but was never validated.
+        unvalidated = _v1_document("p@3")
+        session.add(
+            OmnigentAgentProfileVersion(
+                profile_id="profile-1",
+                version=2,
+                digest=_profile_document_digest(unvalidated),
+                document=unvalidated,
+                parent_version=1,
+                upstream_snapshot={},
+                validation_result={"ready": False},
+                rollout_metadata={"origin": "test"},
+            )
+        )
+        await session.commit()
+        advanced = await advance_agent_profiles_for_policy_cutover(
+            session, cutovers={"p@1": "p@3"}
+        )
+        await session.commit()
+        assert advanced == []
+        profile = await session.get(OmnigentAgentProfile, "profile-1")
+        assert profile.active_version == 1
