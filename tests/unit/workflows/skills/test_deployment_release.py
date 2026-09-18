@@ -974,3 +974,54 @@ async def test_retained_worker_diagnostic_redacts_before_truncating(
     assert "gateway=unhealthy" in message
     assert "[REDACTED]" in message
     assert "S" * 20 not in message
+
+
+@pytest.mark.asyncio
+async def test_recorded_release_failure_keeps_the_line_that_names_it(
+    tmp_path, monkeypatch
+):
+    """A bounded diagnosis must not discard the exception it ends with.
+
+    ``preserve_previous`` reports the retained worker's log tail, and a Python
+    traceback names its cause on its last line. Keeping only the head of a long
+    failure published frame stacks and dropped ``RuntimeError:
+    restricted-egress gateway is not healthy``, so every operator surface fed
+    from this record - the Temporal failure, the run summary, the memo and
+    ``last-error.json`` - reported a release that could not retain pollers
+    without saying why.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(tmp_path / "desired.json")
+    )
+    directory = release.state_root() / "job"
+    directory.mkdir(parents=True)
+    request_file = directory / "request.json"
+    release.write_record(
+        request_file,
+        {"authored": {"owner": "owner"}, "deadline": release.time.time() + 300},
+    )
+    cause = "RuntimeError: restricted-egress gateway is not healthy"
+    diagnosis = (
+        "Previous release could not retain compatible pollers"
+        " (fleet=agent_runtime; gateway=unhealthy; retained-logs="
+        + "  File \"/app/moonmind/workflows/temporal/worker_runtime.py\"\n" * 40
+        + cause
+        + ")"
+    )
+
+    async def body(path):
+        raise RuntimeError(diagnosis)
+
+    async def no_wait(*args):
+        pass
+
+    monkeypatch.setattr(release, "_run_job_body", body)
+    monkeypatch.setattr(release.asyncio, "sleep", no_wait)
+    await release.run_job(request_file)
+
+    recorded = json.loads((directory / "last-error.json").read_text())["error"]
+    assert "fleet=agent_runtime" in recorded
+    assert "gateway=unhealthy" in recorded
+    assert cause in recorded
+    assert len(recorded) <= 1000
+    assert json.loads((directory / "result.json").read_text())["error"] == recorded
