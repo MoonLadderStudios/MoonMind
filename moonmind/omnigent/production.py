@@ -232,7 +232,6 @@ def build_generic_omnigent_execution_services(
         skill_service=OmnigentSkillDeliveryService(
             workspace_root=workspace_root,
             workspace_volume=workspace_volume,
-            command_runner=daemon_command,
             artifact_gateway=artifacts,
         ),
         tool_service=OmnigentMountedToolService(backend=docker),

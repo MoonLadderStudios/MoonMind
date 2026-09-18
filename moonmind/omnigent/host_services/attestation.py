@@ -44,6 +44,62 @@ _PROBE_SUBSTRATE_UNAVAILABLE_EXIT_CODE = 97
 _PROBE_SUBSTRATE_UNAVAILABLE_MARKER = "moonmind-attestation-substrate-unavailable"
 _MODEL_ATTESTATION_MAX_ATTEMPTS = 3
 
+# Each Skill-projection invariant reports which one failed. A bare
+# ``test`` chain exits 1 for all four, so an empty projection, a stripped
+# environment, and a mismatched Step Execution all reported the same
+# sentence and the operator had to reproduce the launch to tell them apart.
+_SKILL_PROJECTION_PROBE_MARKER = "moonmind-skill-projection-check"
+_SKILL_PROJECTION_PROBE_REASONS = {
+    "active-skills-dir-env-mismatch": (
+        "the runtime environment does not carry the delivered "
+        "MOONMIND_ACTIVE_SKILLS_DIR"
+    ),
+    "projection-directory-missing": "the projection directory is not readable",
+    "projection-manifest-missing": (
+        "the projection directory is mounted but holds no readable "
+        "_manifest.json, so the host received an empty or foreign directory"
+    ),
+    "step-execution-id-mismatch": (
+        "the runtime environment does not carry the launched "
+        "MOONMIND_STEP_EXECUTION_ID"
+    ),
+}
+_SKILL_PROJECTION_PROBE_SCRIPT = (
+    f'fail() {{ echo "{_SKILL_PROJECTION_PROBE_MARKER}:$1"; exit 1; }}; '
+    'test "${MOONMIND_ACTIVE_SKILLS_DIR:-}" = "$1" '
+    "|| fail active-skills-dir-env-mismatch; "
+    'test -d "$1" || fail projection-directory-missing; '
+    'test -r "$1/_manifest.json" || fail projection-manifest-missing; '
+    'test "${MOONMIND_STEP_EXECUTION_ID:-}" = "$2" '
+    "|| fail step-execution-id-mismatch"
+)
+
+
+def _skill_projection_probe_message(
+    boundary: str, stdout: str, stderr: str, skill_target: str
+) -> str:
+    """Name the Skill-projection invariant the probed environment failed."""
+
+    reason = next(
+        (
+            line.split(":", 1)[1].strip()
+            for line in f"{stdout}\n{stderr}".splitlines()
+            if line.strip().startswith(f"{_SKILL_PROJECTION_PROBE_MARKER}:")
+        ),
+        "",
+    )
+    message = (
+        f"resolved Skill projection is unavailable in the {boundary} "
+        f"at {skill_target}"
+    )
+    detail = _SKILL_PROJECTION_PROBE_REASONS.get(reason)
+    if detail:
+        return f"{message}: {detail} ({reason})"
+    # The probe could not report a reason (transport failure, killed shell).
+    # Carry its own diagnostics rather than a sentence that names none.
+    raw = (stderr or stdout).strip()[:256]
+    return f"{message}: {raw}" if raw else message
+
 
 def _substrate_guarded_probe(body: str) -> str:
     """Wrap one line of in-host probe statements so helper drift fails typed.
@@ -334,6 +390,12 @@ def _attest_workspace_mount(
         "sourceRef": attachment["sourceRef"],
         "targetPath": attachment["targetPath"],
         "accessMode": attachment["accessMode"],
+        # Docker does not report a volume subpath on the container's mount
+        # list, so the declared subpath is the only record of which directory
+        # inside the volume the host received.
+        **(
+            {"subPath": str(attachment["subPath"])} if attachment.get("subPath") else {}
+        ),
     }
 
 
@@ -580,17 +642,13 @@ class DockerOmnigentHostAttestor:
                 f"resolved Skill projection is missing or unreadable at {skill_target}",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
-        code, _out, _err = await _run_exact_host_runner_command(
+        code, out, err = await _run_exact_host_runner_command(
             backend=self._backend,
             container_name=launch_result["containerName"],
             argv=[
                 "/bin/sh",
                 "-ceu",
-                (
-                    'test "${MOONMIND_ACTIVE_SKILLS_DIR:-}" = "$1"; '
-                    'test -d "$1"; test -r "$1/_manifest.json"; '
-                    'test "${MOONMIND_STEP_EXECUTION_ID:-}" = "$2"'
-                ),
+                _SKILL_PROJECTION_PROBE_SCRIPT,
                 "--",
                 skill_target,
                 spec.stepExecutionId,
@@ -598,21 +656,19 @@ class DockerOmnigentHostAttestor:
         )
         if code != 0:
             raise HarnessPlatformError(
-                "resolved Skill projection is unavailable in the exact runner environment",
+                _skill_projection_probe_message(
+                    "exact runner environment", out, err, skill_target
+                ),
                 code=HarnessPlatformFailure.OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE,
             )
         if plan.payload.harnessId == "opencode-native":
-            code, _out, _err = await _run_exact_host_opencode_command(
+            code, out, err = await _run_exact_host_opencode_command(
                 backend=self._backend,
                 container_name=launch_result["containerName"],
                 argv=[
                     "/bin/sh",
                     "-ceu",
-                    (
-                        'test "${MOONMIND_ACTIVE_SKILLS_DIR:-}" = "$1"; '
-                        'test -d "$1"; test -r "$1/_manifest.json"; '
-                        'test "${MOONMIND_STEP_EXECUTION_ID:-}" = "$2"'
-                    ),
+                    _SKILL_PROJECTION_PROBE_SCRIPT,
                     "--",
                     skill_target,
                     spec.stepExecutionId,
@@ -620,7 +676,9 @@ class DockerOmnigentHostAttestor:
             )
             if code != 0:
                 raise HarnessPlatformError(
-                    "resolved Skill projection is unavailable in the OpenCode shell environment",
+                    _skill_projection_probe_message(
+                        "OpenCode shell environment", out, err, skill_target
+                    ),
                     code=HarnessPlatformFailure.OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE,
                 )
         tool_mount_evidence: list[dict[str, Any]] = []
