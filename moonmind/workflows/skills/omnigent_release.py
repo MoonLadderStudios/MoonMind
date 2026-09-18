@@ -289,9 +289,107 @@ class OmnigentReleaseDrivers:
     refresh_schedules: Callable[[], Awaitable[int]] = field(
         default=None, repr=False
     )
+    qualify_host_drift: Callable[
+        [dict[str, str]], Awaitable[list[dict[str, Any]]]
+    ] = field(default=None, repr=False)
     verify_live_container: Callable[[str], Awaitable[str | None]] = field(
         default=None, repr=False
     )
+
+
+def release_policy_drift_dispositions(
+    policy_host_refs: Mapping[str, str],
+    target_refs: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """Describe policy<->Host Class drift for release qualification (#4379 R7).
+
+    ``policy_host_refs`` maps ``policy_id`` to its default host image ref;
+    ``target_refs`` maps release host kinds (``codex``/``opencode``/``shared``/
+    ``pi``) to the recorded release image. Returns one disposition per
+    drifted policy (see ``describe_policy_hostclass_drift``); empty means
+    policy defaults already match the recorded release and promotion is
+    unfenced on this boundary.
+    """
+    from moonmind.omnigent.host_image_drift import describe_policy_hostclass_drift
+
+    kinds = {policy_id: kind for policy_id, kind in OMNIGENT_RELEASE_POLICIES}
+    dispositions: list[dict[str, Any]] = []
+    for policy_id, host_ref in dict(policy_host_refs).items():
+        kind = kinds.get(policy_id)
+        if kind is None:
+            continue
+        selected = str((target_refs or {}).get(kind) or "").strip()
+        disposition = describe_policy_hostclass_drift(
+            policy_id, str(host_ref or "").strip(), selected
+        )
+        if disposition is not None:
+            dispositions.append(disposition)
+    return dispositions
+
+
+def raise_for_release_policy_drift(
+    dispositions: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> None:
+    """Fence promotion while policy<->Host Class drift remains (#4379 R7).
+
+    Raises :class:`OmnigentReleaseError` with the executable recovery
+    disposition instead of a warnings-only log. Compatible rebuilds point at
+    bootstrap reconcile; family changes require explicit revision. Empty
+    dispositions return without raising.
+    """
+    pending = [dict(item) for item in dispositions or () if isinstance(item, dict)]
+    if not pending:
+        return
+    fenced = [item for item in pending if item.get("fencePromotion")]
+    if not fenced:
+        return
+    first = fenced[0]
+    recovery = str(first.get("recovery") or "resolve policy drift explicitly")
+    policy_ref = str(first.get("policyRef") or "policy")
+    raise OmnigentReleaseError("drift-fence", f"{policy_ref}: {recovery}")
+
+
+async def _default_qualify_host_drift(
+    target_refs: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """Read policy defaults and describe drift against the release record."""
+    from api_service.db.base import get_async_session_context
+    from api_service.services.omnigent_policies import OmnigentPolicy
+
+    target = {str(k): str(v or "") for k, v in dict(target_refs or {}).items()}
+    policy_hosts: dict[str, str] = {}
+    policy_refs: dict[str, str] = {}
+    async with get_async_session_context() as session:
+        from api_service.services.omnigent_policies import OmnigentPolicyService
+
+        service = OmnigentPolicyService(session)
+        for policy_id, _kind in OMNIGENT_RELEASE_POLICIES:
+            policy = await session.get(OmnigentPolicy, policy_id)
+            if policy is None or policy.default_version is None:
+                continue
+            try:
+                current = await service.get_version(
+                    policy_id, policy.default_version
+                )
+            except Exception:
+                continue
+            document = current.document_json
+            host = document.get("host") if isinstance(document, dict) else None
+            host_ref = (
+                str(host.get("hostImageRef") or "")
+                if isinstance(host, dict)
+                else ""
+            )
+            if host_ref.strip():
+                policy_hosts[policy_id] = host_ref.strip()
+                policy_refs[policy_id] = f"{policy_id}@{policy.default_version}"
+    dispositions = release_policy_drift_dispositions(policy_hosts, target)
+    # Annotate with the exact default ref so the recovery names versions.
+    for item in dispositions:
+        policy_id = str(item.get("policyRef") or "")
+        if policy_id in policy_refs:
+            item["policyRef"] = policy_refs[policy_id]
+    return dispositions
 
 
 async def _default_deployment_inputs() -> Mapping[str, str]:
@@ -492,6 +590,7 @@ async def _default_cut_policy_versions(
             if not want_server or not want_host:
                 skipped.append(policy_id)
                 continue
+            previous_default_ref = f"{policy_id}@{policy.default_version}"
             payload = build_migrated_policy_document(
                 document, server_ref=want_server, host_ref=want_host
             )
@@ -538,6 +637,29 @@ async def _default_cut_policy_versions(
                 previous_refs=predecessors,
                 policy_ref=candidate_ref,
             )
+            # Release cutover advances active profiles across the same-policy
+            # move so schedules refresh without manual profile edits (#4379
+            # R3). Previous defaults are recorded authority for in-flight
+            # runs; only the active profile pointer moves.
+            try:
+                from api_service.services.omnigent_agent_profile_selection import (
+                    advance_agent_profiles_for_policy_cutover,
+                )
+
+                # Release cutover advances active profiles across the same-policy
+                # move so schedules refresh without manual profile edits (#4379
+                # R3). `previous_default_ref` was captured before the cut;
+                # usages keep recorded authority for in-flight runs.
+                if previous_default_ref != candidate_ref:
+                    await advance_agent_profiles_for_policy_cutover(
+                        session,
+                        cutovers={previous_default_ref: candidate_ref},
+                        actor=actor,
+                    )
+            except Exception:
+                # Profile advancement is convergent; a later reconcile retry
+                # completes it. Never fail the policy cut itself here.
+                pass
             service._event(
                 policy_id,
                 candidate.version,
@@ -597,6 +719,7 @@ def _default_drivers() -> OmnigentReleaseDrivers:
         sync_catalog=_default_sync_catalog,
         cut_policy_versions=None,
         refresh_schedules=_default_refresh_schedules,
+        qualify_host_drift=_default_qualify_host_drift,
         verify_live_container=_default_verify_live_container,
     )
 
@@ -675,6 +798,7 @@ def production_drivers(
         sync_catalog=base.sync_catalog,
         cut_policy_versions=cut_policy_versions,
         refresh_schedules=base.refresh_schedules,
+        qualify_host_drift=base.qualify_host_drift,
         verify_live_container=base.verify_live_container,
     )
 
@@ -781,6 +905,15 @@ async def _migrate_omnigent_release_inner(
             catalog = await run.sync_catalog()
             policy_outcome = await run.cut_policy_versions(target)
             refreshed = await run.refresh_schedules()
+            if run.qualify_host_drift is not None:
+                # Fence promotion while policy defaults drift from the
+                # recorded release (#4379 R7): a compatible rebuild names
+                # bootstrap reconcile, a family change names explicit
+                # revision. Warnings-only would re-create the wedged
+                # schedules the issue reports.
+                raise_for_release_policy_drift(
+                    await run.qualify_host_drift(dict(target))
+                )
             live_digest = await run.verify_live_container(
                 str(target.get("server") or "")
             )
@@ -853,6 +986,8 @@ async def _migrate_omnigent_release_inner(
     catalog = await run.sync_catalog()
     policy_outcome = await run.cut_policy_versions(target)
     refreshed = await run.refresh_schedules()
+    if run.qualify_host_drift is not None:
+        raise_for_release_policy_drift(await run.qualify_host_drift(dict(target)))
     live_digest = await run.verify_live_container(str(target.get("server") or ""))
     if live_digest and live_digest != str(target.get("server") or ""):
         # Compare by digest: the live check returns a repository digest for
@@ -893,5 +1028,7 @@ __all__ = [
     "decide_release_transition",
     "migrate_omnigent_release",
     "production_drivers",
+    "raise_for_release_policy_drift",
     "read_omnigent_release",
+    "release_policy_drift_dispositions",
 ]
