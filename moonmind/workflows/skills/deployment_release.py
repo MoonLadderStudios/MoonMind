@@ -407,6 +407,16 @@ async def execute_detached(executor, inputs, context):
     directory = state_root() / key
     directory.mkdir(parents=True, exist_ok=True)
     request_file, result_file = directory / "request.json", directory / "result.json"
+    # Anchor the durable deadline before any pre-launch work. Pulling and
+    # inspecting the updater image is allowed a full runner command timeout,
+    # so a deadline computed afterwards would start that much later than the
+    # Activity supervising it and could outlive the supervisor's schedule.
+    # The anchor is reserved, not written, so a re-attaching attempt inherits
+    # the first delivery's deadline instead of extending it.
+    deadline = reserve_record(
+        directory / "deadline.json",
+        {"owner": owner, "deadline": time.time() + RELEASE_JOB_BUDGET_SECONDS},
+    )["deadline"]
     name = f"moonmind-release-update-{key}"
     safe_context = {
         key: context[key]
@@ -461,10 +471,10 @@ async def execute_detached(executor, inputs, context):
             "authored": authored,
             "image": f"{parsed['image']['repository']}@{digest}",
             "imageId": image["Id"],
-            # The tool contract owns this budget; reading it from there keeps
-            # the job and the Activity supervising it from disagreeing about
-            # when the release is allowed to still be running.
-            "deadline": time.time() + RELEASE_JOB_BUDGET_SECONDS,
+            # Anchored above, before the pull, so the job and the Activity
+            # supervising it cannot disagree about when the release is still
+            # allowed to be running.
+            "deadline": deadline,
         }
         record = reserve_record(request_file, record)
         if record["authored"] != authored:

@@ -454,9 +454,9 @@ requirements:
 policies:
   timeouts:
     start_to_close_seconds: 900
-    schedule_to_close_seconds: 1800
+    schedule_to_close_seconds: 8100
   retries:
-    max_attempts: 1
+    max_attempts: 9
     non_retryable_error_codes:
       - "INVALID_INPUT"
       - "PERMISSION_DENIED"
@@ -830,7 +830,11 @@ that submitted the release, so the updater routinely outlives its own
 supervisor. The supervising Activity is therefore budgeted from the same
 two-hour deadline rather than from a single attempt: its schedule-to-close
 covers the whole job budget, and each start-to-close window only bounds how
-long a replaced supervisor goes unnoticed. A supervision timeout re-attaches
+long a replaced supervisor goes unnoticed while still outlasting one runner
+command, so a slow updater pull is supervised rather than cancelled. That
+deadline is anchored before the pull, so pre-launch work consumes the budget
+instead of starting it late and outliving the supervisor. A supervision
+timeout re-attaches
 to the running job by its durable identity and never launches a second
 updater; the job's own deadline, never the supervisor's, decides when a
 release stops. Terminal release failures remain terminal and are not retried.
