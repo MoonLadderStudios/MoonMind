@@ -70,9 +70,9 @@ The existing configured `status: done` label may accompany verified completed cl
 
 ### 2.1 State interpretation
 
-A settled open issue has either no canonical status label or one canonical status label. Label mutations are not transactional, so intermediate combinations can occur. Every combination of multiple canonical status labels blocks new automatic admission until reconciled from evidence.
+A settled open issue has either no canonical status label or one canonical status label, with one declared exception below. Label mutations are not transactional, so intermediate combinations can occur. Every other combination of multiple canonical status labels blocks new automatic admission until reconciled from evidence.
 
-`status: needs-attention` always blocks admission. It may deliberately coexist with `status: in-progress` while the old writer's stop status is unknown. This means attention is required, not that another deployment may take over.
+`status: needs-attention` always blocks admission. It may deliberately coexist with `status: in-progress` while the old writer's stop status is unknown. This means attention is required, not that another deployment may take over. That pair is the declared result of the attention escalation, not an interrupted mutation, so it settles as Needs attention: it is reported as needing attention rather than as contradictory evidence, and it is left by the authorized resolution in section 3, not by reconciliation. The resolution clears the retained `status: in-progress` along with `status: needs-attention`, because leaving it behind would re-block the issue the moment the hold was released.
 
 An unrecognized workflow-status value is not equivalent to no status. It requires classification rather than silent admission. Superseded labels are not newly emitted, and historical or manually applied labels are not bulk-cleared without evidence. Unknown ownership remains unknown even when the label looks familiar.
 
@@ -90,6 +90,7 @@ Transitions require authenticated GitHub reads, validated attempt evidence, and 
 | In progress | Attempt ends with no work to preserve and fresh retry is safe | Available | Retain failure history and retry restrictions before removing the active status |
 | In progress | All valid version-2 leases expired, with complete trusted comments and no hold or other status | Available for assessment | Retain every attempt and prior-work reference; expiry proves loss of claim authority, not stopped processes or absence of work |
 | In progress | Stop is uncertain, evidence is missing, recovery is unsafe, or budget is exhausted | Needs attention | Preserve blocking information and explain the required intervention |
+| In progress | The deployment could not start a runtime, so no agent ever ran | Available | Retain the attempt in lineage without charging the issue's allowance, and record its back-off |
 | In progress or Code review | Objective is verified satisfied on its intended destination | Closed | Apply the existing authorized completion policy, including no-change completion when qualified |
 | Code review | Existing owner or explicitly admitted PR repair starts editing | In progress | Continue the same PR under the existing review/repair contract |
 | Code review | Review owner ends before the remaining authorized work is complete | Recovery needed or Needs attention | Record whether the next action is PR repair, verification, or review/merge continuation |
@@ -98,6 +99,8 @@ Transitions require authenticated GitHub reads, validated attempt evidence, and 
 | Closed | Human or authorized policy reopens the issue | Reassess | Do not infer fresh work or completion from old labels |
 
 All other transitions require an explicit decision under the existing authority contracts. Only an explicitly declared claim lease can expire. Workflow timeouts, old progress timestamps, and missing local records do not create that authority. Expiry never proves completion, safe workspace deletion, or an exact resume checkpoint.
+
+The retry allowance bounds work attempts on one issue, so only attempts that could have produced work consume it. When the full controlling history proves that no agent child ever started -- the deployment could not launch a runtime -- the attempt is recorded with the `runtime_unavailable` outcome. It stays in lineage and remains visible, but it is not charged to the allowance and it does not escalate the issue: a fault that affects every candidate equally is a deployment problem, not evidence about any issue. Such an attempt carries a portable cooldown instead, so a deployment that cannot launch rotates past the candidate rather than re-announcing on it, and the issue becomes admissible again once the window elapses without any operator act.
 
 A workflow whose admitted finish target is a completed PR handoff may end successfully in Code review without an active implementation owner. A PR-and-merge parent can remain awaiting review under its existing contract. Lack of new code during that wait is not by itself a stalled attempt.
 
@@ -129,6 +132,8 @@ The comment carries only the information required to interpret and continue the 
 This is an attempt handoff, not another workflow database. Large logs, prompts, secrets, provider credentials, and runtime session material do not belong in comments. Private dashboard URLs and local artifact references are optional diagnostics, never the sole cross-device recovery input.
 
 A marker and body do not authenticate themselves. The integration validates comment provenance, issue identity, schema, and relevant GitHub objects. Issue text and arbitrary comments remain untrusted input. Shared credentials do not establish an adversarial security boundary between deployments.
+
+The trusted-poster set is derived, not declared. MoonMind posts every attempt handoff as the GitHub account behind the credential resolved at the trusted Activity boundary, so that account is always trusted for its own markers; no operator setting is required for a single deployment to read back its own evidence. `MOONMIND_TRUSTED_POSTERS` only adds further accounts, such as a second deployment that shares the repository. An unresolvable identity is reported as untrusted provenance rather than assumed.
 
 ### 4.2 Write and release behavior
 

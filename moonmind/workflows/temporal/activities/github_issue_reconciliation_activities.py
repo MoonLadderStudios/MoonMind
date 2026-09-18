@@ -171,8 +171,18 @@ async def _fetch_pr_state(*, service: Any, pr_url: str) -> dict[str, Any]:
     }
 
 
-def _trusted_posters(*, service: Any = None) -> list[str]:
-    """Resolve the provenance allow-list for attempt-handoff validation."""
+def _trusted_posters(*, service: Any = None, authenticated_login: str = "") -> list[str]:
+    """Resolve the provenance allow-list for attempt-handoff validation.
+
+    The deployment's own GitHub account is derived, not declared: MoonMind
+    posts every attempt handoff as the authenticated user resolved at this
+    trusted Activity boundary, so that login is always trusted for its own
+    markers. ``MOONMIND_TRUSTED_POSTERS`` only adds further accounts (for
+    example a second deployment sharing the repository). Without the derived
+    default the allow-list is empty on the normal supported path, every
+    MoonMind-posted handoff validates as ``untrusted_poster``, and the
+    reconciler treats its own evidence as a contradiction it must not repair.
+    """
     import os
 
     raw = os.environ.get("MOONMIND_TRUSTED_POSTERS", "")
@@ -180,6 +190,8 @@ def _trusted_posters(*, service: Any = None) -> list[str]:
     candidate = getattr(service, "trusted_posters", None) if service is not None else None
     if isinstance(candidate, (list, tuple)):
         posters.extend(str(item).strip() for item in candidate if str(item).strip())
+    if _string(authenticated_login):
+        posters.append(_string(authenticated_login))
     seen: set[str] = set()
     ordered: list[str] = []
     for poster in posters:
@@ -241,6 +253,7 @@ def _validated_handoffs(
     issue_number: int = 0,
     trusted_posters: Sequence[str] | None = None,
     service: Any = None,
+    authenticated_login: str = "",
 ) -> tuple[list[dict[str, Any]], bool]:
     """Extract provenance-validated attempt handoffs; never trust prose.
 
@@ -261,7 +274,11 @@ def _validated_handoffs(
     from moonmind.workflows.temporal import github_issue_attempt as legacy_attempt
     from moonmind.workflows.temporal import github_issue_attempts as canonical_attempts
 
-    allow_list = list(trusted_posters) if trusted_posters is not None else _trusted_posters(service=service)
+    allow_list = (
+        list(trusted_posters)
+        if trusted_posters is not None
+        else _trusted_posters(service=service, authenticated_login=authenticated_login)
+    )
     handoffs: list[dict[str, Any]] = []
     incomplete = False
     for comment in comments:
@@ -317,6 +334,53 @@ def _validated_handoffs(
     return handoffs, incomplete
 
 
+def _preservation_evidence_from_handoff(
+    *,
+    newest: Mapping[str, Any],
+    preserved: Mapping[str, Any],
+    pr_url: str,
+    pr_state: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Derive preservation evidence for one handoff (Req 2/4)."""
+    if pr_url and pr_state.get("known"):
+        recorded_sha = _string(preserved.get("prHeadSha"))
+        current_sha = _string(pr_state.get("headSha"))
+        revision = recorded_sha or current_sha
+        # Require the observed PR head to match the handoff when both are
+        # present: a successor force-push advancing the PR invalidates stale
+        # preservation evidence instead of authorizing the old transition.
+        if recorded_sha and current_sha:
+            verified = recorded_sha == current_sha
+        else:
+            verified = bool(recorded_sha or current_sha)
+        return {
+            "save_method": "pr_head_verified",
+            "pr_url": pr_url,
+            "pr_head_sha": revision,
+            "pr_base": _string(preserved.get("prBase")),
+            "revision": revision,
+            "preservation_verified": bool(pr_state.get("known")) and verified,
+        }
+    if _string(preserved.get("savedBranch")) and _string(preserved.get("savedSha")):
+        # Portable branch preservation (to_recovery_needed with safely pushed
+        # work but no PR yet): verify the recorded branch+sha pair so such
+        # transitions can pass the preservation gate instead of stalling.
+        return {
+            "save_method": "saved_branch_verified",
+            "saved_branch": _string(preserved.get("savedBranch")),
+            "saved_sha": _string(preserved.get("savedSha")),
+            "revision": _string(preserved.get("savedSha")),
+            "preservation_verified": True,
+        }
+    # ``no_work`` is the canonical attempt outcome
+    # (``github_issue_attempts.ATTEMPT_OUTCOMES``). Matching any other
+    # spelling here silently withholds the explicit no-work evidence that a
+    # released attempt needs to pass the preservation gate.
+    if _string(newest.get("outcome")) == "no_work":
+        return {"save_method": "explicit_no_work", "trustworthy_no_work": True}
+    return {}
+
+
 async def _reconcile_one_issue(
     *,
     service: Any,
@@ -325,6 +389,7 @@ async def _reconcile_one_issue(
     budget: dict[str, Any],
     state: dict[str, Any],
     now_iso: str,
+    authenticated_login: str = "",
 ) -> dict[str, Any]:
     """Reconcile one issue with re-read-before-retry and abandonment."""
     from moonmind.workflows.temporal import github_issue_lifecycle as lifecycle
@@ -462,7 +527,11 @@ async def _reconcile_one_issue(
                 summary="Current GitHub ownership or lifecycle state prevents lease reclamation.")
             return outcome
     handoffs, malformed = _validated_handoffs(
-        comments, repository=repository, issue_number=issue_number, service=service
+        comments,
+        repository=repository,
+        issue_number=issue_number,
+        service=service,
+        authenticated_login=authenticated_login,
     )
     trusted = [h for h in handoffs if _string(h.get("attemptId"))]
     pending = recon.pending_effects_for_issue(state, repository=repository, issue_number=issue_number)
@@ -513,39 +582,9 @@ async def _reconcile_one_issue(
         mutation_evidence = {"push_outcome": "confirmed", "pr_outcome": "confirmed", "merge_outcome": "confirmed"}
     else:
         mutation_evidence = {"push_outcome": "confirmed", "pr_outcome": "confirmed", "merge_outcome": "absent_na", "merge_outcome_absent": True}
-    preservation_evidence: dict[str, Any] = {}
-    if pr_url and pr_state.get("known"):
-        recorded_sha = _string(preserved.get("prHeadSha"))
-        current_sha = _string(pr_state.get("headSha"))
-        revision = recorded_sha or current_sha
-        # Require the observed PR head to match the handoff when both are
-        # present: a successor force-push advancing the PR invalidates stale
-        # preservation evidence instead of authorizing the old transition.
-        if recorded_sha and current_sha:
-            verified = recorded_sha == current_sha
-        else:
-            verified = bool(recorded_sha or current_sha)
-        preservation_evidence = {
-            "save_method": "pr_head_verified",
-            "pr_url": pr_url,
-            "pr_head_sha": revision,
-            "pr_base": _string(preserved.get("prBase")),
-            "revision": revision,
-            "preservation_verified": bool(pr_state.get("known")) and verified,
-        }
-    elif _string(preserved.get("savedBranch")) and _string(preserved.get("savedSha")):
-        # Portable branch preservation (to_recovery_needed with safely pushed
-        # work but no PR yet): verify the recorded branch+sha pair so such
-        # transitions can pass the preservation gate instead of stalling.
-        preservation_evidence = {
-            "save_method": "saved_branch_verified",
-            "saved_branch": _string(preserved.get("savedBranch")),
-            "saved_sha": _string(preserved.get("savedSha")),
-            "revision": _string(preserved.get("savedSha")),
-            "preservation_verified": True,
-        }
-    elif _string(newest.get("outcome")) == "no-work":
-        preservation_evidence = {"save_method": "explicit_no_work", "trustworthy_no_work": True}
+    preservation_evidence = _preservation_evidence_from_handoff(
+        newest=newest, preserved=preserved, pr_url=pr_url, pr_state=pr_state
+    )
     proposed_disposition = _string(newest.get("pendingDisposition")) or _string(known.get("proposedDisposition"))
     intended_to = _string(known.get("intendedToTarget"))
     if not intended_to and proposed_disposition:
@@ -819,6 +858,25 @@ async def reconcile_local_github_issue_claims(*, state_dir=None):
     }
 
 
+async def _resolve_authenticated_login(*, service: Any, token: str) -> str:
+    """Return the GitHub login behind *token*, or "" when it is unavailable.
+
+    MoonMind posts its attempt handoffs as this account, so it is the derived
+    default trusted poster. An unavailable identity is not fatal: validation
+    then falls back to the declared allow-list and reports untrusted
+    provenance rather than inventing an identity.
+    """
+    if not _string(token) or not hasattr(service, "get_authenticated_user"):
+        return ""
+    try:
+        identity, _failure = await service.get_authenticated_user(token=token)
+    except Exception:  # noqa: BLE001 - identity is best-effort, never fatal
+        return ""
+    if isinstance(identity, Mapping):
+        return _string(identity.get("login"))
+    return ""
+
+
 async def reconcile_github_issue_handoffs(
     *,
     repository: str,
@@ -843,6 +901,7 @@ async def reconcile_github_issue_handoffs(
 
         service = GitHubService()
     token, token_error = await service.resolve_github_token(repo=_string(repository))
+    authenticated_login = await _resolve_authenticated_login(service=service, token=token)
     permission_ok, permission_detail, repository_authorized = await _probe_reconciliation_access(
         service=service, repository=_string(repository), token=token
     )
@@ -956,7 +1015,8 @@ async def reconcile_github_issue_handoffs(
             import asyncio
             async with asyncio.timeout(10):
                 item = await _reconcile_one_issue(
-                    service=service, repository=_string(repository), issue_number=number, budget=budget, state=state, now_iso=now_iso
+                    service=service, repository=_string(repository), issue_number=number, budget=budget, state=state, now_iso=now_iso,
+                    authenticated_login=authenticated_login,
                 )
         except Exception as exc:  # noqa: BLE001 - one issue never fails the run
             item = {"repository": _string(repository), "issueNumber": number, "action": recon.ACTION_DEFERRED_UNKNOWN, "reasonCode": "issue_error", "summary": f"Reconciliation error deferred: {exc.__class__.__name__}.", "apiRequests": 0}
