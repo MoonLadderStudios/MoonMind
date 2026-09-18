@@ -23,7 +23,7 @@ import asyncio
 import contextlib
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from temporalio import exceptions
@@ -1182,6 +1182,55 @@ async def test_the_retained_snapshot_writer_carries_its_own_generation() -> None
 
     assert ledger.calls[0]["action"] == "save"
     assert ledger.calls[0]["writer_generation"] == 4
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_restart_restores_cleanup_requested_obligations() -> None:
+    """Terminating an ambiguous manager history must not drop owed cleanup.
+
+    PR #4425 review (comment 4048923511): histories that recorded the #4330
+    redrive activities without the redrive marker cannot replay on the
+    patched worker, and markers alone cannot tell them apart from the older
+    generation. Their tested, state-preserving cutover is a fresh start:
+    the durable ledger already holds the cleanup request, so the restart
+    restores the same stable claim (original reason, zeroed attempts) and
+    the redrive resumes without re-requesting or freeing the slot.
+    """
+
+    ledger = _Ledger(
+        {
+            "load": {
+                "leases": [
+                    {
+                        "workflow_id": "agent-run-1",
+                        "profile_id": PROFILE_ID,
+                        "leaseId": "agent-run-1",
+                        "ownerId": "agent-run-1",
+                        "purpose": "execution_direct",
+                        "granted_at": (NOW - timedelta(hours=4)).isoformat(),
+                        "fencingGeneration": 6,
+                        "leaseState": DurableLeaseState.CLEANUP_REQUESTED.value,
+                        "safeMetadata": {
+                            "evidenceIdentity": "evidence-1",
+                            "cleanupReason": "lease_expired",
+                        },
+                    }
+                ],
+                "max_fencing_generation": 6,
+            }
+        }
+    )
+    successor = _manager()
+    successor._signal_slot_assigned = AsyncMock()
+
+    with _patched(ledger):
+        assert await successor._load_leases_from_db() is True
+
+    assert successor._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+    assert "agent-run-1" in successor._cleanup_requested_leases
+    assert successor._cleanup_request_reasons["agent-run-1"] == "lease_expired"
+    assert successor._cleanup_delivery_attempts["agent-run-1"] == 0
+    successor._signal_slot_assigned.assert_awaited_once()
 
 
 class _Signals:
