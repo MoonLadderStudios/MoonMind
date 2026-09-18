@@ -25,8 +25,15 @@ from moonmind.workflows.skills.deployment_execution import (
     _requested_image,
     _resolved_digest_from_target_image,
 )
+from moonmind.workflows.skills.deployment_tools import RELEASE_JOB_BUDGET_SECONDS
 
 CONTROL_SERVICE = "temporal-worker-deployment-control"
+
+# Polls one gateway recreate keeps to itself before another may replace it.
+# The gateway healthcheck runs every 10s after a 10s start period and needs
+# three passes, so a recreate that is going to work reports healthy well
+# inside this cooldown.
+_GATEWAY_REPAIR_COOLDOWN_POLLS = 20
 
 
 async def docker(*args, input_bytes=None):
@@ -454,7 +461,10 @@ async def execute_detached(executor, inputs, context):
             "authored": authored,
             "image": f"{parsed['image']['repository']}@{digest}",
             "imageId": image["Id"],
-            "deadline": time.time() + 7200,
+            # The tool contract owns this budget; reading it from there keeps
+            # the job and the Activity supervising it from disagreeing about
+            # when the release is allowed to still be running.
+            "deadline": time.time() + RELEASE_JOB_BUDGET_SECONDS,
         }
         record = reserve_record(request_file, record)
         if record["authored"] != authored:
@@ -465,7 +475,8 @@ async def execute_detached(executor, inputs, context):
         while not result_file.exists():
             if time.time() >= record["deadline"]:
                 raise RuntimeError(
-                    "Release update exhausted its durable two-hour budget"
+                    "Release update exhausted its durable"
+                    f" {RELEASE_JOB_BUDGET_SECONDS // 3600}-hour budget"
                 )
             existing = await inspect_owned(name, owner)
             if existing is None:
@@ -793,10 +804,18 @@ class ReleaseCohort:
         cohort's own image owns, never from a newer one, so the release that
         follows still owns the upgrade. Its observed health is returned for
         the caller's diagnosis whether or not the repair converged.
+
+        A recreate that does not take is retried inside this window rather
+        than left for the next release attempt. Repairing exactly once meant
+        a gateway needing a second recreate failed retention, failed the
+        whole attempt, and only converged because the job retried the entire
+        update — minutes of wall clock for a repair that belongs here. Each
+        recreate still gets a cooldown to converge on its own, so a gateway
+        that is coming up is never bounced.
         """
         from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
 
-        repaired = False
+        repaired_at = None
         for attempt in range(attempts):
             health = await container_health(EGRESS_GATEWAY_REF)
             if health == "healthy":
@@ -809,9 +828,15 @@ class ReleaseCohort:
                 return health
             # A gateway that is still starting owns the first half of the
             # window on its own: recovery must not bounce deployment state
-            # that was about to converge.
-            if not repaired and (health != "starting" or attempt * 2 >= attempts):
-                repaired = True
+            # that was about to converge. The same restraint spaces out the
+            # retries: a recreate keeps the cooldown to report healthy before
+            # another one replaces it.
+            due = (
+                repaired_at is None
+                or attempt - repaired_at >= _GATEWAY_REPAIR_COOLDOWN_POLLS
+            )
+            if due and (health != "starting" or attempt * 2 >= attempts):
+                repaired_at = attempt
                 result = await runner._run_compose_command(
                     (
                         "docker",

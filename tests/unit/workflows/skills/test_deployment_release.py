@@ -802,9 +802,15 @@ async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_require
     assert captured["project_dir"] == str(tmp_path)
     assert captured["image"] == "sha256:previous"
     assert expected_compose.read_text() == embedded_compose
-    # The repair is attempted once, never per readiness poll, and never at all
-    # while the gateway is still starting on its own.
-    assert len(compose_calls) == (0 if repaired == "starting" else 1)
+    # A repair that converges is never repeated, one that is still starting on
+    # its own is never attempted, and one that does not take is retried on the
+    # cooldown - never per readiness poll.
+    if repaired == "starting":
+        assert not compose_calls
+    elif repaired:
+        assert len(compose_calls) == 1
+    else:
+        assert len(compose_calls) == -(-60 // release._GATEWAY_REPAIR_COOLDOWN_POLLS)
 
 
 @pytest.mark.asyncio
@@ -974,3 +980,54 @@ async def test_retained_worker_diagnostic_redacts_before_truncating(
     assert "gateway=unhealthy" in message
     assert "[REDACTED]" in message
     assert "S" * 20 not in message
+
+
+@pytest.mark.asyncio
+async def test_gateway_repair_is_retried_inside_one_release_attempt(
+    tmp_path, monkeypatch
+):
+    """A recreate that does not take must be retried, not waited out.
+
+    Regression: ``restore_gateway`` recreated the gateway exactly once and
+    then polled out its window. A gateway that needed a second recreate left
+    retention to fail, failing the whole release attempt; the deployment only
+    converged because the job retried the entire update. Two doomed attempts
+    cost nine minutes of wall clock for a repair that belongs inside one.
+    """
+    from unittest.mock import AsyncMock
+
+    from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+
+    monkeypatch.setattr(release.asyncio, "sleep", AsyncMock())
+    health = {"status": "unhealthy"}
+    recreates = {"count": 0}
+
+    async def docker(*args, **kwargs):
+        assert args[0] == "inspect" and args[1] == EGRESS_GATEWAY_REF
+        return json.dumps([{"State": {"Health": {"Status": health["status"]}}}])
+
+    async def fake_compose(self, command, **kwargs):
+        assert command[:4] == ("docker", "compose", "up", "-d")
+        assert command[-1] == EGRESS_GATEWAY_SERVICE
+        recreates["count"] += 1
+        # The first recreate does not take - the observed failure mode.
+        if recreates["count"] >= 2:
+            health["status"] = "healthy"
+        return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(release, "docker", AsyncMock(side_effect=docker))
+    monkeypatch.setattr(HostDockerComposeRunner, "_run_compose_command", fake_compose)
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file=str(tmp_path / "retained.yaml"),
+        project_name="moonmind",
+    )
+    cohort = release.ReleaseCohort(runner, tmp_path, "owner")
+
+    observed = await cohort.restore_gateway(runner, "sha256:previous")
+
+    # The repair converges within its own window instead of handing an
+    # unhealthy gateway to a readiness loop that cannot succeed.
+    assert observed == "healthy"
+    assert recreates["count"] == 2
