@@ -817,6 +817,45 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
     assert subprocess.run(["bash", "--version"], capture_output=True).returncode == 0
 
 
+def test_ci_required_backend_matrix_states():
+    """MoonLadderStudios/MoonMind#4366 R7: every selected reliability shard
+    funnels through the backend-matrix aggregate, so a failed, timed-out,
+    canceled, or unexpectedly skipped matrix entry fails ci-required while
+    an intentionally unselected matrix stays an intentional skip."""
+    assert _run_aggregator([("backend-matrix", "true", "success")]) == 0
+    assert _run_aggregator([("backend-matrix", "true", "failure")]) == 1
+    assert _run_aggregator([("backend-matrix", "true", "cancelled")]) == 1
+    # A selected matrix that reports skipped did not run its shards.
+    assert _run_aggregator([("backend-matrix", "true", "skipped")]) == 1
+    assert _run_aggregator([("backend-matrix", "true", "")]) == 1
+    # An intentionally unselected matrix remains an intentional skip; any
+    # other result for an unselected matrix fails.
+    assert _run_aggregator([("backend-matrix", "false", "skipped")]) == 0
+    assert _run_aggregator([("backend-matrix", "false", "success")]) == 1
+    assert _run_aggregator([("backend-matrix", "false", "failure")]) == 1
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "tests/.reliability-test-durations.json",
+        "tools/ci/reliability_shard_weights.json",
+        "tools/ci/refresh_reliability_durations.py",
+        "tools/ci/write_backend_matrix_summary.py",
+    ],
+)
+def test_reliability_sharding_inputs_select_the_reliability_corpus(changed_path):
+    """MoonLadderStudios/MoonMind#4366 R8: dependency-adjacent timing-hint
+    and sharding-evidence changes select the reliability corpus (whose
+    shards consume them), without escalating to full verification or
+    pulling in unrelated suites."""
+    assert (REPO_ROOT / changed_path).exists(), changed_path
+    outputs = _outputs([changed_path])
+    assert outputs["reliability_journey"] == "true", changed_path
+    assert outputs["integration_ci"] == "false", changed_path
+    assert outputs["full_backend"] == "false", changed_path
+
+
 def test_selector_documents_qualified_infra_ownership():
     """MoonLadderStudios/MoonMind#3950 R6: the selector header must name the
     qualified #3885/#3832 owners of the PostgreSQL/Temporal/Docker boundaries
