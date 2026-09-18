@@ -1581,6 +1581,16 @@ an `already_held` lease whose row is already released, strand capacity behind a
 release nobody retries, or announce a reservation the ledger never accepted. A
 pre-contract rollover payload is unchanged.
 
+The #1089 redrive (re-driving outstanding cleanup obligations and completing
+direct cleanup obligations, #4330) has its own workflow marker,
+`provider-profile-manager-lease-cleanup-redrive-v1`. A history recorded before
+it keeps its exact recorded commands: only request-cleanup + retry-unresolved
+per loop, without the redrive activities. New executions record the marker and
+use all four steps. Histories recorded with the four steps but without the
+marker (post-#4330, pre-marker) are ambiguous with the older generation and
+require operational recovery (terminate and restart fresh, restoring leases
+from the durable ledger); they cannot be distinguished by markers alone.
+
 Periodic released-lease tombstone cleanup has its own workflow marker,
 `provider-profile-manager-lease-tombstone-purge-v1`. Both DB lease persistence and
 maintenance durability predate cleanup; neither may enable the purge activity
