@@ -453,10 +453,10 @@ requirements:
     - "docker_admin"
 policies:
   timeouts:
-    start_to_close_seconds: 900
-    schedule_to_close_seconds: 8100
+    start_to_close_seconds: 1200
+    schedule_to_close_seconds: 8400
   retries:
-    max_attempts: 9
+    max_attempts: 7
     non_retryable_error_codes:
       - "INVALID_INPUT"
       - "PERMISSION_DENIED"
@@ -831,9 +831,10 @@ supervisor. The supervising Activity is therefore budgeted from the same
 two-hour deadline rather than from a single attempt: its schedule-to-close
 covers the whole job budget, and each start-to-close window only bounds how
 long a replaced supervisor goes unnoticed while still outlasting one runner
-command, so a slow updater pull is supervised rather than cancelled. That
-deadline is anchored before the pull, so pre-launch work consumes the budget
-instead of starting it late and outliving the supervisor. A supervision
+command plus the pre-launch work around it, so a pull that uses its whole
+timeout is supervised rather than cancelled. That deadline is anchored to the
+instant the Activity was scheduled, so neither queue delay nor pre-launch work
+starts the budget late enough to outlive the supervisor. A supervision
 timeout re-attaches
 to the running job by its durable identity and never launches a second
 updater; the job's own deadline, never the supervisor's, decides when a

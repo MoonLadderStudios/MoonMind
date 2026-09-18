@@ -75,6 +75,25 @@ async def inspect_owned(name, owner):
     return rows[0]
 
 
+def _activity_schedule_anchor():
+    """Wall clock instant the supervising Activity was scheduled.
+
+    Temporal starts its schedule-to-close clock when the Activity is
+    scheduled, not when it begins running, and the deployment fleet runs one
+    Activity at a time. A release that waited behind another one would
+    otherwise start its own budget late enough to outlive the supervisor that
+    is meant to observe it. ``None`` outside an Activity - the host-update
+    entrypoint and tests - where the caller falls back to the current time.
+    """
+    try:
+        from temporalio import activity
+
+        scheduled = activity.info().scheduled_time
+    except (ImportError, RuntimeError):
+        return None
+    return scheduled.timestamp() if scheduled is not None else None
+
+
 def write_record(path, value):
     _atomic_write_bytes(path, (json.dumps(value, sort_keys=True) + "\n").encode())
 
@@ -407,15 +426,21 @@ async def execute_detached(executor, inputs, context):
     directory = state_root() / key
     directory.mkdir(parents=True, exist_ok=True)
     request_file, result_file = directory / "request.json", directory / "result.json"
-    # Anchor the durable deadline before any pre-launch work. Pulling and
-    # inspecting the updater image is allowed a full runner command timeout,
-    # so a deadline computed afterwards would start that much later than the
-    # Activity supervising it and could outlive the supervisor's schedule.
-    # The anchor is reserved, not written, so a re-attaching attempt inherits
-    # the first delivery's deadline instead of extending it.
+    # Anchor the durable deadline where the supervising Activity's own clock
+    # starts, before any pre-launch work. Pulling and inspecting the updater
+    # image is allowed a full runner command timeout, and the Activity may
+    # have queued behind another deployment before that, so a deadline taken
+    # later would start after the schedule it must stay inside. The anchor is
+    # reserved, not written, so a re-attaching attempt inherits the first
+    # delivery's deadline instead of extending it.
+    anchor = _activity_schedule_anchor()
     deadline = reserve_record(
         directory / "deadline.json",
-        {"owner": owner, "deadline": time.time() + RELEASE_JOB_BUDGET_SECONDS},
+        {
+            "owner": owner,
+            "deadline": (time.time() if anchor is None else anchor)
+            + RELEASE_JOB_BUDGET_SECONDS,
+        },
     )["deadline"]
     name = f"moonmind-release-update-{key}"
     safe_context = {

@@ -25,12 +25,19 @@ RELEASE_JOB_BUDGET_SECONDS = 7200
 # attempt. The window therefore only bounds how long a replaced supervisor
 # goes unnoticed, which is why it is far shorter than the budget.
 #
-# It must still outlast one pre-launch compose command. The deployment runner
-# allows any single command - notably the updater pull - 900 seconds, and a
-# shorter window would cancel that pull mid-flight and start an overlapping
-# retry that never converges. A test pins this against the runner's own
-# command timeout so the two cannot drift apart.
-RELEASE_SUPERVISION_WINDOW_SECONDS = 900
+# It must still outlast one pre-launch compose command with room to spare.
+# ``HostDockerComposeRunner`` reads its own command timeout from here, and
+# lets the updater pull consume all of it; the Activity clock additionally
+# starts before that subprocess does, and after the pull the image is still
+# inspected and ``request.json`` published. A window that merely equalled the
+# command timeout therefore cancelled a pull that had in fact succeeded,
+# forcing another pull on retry and spending the durable budget on repeated
+# pre-launch work.
+RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS = 900
+RELEASE_PRELAUNCH_HEADROOM_SECONDS = 300
+RELEASE_SUPERVISION_WINDOW_SECONDS = (
+    RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS + RELEASE_PRELAUNCH_HEADROOM_SECONDS
+)
 # Enough attempts to re-attach across the whole budget, so the job's own
 # deadline - never the attempt count - decides when a release stops.
 RELEASE_SUPERVISION_MAX_ATTEMPTS = (
