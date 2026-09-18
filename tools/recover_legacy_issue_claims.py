@@ -76,6 +76,8 @@ async def _open_issues(
             if not isinstance(payload, list) or not payload:
                 break
             issues.extend(item for item in payload if "pull_request" not in item)
+            if len(payload) < 100:
+                break
             page += 1
     return issues[:limit]
 
@@ -143,7 +145,10 @@ async def run(args: argparse.Namespace) -> int:
         "staleStatusLabels": sum(
             1 for plan in plans if plan.get("staleStatusLabel")
         ),
-        "issues": [plan for plan in plans if plan.get("attempts") or plan.get("staleStatusLabel")],
+        "issues": [
+            plan for plan in plans
+            if plan.get("attempts") or plan.get("staleStatusLabel") or plan.get("reasonCode")
+        ],
     }
     if args.report:
         destination = Path(args.report)
@@ -164,7 +169,10 @@ async def run(args: argparse.Namespace) -> int:
                 + (", ".join(actions) or "stale_status_label")
                 + f" -> {plan.get('nextAction', 'reassess')}"
             )
-    return 0
+    return 2 if (
+        any(plan.get("reasonCode") for plan in plans)
+        or (args.apply and applied != report["plannedWrites"])
+    ) else 0
 
 
 def main() -> int:

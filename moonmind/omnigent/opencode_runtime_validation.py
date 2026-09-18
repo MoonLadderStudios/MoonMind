@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,34 +30,27 @@ from moonmind.omnigent.secret_resolution import (
     ScopedSecretBundle,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-from moonmind.security.egress import (
-    OMNIGENT_EGRESS_NETWORK_REF,
-    omnigent_proxy_env,
-)
+from moonmind.security.egress import OMNIGENT_EGRESS_NETWORK_REF, omnigent_proxy_env
 
 
-def _models(value: Any) -> set[str]:
+def _models(value: Any, *, provider_id: str) -> set[str]:
     found: set[str] = set()
     if isinstance(value, str):
         for line in value.splitlines():
             item = line.strip().strip("\"',")
             provider, separator, model = item.partition("/")
-            if (
-                separator
-                and model
-                and (provider == "opencode" or provider.startswith("opencode-"))
-            ):
+            if separator and model and provider == provider_id:
                 found.add(item)
     elif isinstance(value, dict):
         for item in value.values():
-            found.update(_models(item))
+            found.update(_models(item, provider_id=provider_id))
     elif isinstance(value, list):
         for item in value:
-            found.update(_models(item))
+            found.update(_models(item, provider_id=provider_id))
     return found
 
 
-def _validated_models(value: Any) -> list[str]:
+def _validated_models(value: Any, *, provider_id: str) -> list[str]:
     """Return observed OpenCode models or reject the validation result.
 
     A successful CLI exit with no provider models is not evidence that a
@@ -65,7 +59,7 @@ def _validated_models(value: Any) -> list[str]:
     validation boundary must fail closed here.
     """
 
-    models = sorted(_models(value))
+    models = sorted(_models(value, provider_id=provider_id))
     if not models:
         raise HarnessPlatformError(
             "pinned OpenCode runtime returned no OpenCode models",
@@ -77,6 +71,7 @@ def _validated_models(value: Any) -> list[str]:
 def _model_probe_argv(
     *,
     image_ref: str,
+    provider_id: str,
     credential_source: str | None = None,
     credential_target: str | None = None,
 ) -> list[str]:
@@ -88,6 +83,8 @@ def _model_probe_argv(
     invoking catalog discovery.
     """
 
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", provider_id):
+        raise ValueError("invalid OpenCode provider ID")
     argv = [
         "docker",
         "run",
@@ -128,11 +125,10 @@ def _model_probe_argv(
         "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
         "OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT; "
         + stage_auth
-        + "exec opencode models --refresh"
+        + 'exec opencode models --refresh "$2"'
     )
     argv.extend(("--entrypoint", "/bin/sh", image_ref, "-ceu", stage_and_probe))
-    if credential_target is not None:
-        argv.extend(("--", credential_target))
+    argv.extend(("--", credential_target or "", provider_id))
     return argv
 
 
@@ -167,6 +163,11 @@ class OpenCodeProviderRuntimeValidationService:
         candidate_secret: str | None = None,
         candidate_generation: int | None = None,
     ) -> dict[str, Any]:
+        if profile.runtime_id != "opencode":
+            raise HarnessPlatformError(
+                "OpenCode validation requires an OpenCode Provider Profile",
+                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+            )
         if (candidate_secret is None) != (candidate_generation is None):
             raise ValueError(
                 "candidate secret and generation must be supplied together"
@@ -240,10 +241,13 @@ class OpenCodeProviderRuntimeValidationService:
             attachment = handle.attachments[0] if handle.attachments else None
             argv = _model_probe_argv(
                 image_ref=self._image_ref,
+                provider_id=str(profile.provider_id or ""),
                 credential_source=(attachment.sourceRef if attachment else None),
                 credential_target=(attachment.targetPath if attachment else None),
             )
-            code, stdout, _stderr = await self._backend.run(argv, timeout_seconds=120)
+            code, stdout, _stderr = await self._backend.run(
+                argv, timeout_seconds=120, output_limit_bytes=1_048_576
+            )
             if code != 0 and "Unable to find image" in _stderr.decode(
                 "utf-8", errors="replace"
             ):
@@ -262,7 +266,9 @@ class OpenCodeProviderRuntimeValidationService:
                 parsed: Any = json.loads(text)
             except json.JSONDecodeError:
                 parsed = text
-            models = _validated_models(parsed)
+            models = _validated_models(
+                parsed, provider_id=str(profile.provider_id or "")
+            )
             versions: dict[str, str] = {}
             for binary in ("opencode", "omnigent"):
                 version_code, version_out, _version_err = await self._backend.run(

@@ -72,6 +72,23 @@ def test_evidence_without_models_falls_back_with_diagnostic():
     assert len(result["model"]["options"]) > 0
 
 
+def test_opencode_drafts_do_not_invent_provider_models():
+    for provider_id in ("openrouter", "future-provider", "openai", "opencode-go", "opencode"):
+        result = tier_capabilities_for_draft("opencode", provider_id)
+        assert result["model"]["options"] == []
+        assert result["model"]["runtime_default"] is None
+        assert result["model"]["allow_custom"] is True
+
+
+def test_opencode_saved_catalog_retains_qualified_models():
+    result = tier_capabilities_for_profile(_profile(
+        runtime_id="opencode", provider_id="openrouter",
+        default_model="openrouter/anthropic/model",
+        model_catalog_evidence_json={"models": [{"qualifiedId": "openrouter/anthropic/model"}]},
+    ))
+    assert [item["value"] for item in result["model"]["options"]] == ["openrouter/anthropic/model"]
+
+
 def test_draft_capabilities_are_not_stale():
     result = tier_capabilities_for_draft("codex_cli", "openai")
     assert result["evidence"]["stale"] is False

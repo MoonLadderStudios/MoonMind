@@ -19796,16 +19796,52 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             STATE_AWAITING_EXTERNAL,
             summary="Waiting for PR merge automation.",
         )
-        try:
-            child_result = await workflow.execute_child_workflow(
+        # AgentRun has ended, but the parent still owns issue completion.
+        # Keep its claim through review and the post-merge handoff.
+        lease = (self._trusted_issue_context or {}).get("issueClaimLease")
+        guard_claim = lease and workflow.patched("run-merge-gate-issue-lease-v1")
+
+        async def await_merge():
+            return await workflow.execute_child_workflow(
                 "MoonMind.MergeAutomation",
                 payload,
                 id=workflow_id,
                 task_queue=self._workflow_child_task_queue(),
-                cancellation_type=ChildWorkflowCancellationType.TRY_CANCEL,
+                cancellation_type=(
+                    ChildWorkflowCancellationType.WAIT_CANCELLATION_COMPLETED
+                    if guard_claim
+                    else ChildWorkflowCancellationType.TRY_CANCEL
+                ),
                 static_summary="Waiting for pull request merge readiness",
                 static_details=f"Merge automation for {pull_request_url}",
             )
+
+        try:
+            if guard_claim:
+                from moonmind.workflows.temporal.github_issue_lease_workflow import (
+                    execute_with_issue_lease,
+                )
+
+                async def renew(payload):
+                    route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                        "github_issue.renew_claim"
+                    )
+                    return await workflow.execute_activity(
+                        "github_issue.renew_claim",
+                        payload,
+                        **{
+                            **self._execute_kwargs_for_route(route),
+                            "start_to_close_timeout": timedelta(seconds=25),
+                            "schedule_to_close_timeout": timedelta(seconds=30),
+                            "retry_policy": RetryPolicy(maximum_attempts=1),
+                        },
+                    )
+
+                child_result = await execute_with_issue_lease(
+                    lease=lease, execute=await_merge, renew=renew
+                )
+            else:
+                child_result = await await_merge()
         except CancelledError:
             self._awaiting_external = False
             self._waiting_reason = None

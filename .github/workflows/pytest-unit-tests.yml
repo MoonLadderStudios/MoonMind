@@ -202,11 +202,49 @@ jobs:
           path: artifacts/omnigent-conformance
           if-no-files-found: error
 
-  unit-fast:
+  backend-matrix:
+    # Consolidated primary backend matrix (MoonLadderStudios/MoonMind#4377):
+    # unit-fast, api-component, temporal-boundary and four deterministic
+    # reliability shards share one native matrix boundary so a failure in
+    # Temporal/API/unit promptly cancels running/queued reliability siblings
+    # through native Actions fail-fast. Decision evidence: run #14404 showed
+    # temporal-boundary failing near minute 3 while the independent
+    # reliability job ran to minute 21 (~18 min executor waste after the
+    # first definitive required-backend failure, excluding queued time).
+    # Per-row setup stays isolated: fast rows never build images or start
+    # Compose services; each reliability shard starts its own isolated
+    # Compose PostgreSQL/Temporal/MinIO under its own Docker project name.
+    # Reliability budgets (MoonLadderStudios/MoonMind#4369, #4384): short per-test
+    # pytest timeout (150s PR / 300s schedule), ~10-min PR step ceiling via
+    # `timeout 600s` (12-min schedule ceiling via step timeout-minutes),
+    # and bounded cleanup (always() compose down wrapped in timeout 100s).
+    # The PR ceiling stays above the heaviest duration-balanced partition
+    # load (~500s) plus collection/shutdown overhead.
+    # Fast rows keep the pre-existing --timeout 600. Each row writes a
+    # uniquely named junit report and attempted cancellation diagnostics.
     needs: select-test-suites
-    if: needs.select-test-suites.outputs.unit_fast == 'true'
+    if: >-
+      needs.select-test-suites.outputs.unit_fast == 'true' ||
+      needs.select-test-suites.outputs.api_component == 'true' ||
+      needs.select-test-suites.outputs.temporal_boundary == 'true' ||
+      needs.select-test-suites.outputs.reliability_journey == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: ${{ github.event_name != 'schedule' }}
+      matrix:
+        include:
+          - suite: unit-fast
+          - suite: api-component
+          - suite: temporal-boundary
+          - suite: reliability-shard-1
+            shard: "0"
+          - suite: reliability-shard-2
+            shard: "1"
+          - suite: reliability-shard-3
+            shard: "2"
+          - suite: reliability-shard-4
+            shard: "3"
     steps:
       - name: Check out code
         uses: actions/checkout@v7
@@ -215,49 +253,308 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
       - name: Set up Python
+        if: >-
+          (matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true') ||
+          (matrix.suite == 'api-component' && needs.select-test-suites.outputs.api_component == 'true') ||
+          (matrix.suite == 'temporal-boundary' && needs.select-test-suites.outputs.temporal_boundary == 'true') ||
+          (startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true')
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install system dependencies
+        if: >-
+          (matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true') ||
+          (matrix.suite == 'api-component' && needs.select-test-suites.outputs.api_component == 'true') ||
+          (startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true')
         run: |
           sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update
           sudo apt-get install -y libcairo2-dev pkg-config
       - name: Cache pip dependencies
+        # Shared immutable dependency layers (MoonLadderStudios/MoonMind#4376):
+        # pip/uv package caches are content-addressed and safe to share
+        # across shards and runs; no mutable release state lives here.
+        # Each reliability shard still boots isolated Compose services under
+        # its own project name with fresh volumes (see below).
+        if: >-
+          (matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true') ||
+          (startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true')
         uses: actions/cache@v6
         with:
-          path: ~/.cache/pip
+          path: |
+            ~/.cache/pip
+            ~/.cache/uv
           key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-pip-
       - name: Install dependencies via uv
+        if: >-
+          (matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true') ||
+          (matrix.suite == 'api-component' && needs.select-test-suites.outputs.api_component == 'true') ||
+          (matrix.suite == 'temporal-boundary' && needs.select-test-suites.outputs.temporal_boundary == 'true') ||
+          (startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true')
         run: |
           python -m pip install --upgrade pip uv
           uv pip install --system -e .[tests]
       - name: Initialize MoonSpec test fixtures
+        if: matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
         run: git submodule update --init --depth 1 -- moonspec omnigent
-      - name: Run selected unit suite
-        env:
-          # A failing generated fault-lab seed serializes a reproduction-complete,
-          # secret-safe bundle here so the first regression leaves replayable
-          # evidence for the upload step below.
-          MOONMIND_FAULTLAB_DIAGNOSTICS_DIR: artifacts/faultlab-generated
+      - name: Initialize Omnigent bundle for API/component suite
+        if: matrix.suite == 'api-component' && needs.select-test-suites.outputs.api_component == 'true'
+        run: git submodule update --init --depth 1 -- omnigent
+      - name: Start isolated reliability dependencies
+        if: startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         run: |
           set -euo pipefail
+          # Reuse immutable dependency image layers across shards
+          # (MoonLadderStudios/MoonMind#4376): postgres/temporal/minio are
+          # pinned prebuilt images, so `pull` warms the runner layer cache
+          # from the registry without sharing mutable release state. Each
+          # shard still starts isolated services under its own Compose
+          # project name with fresh volumes; no volume, network, or routing
+          # state is shared between shards.
+          docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml pull --quiet
+          docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml up -d --wait --wait-timeout 180
+          dependency_ip() {
+            local container
+            container=$(docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml ps -q "$1")
+            docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container"
+          }
+          echo "MOONMIND_TEST_POSTGRES_URL=postgresql+asyncpg://postgres:reliability-test-only@$(dependency_ip postgres):5432/postgres" >> "$GITHUB_ENV"
+          echo "MOONMIND_TEST_TEMPORAL_ADDRESS=$(dependency_ip temporal):7233" >> "$GITHUB_ENV"
+          echo "MOONMIND_TEST_MINIO_ENDPOINT=http://$(dependency_ip minio):9000" >> "$GITHUB_ENV"
+          echo "MOONMIND_TEST_DOCKER_NETWORK=moonmind-reliability-${{ matrix.suite }}_default" >> "$GITHUB_ENV"
+      - name: Run selected unit suite
+        id: run-unit
+        if: matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
+        env:
+          MOONMIND_FAULTLAB_DIAGNOSTICS_DIR: artifacts/faultlab-generated
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          test_start=$SECONDS
+          set +e
           python -m pytest tests/unit \
             --ignore=tests/unit/workflows/temporal \
             --ignore=tests/unit/api \
             --ignore=tests/unit/api_service \
             -m "unit_fast and not provider_verification and not requires_credentials" \
             -q -n auto --dist loadfile --durations=25 --timeout 600 \
-            --junitxml=artifacts/pytest-unit-fast.xml
-      - name: Upload generated fault-lab diagnostics
-        if: failure()
+            --junitxml=artifacts/pytest-backend-unit-fast.xml 2>&1 | tee artifacts/pytest-backend-unit-fast.log
+          status=${PIPESTATUS[0]}
+          echo $((SECONDS - test_start)) > /tmp/backend-unit-fast-test-seconds.txt || true
+          exit $status
+      - name: Run API/component suite
+        id: run-api
+        if: matrix.suite == 'api-component' && needs.select-test-suites.outputs.api_component == 'true'
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          test_start=$SECONDS
+          set +e
+          python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
+            -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
+            -q -n auto --dist load --durations=25 --timeout 600 \
+            --junitxml=artifacts/pytest-backend-api-component.xml 2>&1 | tee artifacts/pytest-backend-api-component.log
+          status=${PIPESTATUS[0]}
+          echo $((SECONDS - test_start)) > /tmp/backend-api-component-test-seconds.txt || true
+          exit $status
+      - name: Run Temporal boundary suite
+        id: run-temporal
+        if: matrix.suite == 'temporal-boundary' && needs.select-test-suites.outputs.temporal_boundary == 'true'
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          test_start=$SECONDS
+          set +e
+          python -m pytest tests/unit/workflows/temporal \
+            -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
+            -q -n auto --dist loadfile --durations=25 --timeout 600 \
+            --junitxml=artifacts/pytest-backend-temporal-boundary.xml 2>&1 | tee artifacts/pytest-backend-temporal-boundary.log
+          status=${PIPESTATUS[0]}
+          echo $((SECONDS - test_start)) > /tmp/backend-temporal-boundary-test-seconds.txt || true
+          exit $status
+      - name: Run hermetic reliability shard
+        id: run-reliability
+        if: startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
+        # Schedule ceiling (12 min) covers the longer diagnostic budget;
+        # PRs enforce the shorter ~10-min budget via `timeout 600s` below
+        # (MoonLadderStudios/MoonMind#4369, #4384: heaviest duration-balanced
+        # partition load is ~500s, so the PR ceiling keeps headroom for
+        # collection/shutdown overhead). Never cap the serial suite
+        # first: this bound applies per duration-balanced shard only.
+        timeout-minutes: 12
+        env:
+          MOONMIND_FORCE_LOCAL_TESTS: "1"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          shard="${{ matrix.shard }}"
+          # Single partition authority (MoonLadderStudios/MoonMind#4367):
+          # duration-balanced greedy LPT over advisory hints in
+          # tools/ci/reliability_shard_weights.json, shared with
+          # tools/verify_test_shard_ownership.py. New files absent from
+          # the weights file run via DEFAULT_WEIGHT_SECONDS; never skipped.
+          mapfile -t shard_files < <(python3 tools/ci/reliability_shard_partition.py --shard "$shard")
+          echo "Reliability shard ${{ matrix.suite }} runs ${#shard_files[@]} files"
+          # Short reliability budgets with PR-vs-schedule differentiation
+          # (MoonLadderStudios/MoonMind#4369, #4384): PRs fail fast with a 150s
+          # per-test timeout and a 10-min step ceiling (600s stays above the
+          # ~500s heaviest partition load); schedules keep
+          # collecting diagnostics with a 300s per-test timeout under the
+          # 12-min step ceiling above.
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            pytest_timeout=300
+            step_budget=660
+          else
+            pytest_timeout=150
+            step_budget=600
+          fi
+          test_start=$SECONDS
+          set +e
+          timeout "${step_budget}s" python -m pytest "${shard_files[@]}" \
+            -m reliability_journey \
+            -vv --tb=short --durations=25 --timeout "$pytest_timeout" \
+            --junitxml=artifacts/pytest-backend-${{ matrix.suite }}.xml 2>&1 | tee artifacts/pytest-backend-${{ matrix.suite }}.log
+          status=${PIPESTATUS[0]}
+          echo $((SECONDS - test_start)) > "/tmp/backend-${{ matrix.suite }}-test-seconds.txt" || true
+          exit $status
+      - name: Write backend-matrix evidence summary
+        if: always()
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "${{ matrix.suite }}" in
+            unit-fast)
+              selected="${{ needs.select-test-suites.outputs.unit_fast }}"
+              outcome="${{ steps.run-unit.outcome }}"
+              seconds_file="/tmp/backend-unit-fast-test-seconds.txt" ;;
+            api-component)
+              selected="${{ needs.select-test-suites.outputs.api_component }}"
+              outcome="${{ steps.run-api.outcome }}"
+              seconds_file="/tmp/backend-api-component-test-seconds.txt" ;;
+            temporal-boundary)
+              selected="${{ needs.select-test-suites.outputs.temporal_boundary }}"
+              outcome="${{ steps.run-temporal.outcome }}"
+              seconds_file="/tmp/backend-temporal-boundary-test-seconds.txt" ;;
+            reliability-*)
+              selected="${{ needs.select-test-suites.outputs.reliability_journey }}"
+              outcome="${{ steps.run-reliability.outcome }}"
+              seconds_file="/tmp/backend-${{ matrix.suite }}-test-seconds.txt" ;;
+            *) selected="false"; outcome="skipped"; seconds_file="" ;;
+          esac
+          if [[ "$selected" != "true" ]]; then
+            outcome="skipped"
+          fi
+          python3 tools/ci/write_backend_matrix_summary.py \
+            --suite "${{ matrix.suite }}" \
+            --shard "${{ matrix.shard }}" \
+            --revision "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --selected "$([ "$selected" == "true" ] && echo true || echo false)" \
+            --test-outcome "${outcome:-unknown}" \
+            --junit "artifacts/pytest-backend-${{ matrix.suite }}.xml" \
+            --log "artifacts/pytest-backend-${{ matrix.suite }}.log" \
+            --slowest "artifacts/pytest-backend-${{ matrix.suite }}-slowest.txt" \
+            --durations-snapshot "artifacts/pytest-backend-${{ matrix.suite }}-durations.json" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --test-seconds-file "$seconds_file"
+      - name: Upload backend-matrix pytest evidence
+        if: >-
+          always() && (
+            (matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true') ||
+            (matrix.suite == 'api-component' && needs.select-test-suites.outputs.api_component == 'true') ||
+            (matrix.suite == 'temporal-boundary' && needs.select-test-suites.outputs.temporal_boundary == 'true') ||
+            (startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true')
+          )
         uses: actions/upload-artifact@v7
         with:
-          name: faultlab-generated-diagnostics
+          name: pytest-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
+          path: |
+            artifacts/pytest-backend-${{ matrix.suite }}.xml
+            artifacts/pytest-backend-${{ matrix.suite }}.log
+            artifacts/pytest-backend-${{ matrix.suite }}-slowest.txt
+            artifacts/pytest-backend-${{ matrix.suite }}-durations.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload generated fault-lab diagnostics
+        if: failure() && matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: faultlab-generated-diagnostics-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
           path: artifacts/faultlab-generated
           if-no-files-found: ignore
+          retention-days: 7
+      - name: Collect reliability shard diagnostics
+        # Every-run retention (MoonLadderStudios/MoonMind#4371): dependency
+        # logs, replays, manifests and per-shard timings upload on every
+        # run, not only on failure/cancellation. Collection stays bounded
+        # (timeout 100s logs, timeout 60s manifest copy) and never replaces
+        # the original test outcome.
+        if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/pytest-${{ matrix.suite }}
+          echo "collection started" > /tmp/pytest-${{ matrix.suite }}/collection-status.txt
+          timeout 100s docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml logs --no-color > /tmp/pytest-${{ matrix.suite }}/dependencies.log 2>&1 \
+            || echo "compose logs failed or timed out (exit=$?)" > /tmp/pytest-${{ matrix.suite }}/dependencies.log
+          for known in "artifacts/pytest-backend-${{ matrix.suite }}.xml" "artifacts/pytest-backend-${{ matrix.suite }}.log" "artifacts/pytest-backend-${{ matrix.suite }}-slowest.txt" "artifacts/pytest-backend-${{ matrix.suite }}-durations.json"; do
+            if [[ -e "$known" ]]; then
+              cp --parents "$known" /tmp/pytest-${{ matrix.suite }}/ 2>/dev/null \
+                || echo "copy $known failed (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
+            else
+              echo "missing $known (interrupted before pytest wrote it; not zero tests)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
+            fi
+          done
+          if [[ -d tests/integration/reliability/replays ]]; then
+            cp -R --parents tests/integration/reliability/replays /tmp/pytest-${{ matrix.suite }}/ 2>/dev/null \
+              || echo "copy replays failed (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
+          fi
+          timeout 60s bash -c "find . -type f \( -name 'workspace-manifest*.json' -o -name 'provider-transcript*.jsonl' -o -name 'temporal-diagnostics*.json' -o -name 'replay-manifest*.json' \) -exec cp --parents '{}' /tmp/pytest-${{ matrix.suite }}/ \; 2>/dev/null" \
+            || echo "scoped manifest copy failed or timed out (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
+          echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > /tmp/pytest-${{ matrix.suite }}/cancellation-context.txt
+      - name: Upload reliability shard diagnostics
+        if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-${{ matrix.suite }}-diagnostics-attempt-${{ github.run_attempt }}
+          path: /tmp/pytest-${{ matrix.suite }}
+          if-no-files-found: error
+          retention-days: 7
+      - name: Record backend-matrix cancellation diagnostics
+        if: (failure() || cancelled())
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/backend-matrix-${{ matrix.suite }}
+          {
+            echo "suite=${{ matrix.suite }}"
+            echo "event=${{ github.event_name }}"
+            echo "run=${{ github.run_id }} attempt=${{ github.run_attempt }}"
+            echo "unit_fast=${{ needs.select-test-suites.outputs.unit_fast }}"
+            echo "api_component=${{ needs.select-test-suites.outputs.api_component }}"
+            echo "temporal_boundary=${{ needs.select-test-suites.outputs.temporal_boundary }}"
+            echo "reliability_journey=${{ needs.select-test-suites.outputs.reliability_journey }}"
+          } > /tmp/backend-matrix-${{ matrix.suite }}/attempted-cancellation.txt
+          ls artifacts/pytest-backend-${{ matrix.suite }}.xml >> /tmp/backend-matrix-${{ matrix.suite }}/attempted-cancellation.txt 2>&1 || echo "no junit report (cancelled before tests wrote one)" >> /tmp/backend-matrix-${{ matrix.suite }}/attempted-cancellation.txt
+      - name: Upload backend-matrix cancellation diagnostics
+        if: (failure() || cancelled())
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-matrix-${{ matrix.suite }}-cancellation-attempt-${{ github.run_attempt }}
+          path: /tmp/backend-matrix-${{ matrix.suite }}
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove isolated reliability dependencies
+        if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
+        run: timeout 100s docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml down -v || echo "compose down failed or timed out; continuing cleanup"
 
   moonspec-projection:
     runs-on: ubuntu-latest
@@ -315,67 +612,6 @@ jobs:
             -m "slow and not provider_verification and not requires_credentials and not integration" \
             -q --durations=50 \
             --junitxml=artifacts/pytest-unit-slow.xml
-
-  api-component:
-    needs: select-test-suites
-    if: needs.select-test-suites.outputs.api_component == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 1
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Install system dependencies
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update
-          sudo apt-get install -y libcairo2-dev pkg-config
-      - name: Install dependencies via uv
-        run: |
-          python -m pip install --upgrade pip uv
-          uv pip install --system -e .[tests]
-      - name: Run API/component suite
-        run: |
-          set -euo pipefail
-          python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
-            -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-            -q -n auto --dist load --durations=25 --timeout 600 \
-            --junitxml=artifacts/pytest-api-component.xml
-
-  temporal-boundary:
-    needs: select-test-suites
-    if: needs.select-test-suites.outputs.temporal_boundary == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 1
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Install dependencies via uv
-        run: |
-          python -m pip install --upgrade pip uv
-          uv pip install --system -e .[tests]
-      - name: Run Temporal boundary suite
-        run: |
-          set -euo pipefail
-          python -m pytest tests/unit/workflows/temporal \
-            -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-            -q -n auto --dist loadfile --durations=25 --timeout 600 \
-            --junitxml=artifacts/pytest-temporal-boundary.xml
 
   integration-ci:
     needs: select-test-suites
@@ -451,79 +687,6 @@ jobs:
           name: pytest-integration-ci-diagnostics
           path: /tmp/pytest-integration-ci
           if-no-files-found: error
-
-  reliability-journey-checkpoint-resume:
-    needs: select-test-suites
-    if: needs.select-test-suites.outputs.reliability_journey == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Check out code
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 1
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Install system dependencies
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/azure-cli.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update
-          sudo apt-get install -y libcairo2-dev pkg-config
-      - name: Install dependencies via uv
-        run: |
-          python -m pip install --upgrade pip uv
-          uv pip install --system -e .[tests]
-      - name: Start isolated reliability dependencies
-        run: |
-          set -euo pipefail
-          docker compose -p moonmind-reliability-qualification -f tests/integration/reliability/compose.yaml up -d --wait --wait-timeout 180
-          dependency_ip() {
-            local container
-            container=$(docker compose -p moonmind-reliability-qualification -f tests/integration/reliability/compose.yaml ps -q "$1")
-            docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$container"
-          }
-          echo "MOONMIND_TEST_POSTGRES_URL=postgresql+asyncpg://postgres:reliability-test-only@$(dependency_ip postgres):5432/postgres" >> "$GITHUB_ENV"
-          echo "MOONMIND_TEST_TEMPORAL_ADDRESS=$(dependency_ip temporal):7233" >> "$GITHUB_ENV"
-          echo "MOONMIND_TEST_MINIO_ENDPOINT=http://$(dependency_ip minio):9000" >> "$GITHUB_ENV"
-      - name: Run hermetic checkpoint-resume reliability journey
-        env:
-          MOONMIND_FORCE_LOCAL_TESTS: "1"
-        run: |
-          set -euo pipefail
-          python -m pytest tests/integration/reliability \
-            -m reliability_journey \
-            -q --durations=25 \
-            --junitxml=artifacts/pytest-reliability-journey.xml
-      - name: Collect reliability journey diagnostics
-        if: failure()
-        run: |
-          set -uo pipefail
-          mkdir -p /tmp/pytest-reliability-journey
-          docker compose -p moonmind-reliability-qualification -f tests/integration/reliability/compose.yaml logs --no-color > /tmp/pytest-reliability-journey/dependencies.log 2>&1
-          for path in artifacts tests/integration/reliability/replays var/artifacts var/pr_resolver; do
-            if [[ -e "$path" ]]; then
-              cp -R --parents "$path" /tmp/pytest-reliability-journey/
-            fi
-          done
-          find . -type f \
-            \( -name 'workspace-manifest*.json' -o -name 'provider-transcript*.jsonl' \
-               -o -name 'temporal-diagnostics*.json' -o -name 'replay-manifest*.json' \) \
-            -exec cp --parents '{}' /tmp/pytest-reliability-journey/ \; 2>/dev/null || true
-      - name: Upload reliability journey diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: pytest-reliability-journey-diagnostics
-          path: /tmp/pytest-reliability-journey
-          if-no-files-found: error
-
-      - name: Remove isolated reliability dependencies
-        if: always()
-        run: docker compose -p moonmind-reliability-qualification -f tests/integration/reliability/compose.yaml down -v
 
   omnigent-exact-artifact:
     # Tier 1 (MoonLadderStudios/MoonMind#3710): the required, per-PR,
@@ -850,12 +1013,9 @@ jobs:
       - select-test-suites
       - preflight-policy
       - moonspec-projection
-      - unit-fast
+      - backend-matrix
       - unit-slow
-      - api-component
-      - temporal-boundary
       - integration-ci
-      - reliability-journey-checkpoint-resume
       - omnigent-exact-artifact
       - omnigent-deterministic-conformance
       - verify-test-shard-ownership
@@ -911,24 +1071,28 @@ jobs:
           require_always "preflight-policy" "${{ needs.preflight-policy.result }}"
           require_always "moonspec-projection" "${{ needs.moonspec-projection.result }}"
 
-          require_selected "unit-fast" \
-            "${{ needs.select-test-suites.outputs.unit_fast }}" \
-            "${{ needs.unit-fast.result }}"
+          # Backend-matrix aggregate (MoonLadderStudios/MoonMind#4377): the
+          # unit-fast, api-component, temporal-boundary and four reliability
+          # shards share one native matrix. A matrix failure, timeout, or
+          # cancellation is not success; an empty backend selection skips the
+          # matrix intentionally. Never use last-writer matrix outputs as
+          # per-row evidence — only the aggregate result is consumed here.
+          backend_selected="false"
+          if [[ "${{ needs.select-test-suites.outputs.unit_fast }}" == "true" || \
+                "${{ needs.select-test-suites.outputs.api_component }}" == "true" || \
+                "${{ needs.select-test-suites.outputs.temporal_boundary }}" == "true" || \
+                "${{ needs.select-test-suites.outputs.reliability_journey }}" == "true" ]]; then
+            backend_selected="true"
+          fi
+          require_selected "backend-matrix" \
+            "$backend_selected" \
+            "${{ needs.backend-matrix.result }}"
           require_selected "unit-slow" \
             "${{ needs.select-test-suites.outputs.unit_slow }}" \
             "${{ needs.unit-slow.result }}"
-          require_selected "api-component" \
-            "${{ needs.select-test-suites.outputs.api_component }}" \
-            "${{ needs.api-component.result }}"
-          require_selected "temporal-boundary" \
-            "${{ needs.select-test-suites.outputs.temporal_boundary }}" \
-            "${{ needs.temporal-boundary.result }}"
           require_selected "integration-ci" \
             "${{ needs.select-test-suites.outputs.integration_ci }}" \
             "${{ needs.integration-ci.result }}"
-          require_selected "reliability-journey-checkpoint-resume" \
-            "${{ needs.select-test-suites.outputs.reliability_journey }}" \
-            "${{ needs.reliability-journey-checkpoint-resume.result }}"
           require_selected "omnigent-exact-artifact" \
             "${{ needs.select-test-suites.outputs.exact_artifact }}" \
             "${{ needs.omnigent-exact-artifact.result }}"

@@ -25,8 +25,37 @@ from moonmind.workflows.skills.deployment_execution import (
     _requested_image,
     _resolved_digest_from_target_image,
 )
+from moonmind.workflows.skills.deployment_tools import RELEASE_JOB_BUDGET_SECONDS
 
 CONTROL_SERVICE = "temporal-worker-deployment-control"
+
+DIAGNOSIS_BOUND = 1000
+_DIAGNOSIS_ELISION = "\n...[elided]...\n"
+
+
+def bounded_diagnosis(text, limit=DIAGNOSIS_BOUND):
+    """Bound a recorded failure without discarding the line that names it.
+
+    A release failure identifies itself at both ends: the opening names the
+    fleet and the observed gateway health, while the retained worker's log
+    tail ends in the exception Python raised. Keeping only the head published
+    frame stacks and dropped the ``RuntimeError: ...`` line, leaving every
+    operator surface fed from this record unable to say why the release
+    failed. Redaction runs over the whole text before this bound, so neither
+    retained end can publish a value the redaction removed.
+    """
+    if len(text) <= limit:
+        return text
+    keep = limit - len(_DIAGNOSIS_ELISION)
+    head = keep // 2
+    return text[:head] + _DIAGNOSIS_ELISION + text[len(text) - (keep - head) :]
+
+
+# Polls one gateway recreate keeps to itself before another may replace it.
+# The gateway healthcheck runs every 10s after a 10s start period and needs
+# three passes, so a recreate that is going to work reports healthy well
+# inside this cooldown.
+_GATEWAY_REPAIR_COOLDOWN_POLLS = 20
 
 
 async def docker(*args, input_bytes=None):
@@ -47,8 +76,8 @@ async def docker(*args, input_bytes=None):
     if process.returncode:
         from moonmind.utils.logging import redact_sensitive_text
 
-        diagnostic = stderr.decode(errors="replace").strip().splitlines()
-        reason = redact_sensitive_text(diagnostic[-1] if diagnostic else "no diagnostic")
+        diagnostic = stderr.decode(errors="replace").strip()
+        reason = redact_sensitive_text(diagnostic or "no diagnostic")
         raise RuntimeError(f"Docker {args[0]} failed: {reason[:1000]}")
     return stdout.decode().strip()
 
@@ -66,6 +95,25 @@ async def inspect_owned(name, owner):
     ):
         raise ValueError("Release container ownership differs")
     return rows[0]
+
+
+def _activity_schedule_anchor():
+    """Wall clock instant the supervising Activity was scheduled.
+
+    Temporal starts its schedule-to-close clock when the Activity is
+    scheduled, not when it begins running, and the deployment fleet runs one
+    Activity at a time. A release that waited behind another one would
+    otherwise start its own budget late enough to outlive the supervisor that
+    is meant to observe it. ``None`` outside an Activity - the host-update
+    entrypoint and tests - where the caller falls back to the current time.
+    """
+    try:
+        from temporalio import activity
+
+        scheduled = activity.info().scheduled_time
+    except (ImportError, RuntimeError):
+        return None
+    return scheduled.timestamp() if scheduled is not None else None
 
 
 def write_record(path, value):
@@ -125,6 +173,17 @@ async def worker_readiness(container):
             "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/readyz', timeout=5).read().decode())",
         )
     )
+
+
+async def container_health(name):
+    """Observed health of one container; ``None`` when it reports none."""
+    try:
+        observed = json.loads(await docker("inspect", name))[0]
+        return (observed["State"].get("Health") or {}).get("Status")
+    except (RuntimeError, ValueError, LookupError, TypeError):
+        # A missing, foreign or unreadable container reports no health rather
+        # than replacing the caller's failure with an inspection error.
+        return None
 
 
 def readiness_matches(state, digest):
@@ -264,6 +323,12 @@ async def successful_release_image(root, version):
             outputs = receipt["result"].get("outputs", {})
             if not digest.startswith("sha256:") or outputs.get("resolvedDigest") != digest:
                 raise ValueError("Successful release receipt image differs")
+            expected_source = request["authored"]["inputs"].get("sourceRevision")
+            if "sourceRevision" in outputs and outputs.get("sourceRevision") != expected_source:
+                raise ValueError("Successful release receipt source differs")
+            # Receipts predating the bound source stamp carry no sourceRevision
+            # output; their source authority still binds through the live image
+            # manifest check below, so absence alone is not rejection evidence.
             image_ids = set((await docker("image", "ls", "-q", "--no-trunc")).split())
             if request["imageId"] not in image_ids:
                 await docker("pull", request["image"])
@@ -344,6 +409,42 @@ async def successful_release_image(root, version):
     return None
 
 
+async def docker_logs_tail(name, tail_lines=30, timeout_seconds=60):
+    """Return the merged stdout+stderr tail for a release container.
+
+    Updater tracebacks (for example the ``FileNotFoundError`` from an empty
+    state volume) are written to stderr, while the shared ``docker()`` helper
+    returns only stdout. Merging both streams keeps the diagnosis from
+    reporting ``(empty)`` for exactly the failures it must surface.
+    """
+    process = await asyncio.create_subprocess_exec(
+        "docker",
+        "logs",
+        "--tail",
+        str(tail_lines),
+        name,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(), timeout=timeout_seconds
+        )
+    except BaseException:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+        raise
+    if process.returncode:
+        raise RuntimeError(f"Docker logs failed for {name}")
+    merged = stdout.decode(errors="replace")
+    if stderr:
+        merged += ("\n" if merged and not merged.endswith("\n") else "") + stderr.decode(
+            errors="replace"
+        )
+    return merged.strip()
+
+
 async def execute_detached(executor, inputs, context):
     """Launch once or reattach, without retaining self-recreation authority."""
     owner = str(context.get("idempotency_key") or context.get("workflow_id") or "")
@@ -353,6 +454,22 @@ async def execute_detached(executor, inputs, context):
     directory = state_root() / key
     directory.mkdir(parents=True, exist_ok=True)
     request_file, result_file = directory / "request.json", directory / "result.json"
+    # Anchor the durable deadline where the supervising Activity's own clock
+    # starts, before any pre-launch work. Pulling and inspecting the updater
+    # image is allowed a full runner command timeout, and the Activity may
+    # have queued behind another deployment before that, so a deadline taken
+    # later would start after the schedule it must stay inside. The anchor is
+    # reserved, not written, so a re-attaching attempt inherits the first
+    # delivery's deadline instead of extending it.
+    anchor = _activity_schedule_anchor()
+    deadline = reserve_record(
+        directory / "deadline.json",
+        {
+            "owner": owner,
+            "deadline": (time.time() if anchor is None else anchor)
+            + RELEASE_JOB_BUDGET_SECONDS,
+        },
+    )["deadline"]
     name = f"moonmind-release-update-{key}"
     safe_context = {
         key: context[key]
@@ -407,7 +524,10 @@ async def execute_detached(executor, inputs, context):
             "authored": authored,
             "image": f"{parsed['image']['repository']}@{digest}",
             "imageId": image["Id"],
-            "deadline": time.time() + 7200,
+            # Anchored above, before the pull, so the job and the Activity
+            # supervising it cannot disagree about when the release is still
+            # allowed to be running.
+            "deadline": deadline,
         }
         record = reserve_record(request_file, record)
         if record["authored"] != authored:
@@ -418,7 +538,8 @@ async def execute_detached(executor, inputs, context):
         while not result_file.exists():
             if time.time() >= record["deadline"]:
                 raise RuntimeError(
-                    "Release update exhausted its durable two-hour budget"
+                    "Release update exhausted its durable"
+                    f" {RELEASE_JOB_BUDGET_SECONDS // 3600}-hour budget"
                 )
             existing = await inspect_owned(name, owner)
             if existing is None:
@@ -433,8 +554,75 @@ async def execute_detached(executor, inputs, context):
                     else 1
                 )
                 if deliveries >= 3:
+                    from moonmind.utils.logging import redact_sensitive_text
+
+                    diagnosis = []
+                    try:
+                        inner_attempts = directory / "attempts.json"
+                        diagnosis.append(
+                            "attempts="
+                            + (
+                                str(
+                                    json.loads(inner_attempts.read_text()).get(
+                                        "count"
+                                    )
+                                )
+                                if inner_attempts.exists()
+                                else "none (updater never entered its retry loop)"
+                            )
+                        )
+                    except (OSError, ValueError):
+                        diagnosis.append("attempts=unreadable")
+                    try:
+                        last_error_file = directory / "last-error.json"
+                        if last_error_file.exists():
+                            last_error = json.loads(last_error_file.read_text())
+                            diagnosis.append(
+                                "last-error="
+                                + redact_sensitive_text(
+                                    str(last_error.get("error") or last_error)
+                                )[:500]
+                            )
+                    except (OSError, ValueError):
+                        diagnosis.append("last-error=unreadable")
+                    try:
+                        state = existing.get("State", {})
+                        diagnosis.append(f"updater-exit={state.get('ExitCode')}")
+                    except (AttributeError, TypeError):
+                        # inspect_owned contracts a Mapping; a foreign shape
+                        # carries no exit evidence, so record that explicitly.
+                        diagnosis.append("updater-exit=unknown")
+                    try:
+                        tail = await docker_logs_tail(name)
+                        diagnosis.append(
+                            "updater-logs="
+                            + redact_sensitive_text(tail or "(empty)")[-2000:]
+                        )
+                    except (RuntimeError, OSError, TimeoutError) as exc:
+                        # Auxiliary log collection must never replace the
+                        # established exhaustion with an unrelated failure.
+                        diagnosis.append(
+                            "updater-logs=unavailable:"
+                            + redact_sensitive_text(str(exc))[:200]
+                        )
+                    recovery_hint = f"release job {key} (owner {name})"
+                    if owner.startswith("host-update:"):
+                        recovery_hint += (
+                            "; delivery budget exhausted: start a new audited release with"
+                            " ./tools/update-moonmind.sh (do not --resume this submission;"
+                            " resume reuses the spent budget and its stopped container,"
+                            " so it returns here without progressing)"
+                        )
+                    else:
+                        recovery_hint += (
+                            "; delivery budget exhausted: start a new audited release;"
+                            " its retained workers still require release.reconcile"
+                        )
                     raise RuntimeError(
                         "Release updater exhausted three deliveries without terminal evidence"
+                        f" ({recovery_hint}; deliveries={deliveries}; "
+                        + "; ".join(diagnosis)
+                        + f"; inspect docker logs {name} and {directory / 'request.json'})"
                     )
                 write_record(attempts_file, {"count": deliveries + 1})
                 await docker("start", name)
@@ -463,50 +651,138 @@ class ReleaseCohort:
         self.runner, self.directory, self.owner = runner, directory, owner
         self.names = []
 
+    async def _discover_installed_serving_image(self):
+        """Image every installed fleet agrees on, without readiness evidence.
+
+        Worker readiness attests the egress gateway, so a broken gateway
+        fails every probe. Image identity is observable without it, which
+        lets the caller repair the gateway before requiring the readiness
+        proof that names the serving image.
+        """
+        from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
+
+        images = set()
+        for service in _FLEET_SERVICE_NAMES.values():
+            found = await self.runner._run_compose_command(
+                ("docker", "compose", "ps", "-q", service)
+            )
+            _ensure_command_succeeded("inspect previous release", found)
+            identifiers = found["stdout"].split()
+            if len(identifiers) != 1:
+                raise ValueError("Previous release has no coherent live worker owner")
+            observed = json.loads(await docker("inspect", identifiers[0]))[0]
+            images.add(observed["Image"])
+        if len(images) != 1:
+            raise ValueError("Previous release spans different images")
+        return images.pop()
+
+    async def resolve_serving_image(self, version, deployment):
+        """Serving image authority without gateway-dependent readiness.
+
+        Returns ``(retained, provenance)`` where provenance is ``receipt``
+        for a durable ``retained.json``, ``evidence`` for a successful
+        release or availability receipt, and ``installed`` for
+        live-container discovery. Only the ``installed`` provenance still
+        needs a readiness proof, which the caller performs after repairing
+        the gateway (see ``record_resolved_serving_image``).
+        """
+        record_file = self.directory / "retained.json"
+        if record_file.exists():
+            retained = json.loads(record_file.read_text())
+            if retained["owner"] != self.owner or retained["version"] != version:
+                raise ValueError("Retained release authority differs")
+            return retained, "receipt"
+        evidence = await successful_release_image(self.directory.parent, version)
+        if evidence is not None:
+            return {"owner": self.owner, "version": version, **evidence}, "evidence"
+        return {
+            "owner": self.owner,
+            "version": version,
+            "image": await self._discover_installed_serving_image(),
+            "retired": [],
+        }, "installed"
+
+    async def record_resolved_serving_image(self, version, deployment, resolved):
+        """Persist a resolved serving image, proving readiness when discovered.
+
+        Receipt and release-evidence provenances already carry their
+        authority. Live-container discovery still needs its coherent
+        readiness proof, which must run only after the caller has repaired
+        the egress gateway the probes attest.
+        """
+        from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
+
+        record_file = self.directory / "retained.json"
+        retained, provenance = resolved
+        if provenance == "receipt":
+            return retained
+        if provenance == "installed":
+            expected_digest = version.removeprefix(deployment + ".")
+            images = set()
+            for service in _FLEET_SERVICE_NAMES.values():
+                found = await self.runner._run_compose_command(
+                    ("docker", "compose", "ps", "-q", service)
+                )
+                _ensure_command_succeeded("inspect previous release", found)
+                identifiers = found["stdout"].split()
+                if len(identifiers) != 1 or not readiness_matches(
+                    await worker_readiness(identifiers[0]), expected_digest
+                ):
+                    raise ValueError(
+                        "Previous release has no coherent live worker owner"
+                    )
+                observed = json.loads(await docker("inspect", identifiers[0]))[0]
+                images.add(observed["Image"])
+            if len(images) != 1 or retained["image"] not in images:
+                raise ValueError("Previous release spans different images")
+        write_record(record_file, retained)
+        return retained
+
     async def record_serving_image(self, version, deployment):
         """Capture recovery authority while the serving image is observable.
 
         Recording an image does not launch another worker or change routing.
         The same receipt is consumed by normal updates and outage recovery.
         """
-        from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
+        return await self.record_resolved_serving_image(
+            version, deployment, await self.resolve_serving_image(version, deployment)
+        )
 
-        record_file = self.directory / "retained.json"
-        expected_digest = version.removeprefix(deployment + ".")
-        if record_file.exists():
-            retained = json.loads(record_file.read_text())
-            if retained["owner"] != self.owner or retained["version"] != version:
-                raise ValueError("Retained release authority differs")
-        else:
-            evidence = await successful_release_image(self.directory.parent, version)
-            if evidence is not None:
-                retained = {"owner": self.owner, "version": version, **evidence}
-            else:
-                images = set()
-                for service in _FLEET_SERVICE_NAMES.values():
-                    found = await self.runner._run_compose_command(
-                        ("docker", "compose", "ps", "-q", service)
-                    )
-                    _ensure_command_succeeded("inspect previous release", found)
-                    identifiers = found["stdout"].split()
-                    if len(identifiers) != 1 or not readiness_matches(
-                        await worker_readiness(identifiers[0]), expected_digest
-                    ):
-                        raise ValueError(
-                            "Previous release has no coherent live worker owner"
-                        )
-                    observed = json.loads(await docker("inspect", identifiers[0]))[0]
-                    images.add(observed["Image"])
-                if len(images) != 1:
-                    raise ValueError("Previous release spans different images")
-                retained = {
-                    "owner": self.owner,
-                    "version": version,
-                    "image": images.pop(),
-                    "retired": [],
-                }
-            write_record(record_file, retained)
-        return retained
+    async def _retained_definition_runner(self, image):
+        """Render the retained cohort from the definition its image owns.
+
+        A deployment checkout bind-mounts the *current* Compose file, whose
+        gateway definition may be incompatible with the retained image: the
+        v1 gateway used ``ubuntu/squid`` with legacy labels and a direct
+        config mount, while the current definition needs
+        ``/opt/moonmind-egress/policy.sh`` from the new image. Recreating
+        the gateway from the current definition with the retained image
+        leaves it exiting. Render the definition the retained image embeds
+        instead; the deployment-owned runner identity (project, environment,
+        override files) still accompanies the command through the replaced
+        runner.
+        """
+        digest = hashlib.sha256(image.encode()).hexdigest()[:16]
+        retained_compose = self.directory / f"retained-compose-{digest}.yaml"
+        if not retained_compose.exists():
+            try:
+                content = await docker(
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--entrypoint",
+                    "cat",
+                    image,
+                    "/app/release/docker-compose.yaml",
+                )
+            except RuntimeError:
+                # Images predating the embedded release definition keep
+                # the previous behavior: render from the deployment
+                # checkout instead of failing worker retention outright.
+                return self.runner
+            _atomic_write_bytes(retained_compose, content.encode())
+        return replace(self.runner, compose_file=str(retained_compose))
 
     async def preserve_previous(self, previous, deployment, candidate):
         """Keep the exact previous image polling until Temporal drains it."""
@@ -515,23 +791,16 @@ class ReleaseCohort:
         from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
 
         expected_digest = previous.removeprefix(deployment + ".")
-        retained = await self.record_serving_image(previous, deployment)
-        retained_runner = self.runner
-        if self.runner.compose_file == "/app/release/docker-compose.yaml":
-            retained_compose = self.directory / "retained-compose.yaml"
-            if not retained_compose.exists():
-                content = await docker(
-                    "run",
-                    "--rm",
-                    "--network",
-                    "none",
-                    "--entrypoint",
-                    "cat",
-                    retained["image"],
-                    "/app/release/docker-compose.yaml",
-                )
-                _atomic_write_bytes(retained_compose, content.encode())
-            retained_runner = replace(self.runner, compose_file=str(retained_compose))
+        # The serving image is discovered without gateway-dependent readiness
+        # so an initial installation without any release receipt can still
+        # reach the recovery below: worker readiness attests the gateway, so
+        # requiring the proof before the repair leaves the repair unreachable.
+        retained, provenance = await self.resolve_serving_image(previous, deployment)
+        retained_runner = await self._retained_definition_runner(retained["image"])
+        gateway = await self.restore_gateway(retained_runner, retained["image"])
+        retained = await self.record_resolved_serving_image(
+            previous, deployment, (retained, provenance)
+        )
         for fleet, service in _FLEET_SERVICE_NAMES.items():
             name = f"mm-retained-{self.directory.name[:16]}-{fleet.replace('_', '-')}"
             existing = await inspect_owned(name, self.owner)
@@ -572,9 +841,80 @@ class ReleaseCohort:
                     pass
                 await asyncio.sleep(2)
             else:
+                from moonmind.utils.logging import redact_sensitive_text
+
+                try:
+                    tail = await docker_logs_tail(name)
+                except (RuntimeError, OSError, TimeoutError) as exc:
+                    # Auxiliary log collection must never replace the
+                    # established retention failure with an unrelated one.
+                    tail = f"unavailable:{exc}"
                 raise RuntimeError(
                     "Previous release could not retain compatible pollers"
+                    f" (fleet={fleet}; gateway={gateway or 'unknown'}; "
+                    + "retained-logs="
+                    + redact_sensitive_text(str(tail) or "(empty)")[-1500:]
+                    + ")"
                 )
+
+    async def restore_gateway(self, runner, image, attempts=60):
+        """Repair the deployment-owned egress gateway the cohort depends on.
+
+        Workers attest the singular restricted-egress gateway before they
+        report ready, so a gateway left unhealthy by an out-of-band change
+        blocks every release — including the one that installs its
+        replacement. The gateway is recreated from the definition this
+        cohort's own image owns, never from a newer one, so the release that
+        follows still owns the upgrade. Its observed health is returned for
+        the caller's diagnosis whether or not the repair converged.
+
+        A recreate that does not take is retried inside this window rather
+        than left for the next release attempt. Repairing exactly once meant
+        a gateway needing a second recreate failed retention, failed the
+        whole attempt, and only converged because the job retried the entire
+        update — minutes of wall clock for a repair that belongs here. Each
+        recreate still gets a cooldown to converge on its own, so a gateway
+        that is coming up is never bounced.
+        """
+        from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
+
+        repaired_at = None
+        for attempt in range(attempts):
+            health = await container_health(EGRESS_GATEWAY_REF)
+            if health == "healthy":
+                return health
+            if health is None:
+                # No gateway container, or one that publishes no health: this
+                # deployment either does not run a gateway or has not been
+                # brought up. Creating one belongs to the stack's own ``up``,
+                # never to this recovery path.
+                return health
+            # A gateway that is still starting owns the first half of the
+            # window on its own: recovery must not bounce deployment state
+            # that was about to converge. The same restraint spaces out the
+            # retries: a recreate keeps the cooldown to report healthy before
+            # another one replaces it.
+            due = (
+                repaired_at is None
+                or attempt - repaired_at >= _GATEWAY_REPAIR_COOLDOWN_POLLS
+            )
+            if due and (health != "starting" or attempt * 2 >= attempts):
+                repaired_at = attempt
+                result = await runner._run_compose_command(
+                    (
+                        "docker",
+                        "compose",
+                        "up",
+                        "-d",
+                        "--no-deps",
+                        "--force-recreate",
+                        EGRESS_GATEWAY_SERVICE,
+                    ),
+                    requested_image=image,
+                )
+                _ensure_command_succeeded("restore release egress gateway", result)
+            await asyncio.sleep(2)
+        return health
 
     async def qualify_api(self, image):
         name = f"mm-candidate-{self.directory.name[:16]}-api"
@@ -793,6 +1133,49 @@ class ReleaseCohort:
                     raise RuntimeError("Candidate worker did not drain")
                 await docker("rm", name)
 
+    async def migrate_omnigent(self, image, *, actor="release"):
+        """Advance the singular Omnigent release; no-op when already aligned.
+
+        Runs inside the primary success path so an omnigent migration failure
+        blocks the release receipt exactly like a fleet verification failure:
+        the retained fleet owns recovery and a resume converges instead of
+        duplicating completed steps.
+        """
+        from moonmind.workflows.skills.deployment_execution import (
+            FileDesiredStateStore,
+        )
+        from moonmind.workflows.skills.omnigent_release import (
+            migrate_omnigent_release,
+            production_drivers,
+        )
+
+        store = FileDesiredStateStore(
+            env_file_path=os.environ.get(
+                "MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", ""
+            ),
+            json_file_path=os.environ.get(
+                "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", ""
+            )
+            or None,
+        )
+        if not str(
+            os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE") or ""
+        ).strip():
+            # No durable desired-state file: the singular record has nowhere
+            # to live, so there is nothing to migrate. The receipt says so
+            # explicitly instead of pretending alignment was verified.
+            return {"status": "skipped", "reason": "no durable desired-state file"}
+        return await migrate_omnigent_release(
+            store=store,
+            runner=self.runner,
+            owner=self.owner,
+            moonmind_image=image,
+            drivers=production_drivers(
+                runner=self.runner, moonmind_image=image, actor=actor
+            ),
+            actor=actor,
+        )
+
 
 async def verify_operator_access(image, urls, owner, *, expected_release=None):
     """Probe published origins through the daemon's declared host transport."""
@@ -998,11 +1381,34 @@ async def _run_job_body(request_file):
                     readiness_ref = await executor.evidence_writer.write(
                         "installed-release-readiness", readiness
                     )
+                    readiness_outputs = {
+                        **result.outputs,
+                        "releaseReadinessArtifactRef": readiness_ref,
+                    }
+                    if expected_revision:
+                        readiness_outputs["sourceRevision"] = expected_revision
+                    result = replace(result, outputs=readiness_outputs)
+                    try:
+                        omnigent_receipt = await cohort.migrate_omnigent(
+                            record["image"]
+                        )
+                    except Exception as exc:
+                        write_record(
+                            request_file.parent / "attempt-result.json",
+                            {
+                                "owner": owner,
+                                "result": result.to_payload(),
+                            },
+                        )
+                        raise RuntimeError(
+                            f"Omnigent release migration did not establish "
+                            f"completion ({exc}); retained workers own recovery"
+                        ) from exc
                     result = replace(
                         result,
                         outputs={
                             **result.outputs,
-                            "releaseReadinessArtifactRef": readiness_ref,
+                            "omnigentRelease": omnigent_receipt,
                         },
                     )
             write_record(primary_file, {"owner": owner, "result": result.to_payload()})
@@ -1030,6 +1436,17 @@ async def _run_job_body(request_file):
                         "cleanupReason": redact_sensitive_text(cleanup_error)[:300],
                     },
                 )
+        if result.status == "COMPLETED" and expected_revision:
+            # The terminal receipt is self-sufficient: it carries the verified
+            # source revision alongside the digest and readiness evidence, so
+            # recovery never depends on an unbound second record.
+            result = replace(
+                result,
+                outputs={
+                    **result.outputs,
+                    "sourceRevision": expected_revision,
+                },
+            )
         write_record(result_file, {"owner": owner, "result": result.to_payload()})
     except Exception:
         raise
@@ -1071,7 +1488,9 @@ async def run_job(request_file):
                     await _run_job_body(request_file)
                 return
             except Exception as exc:
-                error = redact_sensitive_text(str(exc) or type(exc).__name__)[:1000]
+                error = bounded_diagnosis(
+                    redact_sensitive_text(str(exc) or type(exc).__name__)
+                )
                 write_record(
                     request_file.parent / "last-error.json",
                     {"owner": owner, "attempt": attempts, "error": error},

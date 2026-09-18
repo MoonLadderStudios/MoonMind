@@ -13,8 +13,15 @@ supplemental for full network conformance.
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import json
+import os
+import shutil
+import subprocess
+import sys
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -26,6 +33,7 @@ from moonmind.security.egress import (
     CONTROL_PLANE_NETWORK_REF,
     DEFAULT_EGRESS_PROFILE,
     EGRESS_CONFIG_DIGEST,
+    EGRESS_FILE_DIGESTS,
     EGRESS_NETWORK_REF,
     EGRESS_PROFILE_SET_DIGEST,
     ENFORCER_IMPLEMENTATION,
@@ -36,13 +44,374 @@ from moonmind.security.egress_conformance_evidence import (
     EgressEvidenceDigestError,
     parse_and_verify_conformance_evidence,
 )
-from moonmind.workflows.temporal.container_job_backend import (
-    DockerContainerJobBackend,
-)
+from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
 JOB_ID = "container-job:00112233445566778899aabbccddeeff"
+
+
+@pytest.fixture
+def deployment_policy(tmp_path, monkeypatch):
+    from moonmind.security import egress
+
+    root = tmp_path / "deployment"
+    source = root / "moonmind/security/egress.py"
+    source.parent.mkdir(parents=True)
+    shutil.copyfile(egress.__file__, source)
+    policy = root / "docker/sandbox-egress-proxy"
+    shutil.copytree(egress.EGRESS_POLICY_DIRECTORY, policy)
+    bundled = root / "docker/moonmind-egress"
+    shutil.copytree(egress.EGRESS_BUNDLED_POLICY_DIRECTORY, bundled)
+    (policy / "omnigent-provider-domains.txt").write_text(
+        "openrouter.ai\napi.future-provider.com\n"
+    )
+    spec = importlib.util.spec_from_file_location("deployment_egress", source)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    live = tmp_path / "loaded"
+    result = subprocess.run(
+        ["sh", str(bundled / "policy.sh"), "prepare", str(policy), str(live)],
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return module, policy, live, bundled
+
+
+def test_new_checkout_never_rewrites_the_live_v1_gateway_policy():
+    """A newer enforcer must not publish through the v1 gateway's mount.
+
+    A v1 gateway bind-mounts ``docker/sandbox-egress-proxy/squid.conf`` as its
+    entire configuration and pins the reviewed v1 digest in both its health
+    check and its attestation. Shipping a newer enforcer through that same file
+    leaves every running v1 gateway permanently unhealthy and blocks the very
+    release that would replace it, so the two policies keep separate paths.
+    """
+
+    from moonmind.security import egress
+
+    mounted = egress.EGRESS_POLICY_DIRECTORY / "squid.conf"
+    bundled = egress.EGRESS_BUNDLED_POLICY_DIRECTORY / "squid.conf"
+    assert mounted.resolve() != bundled.resolve()
+    assert "sha256:" + hashlib.sha256(mounted.read_bytes()).hexdigest() == (
+        egress._LEGACY_CONFIG_DIGEST
+    )
+    assert "sha256:" + hashlib.sha256(bundled.read_bytes()).hexdigest() == (
+        egress.EGRESS_MAIN_CONFIG_DIGEST
+    )
+    # The executable policy is image-owned too; only provider data is read from
+    # the deployment mount.
+    assert (egress.EGRESS_BUNDLED_POLICY_DIRECTORY / "policy.sh").exists()
+    assert not (egress.EGRESS_POLICY_DIRECTORY / "policy.sh").exists()
+
+
+@pytest.mark.parametrize(
+    "provider_data", [None, "", "openrouter.ai\napi.future-provider.com\n"]
+)
+def test_image_policy_survives_old_checkout_and_restart(
+    tmp_path, monkeypatch, provider_data
+):
+    from moonmind.security import egress
+
+    image = tmp_path / "image"
+    bundled = image / "opt/moonmind-egress"
+    shutil.copytree(egress.EGRESS_BUNDLED_POLICY_DIRECTORY, bundled)
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "squid.conf").write_text("old checkout config\n")
+    if provider_data is not None:
+        (checkout / "omnigent-provider-domains.txt").write_text(provider_data)
+    monkeypatch.setenv("MOONMIND_EGRESS_POLICY_DIRECTORY", str(checkout))
+    for attempt in range(2):
+        source = image / f"release-{attempt}/moonmind/security/egress.py"
+        source.parent.mkdir(parents=True)
+        shutil.copyfile(egress.__file__, source)
+        spec = importlib.util.spec_from_file_location(f"image_egress_{attempt}", source)
+        module = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, spec.name, module)
+        spec.loader.exec_module(module)
+        live = tmp_path / f"loaded-{attempt}"
+        result = subprocess.run(
+            ["sh", str(bundled / "policy.sh"), "prepare", str(checkout), str(live)],
+            capture_output=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert (live / "squid.conf").read_bytes() == (
+            bundled / "squid.conf"
+        ).read_bytes()
+        assert (live / "omnigent-provider-domains.txt").read_text() == (
+            provider_data or ""
+        )
+        expected = set((provider_data or "").splitlines())
+        assert {d.dns_name for d in module.OMNIGENT_EGRESS_PROFILE.destinations} - {
+            d.dns_name for d in module.DEFAULT_EGRESS_PROFILE.destinations
+        } == expected
+        assert module.EGRESS_FILE_DIGESTS["omnigent-provider-domains.txt"] == (
+            "sha256:" + hashlib.sha256((provider_data or "").encode()).hexdigest()
+        )
+    assert not (checkout / "policy.sh").exists()
+    assert (checkout / "squid.conf").read_text() == "old checkout config\n"
+
+
+@pytest.mark.parametrize(
+    "selection", ["omitted", "blank", "explicit-default", "custom"]
+)
+def test_compose_policy_selection_reaches_gateway_and_consumers(
+    tmp_path, monkeypatch, selection
+):
+    from moonmind.security import egress
+
+    root = Path(__file__).resolve().parents[3]
+    project = tmp_path / "project"
+    project.mkdir()
+    shutil.copyfile(root / "docker-compose.yaml", project / "docker-compose.yaml")
+    default_policy = project / "docker/sandbox-egress-proxy"
+    shutil.copytree(root / "docker/sandbox-egress-proxy", default_policy)
+    policy = default_policy
+    if selection == "custom":
+        policy = tmp_path / "custom policy"
+        policy.mkdir()
+        (policy / "omnigent-provider-domains.txt").write_text("openrouter.ai\n")
+    value = "" if selection == "blank" else str(policy)
+    (project / ".env").write_text(
+        "" if selection == "omitted" else f"MOONMIND_EGRESS_POLICY_DIRECTORY={value}\n"
+    )
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--project-name",
+            "moonmind-test-egress-policy",
+            "--project-directory",
+            str(project),
+            "--env-file",
+            str(project / ".env"),
+            "-f",
+            str(project / "docker-compose.yaml"),
+            "config",
+            "--format",
+            "json",
+        ],
+        env={key: os.environ[key] for key in ("PATH", "HOME") if key in os.environ},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    services = json.loads(result.stdout)["services"]
+    consumers = [
+        "api",
+        "omnigent-runtime-bootstrap",
+        "init-db",
+        "sandbox-egress-proxy",
+        "temporal-worker-workflow",
+        "temporal-worker-artifacts",
+        "temporal-worker-llm",
+        "temporal-worker-sandbox",
+        "temporal-worker-agent-runtime",
+        "temporal-worker-deployment-control",
+        "temporal-worker-integrations",
+    ]
+    target = (
+        "/app/docker/sandbox-egress-proxy"
+        if selection in ("omitted", "blank")
+        else str(policy)
+    )
+    for name in consumers:
+        service = services[name]
+        assert service.get("environment", {}).get(
+            "MOONMIND_EGRESS_POLICY_DIRECTORY"
+        ) == ("" if selection in ("omitted", "blank") else str(policy)), name
+        mount = next(item for item in service["volumes"] if item["target"] == target)
+        assert mount["type"] == "bind"
+        assert mount["source"] == str(policy)
+        assert mount["read_only"] is True
+
+    for _ in range(2):
+        inherited = services["temporal-worker-deployment-control"]["environment"]
+        rendered = subprocess.run(
+            result.args,
+            env={
+                **{
+                    key: os.environ[key]
+                    for key in ("PATH", "HOME")
+                    if key in os.environ
+                },
+                **{
+                    key: str(value)
+                    for key, value in inherited.items()
+                    if value is not None
+                },
+            },
+            capture_output=True,
+            text=True,
+        )
+        assert rendered.returncode == 0, rendered.stderr
+        services = json.loads(rendered.stdout)["services"]
+        for name in consumers:
+            mount = next(
+                item for item in services[name]["volumes"] if item["target"] == target
+            )
+            assert mount["source"] == str(policy), name
+            assert mount["read_only"] is True
+
+    monkeypatch.setenv("MOONMIND_EGRESS_POLICY_DIRECTORY", str(policy))
+    spec = importlib.util.spec_from_file_location(
+        "compose_policy_egress", egress.__file__
+    )
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    for attempt in range(2):
+        live = tmp_path / f"live-{attempt}"
+        prepared = subprocess.run(
+            [
+                "sh",
+                str(root / "docker/moonmind-egress/policy.sh"),
+                "prepare",
+                "",
+                str(live),
+            ],
+            capture_output=True,
+        )
+        assert prepared.returncode == 0, prepared.stderr
+        assert module.EGRESS_FILE_DIGESTS["omnigent-provider-domains.txt"] == (
+            "sha256:"
+            + hashlib.sha256(
+                (live / "omnigent-provider-domains.txt").read_bytes()
+            ).hexdigest()
+        )
+        extra = {d.dns_name for d in module.OMNIGENT_EGRESS_PROFILE.destinations} - {
+            d.dns_name for d in module.DEFAULT_EGRESS_PROFILE.destinations
+        }
+        assert extra == ({"openrouter.ai"} if selection == "custom" else set())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        None,
+        "mounted-main",
+        "mounted-extra",
+        "loaded-main",
+        "loaded-extra",
+        "missing-extra",
+    ],
+)
+async def test_deployment_data_drives_runtime_and_proxy_attestation(
+    deployment_policy, tamper
+):
+    module, policy, live, bundled = deployment_policy
+    destinations = module.OMNIGENT_EGRESS_PROFILE.destinations
+    assert {d.dns_name for d in destinations} - {
+        d.dns_name for d in module.DEFAULT_EGRESS_PROFILE.destinations
+    } == {"openrouter.ai", "api.future-provider.com"}
+    assert {d.dns_name for d in destinations} >= set(
+        (live / "omnigent-provider-domains.txt").read_text().splitlines()
+    )
+    assert all(d.ports == (443,) for d in destinations)
+    if tamper:
+        if tamper.endswith("main"):
+            # The main config is image-owned; only provider data is mounted.
+            target = (bundled if tamper.startswith("mounted") else live) / "squid.conf"
+        else:
+            target = (
+                policy if tamper.startswith("mounted") else live
+            ) / "omnigent-provider-domains.txt"
+        target.chmod(0o644)
+        if tamper == "missing-extra":
+            target.unlink()
+        else:
+            target.write_text(target.read_text() + "other-provider.com\n")
+
+    async def runner(args):
+        if args[0] == "network":
+            return 0, b'{"Internal":true,"EnableIPv6":false}', b""
+        if args[0] == "inspect":
+            return (
+                0,
+                json.dumps(
+                    {
+                        "labels": {
+                            "moonmind.egress.enforcer": module.ENFORCER_IMPLEMENTATION
+                        },
+                        "networks": dict.fromkeys(
+                            module._EXPECTED_GATEWAY_NETWORKS, {}
+                        ),
+                        "health": "healthy",
+                        "image": "sha256:gateway-image",
+                    }
+                ).encode(),
+                b"",
+            )
+        assert args[2] == "sha256sum"
+        rows = []
+        for name in args[3:]:
+            if not name.startswith("/etc/squid/"):
+                directory = live
+            elif name.endswith("squid.conf"):
+                directory = bundled
+            else:
+                directory = policy
+            path = directory / Path(name).name
+            if not path.exists():
+                return 1, b"", b"missing policy"
+            rows.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {name}\n")
+        return 0, "".join(rows).encode(), b""
+
+    if tamper:
+        with pytest.raises(RuntimeError, match="config"):
+            await module.attest_docker_egress(
+                runner=runner,
+                profile=module.OMNIGENT_EGRESS_PROFILE,
+                backend_ref="test",
+            )
+    else:
+        evidence = await module.attest_docker_egress(
+            runner=runner, profile=module.OMNIGENT_EGRESS_PROFILE, backend_ref="test"
+        )
+        assert evidence.profile_digest == module.OMNIGENT_EGRESS_PROFILE.digest
+        assert evidence.config_digest != EGRESS_CONFIG_DIGEST
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "api",
+        ".provider.com",
+        "*.provider.com",
+        "127.0.0.1",
+        "169.254.169.254",
+        "::1",
+        "provider.internal",
+        "provider.com:443",
+        "provider.com/",
+        "provider.com\nhttp_access allow all",
+        "provider.123",
+        "provider.com\tother.com",
+    ],
+)
+def test_proxy_startup_rejects_invalid_deployment_destinations(
+    deployment_policy, value
+):
+    module, policy, live, bundled = deployment_policy
+    (policy / "omnigent-provider-domains.txt").write_text(value + "\n")
+    with pytest.raises(ValueError):
+        module.load_omnigent_provider_destinations(
+            policy / "omnigent-provider-domains.txt"
+        )
+    result = subprocess.run(
+        [
+            "sh",
+            str(bundled / "policy.sh"),
+            "prepare",
+            str(policy),
+            str(live.parent / "invalid"),
+        ],
+        capture_output=True,
+    )
+    assert result.returncode != 0
 
 
 def _request(tmp_path, **spec_overrides) -> ContainerJobActivityRequest:
@@ -102,9 +471,7 @@ async def test_bridge_launch_is_gated_by_network_attestation(tmp_path) -> None:
             return 0, b'{"Internal":false,"EnableIPv6":false}', b""
         return 0, b"", b""
 
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=runner
-    )
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
     with pytest.raises(RuntimeError, match="not internal"):
         await backend.create_container(_request(tmp_path, networkMode="bridge"))
     assert not any(command[0] == "create" for command in commands)
@@ -124,17 +491,19 @@ async def test_attested_bridge_launch_uses_restricted_network_and_proxy(
         if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
             return 0, _healthy_gateway_inspect(), b""
         if args[:2] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref):
-            return 0, (
-                EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
-                + "  /etc/squid/squid.conf\n"
-            ).encode(), b""
+            return (
+                0,
+                "".join(
+                    f"{EGRESS_FILE_DIGESTS[path.rsplit('/', 1)[-1]].removeprefix('sha256:')}  {path}\n"
+                    for path in args[3:]
+                ).encode(),
+                b"",
+            )
         if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
             return 1, b"", b"no such container"
         return 0, b"", b""
 
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=runner
-    )
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
     await backend.create_container(_request(tmp_path, networkMode="bridge"))
 
     create = next(command for command in commands if command[0] == "create")
@@ -154,9 +523,7 @@ async def test_runtime_evidence_rejects_secondary_network(tmp_path) -> None:
             return 0, json.dumps(payload).encode(), b""
         raise AssertionError(args)
 
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=runner
-    )
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
     request = _request(tmp_path, networkMode="bridge")
     request.container_ref = "owned-workload"
     with pytest.raises(RuntimeError, match="sole approved network"):
@@ -182,16 +549,16 @@ async def test_runtime_evidence_scopes_denials_and_counts_full(tmp_path) -> None
 
     async def runner(args):
         if args[:3] == ("inspect", "--format", "{{json .NetworkSettings.Networks}}"):
-            return 0, json.dumps(
-                {EGRESS_NETWORK_REF: {"IPAddress": "172.31.0.9"}}
-            ).encode(), b""
+            return (
+                0,
+                json.dumps({EGRESS_NETWORK_REF: {"IPAddress": "172.31.0.9"}}).encode(),
+                b"",
+            )
         if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "cat"):
             return 0, access_log, b""
         raise AssertionError(args)
 
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=runner
-    )
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
     request = _request(tmp_path, networkMode="bridge")
     request.container_ref = "owned-workload"
     request.started_at = start
@@ -259,10 +626,14 @@ async def test_launch_and_lifecycle_evidence_is_digest_bound_and_resolvable(
             DEFAULT_EGRESS_PROFILE.gateway_ref,
             "sha256sum",
         ):
-            return 0, (
-                EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
-                + "  /etc/squid/squid.conf\n"
-            ).encode(), b""
+            return (
+                0,
+                "".join(
+                    f"{EGRESS_FILE_DIGESTS[path.rsplit('/', 1)[-1]].removeprefix('sha256:')}  {path}\n"
+                    for path in args[3:]
+                ).encode(),
+                b"",
+            )
         if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "cat"):
             return 0, b"", b""
         if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
@@ -342,8 +713,6 @@ async def test_launch_and_lifecycle_evidence_is_digest_bound_and_resolvable(
     assert lifecycle["launchAttestationRef"] == started.diagnostics_ref
 
     # Tampering with the resolved body after cleanup is detected by the digest.
-    tampered = json.dumps(
-        {**lifecycle, "cleanupResult": "failed"}
-    ).encode()
+    tampered = json.dumps({**lifecycle, "cleanupResult": "failed"}).encode()
     with pytest.raises(EgressEvidenceDigestError):
         parse_and_verify_conformance_evidence(tampered, location="egress-lifecycle")

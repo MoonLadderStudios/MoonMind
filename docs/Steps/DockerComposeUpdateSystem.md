@@ -453,10 +453,10 @@ requirements:
     - "docker_admin"
 policies:
   timeouts:
-    start_to_close_seconds: 900
-    schedule_to_close_seconds: 1800
+    start_to_close_seconds: 1200
+    schedule_to_close_seconds: 8400
   retries:
-    max_attempts: 1
+    max_attempts: 7
     non_retryable_error_codes:
       - "INVALID_INPUT"
       - "PERMISSION_DENIED"
@@ -558,6 +558,16 @@ The persisted desired state should record:
 The env file is the Compose-consumed desired state. A JSON sidecar stores the
 full audit payload, including fields that should not be projected into process
 environment variables.
+
+The same files carry the singular Omnigent release: digest-pinned server and
+host image refs as env entries (`OMNIGENT_IMAGE_REF`,
+`OMNIGENT_OPENCODE_HOST_IMAGE_REF`, `OMNIGENT_SHARED_HOST_IMAGE_REF`,
+`OMNIGENT_PI_HOST_IMAGE_REF`, `OMNIGENT_HOST_IMAGE_REF`) plus an
+`omnigentRelease` document in the JSON sidecar (revision, previous revision,
+refs, timestamp, author). The release controller is the single writer; Compose
+rendering, launch policy versions, schedule admissions, and dispatch all derive
+from this record instead of independently resolving mutable tags. Merges must
+preserve entries the writer did not author.
 
 ## 9.3 Mutable tag rule
 
@@ -675,11 +685,39 @@ The tool verifies:
 
 Verification output is written to an immutable artifact.
 
-## 10.8 Capture after state
+## 10.8 Migrate the singular Omnigent release
+
+After fleet verification and before the primary receipt, the controller
+advances the deployment-wide Omnigent release so one `update-moonmind.sh` run
+moves the server, the launch policy versions, and every recurring schedule to
+the same digests:
+
+1. Resolve the candidate server/host digests from the deployment tag inputs.
+2. Compare the candidates against the recorded release and the live deployment:
+   all three agree is a no-op; live disagreeing with the record converges to
+   the record without a new revision; upstream offering new digests cuts a new
+   revision with the previous revision retained for rollback.
+3. Persist the record (compare-and-set on the revision), recreate the omnigent
+   server container onto the recorded digests, and wait for readiness.
+4. Publish the new resolution, synchronize the harness catalog, cut one launch
+   policy version per bootstrap policy whose images moved (carrying the current
+   default document over verbatim except the two image refs), and re-admit all
+   recurring schedules so their Temporal actions embed the new plan authority.
+5. Verify the resolved refs, the running container digest, and the refreshed
+   schedules; record the receipt in the release outputs.
+
+Every step is convergent, so resuming an interrupted update completes pending
+work instead of duplicating it. A step failure blocks the primary receipt like
+a fleet verification failure: the retained fleet owns recovery. Deployments
+without a durable desired-state file skip this phase with an explicit receipt
+reason and keep the previous tag-driven behavior. The major.minor dispatch
+gate is unchanged and now only fires on genuine out-of-band drift.
+
+## 10.9 Capture after state
 
 The tool captures the same state collected before the update and stores it as an after-state artifact.
 
-## 10.9 Release lock and report result
+## 10.10 Release lock and report result
 
 The workflow releases the deployment lock and writes a structured result containing:
 
@@ -688,12 +726,13 @@ The workflow releases the deployment lock and writes a structured result contain
 - running services
 - requested image
 - resolved digest
+- omnigent release receipt (revision, refs, policies cut, schedules refreshed)
 - before artifact ref
 - after artifact ref
 - command log artifact ref
 - verification artifact ref
 
-## 10.10 Bind-mounted checkouts: a host `git pull` alone is not a deployment
+## 10.11 Bind-mounted checkouts: a host `git pull` alone is not a deployment
 
 The default production Compose deployment does not overlay application source.
 Its immutable image provides release identity. Source mounts are explicit
@@ -760,7 +799,13 @@ job. It is configured with:
 - `MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE` for the audit sidecar
 - `MOONMIND_DEPLOYMENT_LOCK_DIR` for durable per-stack lock files
 - `MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES` for explicit specialized maintenance;
-  a coherent release rejects exclusion of the deployment-control worker
+  a coherent release rejects exclusion of the deployment-control worker.
+  Release-owned substrate excluded from the main stage (for example the
+  docker transport proxy or stateful database services) is still reconciled
+  and verified in a staged pass after the main stack verifies: converged
+  substrate is left running, drifted substrate is pulled, recreated, and
+  re-verified, and substrate that does not converge fails the release
+  instead of reporting success on previous definitions.
 
 On Windows Docker Desktop, the Linux worker resolves Compose files through its
 local checkout mount and maps checkout bind sources into the daemon's
@@ -779,6 +824,21 @@ under the deployment-owned `release-jobs` directory. Kernel locks serialize
 stack changes and job ownership; PID age cannot transfer authority across
 container namespaces. The updater has a two-hour cumulative deadline and at
 most three attempts, preserved across restarts.
+
+Promotion recreates every worker fleet, including the one running the Activity
+that submitted the release, so the updater routinely outlives its own
+supervisor. The supervising Activity is therefore budgeted from the same
+two-hour deadline rather than from a single attempt: its schedule-to-close
+covers the whole job budget, and each start-to-close window only bounds how
+long a replaced supervisor goes unnoticed while still outlasting one runner
+command plus the pre-launch work around it, so a pull that uses its whole
+timeout is supervised rather than cancelled. That deadline is anchored to the
+instant the Activity was scheduled, so neither queue delay nor pre-launch work
+starts the budget late enough to outlive the supervisor. A supervision
+timeout re-attaches
+to the running job by its durable identity and never launches a second
+updater; the job's own deadline, never the supervisor's, decides when a
+release stops. Terminal release failures remain terminal and are not retried.
 
 Candidate workers first register all workflow and Activity queues. A stable,
 pinned canary verifies their image identity through each queue. The controller
@@ -800,6 +860,18 @@ the handoff. A live route is never displaced whatever image backs it, so
 deliberate moves of a serving route stay on the managed update path.
 
 Before promotion, the controller retains pollers from the exact previous image.
+Those pollers attest deployment-owned singleton infrastructure before they
+report ready, so the controller first repairs an unhealthy or absent
+restricted-egress gateway from the previous release's own definition; a
+gateway broken out of band must not make the deployment un-updatable. A
+recreate that does not take is retried within that repair window, each attempt
+keeping a cooldown to converge on its own, so a gateway needing more than one
+recreate is repaired inside the current release attempt instead of failing
+retention and waiting for the job to retry the whole update. When
+retention still does not converge, the recorded failure names the fleet, the
+observed gateway health and the retained container's redacted log tail, and
+the bound that keeps that record small preserves both ends of the diagnosis
+so the exception line naming the cause survives to every operator surface.
 Pinned work remains owned by that version after normal Compose services change.
 The existing maintenance schedule retires those temporary pollers only when
 Temporal reports the version drained. Inactive private candidates require a
@@ -948,8 +1020,10 @@ through the operator URL. The preflight never infers ingress authorization or
 prints rendered environment/inspect payloads, including OIDC credentials.
 
 The host scripts require Python 3.10+ and Docker Compose V2, validated before
-deployment changes. Fetching a branch selects its published source-SHA image
-without changing the checkout. Failed qualification preserves current routing
+deployment changes. Fetching a branch selects the newest published source-SHA
+image on that branch's first-parent history (up to 20 commits) without changing
+the checkout, so a just-fetched tip whose publish workflow has not finished yet
+falls back to its newest published ancestor with a recorded notice. Failed qualification preserves current routing
 and normal services. Explicit specialized maintenance skips the API check only
 when its dependency closure and orphan removal cannot affect the API.
 
@@ -973,10 +1047,20 @@ and verifies those same origins again before recording release success. The port
 updater accepts repeatable `--operator-url <existing-origin>` declarations, recorded
 as `deployment_operator_urls` in the immutable submission context. These supply
 verification targets without changing API authentication or published bindings.
-A configured `MOONMIND_PUBLIC_BASE_URL` remains a required target. Otherwise, fixed published
-API bindings supply the origins; omitted and explicitly empty public URL values
-use this same path when no operator origins were declared. Wildcard bindings require a declared operator origin because
-an unspecified address cannot identify the client's route. Missing targets or an
+A configured `MOONMIND_PUBLIC_BASE_URL` remains a required target. For
+`AUTH_PROVIDER=header`, verification must use the trusted ingress origin, supplied by
+that public URL or `--operator-url`. Published API bindings bypass the proxy, and the
+trusted-proxy peer allowlist does not identify its public scheme, host, and port. If
+neither origin is supplied, preflight stops with actionable ingress configuration
+guidance before recording a target or replacing the API; it never substitutes a
+direct API probe or a fabricated identity header.
+For other authentication modes, published API bindings supply the origins when no
+public URL or operator origins were declared; omitted and explicitly empty public URL
+values use the same path. A fixed binding supplies its own address. A wildcard binding
+(`MOONMIND_API_PUBLISH_HOST=0.0.0.0` or `::`) publishes on every host address, so its own
+loopback origin on the published port is the derived target without a declaration,
+`.env` edit, or authentication change. Declare the LAN or VPN address with
+`--operator-url` to verify that route instead. Missing targets or an
 unreachable route leave the existing release in place before replacement; a
 post-replacement failure retains the durable updater and recovery evidence.
 

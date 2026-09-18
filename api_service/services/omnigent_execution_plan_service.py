@@ -31,7 +31,10 @@ from moonmind.omnigent.harness_platform.catalog import (
     classify_harness_trust,
     create_catalog_snapshot,
 )
-from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
+from moonmind.omnigent.harness_platform.credential_bindings import (
+    create_binding_set,
+    derive_repository_slot_requirements,
+)
 from moonmind.omnigent.harness_platform.execution_plan import (
     AdmissionAuthority,
     OmnigentExecutionPlanEnvelope,
@@ -679,6 +682,16 @@ async def compile_and_persist_execution_plan(
     task_input_snapshot_digest: str,
     execution_plan_store: Any | None = None,
     db_session: Any | None = None,
+    trusted_repository_declarations: Mapping[str, Mapping[str, Any]] | None = None,
+    workspace_source_kind: str | None = None,
+    workspace_access_snapshot_ref: str | None = None,
+    worker_authority_kinds: tuple[str, ...] | list[str] | None = None,
+    # Repository bindings re-admitted for child work (attenuated grants
+    # composed by the fan-out caller from trusted snapshots). Each entry is
+    # a v2 ``repository_connection`` binding payload keyed by slot. They are
+    # admitted only through ``trusted_repository_declarations``; entries
+    # without a declaration are rejected by the planner.
+    repository_bindings: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
@@ -810,18 +823,6 @@ async def compile_and_persist_execution_plan(
         raise ValueError("launch policy execution profile conflicts with Agent Profile")
     if str(effective_launch.get("harness") or "") != harness_id:
         raise ValueError("launch policy harness conflicts with Agent Profile")
-    policy_artifact_ref, policy_artifact_digest = await persist_json_artifact(
-        artifact_service=artifact_service,
-        principal=principal,
-        artifact_class="omnigent.launch_policy_snapshot",
-        payload=policy_snapshot,
-    )
-    effective_launch_ref, effective_launch_digest = await persist_json_artifact(
-        artifact_service=artifact_service,
-        principal=principal,
-        artifact_class="omnigent.effective_launch_snapshot",
-        payload=effective_launch,
-    )
     if isinstance(exact_harness, HarnessRecord):
         harness_record = exact_harness
         implementation = harness_record.implementation
@@ -909,17 +910,61 @@ async def compile_and_persist_execution_plan(
             requested_host_mode=str(effective_launch.get("hostMode") or ""),
             requested_host_class_ref=config["hostClassRef"],
         )
-    if host_class.imageRef != str(effective_launch.get("hostImageRef") or ""):
-        raise ValueError(
-            "effective launch host image conflicts with the selected Host Class"
+    # Rebuilt host images change SHA/patch while keeping the same repository.
+    # The persisted policy snapshot may still pin the previous digest while
+    # Host Class selection reads current deployment evidence. Same-repository
+    # drift is reconciled to the selected Host Class image (launch-time
+    # attestation re-verifies major.minor); a foreign repository still fails
+    # closed instead of substituting another image family.
+    if harness_id != "codex-native" and host_class.imageRef != str(
+        effective_launch.get("hostImageRef") or ""
+    ):
+        from moonmind.omnigent.host_image_drift import (
+            reconcile_effective_launch_to_selected_host,
         )
+
+        reconciled = reconcile_effective_launch_to_selected_host(
+            effective_launch, host_class.imageRef
+        )
+        if reconciled is None:
+            planned_ref = str(effective_launch.get("hostImageRef") or "")
+            raise ValueError(
+                "effective launch host image conflicts with the selected Host Class "
+                f"(planned={planned_ref[:120]} selected={host_class.imageRef[:120]} "
+                f"hostClass={config['hostClassRef']}); refresh the bootstrap policy "
+                "default to the qualified image and retry"
+            )
+        import logging
+
+        logging.getLogger(__name__).info(
+            "planning host image drift: reconciling same-repo policy "
+            "image to selected Host Class (planned=%s selected=%s)",
+            str(effective_launch.get("hostImageRef") or "")[:80],
+            host_class.imageRef[:80],
+        )
+        effective_launch = reconciled
+    policy_artifact_ref, policy_artifact_digest = await persist_json_artifact(
+        artifact_service=artifact_service,
+        principal=principal,
+        artifact_class="omnigent.launch_policy_snapshot",
+        payload=policy_snapshot,
+    )
+    effective_launch_ref, effective_launch_digest = await persist_json_artifact(
+        artifact_service=artifact_service,
+        principal=principal,
+        artifact_class="omnigent.effective_launch_snapshot",
+        payload=effective_launch,
+    )
     raw_architectures = effective_launch.get("architectures") or []
     host_architecture = str(raw_architectures[0] if raw_architectures else "").strip()
     if host_architecture and "/" not in host_architecture:
         host_architecture = f"linux/{host_architecture}"
     if not host_architecture or host_architecture not in host_class.architectures:
         raise ValueError(
-            "launch policy architecture conflicts with the selected Host Class"
+            "launch policy architecture conflicts with the selected Host Class "
+            f"(launch={host_architecture or '<missing>'} "
+            f"hostClass={config['hostClassRef']} "
+            f"supported={','.join(host_class.architectures) or '<none>'})"
         )
     matching_entry = next(
         (
@@ -931,7 +976,12 @@ async def compile_and_persist_execution_plan(
         None,
     )
     if matching_entry is None:
-        raise ValueError("Host Class does not declare the selected exact harness")
+        raise ValueError(
+            "Host Class does not declare the selected exact harness "
+            f"(harness={harness_id} "
+            f"implementation={implementation.implementation_ref()} "
+            f"hostClass={config['hostClassRef']})"
+        )
     catalog = exact_catalog or create_catalog_snapshot(
         endpointRef=str(document.get("endpointRef") or "default"),
         omnigentVersion=host_class.omnigentVersion,
@@ -1015,16 +1065,43 @@ async def compile_and_persist_execution_plan(
         "session.start": True,
         **{tool_name: True for tool_name in mounted_skill_tools},
     }
-    binding_set = create_binding_set(
-        bindingSetId=f"{harness_id}.primary-model",
-        version=int(agent_profile_snapshot.get("version") or 1),
-        bindings={
-            "primary-model": {
-                "providerProfileRef": provider_profile_ref,
-                "materializerRef": config["materializerRef"],
-            }
-        },
-    )
+    binding_payloads: dict[str, dict[str, Any]] = {
+        "primary-model": {
+            "providerProfileRef": provider_profile_ref,
+            "materializerRef": config["materializerRef"],
+        }
+    }
+    if repository_bindings:
+        # A mixed model/repository plan uses the v2 envelope so repository
+        # authority carries its explicit kind, delivery contract, and role.
+        # Model entries without a discriminator upgrade to model authority
+        # inside the versioned constructor.
+        for slot, repo_binding in dict(repository_bindings).items():
+            slot_name = str(slot or "").strip()
+            if not slot_name:
+                raise ValueError("repository binding requires a slot name")
+            if slot_name in binding_payloads:
+                raise ValueError(
+                    f"repository binding slot {slot_name!r} conflicts with "
+                    "the model authority slot"
+                )
+            if not isinstance(repo_binding, Mapping):
+                raise ValueError(
+                    f"repository binding for slot {slot_name!r} must be a mapping"
+                )
+            binding_payloads[slot_name] = dict(repo_binding)
+        binding_set = create_binding_set(
+            bindingSetId=f"{harness_id}.primary-model",
+            version=int(agent_profile_snapshot.get("version") or 1),
+            bindings=binding_payloads,
+            schema_version="moonmind.omnigent-credential-bindings.v2",
+        )
+    else:
+        binding_set = create_binding_set(
+            bindingSetId=f"{harness_id}.primary-model",
+            version=int(agent_profile_snapshot.get("version") or 1),
+            bindings=binding_payloads,
+        )
     if real_config is not None:
         trust = real_config.get("_freshnessTrustRecord")
         if not isinstance(trust, HarnessTrustRecord):
@@ -1101,6 +1178,15 @@ async def compile_and_persist_execution_plan(
     }
     model = document.get("model")
     model_mapping = dict(model) if isinstance(model, Mapping) else {}
+    # MoonLadderStudios/MoonMind#4009: repository slot declarations derive
+    # from admitted profile authority plus trusted delivery / publication
+    # declarations when those owners supply them (#4011/#1090; issuance is
+    # #4007). Agent-supplied binding keys never create declarations.
+    # Fail-closed ({}) without trusted input.
+    repository_slot_requirements = derive_repository_slot_requirements(
+        profile_document=dict(document),
+        trusted_repository_declarations=trusted_repository_declarations,
+    )
     plan = compile_execution_plan(
         agent_profile=_build_v2_profile(
             snapshot=agent_profile_snapshot,
@@ -1115,6 +1201,10 @@ async def compile_and_persist_execution_plan(
         trust_record=trust,
         resolved_skills=resolved_skills,
         credential_binding_set=binding_set,
+        repository_slot_requirements=repository_slot_requirements,
+        workspace_source_kind=workspace_source_kind,
+        workspace_access_snapshot_ref=workspace_access_snapshot_ref,
+        worker_authority_kinds=worker_authority_kinds,
         host_class_ref=host_class.ref,
         host_class=host_class,
         launch_policy_ref=launch_policy_ref,

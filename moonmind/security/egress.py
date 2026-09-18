@@ -11,7 +11,9 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Awaitable, Callable, Literal, Sequence
 from urllib.parse import urlsplit
 
@@ -21,10 +23,33 @@ from moonmind.security.docker_networks import resolve_control_plane_network
 
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 
-ENFORCER_IMPLEMENTATION = "docker-internal-proxy/v1"
-# Digest of the reviewed, mounted Squid policy. Attestation compares this
-# deployment-owned value with both the container label and the live file.
-EGRESS_CONFIG_DIGEST = "sha256:f79931d832bcc9901928ce17931720b6a42fba7bb09b531c211bff9325b12dfa"
+ENFORCER_IMPLEMENTATION = "docker-internal-proxy/v2"
+_LEGACY_ENFORCER_IMPLEMENTATION = "docker-internal-proxy/v1"
+_LEGACY_CONFIG_DIGEST = (
+    "sha256:f79931d832bcc9901928ce17931720b6a42fba7bb09b531c211bff9325b12dfa"
+)
+_LEGACY_PROFILE_SET_DIGEST = (
+    "sha256:ce9e19f22079cd8dc4dd4d14f943b4055b5788bed49188b5c9085b5af82b7ebc"
+)
+EGRESS_MAIN_CONFIG_DIGEST = (
+    "sha256:305b6d6ebfb141f984aa4c51490d633f03ea3e82886232dc49a1af4efde71df2"
+)
+EGRESS_POLICY_DIRECTORY = Path(
+    os.environ.get("MOONMIND_EGRESS_POLICY_DIRECTORY")
+    or Path(__file__).resolve().parents[2] / "docker/sandbox-egress-proxy"
+)
+EGRESS_PROVIDER_POLICY_PATH = EGRESS_POLICY_DIRECTORY / "omnigent-provider-domains.txt"
+# The enforcer's own policy is image-owned (copied to /opt/moonmind-egress) and
+# keeps its own source directory. A live v1 gateway bind-mounts
+# ``docker/sandbox-egress-proxy/squid.conf`` as its whole configuration and
+# pins _LEGACY_CONFIG_DIGEST in both its health check and its attestation, so
+# that file stays frozen at the reviewed v1 bytes until the transition is
+# removed. Publishing a newer enforcer through it would leave every running v1
+# gateway permanently unhealthy, before any release could replace it.
+EGRESS_BUNDLED_POLICY_DIRECTORY = (
+    Path(__file__).resolve().parents[2] / "docker/moonmind-egress"
+)
+EGRESS_LIVE_DIRECTORY = "/run/moonmind-egress"
 # Deployment-owned network names. Compose resolves these same overrides when it
 # creates the networks (``restricted-egress-network`` /
 # ``sandbox-egress-network``), so an operator that sets the documented override
@@ -41,6 +66,9 @@ OMNIGENT_EGRESS_NETWORK_REF = os.environ.get(
 )
 CONTROL_PLANE_NETWORK_REF = resolve_control_plane_network()
 EGRESS_GATEWAY_REF = "moonmind-sandbox-egress-proxy"
+# Compose service that owns the gateway container above, so a release can
+# reconcile deployment-owned gateway state without re-deriving the name.
+EGRESS_GATEWAY_SERVICE = "sandbox-egress-proxy"
 PROXY_URL = "http://sandbox-egress-proxy:3128"
 OMNIGENT_PROXY_URL = "http://omnigent-egress-proxy:3129"
 _EXPECTED_GATEWAY_NETWORKS = frozenset(
@@ -221,7 +249,10 @@ def _iter_scoped_denials(
                 # A denial that cannot be placed in the container lifetime is not
                 # attributable to this launch; exclude it rather than overcount.
                 continue
-            if start_epoch is not None and entry_epoch < start_epoch - tolerance_seconds:
+            if (
+                start_epoch is not None
+                and entry_epoch < start_epoch - tolerance_seconds
+            ):
                 continue
             if (
                 finish_epoch is not None
@@ -310,6 +341,54 @@ def denied_connection_count(
     )
 
 
+def load_omnigent_provider_destinations(path: Path) -> tuple[EgressDestination, ...]:
+    return _load_provider_policy(path)[0]
+
+
+def _load_provider_policy(path: Path) -> tuple[tuple[EgressDestination, ...], str]:
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        raw = b""
+    destinations = []
+    for line in raw.decode("ascii").split("\n"):
+        name = line
+        if not name:
+            continue
+        labels = name.split(".")
+        if (
+            len(name) > 253
+            or len(labels) < 2
+            or not re.fullmatch(r"[a-z]{2,63}", labels[-1])
+            or labels[-1]
+            in {"local", "internal", "localhost", "test", "invalid", "onion", "arpa"}
+            or any(
+                not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                for label in labels
+            )
+        ):
+            raise ValueError(
+                "provider destination must be an exact lowercase public DNS name"
+            )
+        destinations.append(EgressDestination(dnsName=name, ports=(443,)))
+    return tuple(destinations), "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+_OMNIGENT_PROVIDER_DESTINATIONS, _PROVIDER_POLICY_DIGEST = _load_provider_policy(
+    EGRESS_PROVIDER_POLICY_PATH
+)
+EGRESS_FILE_DIGESTS = {
+    "squid.conf": EGRESS_MAIN_CONFIG_DIGEST,
+    "omnigent-provider-domains.txt": _PROVIDER_POLICY_DIGEST,
+}
+EGRESS_CONFIG_DIGEST = (
+    "sha256:"
+    + hashlib.sha256(
+        json.dumps(EGRESS_FILE_DIGESTS, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+)
+
+
 DEFAULT_EGRESS_PROFILE = EgressProfile.model_validate(
     {
         "profileId": "moonmind-provider-egress",
@@ -351,6 +430,10 @@ OMNIGENT_EGRESS_PROFILE = EgressProfile.model_validate(
     {
         **DEFAULT_EGRESS_PROFILE.model_dump(by_alias=True, mode="json"),
         "profileId": "moonmind-omnigent-egress",
+        "destinations": [
+            *DEFAULT_EGRESS_PROFILE.destinations,
+            *_OMNIGENT_PROVIDER_DESTINATIONS,
+        ],
         "dnsServers": ["127.0.0.11"],
         "permittedWorkloadClasses": [
             "omnigent_static",
@@ -376,16 +459,19 @@ def _gateway_policy_digest(profile: EgressProfile) -> str:
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
-EGRESS_PROFILE_SET_DIGEST = "sha256:" + hashlib.sha256(
-    json.dumps(
-        {
-            profile.ref: _gateway_policy_digest(profile)
-            for profile in (DEFAULT_EGRESS_PROFILE, OMNIGENT_EGRESS_PROFILE)
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-).hexdigest()
+EGRESS_PROFILE_SET_DIGEST = (
+    "sha256:"
+    + hashlib.sha256(
+        json.dumps(
+            {
+                profile.ref: _gateway_policy_digest(profile)
+                for profile in (DEFAULT_EGRESS_PROFILE, OMNIGENT_EGRESS_PROFILE)
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+)
 
 
 async def attest_docker_egress(
@@ -413,7 +499,9 @@ async def attest_docker_egress(
     try:
         network = json.loads(stdout)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise RuntimeError("restricted-egress network attestation is malformed") from exc
+        raise RuntimeError(
+            "restricted-egress network attestation is malformed"
+        ) from exc
     if network.get("Internal") is not True or network.get("EnableIPv6") is True:
         raise RuntimeError("restricted-egress network is not internal IPv4-only state")
 
@@ -430,15 +518,34 @@ async def attest_docker_egress(
     try:
         gateway = json.loads(stdout)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise RuntimeError("restricted-egress gateway attestation is malformed") from exc
+        raise RuntimeError(
+            "restricted-egress gateway attestation is malformed"
+        ) from exc
     labels = gateway.get("labels") or {}
     networks = gateway.get("networks") or {}
-    if labels.get("moonmind.egress.profile-set-digest") != EGRESS_PROFILE_SET_DIGEST:
-        raise RuntimeError("restricted-egress gateway profile set is stale")
-    if labels.get("moonmind.egress.enforcer") != ENFORCER_IMPLEMENTATION:
+    enforcer = labels.get("moonmind.egress.enforcer")
+    legacy = enforcer == _LEGACY_ENFORCER_IMPLEMENTATION
+    if legacy:
+        if (
+            labels.get("moonmind.egress.profile-set-digest")
+            != _LEGACY_PROFILE_SET_DIGEST
+            or labels.get("moonmind.egress.config-digest") != _LEGACY_CONFIG_DIGEST
+        ):
+            raise RuntimeError("restricted-egress gateway implementation is unattested")
+        if any(
+            not any(
+                destination.dns_name == allowed.dns_name
+                or destination.dns_name.endswith("." + allowed.dns_name)
+                for allowed in DEFAULT_EGRESS_PROFILE.destinations
+            )
+            for destination in _OMNIGENT_PROVIDER_DESTINATIONS
+        ):
+            raise RuntimeError(
+                "restricted-egress provider destinations require a compatible gateway; "
+                "upgrade the legacy gateway before adding destinations"
+            )
+    elif enforcer != ENFORCER_IMPLEMENTATION:
         raise RuntimeError("restricted-egress gateway implementation is unattested")
-    if labels.get("moonmind.egress.config-digest") != EGRESS_CONFIG_DIGEST:
-        raise RuntimeError("restricted-egress gateway config label is stale")
     if set(networks) != _EXPECTED_GATEWAY_NETWORKS:
         raise RuntimeError("restricted-egress gateway attachment is invalid")
     image_digest = str(gateway.get("image") or "")
@@ -448,19 +555,31 @@ async def attest_docker_egress(
     if health != "healthy":
         raise RuntimeError("restricted-egress gateway is not healthy")
 
+    if legacy:
+        expected = {
+            "/etc/squid/squid.conf": _LEGACY_CONFIG_DIGEST.removeprefix("sha256:")
+        }
+    else:
+        expected = {
+            f"{directory}/{name}": digest.removeprefix("sha256:")
+            for directory in ("/etc/squid", EGRESS_LIVE_DIRECTORY)
+            for name, digest in EGRESS_FILE_DIGESTS.items()
+        }
     code, stdout, _ = await runner(
-        (
-            "exec",
-            profile.gateway_ref,
-            "sha256sum",
-            "/etc/squid/squid.conf",
-        )
+        ("exec", profile.gateway_ref, "sha256sum", *expected)
     )
     if code:
         raise RuntimeError("restricted-egress live config cannot be observed")
-    observed_config_digest = "sha256:" + stdout.decode(errors="replace").split()[0]
-    if observed_config_digest != EGRESS_CONFIG_DIGEST:
+    try:
+        rows = [line.split() for line in stdout.decode("ascii").splitlines()]
+        observed = {path: digest for digest, path in rows}
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise RuntimeError(
+            "restricted-egress live config evidence is malformed"
+        ) from exc
+    if len(rows) != len(expected) or observed != expected:
         raise RuntimeError("restricted-egress live config is stale or mismatched")
+    observed_config_digest = _LEGACY_CONFIG_DIGEST if legacy else EGRESS_CONFIG_DIGEST
 
     applied = {
         "profileDigest": profile.digest,
@@ -470,15 +589,18 @@ async def attest_docker_egress(
         "ipv6": False,
         "idleSeconds": profile.idle_seconds,
         "gatewayNetworks": sorted(networks),
-        "enforcer": ENFORCER_IMPLEMENTATION,
+        "enforcer": enforcer,
     }
-    applied_digest = "sha256:" + hashlib.sha256(
-        json.dumps(applied, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    applied_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(applied, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
     return EgressAttestation(
         profileRef=profile.ref,
         profileDigest=profile.digest,
-        enforcerImplementation=ENFORCER_IMPLEMENTATION,
+        enforcerImplementation=enforcer,
         backendRef=backend_ref,
         networkRef=profile.network_ref,
         gatewayRef=profile.gateway_ref,

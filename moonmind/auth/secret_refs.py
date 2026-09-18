@@ -43,6 +43,8 @@ class ParsedSecretRef:
     backend: SecretBackend
     locator: str
     normalized_ref: str
+    expected_credential_revision: int | None = None
+    expected_policy_revision: int | None = None
 
 def parse_secret_ref(ref: str) -> ParsedSecretRef:
     """Parse and validate ``<backend>://<locator>`` reference values."""

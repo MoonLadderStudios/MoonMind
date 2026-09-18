@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -3957,7 +3958,7 @@ async def test_zen_api_key_setup_is_rejected_without_mutating_profile(
 
     assert response.status_code == 422
     assert raw_key not in response.text
-    assert "OpenCode Go profiles" in response.text
+    assert "does not accept API keys" in response.text
     async with db_base.async_session_maker() as session:
         persisted = await session.get(ManagedAgentProviderProfile, profile_id)
     assert persisted is not None
@@ -4162,24 +4163,170 @@ async def test_provider_api_key_setup_transient_validation_error_preserves_profi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_id",
+    ["openrouter", "future.v2_provider-1", "opencode-go", "openai", "anthropic"],
+)
+async def test_opencode_create_enroll_and_routing_data(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_id: str,
+) -> None:
+    from datetime import UTC, datetime
+
+    from moonmind.omnigent.harness_platform.materializers import (
+        materializer_ref_for_provider,
+    )
+    from moonmind.omnigent.opencode_runtime_validation import (
+        OpenCodeProviderRuntimeValidationService,
+    )
+
+    profile_id = f"generic-{provider_id}"
+    raw_key = "provider-specific-test-key"
+    image_ref = "registry.test/opencode@sha256:" + "a" * 64
+    evidence = {
+        "credentialGeneration": 1,
+        "imageRef": image_ref,
+        "validatedAt": datetime.now(UTC).isoformat(),
+        "runtimeVersions": {"opencode": "1.18.11"},
+        "models": [{"qualifiedId": f"{provider_id}/model"}],
+    }
+    runtime_calls: list[str] = []
+
+    async def _validate(self, **kwargs):
+        assert kwargs["profile"].provider_id == provider_id
+        assert kwargs["candidate_secret"] == raw_key
+        assert kwargs["candidate_generation"] == 1
+        assert kwargs["lease"].lease_id == "generic-enrollment"
+        runtime_calls.append(kwargs["profile"].profile_id)
+        return evidence
+
+    async def _maintenance_guard_override():
+        yield SimpleNamespace(lease=SimpleNamespace(lease_id="generic-enrollment"))
+
+    validated_providers: list[tuple[str, str]] = []
+
+    async def _forbidden_direct_validation(provider: str, key: str) -> None:
+        validated_providers.append((provider, key))
+
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.validate_provider_api_key",
+        _forbidden_direct_validation,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.sync_provider_profile_manager",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        OpenCodeProviderRuntimeValidationService, "validate", _validate
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.host_classes.get_opencode_host_image_ref",
+        lambda: image_ref,
+    )
+    app.dependency_overrides[
+        provider_profiles_router._credential_validation_guard
+    ] = _maintenance_guard_override
+
+    async with client_app as client:
+        preset_response = await client.get(
+            "/api/v1/provider-profiles/creation-preset",
+            params={
+                "runtime_id": "opencode",
+                "provider_id": provider_id,
+                "authentication_method": "api_key",
+            },
+        )
+        assert preset_response.status_code == 200
+        preset = preset_response.json()
+        assert preset["supported"] is True
+        created = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "opencode",
+                "provider_id": provider_id,
+                "authentication_method": "api_key",
+                "preset_version": preset["version"],
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["enabled"] is False
+        assert created.json()["launch_ready"] is False
+        assert created.json()["auth_state"] == "api_key_pending"
+        enrolled = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            json={"api_key": raw_key},
+        )
+        assert enrolled.status_code == 200, enrolled.text
+        saved = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert runtime_calls == [profile_id]
+    assert validated_providers == []
+    assert raw_key not in enrolled.text + saved.text
+    payload = saved.json()
+    assert payload["provider_id"] == provider_id
+    assert payload["runtime_id"] == "opencode"
+    assert payload["launch_ready"] is True
+    assert payload["model_catalog_evidence"] == evidence
+    assert payload["credential_generation"] == 1
+    assert payload["runtime_materialization_mode"] == "composite"
+    assert payload["env_template"] == {}
+    assert payload["file_templates"] == []
+    assert payload["clear_env_keys"] == preset["fields"]["clear_env_keys"]["value"]
+    assert payload["command_behavior"]["auth_strategy"] == "opencode_auth_json"
+    secret_ref = enrolled.json()["secret_ref"]
+    assert payload["secret_refs"] == {"opencode_api_key": secret_ref}
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentProviderProfile, profile_id)
+        statuses = await _managed_secret_statuses_for_profiles(
+            session=session, rows=[row]
+        )
+        routing = _manager_profile_payload(row, managed_secret_statuses=statuses)
+        secret = (
+            await session.execute(
+                select(ManagedSecret).where(
+                    ManagedSecret.slug == secret_ref.removeprefix("db://")
+                )
+            )
+        ).scalar_one()
+        assert secret.ciphertext == raw_key
+        assert secret.details["provider_id"] == provider_id
+    assert routing["launch_ready"] is True
+    assert routing["provider_id"] == provider_id
+    assert routing["default_model"] == f"{provider_id}/model"
+    assert routing["secret_refs"] == {"opencode_api_key": secret_ref}
+    assert (
+        materializer_ref_for_provider(routing["runtime_id"], routing["provider_id"])
+        == "opencode-auth-json@1"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_id", ["opencode-go", "openrouter", "future-provider"])
+@pytest.mark.parametrize("failure", ["runtime", "shape"])
 async def test_opencode_rotation_validation_failure_preserves_previous_authority(
     client_app: AsyncClient,
     _module_db,
     monkeypatch: pytest.MonkeyPatch,
+    provider_id: str,
+    failure: str,
 ) -> None:
     from moonmind.omnigent.opencode_runtime_validation import (
         OpenCodeProviderRuntimeValidationService,
     )
 
-    profile_id = "opencode-atomic-rotation"
+    profile_id = f"opencode-atomic-rotation-{provider_id}-{failure}"
     owner = _override_current_user()
-    previous_ref = "db://opencode-existing-secret"
+    previous_ref = f"db://{profile_id}-secret"
     previous_evidence = {
         "credentialGeneration": 4,
         "imageRef": "registry.test/opencode@sha256:" + "a" * 64,
-        "models": [{"qualifiedId": "opencode-go/model"}],
+        "models": [{"qualifiedId": f"{provider_id}/model"}],
     }
-    candidate_key = "candidate-opencode-key"
+    candidate_key = "candidate-opencode-key" if failure == "runtime" else "short"
 
     async def _failing_validation(self, **kwargs):
         assert kwargs["candidate_secret"] == candidate_key
@@ -4189,9 +4336,9 @@ async def test_opencode_rotation_validation_failure_preserves_previous_authority
     async def _maintenance_guard_override():
         yield SimpleNamespace(lease=SimpleNamespace(lease_id="maintenance-1"))
 
-    monkeypatch.setenv(
-        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
-        "registry.test/opencode@sha256:" + "a" * 64,
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.host_classes.get_opencode_host_image_ref",
+        lambda: previous_evidence["imageRef"],
     )
     monkeypatch.setattr(
         OpenCodeProviderRuntimeValidationService,
@@ -4207,8 +4354,8 @@ async def test_opencode_rotation_validation_failure_preserves_previous_authority
             ManagedAgentProviderProfile(
                 profile_id=profile_id,
                 runtime_id="opencode",
-                provider_id="opencode-go",
-                provider_label="OpenCode Go",
+                provider_id=provider_id,
+                provider_label=provider_id,
                 owner_user_id=owner.id,
                 credential_source=ProviderCredentialSource.SECRET_REF,
                 runtime_materialization_mode=RuntimeMaterializationMode.CONFIG_BUNDLE,
@@ -4227,7 +4374,7 @@ async def test_opencode_rotation_validation_failure_preserves_previous_authority
             json={"api_key": candidate_key},
         )
 
-    assert response.status_code == 502
+    assert response.status_code == (502 if failure == "runtime" else 422)
     assert candidate_key not in response.text
     async with db_base.async_session_maker() as session:
         persisted = await session.get(ManagedAgentProviderProfile, profile_id)

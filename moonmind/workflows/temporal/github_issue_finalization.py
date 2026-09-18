@@ -436,6 +436,7 @@ def choose_disposition(evidence: Mapping[str, Any] | None) -> dict[str, Any]:
 
     Precedence (first match wins):
     intentional cancellation/hold -> needs_attention (hold, never auto-rerun);
+    runtime unavailable -> available (a deployment fault is not the issue's);
     unsafe recovery / exhausted budget / unresolved decision -> needs_attention;
     verified objective satisfaction -> closed;
     fulfilled implementation awaiting normal review -> code_review;
@@ -450,6 +451,21 @@ def choose_disposition(evidence: Mapping[str, Any] | None) -> dict[str, Any]:
             "disposition": DISPOSITION_NEEDS_ATTENTION,
             "reasonCode": "cancellation_hold",
             "summary": "Intentional cancellation/hold: explicit hold with no automatic replacement work.",
+            "schedulesReplacement": False,
+        }
+    if _truthy(data.get("runtimeUnavailable", data.get("runtime_unavailable"))):
+        # The deployment could not start a runtime, so nothing was learned
+        # about this issue. Design section 2: ordinary worker disappearance is
+        # not routed to needs-attention. The issue is released with its history
+        # and its allowance intact; the attempt's cooldown bounds the retry.
+        return {
+            "disposition": DISPOSITION_AVAILABLE,
+            "reasonCode": "runtime_unavailable",
+            "summary": (
+                "The deployment could not start a runtime for this attempt; no "
+                "work was attempted on the issue. Released for a later attempt "
+                "with its history retained; repair the runtime launcher."
+            ),
             "schedulesReplacement": False,
         }
     if (

@@ -215,6 +215,28 @@ def test_opencode_host_class_accepts_credentialless_zen():
     )
 
 
+@pytest.mark.parametrize("provider", ["openrouter", "vendor.v2_test", "x"])
+def test_generic_opencode_materializer_mapping(provider):
+    assert materializer_ref_for_provider("opencode", provider) == "opencode-auth-json@1"
+    with pytest.raises(HarnessPlatformError):
+        materializer_ref_for_provider("codex_cli", provider)
+
+
+@pytest.mark.parametrize("provider", ["", "UPPER", "a/b", "a b", "-flag", "a\n"])
+def test_opencode_rejects_unsafe_provider_ids(provider):
+    with pytest.raises(HarnessPlatformError):
+        materializer_ref_for_provider("opencode", provider)
+    with pytest.raises(HarnessPlatformError):
+        build_opencode_auth_json_bytes(api_key="test-key", provider_key=provider)
+
+
+def test_opencode_free_route_rejects_key_materialization():
+    with pytest.raises(HarnessPlatformError):
+        build_opencode_auth_json_bytes(
+            api_key="test-key", provider_key=OPENCODE_BUILTIN_PROVIDER_KEY
+        )
+
+
 def test_production_registry_has_no_synthetic_host_classes():
     assert HOST_CLASSES == {}
     with pytest.raises(HarnessPlatformError):
@@ -321,7 +343,7 @@ def test_opencode_image_ref_fail_closed(monkeypatch):
 
 @pytest.mark.parametrize(
     "provider_key",
-    (OPENCODE_PROVIDER_KEY, OPENCODE_BUILTIN_PROVIDER_KEY),
+    (OPENCODE_PROVIDER_KEY, "openrouter", "vendor.v2_test", "x"),
 )
 def test_opencode_auth_json_bytes_structure(provider_key: str):
     key = "sk-opencode-abcdef1234567890"

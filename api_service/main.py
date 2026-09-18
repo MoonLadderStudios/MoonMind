@@ -104,6 +104,7 @@ from api_service.api.routers.system_operations import (
 )
 from api_service.api.routers.proxy import router as proxy_router
 from api_service.api.routers.auth_advanced_4124 import router as auth_advanced_4124_router
+from api_service.api.routers.accounts_4122 import router as accounts_4122_router
 from api_service.api.routers.issue_lifecycle import router as issue_lifecycle_router
 from api_service.api.websockets import router as websockets_router
 from api_service.api.schemas import UserProfileUpdate
@@ -225,6 +226,53 @@ async def _sync_env_managed_secrets() -> int:
         logger.warning(
             "Failed to sync managed secrets from environment during startup: %s",
             redacted_error,
+        )
+        return 0
+
+
+async def _sweep_secret_invalidation_outbox() -> int:
+    """Deliver leftover secret invalidation outbox rows (restart recovery).
+
+    Registers a process-level logging subscriber so the sweep can mark rows
+    delivered instead of leaving them permanently pending, then replays the
+    outbox through :meth:`SecretsService.sweep_invalidations`. Acquisition
+    always checks the authoritative revision, so this only repairs cache
+    freshness after restarts or delivery failures.
+    """
+    try:
+        from api_service.services.secrets import (
+            SecretsService,
+            subscribe_secret_invalidations,
+        )
+        from api_service.db.base import get_async_session_context
+
+        async def _log_invalidation(event: dict) -> None:
+            logger.info(
+                "secret_invalidation_replayed",
+                slug=event.get("slug"),
+                credential_revision=event.get("credential_revision"),
+                policy_revision=event.get("policy_revision"),
+                cause=event.get("cause"),
+            )
+
+        try:
+            subscribe_secret_invalidations(_log_invalidation)
+        except Exception:
+            # Startup replay is idempotent; a duplicate subscriber
+            # registration is safe to ignore and continue the sweep.
+            pass
+        async with get_async_session_context() as session:
+            swept = await SecretsService.sweep_invalidations(session)
+            if swept:
+                logger.info(
+                    "Replayed secret invalidation outbox on startup",
+                    swept=swept,
+                )
+            return swept
+    except Exception as exc:
+        logger.warning(
+            "Secret invalidation sweep deferred: %s",
+            type(exc).__name__,
         )
         return 0
 
@@ -1356,6 +1404,11 @@ app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
 # through the shared auth boundary. Endpoints fail closed when the classified
 # production mode does not select them.
 app.include_router(auth_advanced_4124_router)
+# Built-in accounts lifecycle (#4122): protected first-owner setup,
+# invitation-only enrollment, password recovery, and administrator member
+# management through the shared #4121 session authority. Endpoints fail
+# closed unless the classified production mode is `accounts`.
+app.include_router(accounts_4122_router)
 if _ENABLE_TEST_UI_ROUTE:
     app.include_router(test_ui_router)
 
@@ -3012,6 +3065,7 @@ async def startup_event():
     # external services or leases held by active workflows. None may hold the
     # HTTP listener closed; execution admission still requires their evidence.
     await _sync_env_managed_secrets()
+    await _sweep_secret_invalidation_outbox()
     # MoonLadderStudios/MoonMind#3955 retired the experimental embedded host
     # transport: startup no longer runs an embedded host-auth preflight or
     # gates on it. Proxy mode is the only supported transport; retained

@@ -261,7 +261,9 @@ Every run records the selected policy/profile refs and the effective launch snap
 
 Durable workflows identify workspaces with the canonical `WorkspaceLocator` discriminated union. Absolute worker or Docker-daemon paths are runtime resolutions, not durable authority.
 
-The owning worker resolves and validates the locator, performs root-containment checks, and then translates the approved path to a daemon-visible bind source. The host runtime must not derive authority from an arbitrary `session.workspace` value or legacy absolute path.
+The owning worker resolves and validates the locator, performs root-containment checks, and then translates the approved path into a mount authority the selected Docker daemon can resolve. The host runtime must not derive authority from an arbitrary `session.workspace` value or legacy absolute path.
+
+When the daemon shares the worker filesystem (`WORKFLOW_DOCKER_DAEMON_MODE=local`), the approved worker path is itself the bind source. When it does not (`remote`), the workspace and resolved-skill attachments name the deployment's agent-workspaces volume plus the subpath inside it (`type=volume,volume-subpath=…`), the same mount form the Container Jobs backend uses, and Docker resolves the volume's own storage. A bind source derived from the volume mountpoint the daemon *reports* is not usable: the reported mountpoint is not reachable as a host path on every supported daemon, and Docker creates a missing bind source as an empty directory rather than refusing it, so the host would silently receive an empty workspace and an empty Skill projection whose directory still satisfies a directory-level check.
 
 ### 8.2 Host filesystem classes
 

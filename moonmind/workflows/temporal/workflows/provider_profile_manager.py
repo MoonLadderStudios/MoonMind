@@ -123,6 +123,19 @@ LEASE_TRANSITION_CONTRACT_PATCH = (
     "provider-profile-manager-lease-transition-contract-v1"
 )
 
+# MoonLadderStudios/MoonMind#1089 (#4330): the redrive of outstanding cleanup
+# obligations and the automatic completion of direct cleanup obligations are
+# versioned independently of the transition contract. Pre-#4330 histories
+# recorded only request-cleanup + retry-unresolved per loop; post-#4330
+# histories add deliver-cleanup + complete-direct per loop. Without an
+# independent marker the two generations are indistinguishable and replay
+# wedges with Activity-vs-Timer nondeterminism, blocking the
+# credential-maintenance lease and thus deployment requalification
+# (no admissible execution evidence for opencode-go-default).
+LEASE_CLEANUP_REDRIVE_PATCH = (
+    "provider-profile-manager-lease-cleanup-redrive-v1"
+)
+
 # Deterministic sort sentinel for pending requests whose scheduled queue order
 # cannot be resolved (missing scheduled_for / created_at). ISO-8601 strings sort
 # lexically, so this value sorts after any real UTC timestamp.
@@ -1032,6 +1045,9 @@ class MoonMindProviderProfileManagerWorkflow:
         self._pending_grant_handoffs: set[str] = set()
         # MoonLadderStudios/MoonMind#3883 durable transition contract state.
         self._lease_transition_contract: bool = False
+        # MoonLadderStudios/MoonMind#1089 redrive state (#4330). False replays
+        # pre-#4330 histories with only request-cleanup + retry-unresolved.
+        self._lease_cleanup_redrive: bool = False
         # Releases whose durable outcome is still unresolved, keyed by lease
         # ID. Their capacity stays unavailable until the ledger answers, so a
         # logged warning can never announce reuse.
@@ -2648,6 +2664,9 @@ class MoonMindProviderProfileManagerWorkflow:
         self._lease_transition_contract = workflow.patched(
             LEASE_TRANSITION_CONTRACT_PATCH
         )
+        self._lease_cleanup_redrive = workflow.patched(
+            LEASE_CLEANUP_REDRIVE_PATCH
+        )
         self._restore_state(
             input_payload,
             repair_legacy_codex_oauth=repair_legacy_codex_oauth,
@@ -2733,14 +2752,17 @@ class MoonMindProviderProfileManagerWorkflow:
                 # stable claim so a lost request ack is recovered and the
                 # existing owner polling manager_state/DB keeps seeing one
                 # claim per owed slot. Escalation below remains the overdue
-                # path, not the only path.
-                await self._deliver_cleanup_requests()
-                # Direct in-workflow leases whose exact admitted run is
-                # terminal have a durable automatic owner: the manager
-                # itself completes them with exact-run teardown evidence.
-                # Host-attached and run-unknown obligations stay spent for
-                # their janitor, realizer, or operator.
-                await self._complete_direct_cleanup_obligations()
+                # path, not the only path. Versioned independently (#4330):
+                # pre-redrive histories stop here to preserve their recorded
+                # Activity-vs-Timer order.
+                if self._lease_cleanup_redrive:
+                    await self._deliver_cleanup_requests()
+                    # Direct in-workflow leases whose exact admitted run is
+                    # terminal have a durable automatic owner: the manager
+                    # itself completes them with exact-run teardown evidence.
+                    # Host-attached and run-unknown obligations stay spent for
+                    # their janitor, realizer, or operator.
+                    await self._complete_direct_cleanup_obligations()
             else:
                 # Evict leases that exceed the max duration (safety net for
                 # cancelled/terminated workflows that failed to release).
