@@ -24,7 +24,13 @@ RELEASE_JOB_BUDGET_SECONDS = 7200
 # replaced mid-release and ``execute_detached`` re-attaches on the next
 # attempt. The window therefore only bounds how long a replaced supervisor
 # goes unnoticed, which is why it is far shorter than the budget.
-RELEASE_SUPERVISION_WINDOW_SECONDS = 300
+#
+# It must still outlast one pre-launch compose command. The deployment runner
+# allows any single command - notably the updater pull - 900 seconds, and a
+# shorter window would cancel that pull mid-flight and start an overlapping
+# retry that never converges. A test pins this against the runner's own
+# command timeout so the two cannot drift apart.
+RELEASE_SUPERVISION_WINDOW_SECONDS = 900
 # Enough attempts to re-attach across the whole budget, so the job's own
 # deadline - never the attempt count - decides when a release stops.
 RELEASE_SUPERVISION_MAX_ATTEMPTS = (

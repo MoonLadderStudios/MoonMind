@@ -1031,3 +1031,85 @@ async def test_gateway_repair_is_retried_inside_one_release_attempt(
     # unhealthy gateway to a readiness loop that cannot succeed.
     assert observed == "healthy"
     assert recreates["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_durable_deadline_is_established_before_the_updater_pull(
+    tmp_path, monkeypatch
+):
+    """Pre-launch work consumes the budget instead of preceding it.
+
+    Regression (Codex P1 on #4422): the job deadline was computed only after
+    the updater image was pulled and inspected. The runner allows that pull
+    900 seconds, so a slow first pull shifted the detached deadline past the
+    supervising Activity's schedule-to-close, and a near-budget release could
+    still be running after its workflow had already timed out.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(tmp_path / "desired.json")
+    )
+    started = 1_000_000.0
+    now = {"value": started}
+    monkeypatch.setattr(release.time, "time", lambda: now["value"])
+    owner = "workflow:deployment:step:1"
+    digest = "sha256:" + "a" * 64
+    inputs = {
+        "stack": "moonmind",
+        "image": {"repository": "example/moonmind", "reference": "candidate"},
+    }
+    container = None
+
+    class Runner:
+        async def pull(self, **kwargs):
+            # The observed failure mode: a cold pull that burns the runner's
+            # whole command budget before the deadline would have existed.
+            now["value"] += 900
+            return {"exitCode": 0}
+
+        async def inspect_image(self, requested):
+            return {"Id": "image-id", "RepoDigests": [f"example/moonmind@{digest}"]}
+
+        async def _run_compose_command(self, command, **kwargs):
+            nonlocal container
+            request = release.Path(command[-1])
+            release.write_record(
+                request.parent / "result.json",
+                {
+                    "owner": owner,
+                    "result": {
+                        "status": "COMPLETED",
+                        "outputs": {"verified": True},
+                        "progress": {},
+                    },
+                },
+            )
+            container = {"Image": "image-id", "State": {"Running": False}}
+            return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    async def inspect(*args):
+        return container
+
+    async def docker(*args):
+        nonlocal container
+        if args[0] == "rm":
+            container = None
+        return ""
+
+    async def coherent(*args):
+        return {}
+
+    monkeypatch.setattr(release, "inspect_owned", inspect)
+    monkeypatch.setattr(release, "docker", docker)
+    monkeypatch.setattr(release, "require_coherent_images", coherent)
+
+    await release.execute_detached(
+        SimpleNamespace(runner=Runner()),
+        inputs,
+        {"idempotency_key": owner, "principal": "system:deployment"},
+    )
+
+    key = hashlib.sha256(owner.encode()).hexdigest()[:32]
+    record = json.loads((release.state_root() / key / "request.json").read_text())
+    # The deadline is anchored where the Activity began, not after the pull,
+    # so the supervisor's schedule still covers the job's own deadline.
+    assert record["deadline"] == started + release.RELEASE_JOB_BUDGET_SECONDS
