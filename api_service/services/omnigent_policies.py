@@ -1261,6 +1261,32 @@ async def _reconcile_bootstrap_authority(
             )
 
         candidate_ref = f"{policy_id}@{candidate.version}"
+        # Advance active Agent Profiles across this same-policy cutover so
+        # long-lived schedules can refresh without manual profile edits
+        # (#4379 R3). Best effort: profile advancement never blocks the
+        # policy reconcile itself. In-flight runs keep recorded authority
+        # because usages are never rewritten here.
+        advanced_profiles: list[dict] = []
+        try:
+            from api_service.services.omnigent_agent_profile_selection import (
+                advance_agent_profiles_for_policy_cutover,
+            )
+
+            advanced_profiles = (
+                await advance_agent_profiles_for_policy_cutover(
+                    session,
+                    cutovers={current_ref: candidate_ref},
+                    actor="bootstrap",
+                )
+            )
+        except Exception:
+            logger.warning(
+                "Omnigent bootstrap profile cutover for %s to %s failed; "
+                "schedules keep their pinned profile version",
+                policy_id,
+                candidate_ref,
+                exc_info=True,
+            )
         candidate_versions = await service.versions(policy_id)
         predecessor_refs = tuple(
             f"{policy_id}@{version.version}"
@@ -1289,6 +1315,7 @@ async def _reconcile_bootstrap_authority(
                 "resources": desired_resources,
                 "updatedBindingCount": updated_binding_count,
                 "deferredBindingCount": deferred_binding_count,
+                "advancedProfileCount": len(advanced_profiles),
             },
         )
         await session.commit()

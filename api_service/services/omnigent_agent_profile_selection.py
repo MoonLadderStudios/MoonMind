@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import json
 import logging
 import re
 from typing import Any, Mapping
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
     ManagedAgentProviderProfile,
     OmnigentAgentProfile,
+    OmnigentAgentProfileAuditEvent,
     OmnigentAgentProfileUsage,
     OmnigentAgentProfileVersion,
     OmnigentUpstreamAgentProjection,
@@ -854,6 +857,174 @@ async def resolve_default_agent_profile_snapshot(
     )
 
 
+def _profile_document_digest(document: Mapping[str, Any]) -> str:
+    """Return the canonical digest for a profile document.
+
+    Mirrors the profile API's immutable version identity so cutover versions
+    deduplicate against manually authored equivalents instead of forking.
+    """
+    encoded = json.dumps(
+        document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _allowed_policy_refs(document: Mapping[str, Any]) -> list[str]:
+    """Return the launch policy refs a profile document admits."""
+    if document.get("schemaVersion") == "moonmind.omnigent-agent-profile.v2":
+        refs = document.get("allowedLaunchPolicyRefs")
+    else:
+        execution = document.get("execution")
+        refs = execution.get("allowedLaunchPolicyRefs") if isinstance(execution, Mapping) else None
+    return [str(ref) for ref in refs or () if str(ref or "").strip()]
+
+
+async def advance_agent_profiles_for_policy_cutover(
+    session: AsyncSession,
+    *,
+    cutovers: Mapping[str, str],
+    actor: str = "bootstrap",
+) -> list[dict[str, Any]]:
+    """Advance active profiles across a same-policy cutover without manual edits.
+
+    When bootstrap reconcile (or the release migration) moves a policy default
+    from ``policy@14`` to ``policy@16`` for a compatible rebuild, long-lived
+    schedules still pin ``@14`` and the Agent Profile still allows only
+    ``@14``. ``refresh_schedule_deployment_snapshot`` then keeps requiring an
+    explicit revision. This advances every active profile whose active version
+    admits the predecessor ref to an equivalent version admitting the
+    successor ref, preserving all other semantics.
+
+    Only same-policy cutovers advance automatically (``policy@old`` to
+    ``policy@new`` with equal policy ids); a different policy identity still
+    requires an explicit schedule revision. Existing usages and in-flight runs
+    keep their recorded version authority; only the active pointer moves, so
+    the next schedule refresh can cut over while running executions stay on
+    their recorded-host plans. Re-running with the same cutover reuses the
+    existing version instead of forking.
+    """
+    pairs: list[tuple[str, str, str]] = []
+    for old_ref, new_ref in dict(cutovers).items():
+        old_id, separator, _old_version = str(old_ref).rpartition("@")
+        new_id, new_separator, _new_version = str(new_ref).rpartition("@")
+        if not separator or not new_separator or old_id != new_id:
+            continue
+        if str(old_ref) == str(new_ref):
+            continue
+        pairs.append((old_id, str(old_ref), str(new_ref)))
+    if not pairs:
+        return []
+    profiles = list(
+        (
+            await session.execute(
+                select(OmnigentAgentProfile).where(
+                    OmnigentAgentProfile.state == "active",
+                    OmnigentAgentProfile.active_version.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    advanced: list[dict[str, Any]] = []
+    for profile in profiles:
+        active = await session.scalar(
+            select(OmnigentAgentProfileVersion).where(
+                OmnigentAgentProfileVersion.profile_id == profile.profile_id,
+                OmnigentAgentProfileVersion.version == profile.active_version,
+            )
+        )
+        if active is None or not isinstance(active.document, Mapping):
+            continue
+        document = copy.deepcopy(dict(active.document))
+        is_v2 = document.get("schemaVersion") == "moonmind.omnigent-agent-profile.v2"
+        changed = False
+        applied: list[dict[str, str]] = []
+        for policy_id, old_ref, new_ref in pairs:
+            refs = _allowed_policy_refs(document)
+            if old_ref not in refs:
+                continue
+            if is_v2:
+                document["allowedLaunchPolicyRefs"] = [
+                    new_ref if ref == old_ref else ref
+                    for ref in document.get("allowedLaunchPolicyRefs") or ()
+                ]
+            else:
+                execution = copy.deepcopy(dict(document.get("execution") or {}))
+                execution["allowedLaunchPolicyRefs"] = [
+                    new_ref if ref == old_ref else ref
+                    for ref in execution.get("allowedLaunchPolicyRefs") or ()
+                ]
+                document["execution"] = execution
+                if document.get("policyRef") == old_ref:
+                    document["policyRef"] = new_ref
+            changed = True
+            applied.append({"previousRef": old_ref, "policyRef": new_ref})
+        if not changed:
+            continue
+        digest = _profile_document_digest(document)
+        candidate = await session.scalar(
+            select(OmnigentAgentProfileVersion).where(
+                OmnigentAgentProfileVersion.profile_id == profile.profile_id,
+                OmnigentAgentProfileVersion.digest == digest,
+            )
+        )
+        if candidate is None:
+            latest = int(
+                await session.scalar(
+                    select(func.max(OmnigentAgentProfileVersion.version)).where(
+                        OmnigentAgentProfileVersion.profile_id == profile.profile_id
+                    )
+                )
+                or 0
+            )
+            candidate = OmnigentAgentProfileVersion(
+                profile_id=profile.profile_id,
+                version=latest + 1,
+                digest=digest,
+                document=document,
+                parent_version=active.version,
+                upstream_snapshot=copy.deepcopy(active.upstream_snapshot),
+                validation_result=copy.deepcopy(active.validation_result),
+                rollout_metadata={
+                    **(copy.deepcopy(active.rollout_metadata) or {}),
+                    "origin": "bootstrap_policy_cutover",
+                    "previousVersion": active.version,
+                    "policyCutovers": applied,
+                    "materializedBy": actor,
+                },
+                created_by=None,
+            )
+            session.add(candidate)
+            await session.flush()
+        if profile.active_version != candidate.version:
+            previous_version = profile.active_version
+            profile.active_version = candidate.version
+            session.add(
+                OmnigentAgentProfileAuditEvent(
+                    profile_id=profile.profile_id,
+                    action="bootstrap_launch_policy_cutover",
+                    version=candidate.version,
+                    actor_id=None,
+                    metadata_json={
+                        "previousVersion": previous_version,
+                        "policyCutovers": applied,
+                        "state": "active",
+                    },
+                )
+            )
+            await session.flush()
+        advanced.append(
+            {
+                "profileId": profile.profile_id,
+                "version": candidate.version,
+                "digest": candidate.digest,
+                "policyCutovers": applied,
+            }
+        )
+    return advanced
+
+
 async def refresh_schedule_deployment_snapshot(
     session: AsyncSession,
     *,
@@ -1126,6 +1297,7 @@ async def refresh_managed_bootstrap_snapshot(
 
 
 __all__ = [
+    "advance_agent_profiles_for_policy_cutover",
     "compile_agent_profile_snapshot_parameters",
     "default_launch_policy_ref",
     "refresh_managed_bootstrap_snapshot",
