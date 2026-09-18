@@ -644,6 +644,80 @@ def test_release_drift_absent_when_aligned():
     assert raise_for_release_policy_drift([]) is None
 
 
+def test_release_drift_missing_selected_fences():
+    """P1: a policy pin with no recorded host target must fence promotion."""
+    from moonmind.workflows.skills.omnigent_release import (
+        raise_for_release_policy_drift,
+        release_policy_drift_dispositions,
+    )
+
+    old = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "d" * 64
+    dispositions = release_policy_drift_dispositions(
+        {"omnigent-on-demand": old},
+        {"server": NEW_SERVER, "opencode": ""},
+    )
+    assert len(dispositions) == 1
+    assert dispositions[0]["fencePromotion"] is True
+    with pytest.raises(OmnigentReleaseError, match="drift-fence"):
+        raise_for_release_policy_drift(dispositions)
+
+
+def test_decide_advance_preserves_recorded_host_on_transient_empty():
+    """P1: a transiently empty candidate must not clear recorded authority."""
+    release = _release()
+    candidate_missing_codex = dict(_refs(server=NEW_SERVER, host=NEW_HOST))
+    candidate_missing_codex["codex"] = ""
+    action, target = decide_release_transition(
+        _refs(), release, candidate_missing_codex
+    )
+    assert action == "advance"
+    assert target["server"] == NEW_SERVER
+    assert target["codex"] == OLD_HOST
+
+
+@pytest.mark.asyncio
+async def test_qualify_host_drift_fails_when_policy_load_fails(monkeypatch):
+    """P1: unavailable qualification must fence instead of silently passing."""
+    from moonmind.workflows.skills import omnigent_release as release_module
+
+    class _Policy:
+        default_version = 14
+
+    async def _get_policy(_self, _policy_id):
+        return _Policy()
+
+    async def _get_version(_self, _policy_id, _version):
+        raise RuntimeError("transient db error")
+
+    captured: dict[str, object] = {}
+
+    class _Service:
+        def __init__(self, _session):
+            pass
+
+        get_version = _get_version
+
+    @__import__("contextlib").asynccontextmanager
+    async def _session_ctx():
+        class _Session:
+            async def get(self, _model, _policy_id):
+                return _Policy()
+
+        yield _Session()
+
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies.OmnigentPolicyService", _Service
+    )
+    monkeypatch.setattr(
+        release_module, "OMNIGENT_RELEASE_POLICIES", (("omnigent-on-demand", "opencode"),)
+    )
+    import api_service.db.base as db_base
+
+    monkeypatch.setattr(db_base, "get_async_session_context", _session_ctx)
+    with pytest.raises(OmnigentReleaseError, match="qualify-host-drift"):
+        await release_module._default_qualify_host_drift({"opencode": NEW_HOST})
+
+
 @pytest.mark.asyncio
 async def test_migrate_fences_promotion_while_drift_remains(tmp_path, monkeypatch):
     """#4379 R7: drift after cut/refresh blocks the release receipt."""

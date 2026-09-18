@@ -11,7 +11,8 @@ import re
 from typing import Any, Mapping
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
@@ -879,6 +880,26 @@ def _allowed_policy_refs(document: Mapping[str, Any]) -> list[str]:
     return [str(ref) for ref in refs or () if str(ref or "").strip()]
 
 
+def _replace_policy_ref_deduped(
+    refs: Any, *, old_ref: str, new_ref: str
+) -> list[str]:
+    """Replace ``old_ref`` with ``new_ref`` while deduplicating the result.
+
+    When an active profile already admits both the predecessor and the
+    successor, a plain in-place replacement produces duplicate successor refs
+    such as ``["p@3", "p@3"]``. ``refresh_schedule_deployment_snapshot`` then
+    finds two same-identity candidates and rejects the schedule, so the
+    automatic cutover recreates the wedge it is meant to remove. Deduplicate
+    while preserving order so the cutover admits the successor exactly once.
+    """
+    replaced = [new_ref if str(ref) == old_ref else str(ref) for ref in refs or ()]
+    deduped: list[str] = []
+    for ref in replaced:
+        if ref not in deduped:
+            deduped.append(ref)
+    return deduped
+
+
 async def advance_agent_profiles_for_policy_cutover(
     session: AsyncSession,
     *,
@@ -928,10 +949,11 @@ async def advance_agent_profiles_for_policy_cutover(
     )
     advanced: list[dict[str, Any]] = []
     for profile in profiles:
+        observed_version = profile.active_version
         active = await session.scalar(
             select(OmnigentAgentProfileVersion).where(
                 OmnigentAgentProfileVersion.profile_id == profile.profile_id,
-                OmnigentAgentProfileVersion.version == profile.active_version,
+                OmnigentAgentProfileVersion.version == observed_version,
             )
         )
         if active is None or not isinstance(active.document, Mapping):
@@ -945,16 +967,18 @@ async def advance_agent_profiles_for_policy_cutover(
             if old_ref not in refs:
                 continue
             if is_v2:
-                document["allowedLaunchPolicyRefs"] = [
-                    new_ref if ref == old_ref else ref
-                    for ref in document.get("allowedLaunchPolicyRefs") or ()
-                ]
+                document["allowedLaunchPolicyRefs"] = _replace_policy_ref_deduped(
+                    document.get("allowedLaunchPolicyRefs"),
+                    old_ref=old_ref,
+                    new_ref=new_ref,
+                )
             else:
                 execution = copy.deepcopy(dict(document.get("execution") or {}))
-                execution["allowedLaunchPolicyRefs"] = [
-                    new_ref if ref == old_ref else ref
-                    for ref in execution.get("allowedLaunchPolicyRefs") or ()
-                ]
+                execution["allowedLaunchPolicyRefs"] = _replace_policy_ref_deduped(
+                    execution.get("allowedLaunchPolicyRefs"),
+                    old_ref=old_ref,
+                    new_ref=new_ref,
+                )
                 document["execution"] = execution
                 if document.get("policyRef") == old_ref:
                     document["policyRef"] = new_ref
@@ -970,35 +994,69 @@ async def advance_agent_profiles_for_policy_cutover(
             )
         )
         if candidate is None:
-            latest = int(
-                await session.scalar(
-                    select(func.max(OmnigentAgentProfileVersion.version)).where(
-                        OmnigentAgentProfileVersion.profile_id == profile.profile_id
+            for _attempt in range(3):
+                latest = int(
+                    await session.scalar(
+                        select(func.max(OmnigentAgentProfileVersion.version)).where(
+                            OmnigentAgentProfileVersion.profile_id == profile.profile_id
+                        )
                     )
+                    or 0
                 )
-                or 0
+                pending = OmnigentAgentProfileVersion(
+                    profile_id=profile.profile_id,
+                    version=latest + 1,
+                    digest=digest,
+                    document=document,
+                    parent_version=active.version,
+                    upstream_snapshot=copy.deepcopy(active.upstream_snapshot),
+                    validation_result=copy.deepcopy(active.validation_result),
+                    rollout_metadata={
+                        **(copy.deepcopy(active.rollout_metadata) or {}),
+                        "origin": "bootstrap_policy_cutover",
+                        "previousVersion": active.version,
+                        "policyCutovers": applied,
+                        "materializedBy": actor,
+                    },
+                    created_by=None,
+                )
+                try:
+                    async with session.begin_nested():
+                        session.add(pending)
+                        await session.flush()
+                except IntegrityError:
+                    # Concurrent cutover or activation allocated the same
+                    # version number or the same digest first. Reuse whatever
+                    # won instead of forking a duplicate.
+                    candidate = await session.scalar(
+                        select(OmnigentAgentProfileVersion).where(
+                            OmnigentAgentProfileVersion.profile_id
+                            == profile.profile_id,
+                            OmnigentAgentProfileVersion.digest == digest,
+                        )
+                    )
+                    if candidate is not None:
+                        break
+                    continue
+                candidate = pending
+                break
+            if candidate is None:
+                continue
+        if observed_version != candidate.version:
+            # Condition the pointer move on the previously observed active
+            # version so an automatic cutover cannot silently undo an explicit
+            # concurrent profile activation. A rowcount of zero means the
+            # operator moved the pointer after our read; keep their choice.
+            moved = await session.execute(
+                update(OmnigentAgentProfile)
+                .where(
+                    OmnigentAgentProfile.profile_id == profile.profile_id,
+                    OmnigentAgentProfile.active_version == observed_version,
+                )
+                .values(active_version=candidate.version)
             )
-            candidate = OmnigentAgentProfileVersion(
-                profile_id=profile.profile_id,
-                version=latest + 1,
-                digest=digest,
-                document=document,
-                parent_version=active.version,
-                upstream_snapshot=copy.deepcopy(active.upstream_snapshot),
-                validation_result=copy.deepcopy(active.validation_result),
-                rollout_metadata={
-                    **(copy.deepcopy(active.rollout_metadata) or {}),
-                    "origin": "bootstrap_policy_cutover",
-                    "previousVersion": active.version,
-                    "policyCutovers": applied,
-                    "materializedBy": actor,
-                },
-                created_by=None,
-            )
-            session.add(candidate)
-            await session.flush()
-        if profile.active_version != candidate.version:
-            previous_version = profile.active_version
+            if (moved.rowcount or 0) == 0:
+                continue
             profile.active_version = candidate.version
             session.add(
                 OmnigentAgentProfileAuditEvent(
@@ -1007,7 +1065,7 @@ async def advance_agent_profiles_for_policy_cutover(
                     version=candidate.version,
                     actor_id=None,
                     metadata_json={
-                        "previousVersion": previous_version,
+                        "previousVersion": observed_version,
                         "policyCutovers": applied,
                         "state": "active",
                     },

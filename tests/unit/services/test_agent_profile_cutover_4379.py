@@ -197,3 +197,85 @@ async def test_profile_cutover_preserves_in_flight_usage(tmp_path):
         )
         assert usage.version == 1
         assert usage.effective_snapshot == {"version": 1}
+
+
+@pytest.mark.asyncio
+async def test_profile_cutover_deduplicates_successor_refs(tmp_path):
+    """P1: a profile admitting both predecessor and successor keeps one ref."""
+    from api_service.services.omnigent_agent_profile_selection import (
+        _profile_document_digest,
+    )
+
+    async with profile_db(tmp_path) as sessions, sessions() as session:
+        document = _v1_document("p@1")
+        document["execution"]["allowedLaunchPolicyRefs"] = ["p@1", "p@3"]
+        document["policyRef"] = "p@1"
+        session.add(
+            OmnigentAgentProfile(
+                profile_id="profile-1",
+                display_name="Test",
+                state="active",
+                active_version=1,
+            )
+        )
+        session.add(
+            OmnigentAgentProfileVersion(
+                profile_id="profile-1",
+                version=1,
+                digest=_profile_document_digest(document),
+                document=document,
+                parent_version=None,
+                upstream_snapshot={},
+                validation_result={"ready": True},
+                rollout_metadata={"origin": "test"},
+            )
+        )
+        await session.commit()
+        advanced = await advance_agent_profiles_for_policy_cutover(
+            session, cutovers={"p@1": "p@3"}
+        )
+        await session.commit()
+        assert len(advanced) == 1
+        from sqlalchemy import select
+
+        current = await session.scalar(
+            select(OmnigentAgentProfileVersion).where(
+                OmnigentAgentProfileVersion.profile_id == "profile-1",
+                OmnigentAgentProfileVersion.version == advanced[0]["version"],
+            )
+        )
+        assert current.document["execution"]["allowedLaunchPolicyRefs"] == ["p@3"]
+
+
+@pytest.mark.asyncio
+async def test_profile_cutover_keeps_concurrent_activation(tmp_path):
+    """P1: an explicit concurrent activation must not be overwritten."""
+    from api_service.services.omnigent_agent_profile_selection import (
+        _profile_document_digest,
+    )
+
+    async with profile_db(tmp_path) as sessions, sessions() as session:
+        await _seed_profile(session)
+        operator_document = _v1_document("q@9")
+        session.add(
+            OmnigentAgentProfileVersion(
+                profile_id="profile-1",
+                version=2,
+                digest=_profile_document_digest(operator_document),
+                document=operator_document,
+                parent_version=1,
+                upstream_snapshot={},
+                validation_result={"ready": True},
+                rollout_metadata={"origin": "operator"},
+            )
+        )
+        profile = await session.get(OmnigentAgentProfile, "profile-1")
+        profile.active_version = 2
+        await session.commit()
+        advanced = await advance_agent_profiles_for_policy_cutover(
+            session, cutovers={"p@1": "p@3"}
+        )
+        await session.commit()
+        assert advanced == []
+        profile = await session.get(OmnigentAgentProfile, "profile-1")
+        assert profile.active_version == 2

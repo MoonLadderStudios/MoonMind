@@ -216,6 +216,30 @@ def _candidate_supplies_new_refs(
     return False
 
 
+def _preserve_recorded_hosts(
+    recorded: Mapping[str, str], candidate: Mapping[str, str]
+) -> dict[str, str]:
+    """Return the advance target without clearing recorded host authority.
+
+    A transiently empty host resolution must not drop a host family the
+    release record already pins: policy cutting would then skip its existing
+    defaults while qualification sees an empty ``selected`` ref. Preserve the
+    recorded ref for any host kind the candidate omits so the new revision
+    keeps deployment-owned authority; an explicit host removal needs its own
+    revision path, never a transient gap. Missing-authority cases that remain
+    (for example a first migration with no record) still fence in
+    ``describe_policy_hostclass_drift``.
+    """
+    target = dict(candidate)
+    for kind, value in recorded.items():
+        if kind == "server":
+            continue
+        wanted = str(value or "").strip()
+        if wanted and not str(target.get(kind) or "").strip():
+            target[kind] = wanted
+    return target
+
+
 def decide_release_transition(
     live_refs: Mapping[str, str],
     record: OmnigentRelease | None,
@@ -241,14 +265,14 @@ def decide_release_transition(
             # the record) still requires a revision even though the symmetric
             # intersection agrees.
             if _candidate_supplies_new_refs(recorded, candidate):
-                return "advance", candidate
+                return "advance", _preserve_recorded_hosts(recorded, candidate)
             return "noop", recorded
         if not _refs_agree(live, recorded):
             return "converge", recorded
         if not _refs_agree(recorded, candidate) or _candidate_supplies_new_refs(
             recorded, candidate
         ):
-            return "advance", candidate
+            return "advance", _preserve_recorded_hosts(recorded, candidate)
         return "noop", recorded
     # First migration must establish the singular record even when live already
     # matches the candidate; otherwise Compose stays tag-driven and the
@@ -371,8 +395,15 @@ async def _default_qualify_host_drift(
                 current = await service.get_version(
                     policy_id, policy.default_version
                 )
-            except Exception:
-                continue
+            except Exception as exc:
+                # Unavailable qualification must fence promotion rather than
+                # silently passing with no drift disposition.
+                raise OmnigentReleaseError(
+                    "qualify-host-drift",
+                    f"{policy_id}@{policy.default_version}: "
+                    f"could not load policy default for drift "
+                    f"qualification: {exc}",
+                ) from exc
             document = current.document_json
             host = document.get("host") if isinstance(document, dict) else None
             host_ref = (
