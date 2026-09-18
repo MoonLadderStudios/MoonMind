@@ -88,6 +88,9 @@ request authority at the boundary the producer already uses:
   `repository_continuation` for each repository-output continuation, and
   `api_service/services/checkpoint_branch_turn_execution.py` claims
   `checkpoint_resume`.
+- `moonmind/omnigent/realizers/generic_host.py` claims
+  `terminal_contract_continuation` for each bounded same-session continuation
+  driven by the resolved Skill's incomplete terminal contract.
 
 The instruction that bootstraps a canonical session journals its own source on
 the bootstrap attempt, so a remediation attempt that opens its own session is

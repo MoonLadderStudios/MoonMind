@@ -181,6 +181,97 @@ def test_turn_source_vocabulary_is_closed_and_versioned() -> None:
             coerce_turn_source(retired)
 
 
+def test_durable_turn_source_constraint_matches_closed_vocabulary() -> None:
+    """The DB CHECK constraint must admit every closed turn source.
+
+    Regression for resolver:pr:2689:head:3c7546304812:h:7a9f9d80a345baf0:2,
+    where ``terminal_contract_continuation`` was added to ``TurnSource``
+    (vocabulary v2) without updating the durable constraint from revision 366.
+    The resulting CHECK violation was masked as
+    ``Idempotency key ... already exists`` and surfaced as
+    ``OMNIGENT_GENERIC_DISPATCH_FAILED`` with ``contact_administrator``.
+    """
+
+    from api_service.db.models import OmnigentTurnAttempt
+
+    constraints = [
+        arg
+        for arg in OmnigentTurnAttempt.__table_args__
+        if getattr(arg, "name", None) == "ck_omnigent_turn_attempts_lineage_kind"
+    ]
+    assert len(constraints) == 1
+    sql = str(constraints[0].sqltext).lower()
+    for source in TURN_SOURCES:
+        assert f"'{source}'" in sql, f"durable constraint missing {source!r}"
+
+
+@pytest.mark.asyncio
+async def test_terminal_contract_continuation_claim_persists(
+    service, session_factory
+) -> None:
+    """A terminal-contract continuation claims and persists like any follow-up."""
+
+    initial = await _claim(
+        service, idempotency_key="run-1", turn_source=TurnSource.INITIAL
+    )
+    assert initial.outcome is ControlPlaneOutcome.APPLIED
+    await service.settle(
+        workflow_id=WORKFLOW_ID,
+        idempotency_key="run-1",
+        outcome=ControlPlaneOutcome.APPLIED,
+    )
+
+    claim = await _claim(
+        service,
+        idempotency_key="run-1:terminal-contract:1",
+        turn_source=TurnSource.TERMINAL_CONTRACT_CONTINUATION,
+        command_type="terminal_contract_continuation",
+    )
+    assert claim.outcome is ControlPlaneOutcome.APPLIED
+    assert claim.session_id == initial.session_id
+    await service.settle(
+        workflow_id=WORKFLOW_ID,
+        idempotency_key="run-1:terminal-contract:1",
+        outcome=ControlPlaneOutcome.APPLIED,
+    )
+
+    store = OmnigentControlPlaneStore(session_factory)
+    async with store.transaction() as repos:
+        turns = await repos.turn_attempts.list_for_session(initial.session_id)
+        assert [turn.lineage_kind for turn in turns] == [
+            TurnSource.INITIAL.value,
+            TurnSource.TERMINAL_CONTRACT_CONTINUATION.value,
+        ]
+
+
+def test_check_violation_is_not_masked_as_idempotency_conflict() -> None:
+    """A CHECK violation must not be reported as ``already exists``."""
+
+    from sqlalchemy.exc import IntegrityError
+
+    from moonmind.omnigent.control_plane.repositories import _is_check_violation
+
+    check_error = IntegrityError(
+        "INSERT INTO omnigent_turn_attempts",
+        {},
+        Exception(
+            'new row for relation "omnigent_turn_attempts" violates check '
+            'constraint "ck_omnigent_turn_attempts_lineage_kind"'
+        ),
+    )
+    assert _is_check_violation(check_error) is True
+
+    unique_error = IntegrityError(
+        "INSERT INTO omnigent_turn_attempts",
+        {},
+        Exception(
+            'duplicate key value violates unique constraint '
+            '"uq_omnigent_turn_attempts_idempotency_key"'
+        ),
+    )
+    assert _is_check_violation(unique_error) is False
+
+
 # --- Same-session and chat tests --------------------------------------------
 
 
