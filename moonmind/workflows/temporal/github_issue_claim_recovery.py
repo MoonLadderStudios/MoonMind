@@ -245,6 +245,9 @@ async def _closed_execution_tree(client, receipt, now):
 #: single launcher outage must not be charged to the whole backlog. Failures
 #: that describe the work itself (bad profile, unavailable model, failed
 #: verification) are deliberately absent and still cost an attempt.
+#: Bound on the failure cause chain inspected for a typed code.
+MAX_FAILURE_CAUSE_DEPTH = 10
+
 RUNTIME_PROVISIONING_FAILURES: tuple[str, ...] = (
     "OMNIGENT_HOST_LAUNCH_FAILED",
     "OMNIGENT_HOST_CAPACITY_UNAVAILABLE",
@@ -274,17 +277,21 @@ async def _runtime_provisioning_failed(client, receipt) -> bool:
     keeps the ordinary accounting, so an attempt is never excused from the
     allowance on a guess.
     """
-    namespace, workflow_id = receipt.owner.split("/", 1)
+    _namespace, workflow_id = receipt.owner.split("/", 1)
     try:
         handle = client.get_workflow_handle(workflow_id)
         await handle.result()
     except Exception as exc:  # noqa: BLE001 - the failure itself is the evidence
-        detail = str(exc)
+        parts = [str(exc)]
         cause = getattr(exc, "cause", None)
-        while cause is not None:
-            detail = f"{detail} {cause}"
+        # Bounded walk: a typed code sits at the top of the chain, and a
+        # self-referential cause must not spin inside the recovery sweep.
+        for _ in range(MAX_FAILURE_CAUSE_DEPTH):
+            if cause is None:
+                break
+            parts.append(str(cause))
             cause = getattr(cause, "cause", None)
-        return runtime_provisioning_failure(detail)
+        return runtime_provisioning_failure(" ".join(parts))
     return False
 
 
