@@ -34,6 +34,29 @@ The selected image supplies the canonical Compose definition, application code, 
 
 The controller records an immutable submission, starts one named updater with durable ownership, qualifies every affected worker queue with a pinned canary, promotes routing with a compare-and-set operation, reconciles the installed fleet, migrates the singular Omnigent release (server/host digests, launch policy versions, recurring schedule admissions) to the resolved digests, and drains temporary workers. The updater can replace the deployment-control service that launched it. A terminal release receipt and verified installed readiness establish completion. An image pull, process exit, or successful container start alone does not.
 
+## Terminal outcomes
+
+Completion requires a terminal release receipt naming the exact source SHA,
+the pinned repository digest of the promoted image, and the verified installed
+readiness for every affected service. The serialized terminal result carries
+the verified `sourceRevision` in its outputs alongside `resolvedDigest` and
+`releaseReadinessArtifactRef`; receipt recovery validates that bound
+`sourceRevision` together with the digest before granting image authority, so
+the receipt is self-sufficient and never depends on an unbound second record.
+Report the unfinished phase and its recorded recovery owner when bounded
+recovery exhausts; preserve primary deployment success when only cleanup remains.
+
+- Verify readiness against the declared operator addresses from the immutable
+  submission (`--operator-url` plus any configured base URL). An image pull,
+  process exit, or successful container start alone is not completion.
+- `--dry-run` is strictly non-mutating: it shows the intended release operation
+  without fetching, deploying, or recording a submission. Never report a
+  dry-run preview as qualification, promotion, or readiness evidence.
+- Preserve deployment authority: deployment-owned `.env`, published bindings,
+  authentication, and explicit configuration keep their existing values across
+  the update. Do not replace that file from a template and do not widen or
+  narrow operator access to satisfy a check.
+
 ## Recovery
 
 If the caller disappears, resume the printed submission with `--resume <submission-id>`. Keep its original image and inputs. Inspect the durable result before retrying any side effect; preserve primary deployment success if only cleanup remains. Report the exact unfinished phase and its recorded recovery owner when bounded recovery exhausts.
