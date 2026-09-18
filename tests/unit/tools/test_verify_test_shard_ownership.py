@@ -245,3 +245,67 @@ def test_plugin_cli_partitions_a_fixture_directory_exactly_once(
     universe = set().union(*groups.values())
     assert len(universe) == 3
     assert verify_physical_partitions(universe, groups) == []
+
+
+def test_plugin_cli_runs_a_history_less_node_exactly_once(tmp_path) -> None:
+    """MoonLadderStudios/MoonMind#4366 A2: a collected node absent from the
+    durations hints still executes exactly once through the real --group
+    collections (plugin fallback, not a skip or duplicate). Skipped where
+    pytest-split is not installed; CI installs it via .[tests]."""
+    import json
+    import sys
+
+    (tmp_path / "test_hist_a.py").write_text(
+        "def test_one():\n    pass\ndef test_two():\n    pass\n"
+    )
+    (tmp_path / "test_brand_new.py").write_text(
+        "def test_brand_new():\n    pass\n"
+    )
+    base = [sys.executable, "-m", "pytest"]
+    probe = _real_run_collection_command(base + ["--help"])
+    if "--splits" not in (probe.stdout + probe.stderr):
+        pytest.skip("pytest-split is not installed")
+    # Unsharded universe for this fixture directory.
+    proc = _real_run_collection_command(
+        base + ["--collect-only", "-q", "-p", "no:cacheprovider"],
+        cwd=tmp_path,
+    )
+    assert proc.returncode in (0, 5), proc.stderr[-500:]
+    universe = {
+        line.strip() for line in proc.stdout.splitlines() if "::" in line
+    }
+    assert len(universe) == 3
+    new_node = next(node for node in universe if "test_brand_new" in node)
+    # Hints cover only the pre-existing nodes; the new node has no history.
+    hints = {
+        node: 10.0 for node in sorted(universe) if node != new_node
+    }
+    durations_path = tmp_path / "durations.json"
+    durations_path.write_text(json.dumps(hints), encoding="utf-8")
+    groups: dict[int, set[str]] = {}
+    for group in (1, 2, 3, 4):
+        proc = _real_run_collection_command(
+            base
+            + [
+                "--collect-only",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "--splits",
+                "4",
+                "--group",
+                str(group),
+                "--splitting-algorithm",
+                "least_duration",
+                "--durations-path",
+                str(durations_path),
+            ],
+            cwd=tmp_path,
+        )
+        assert proc.returncode in (0, 5), proc.stderr[-500:]
+        groups[group] = {
+            line.strip() for line in proc.stdout.splitlines() if "::" in line
+        }
+    assert verify_physical_partitions(universe, groups) == []
+    appearances = sum(new_node in nodes for nodes in groups.values())
+    assert appearances == 1

@@ -680,6 +680,20 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     assert shards == ["1", "2", "3", "4"]
 
 
+def test_backend_matrix_documents_max_parallel_deviation() -> None:
+    """MoonLadderStudios/MoonMind#4366 R1: the four reliability shards run
+    concurrently with isolated services; the consolidated 7-row matrix
+    intentionally leaves max-parallel unset (capping at 4 would queue shards
+    behind fast rows past the PR ceiling). The deviation rationale must stay
+    recorded in the workflow until it is accepted on the issue."""
+    workflow = _load_workflow()
+    strategy = workflow["jobs"]["backend-matrix"]["strategy"]
+    assert "max-parallel" not in strategy
+    raw = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert "Accepted deviation from MoonLadderStudios/MoonMind#4366 R1" in raw
+    assert "max-parallel stays unset on purpose" in raw
+
+
 def test_backend_matrix_keeps_setup_isolated_per_row() -> None:
     workflow = _load_workflow()
     job = workflow["jobs"]["backend-matrix"]

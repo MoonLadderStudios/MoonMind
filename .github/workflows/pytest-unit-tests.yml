@@ -219,9 +219,12 @@ jobs:
     # with --splits 4 and least_duration over the committed advisory hints.
     # The consolidated matrix is the "where possible" form of the original
     # job-ID preservation: native fail-fast needs one matrix boundary.
-    # max-parallel stays unset on purpose: capping this 7-row matrix at 4
-    # would queue reliability shards behind fast rows and push the critical
-    # path past the ~10-min PR ceiling below; the default lets all four
+    # Accepted deviation from MoonLadderStudios/MoonMind#4366 R1 literal
+    # `max-parallel: 4` (to be recorded on issue #4366 in the first
+    # networked run): max-parallel stays unset on purpose. This is a 7-row
+    # matrix (3 fast rows + 4 reliability shards); capping it at 4 would
+    # queue reliability shards behind fast rows and push the critical path
+    # past the ~10-min PR ceiling below, while the default lets all four
     # reliability rows run concurrently with isolated services.
     # Reliability budgets (MoonLadderStudios/MoonMind#4369, #4384): short per-test
     # pytest timeout (150s PR / 300s schedule), ~10-min PR step ceiling via
