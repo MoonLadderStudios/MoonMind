@@ -1,15 +1,20 @@
 """Regression coverage for epic #4264 (packages #4266 + #4275 + model-neutral,
 plus bounded #4270/#4271/#4272/#4273 slices).
 
-Covers the bounded slice implemented in this change:
+Covers the bounded slice implemented in this change (repo-native skills and
+presets only):
 
 - MoonSpec planning/implementation recovers from repairable checklist, fixture,
   and evidence gaps within existing authority instead of stopping for approval
-  or halting on the first failed task (#4266).
+  or halting on the first failed task (#4266). [Moved upstream: moonspec-*
+  entrypoint wording is owned by the pinned MoonSpec bundle projection and
+  covered by tools/sync_moonspec.py --check, not asserted here.]
 - Technical API/protocol/migration acceptance survives specify/align unchanged
-  in meaning without invented numbers (#4266).
+  in meaning without invented numbers (#4266). [Same: moonspec-specify/align
+  wording lives in the bundle; repo-native preset/skill coverage below.]
 - Verification resolves helpers through the immutable active bundle and allows
   a valid conflict-free alias instead of blanket-rejecting symlinks (#4275).
+  [Same: moonspec-verify wording lives in the bundle.]
 - PR repair recovers with bounded retry and blocked evidence instead of
   stopping to ask for a PR number/URL, never invents PR identity, and never
   continues from stale comments (#4270).
@@ -102,58 +107,10 @@ def _read_skill(name: str) -> str:
     return (SKILLS_ROOT / name / "SKILL.md").read_text(encoding="utf-8")
 
 
-def test_implement_checklist_gap_recovers_without_fabricated_approval():
-    text = _read_skill("moonspec-implement")
-    assert "stop and ask whether to proceed" not in text.lower()
-    assert "continue only when the user explicitly says yes" not in text.lower()
-    assert "repairable gap" in text
-    assert "existing authority" in text
-    assert "Never fabricate" in text
-    assert "without its required evidence" in text
-
-
-def test_implement_setup_stays_bounded_to_selected_story():
-    text = _read_skill("moonspec-implement")
-    assert "Limit setup changes to prerequisites required by the selected story" in text
-    assert "Preserve unrelated worktree changes" in text
-
-
-def test_implement_failure_uses_bounded_retry_not_unconditional_halt():
-    text = _read_skill("moonspec-implement")
-    assert "Halt on failed non-parallel tasks" not in text
-    assert "diagnose within existing authority" in text
-    assert "unsupported substrate" in text
-    assert "budget exhaustion" in text
-
-
-def test_specify_preserves_technical_acceptance_criteria():
-    text = _read_skill("moonspec-specify")
-    norm = re.sub(r"\s+", " ", text)
-    assert "Define measurable, technology-agnostic success criteria." not in text
-    assert "keeps its explicit interface names" in text
-    assert "Do not rewrite a technical requirement as a business metric" in norm
-    assert "do not invent performance, retention, or concurrency numbers" in norm.lower()
-    assert "Source-faithful" in text
-    assert "explicit technical contract, not an invented metric" in norm
-    assert "when no request threshold exists" in text.lower()
-
-
-def test_align_preserves_genuine_authority_boundaries():
-    text = _read_skill("moonspec-align")
-    assert "genuine product decision" in text
-    assert "information or" in text and "cannot be obtained safely" in text
-    assert "instead of guessing" in text
-
-
-def test_verify_preflight_allows_valid_alias_and_forbids_destructive_repair():
-    text = _read_skill("moonspec-verify")
-    assert "MOONMIND_ACTIVE_SKILLS_DIR" in text
-    assert "conflict-free alias" in text
-    assert "masks no repository-owned source" in text
-    assert "Never delete, move," in text
-    assert "never create a clean reclone" in text.lower()
-    assert "Prefer restoring the tracked repository files or using a clean reclone" not in text
-    assert "test ! -L .agents/skills" not in text
+# NOTE: moonspec-* entrypoint wording is owned by the pinned MoonSpec bundle
+# projection (see tools/sync_moonspec.py). It must not be hand-edited or
+# asserted here; the drift gate covers it. The wording slice belongs upstream
+# in the MoonSpec repository.
 
 
 def test_fix_comments_pr_failure_is_portable_and_preserves_branch_authority():

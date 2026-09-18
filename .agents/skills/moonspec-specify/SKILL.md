@@ -171,13 +171,7 @@ Fill the template with concrete details derived from the feature description:
    - Scope status: in scope or out of scope with rationale.
    - Mapped functional requirement ID after functional requirements are generated.
 10. Ensure every in-scope `DESIGN-REQ-*` maps to at least one functional requirement.
-11. Define measurable success criteria with an objective verification method.
-    Preserve the request's own acceptance language: a technical API, protocol,
-    migration, or infrastructure requirement keeps its explicit interface names,
-    numerical thresholds, platform constraints, and negative requirements
-    unchanged in meaning. Do not rewrite a technical requirement as a business metric
-    and do not invent performance, retention, or concurrency numbers to fill the template.
-    Qualitative criteria are valid when they have an objective verification method.
+11. Define measurable, technology-agnostic success criteria.
 12. Include key entities only if the feature involves data.
 13. Apply the intent guard:
    - For `runtime` intent, the spec must describe observable system behavior and validation outcomes, not merely edits to documentation.
@@ -186,10 +180,8 @@ Fill the template with concrete details derived from the feature description:
 Guidelines:
 
 - Focus on what users need and why.
-- Avoid prescribing implementation beyond what the original request requires:
-  keep the request's explicit tech stack, APIs, code structure, frameworks, or
-  databases when they are acceptance. Do not add new ones.
-- Write for the request's intended readers, not only business stakeholders.
+- Avoid how to implement it: no tech stack, APIs, code structure, frameworks, or databases.
+- Write for business stakeholders, not developers.
 - Remove optional sections when irrelevant instead of writing `N/A`.
 - Do not embed checklists in the spec.
 - Keep source requirement mappings traceable without introducing implementation details.
@@ -207,11 +199,9 @@ After writing the initial spec, create `SPECIFY_FEATURE_DIRECTORY/checklists/req
 
 ## Content Quality
 
-- [ ] No implementation details beyond what the original request explicitly requires
-- [ ] Focused on user value and requested behavior
-- [ ] Written for its intended readers (business stakeholders for product
-  requests; engineers and operators for API, protocol, migration, or
-  infrastructure contracts)
+- [ ] No implementation details (languages, frameworks, APIs)
+- [ ] Focused on user value and business needs
+- [ ] Written for non-technical stakeholders
 - [ ] All mandatory sections completed
 
 ## Requirement Completeness
@@ -220,10 +210,8 @@ After writing the initial spec, create `SPECIFY_FEATURE_DIRECTORY/checklists/req
 - [ ] Exactly one user story is defined
 - [ ] Requirements are testable and unambiguous
 - [ ] Runtime intent describes system behavior rather than docs-only changes, unless docs-only was explicitly requested
-- [ ] Success criteria are measurable with an objective verification method
-- [ ] Explicit technical thresholds, interface names, platform constraints, and
-  negative requirements from the original request survive unchanged in meaning
-  (no invented numbers; no business-metric rewrite of a technical contract)
+- [ ] Success criteria are measurable
+- [ ] Success criteria are technology-agnostic (no implementation details)
 - [ ] All acceptance scenarios are defined
 - [ ] Independent Test describes how the story can be validated end-to-end
 - [ ] Acceptance scenarios are concrete enough to derive unit and integration tests
@@ -238,7 +226,7 @@ After writing the initial spec, create `SPECIFY_FEATURE_DIRECTORY/checklists/req
 - [ ] All functional requirements have clear acceptance criteria
 - [ ] The single user story covers the primary flow
 - [ ] Feature meets measurable outcomes defined in Success Criteria
-- [ ] No implementation details beyond what the original request explicitly requires
+- [ ] No implementation details leak into specification
 
 ## Notes
 
@@ -302,16 +290,9 @@ Examples:
 Success criteria must be:
 
 - Measurable: include time, percentage, count, rate, or similar metrics.
-- Technology-agnostic by default: no frameworks, languages, databases, or tools
-  beyond what the original request explicitly requires.
-- User-focused by default: describe user or business outcomes rather than
-  internals, unless the request itself states a technical contract.
+- Technology-agnostic: no frameworks, languages, databases, or tools.
+- User-focused: describe user or business outcomes rather than internals.
 - Verifiable: testable without knowing implementation details.
-- Source-faithful: an explicit technical threshold, interface name, platform
-  constraint, or negative requirement from the original request is a valid
-  criterion preserved unchanged in meaning (see step 11). It is never
-  rewritten as a business metric and never discarded for being
-  technology-specific.
 
 Good examples:
 
@@ -319,15 +300,13 @@ Good examples:
 - `System supports 10,000 concurrent users`
 - `95% of searches return results in under 1 second`
 - `Task completion rate improves by 40%`
-- `API responds within 200ms` (when the request explicitly requires a 200ms
-  API threshold — an explicit technical contract, not an invented metric)
 
-Bad examples (invented implementation metrics the request never named):
+Bad examples:
 
-- `API response time is under 200ms` (when no request threshold exists)
-- `Database can handle 1000 TPS` (when no request throughput exists)
+- `API response time is under 200ms`
+- `Database can handle 1000 TPS`
 - `React components render efficiently`
-- `Redis cache hit rate above 80%` (when no request cache objective exists)
+- `Redis cache hit rate above 80%`
 
 ## Outputs
 

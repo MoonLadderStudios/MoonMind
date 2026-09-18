@@ -169,42 +169,16 @@ If shell arguments contain single quotes, use shell-safe escaping such as `'I'\'
 
 ## Workspace Projection Preflight
 
-Resolve Skill helpers and references through the run's actual immutable active
-bundle. Inside MoonMind, `MOONMIND_ACTIVE_SKILLS_DIR` is the canonical
-runtime-visible path to the resolved active snapshot; a checked-in
-`.agents/skills` directory must not shadow that selected snapshot. Outside
-MoonMind, use the Skill's explicit installed directory and documented
-standalone defaults. `.agents/skills` is a convenience alias only when the
-repository does not already own that path.
-
-Before running full-suite verification commands, examine the actual owning
-binding and tracked repository view — not just path-string shape:
+Before running full-suite verification commands, ensure the repository view is not contaminated by a MoonMind active skill projection:
 
 ```bash
-printf '%s\n' "${MOONMIND_ACTIVE_SKILLS_DIR:-<unset>}"
+test ! -L .agents/skills
+test ! -L .gemini/skills
+test ! -e skills_active || test -L skills_active
 git status --porcelain -- .agents/skills .gemini/skills skills_active
-git ls-files -- .agents/skills | head -n 5
-readlink .agents/skills .gemini/skills skills_active 2>/dev/null || true
 ```
 
-A conflict-free alias to the selected immutable snapshot is valid when it
-masks no repository-owned source. It passes preflight. Fail with a precise,
-owner-specific diagnostic only for a real problem: tracked-file shadowing, a
-stale or incorrect snapshot target, a missing selected asset, or an escaping
-path.
-
-Repair only through the workspace/materialization owner. Never delete, move,
-or relocate a repository-authored Skill directory, never reset the candidate,
-and never create a clean reclone or worktree that discards cumulative work
-merely to satisfy this check. Preserve unrelated edits, checkpoint identity,
-and immutable inputs. When safe repair is unavailable, retain the candidate
-and report actionable failure evidence.
-
-If repair is not possible in the current runtime, stop with verdict `BLOCKED`,
-include the diagnostic `ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION`, set
-`recoverableInCurrentRuntime: false`, set `recommendedNextAction: blocked`,
-and do not report `NO_DETERMINATION` merely because the workspace view masked
-tracked skill files.
+If `.agents/skills` or `.gemini/skills` is an active projection symlink, repair the checkout view before running full-suite evidence. Prefer restoring the tracked repository files or using a clean reclone/worktree. If repair is not possible in the current runtime, stop with verdict `BLOCKED`, include the diagnostic `ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION`, set `recoverableInCurrentRuntime: false`, set `recommendedNextAction: blocked`, and do not report `NO_DETERMINATION` merely because MoonMind's active projection masked tracked skill files.
 
 Real repo-authored `.agents/skills` directories are valid source input and must not be deleted, moved, or treated as the active selected skill snapshot.
 

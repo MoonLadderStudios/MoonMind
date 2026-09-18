@@ -25,14 +25,7 @@ This skill edits MoonSpec execution artifacts, not application feature code. Typ
 
 Alignment operates only among temporary execution artifacts. It must never edit canonical `docs/` files and never aligns a canonical document toward a spec; the canonical document is the higher authority (see `docs/Workflows/MoonSpecDocumentModel.md`). Evidence that a canonical document is wrong belongs in the discovery ledger for `moonspec-doc-reconcile`, not in alignment edits.
 
-Do not ask the user for clarification about repairable artifact inconsistencies.
-Resolve uncertainty by reading project context, making conservative decisions,
-documenting assumptions, and applying the least surprising artifact changes.
-When the uncertainty is a genuine product decision or needs information or
-authority that cannot be obtained safely — or resolving it would change product
-scope, security, or source authority — preserve the exact remaining decision,
-apply the safe repairs that do not depend on it, and report the blocker with
-its evidence instead of guessing.
+Do not ask the user for clarification. Resolve uncertainty by reading project context, making conservative decisions, documenting assumptions, and applying the least surprising artifact changes.
 
 ## Inputs
 
@@ -115,10 +108,9 @@ Identify high-signal findings. Aggregate related issues instead of creating nois
 
 ## Uncertainty And Tradeoff Handling
 
-For each material uncertainty, resolve it from evidence when safe; otherwise
-preserve it as an explicit decision for its owner.
+For each material uncertainty, choose a resolution without asking the user.
 
-Use this decision process as guidance, not a rigid recipe:
+Use this decision process:
 
 1. Name the uncertainty precisely.
 2. Gather available evidence from the artifacts and repository.
@@ -139,11 +131,7 @@ Default choices:
 - If `plan.md` conflicts with an explicit source design requirement or relevant `AGENTS.md` principle, update `plan.md`.
 - If `spec.md` is ambiguous but the repo has a clear established convention, update `spec.md` with that convention as an assumption or measurable requirement.
 - If two options are equally plausible and neither is required by higher authority, choose the simpler and more reversible option.
-- If a finding cannot be remediated without inventing product scope, changing
-  security or source authority, or using information that cannot be obtained
-  safely, leave the decision explicit: record the options, apply only the safe
-  repairs, add a validation task, and report the remaining decision with its
-  evidence instead of guessing.
+- If a finding cannot be remediated without inventing product scope, add a bounded assumption and a validation task instead of asking the user.
 
 ## Remediation Rules
 
@@ -152,7 +140,7 @@ Apply edits after analysis. Do not stop at a report.
 Prefer these remediation patterns:
 
 - Merge duplicate requirements and update downstream references.
-- Replace vague adjectives with measurable, testable criteria when context supports a defensible threshold. Preserve explicit technical thresholds, interface names, platform constraints, and negative requirements unchanged in meaning; never invent numbers to fill a template.
+- Replace vague adjectives with measurable, testable criteria when context supports a defensible threshold.
 - Add missing acceptance criteria for already-implied behavior.
 - Add tasks for uncovered requirements, edge cases, contracts, and buildable success criteria.
 - Add or reorder test tasks so tests precede implementation when the workflow requires test-first development.
