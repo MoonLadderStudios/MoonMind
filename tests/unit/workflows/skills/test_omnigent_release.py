@@ -580,3 +580,175 @@ async def test_cohort_migrate_reports_missing_desired_state(tmp_path, monkeypatc
     cohort = deployment_release.ReleaseCohort(object(), tmp_path, "owner-1")
     receipt = await cohort.migrate_omnigent("img")
     assert receipt["status"] == "skipped"
+
+
+def test_release_drift_compatible_rebuild_points_at_bootstrap_reconcile():
+    """#4379 R7: same-repo rebuild is fenced with an executable recovery."""
+    from moonmind.workflows.skills.omnigent_release import (
+        raise_for_release_policy_drift,
+        release_policy_drift_dispositions,
+    )
+
+    # NOTE: "c"*64/"0"*64 digests are synthetic placeholders that never
+    # auto-advance; use real-looking digests so the rebuild qualifies.
+    old = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "d" * 64
+    new = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "e" * 64
+    dispositions = release_policy_drift_dispositions(
+        {"omnigent-on-demand": old},
+        {"server": NEW_SERVER, "opencode": new},
+    )
+    assert len(dispositions) == 1
+    assert dispositions[0]["compatibleRebuild"] is True
+    assert dispositions[0]["fencePromotion"] is True
+    assert "bootstrap reconcile" in dispositions[0]["recovery"]
+    with pytest.raises(OmnigentReleaseError) as exc:
+        raise_for_release_policy_drift(dispositions)
+    assert exc.value.step == "drift-fence"
+    assert "bootstrap reconcile" in str(exc.value)
+
+
+def test_release_drift_family_change_fences_with_explicit_revision():
+    """#4379 R7: a genuinely incompatible image fences closed."""
+    from moonmind.workflows.skills.omnigent_release import (
+        raise_for_release_policy_drift,
+        release_policy_drift_dispositions,
+    )
+
+    old = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "d" * 64
+    foreign = "ghcr.io/example/other-host@sha256:" + "e" * 64
+    dispositions = release_policy_drift_dispositions(
+        {"omnigent-on-demand": old},
+        {"server": NEW_SERVER, "opencode": foreign},
+    )
+    assert len(dispositions) == 1
+    assert dispositions[0]["compatibleRebuild"] is False
+    with pytest.raises(OmnigentReleaseError) as exc:
+        raise_for_release_policy_drift(dispositions)
+    assert exc.value.step == "drift-fence"
+    assert "explicitly" in str(exc.value)
+
+
+def test_release_drift_absent_when_aligned():
+    from moonmind.workflows.skills.omnigent_release import (
+        raise_for_release_policy_drift,
+        release_policy_drift_dispositions,
+    )
+
+    assert (
+        release_policy_drift_dispositions(
+            {"omnigent-on-demand": NEW_HOST},
+            {"server": NEW_SERVER, "opencode": NEW_HOST},
+        )
+        == []
+    )
+    assert raise_for_release_policy_drift([]) is None
+
+
+def test_release_drift_missing_selected_fences():
+    """P1: a policy pin with no recorded host target must fence promotion."""
+    from moonmind.workflows.skills.omnigent_release import (
+        raise_for_release_policy_drift,
+        release_policy_drift_dispositions,
+    )
+
+    old = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "d" * 64
+    dispositions = release_policy_drift_dispositions(
+        {"omnigent-on-demand": old},
+        {"server": NEW_SERVER, "opencode": ""},
+    )
+    assert len(dispositions) == 1
+    assert dispositions[0]["fencePromotion"] is True
+    with pytest.raises(OmnigentReleaseError, match="drift-fence"):
+        raise_for_release_policy_drift(dispositions)
+
+
+def test_decide_advance_preserves_recorded_host_on_transient_empty():
+    """P1: a transiently empty candidate must not clear recorded authority."""
+    release = _release()
+    candidate_missing_codex = dict(_refs(server=NEW_SERVER, host=NEW_HOST))
+    candidate_missing_codex["codex"] = ""
+    action, target = decide_release_transition(
+        _refs(), release, candidate_missing_codex
+    )
+    assert action == "advance"
+    assert target["server"] == NEW_SERVER
+    assert target["codex"] == OLD_HOST
+
+
+@pytest.mark.asyncio
+async def test_qualify_host_drift_fails_when_policy_load_fails(monkeypatch):
+    """P1: unavailable qualification must fence instead of silently passing."""
+    from moonmind.workflows.skills import omnigent_release as release_module
+
+    class _Policy:
+        default_version = 14
+
+    async def _get_version(_self, _policy_id, _version):
+        raise RuntimeError("transient db error")
+
+    class _Service:
+        def __init__(self, _session):
+            pass
+
+        get_version = _get_version
+
+    @__import__("contextlib").asynccontextmanager
+    async def _session_ctx():
+        class _Session:
+            async def get(self, _model, _policy_id):
+                return _Policy()
+
+        yield _Session()
+
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies.OmnigentPolicyService", _Service
+    )
+    monkeypatch.setattr(
+        release_module, "OMNIGENT_RELEASE_POLICIES", (("omnigent-on-demand", "opencode"),)
+    )
+    import api_service.db.base as db_base
+
+    monkeypatch.setattr(db_base, "get_async_session_context", _session_ctx)
+    with pytest.raises(OmnigentReleaseError, match="qualify-host-drift"):
+        await release_module._default_qualify_host_drift({"opencode": NEW_HOST})
+
+
+@pytest.mark.asyncio
+async def test_migrate_fences_promotion_while_drift_remains(tmp_path, monkeypatch):
+    """#4379 R7: drift after cut/refresh blocks the release receipt."""
+    _enable_omnigent(monkeypatch)
+    store = _store(tmp_path)
+    release = _release()
+    await store.merge(
+        env_updates=release.to_env(),
+        json_updates={OMNIGENT_RELEASE_RECORD_KEY: release.to_record()},
+    )
+    from dataclasses import replace
+
+    from moonmind.workflows.skills.omnigent_release import OmnigentReleaseError
+
+    old = "ghcr.io/moonladderstudios/omnigent-host-moonmind@sha256:" + "d" * 64
+    foreign = "ghcr.io/example/other-host@sha256:" + "e" * 64
+
+    async def fenced_drift(_target):
+        return [
+            {
+                "policyRef": "omnigent-on-demand@14",
+                "plannedHostImageRef": old,
+                "selectedHostImageRef": foreign,
+                "compatibleRebuild": False,
+                "fencePromotion": True,
+                "recovery": "revise the policy, profile, and schedule explicitly",
+            }
+        ]
+
+    calls: list[str] = []
+    drivers = replace(_drivers(calls), qualify_host_drift=fenced_drift)
+    with pytest.raises(OmnigentReleaseError) as exc:
+        await migrate_omnigent_release(
+            store=store,
+            runner=object(),
+            owner="test",
+            drivers=drivers,
+        )
+    assert exc.value.step == "drift-fence"

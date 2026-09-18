@@ -927,8 +927,12 @@ async def compile_and_persist_execution_plan(
             effective_launch, host_class.imageRef
         )
         if reconciled is None:
+            planned_ref = str(effective_launch.get("hostImageRef") or "")
             raise ValueError(
-                "effective launch host image conflicts with the selected Host Class"
+                "effective launch host image conflicts with the selected Host Class "
+                f"(planned={planned_ref[:120]} selected={host_class.imageRef[:120]} "
+                f"hostClass={config['hostClassRef']}); refresh the bootstrap policy "
+                "default to the qualified image and retry"
             )
         import logging
 
@@ -957,7 +961,10 @@ async def compile_and_persist_execution_plan(
         host_architecture = f"linux/{host_architecture}"
     if not host_architecture or host_architecture not in host_class.architectures:
         raise ValueError(
-            "launch policy architecture conflicts with the selected Host Class"
+            "launch policy architecture conflicts with the selected Host Class "
+            f"(launch={host_architecture or '<missing>'} "
+            f"hostClass={config['hostClassRef']} "
+            f"supported={','.join(host_class.architectures) or '<none>'})"
         )
     matching_entry = next(
         (
@@ -969,7 +976,12 @@ async def compile_and_persist_execution_plan(
         None,
     )
     if matching_entry is None:
-        raise ValueError("Host Class does not declare the selected exact harness")
+        raise ValueError(
+            "Host Class does not declare the selected exact harness "
+            f"(harness={harness_id} "
+            f"implementation={implementation.implementation_ref()} "
+            f"hostClass={config['hostClassRef']})"
+        )
     catalog = exact_catalog or create_catalog_snapshot(
         endpointRef=str(document.get("endpointRef") or "default"),
         omnigentVersion=host_class.omnigentVersion,

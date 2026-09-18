@@ -285,8 +285,95 @@ def reconcile_effective_launch_to_selected_host(
     return reconciled
 
 
+def describe_policy_hostclass_drift(
+    policy_ref: object,
+    policy_host_image_ref: object,
+    selected_host_image_ref: object,
+) -> dict[str, Any] | None:
+    """Describe policy<->Host Class image drift for release qualification.
+
+    Returns None when the policy image already equals the selected Host Class
+    image (no drift, no fencing needed). Otherwise returns a disposition with
+    the pinned policy ref, both digests, whether the drift is a compatible
+    same-repository rebuild (adoptable via automatic bootstrap policy
+    versioning) or an incompatible family change (explicit revision required),
+    and an executable recovery hint. In-flight runs keep their recorded-host
+    plans; only new compilations must adopt the disposition.
+    """
+
+    policy = str(policy_ref or "").strip() or "<unknown-policy>"
+    planned = str(policy_host_image_ref or "").strip()
+    selected = str(selected_host_image_ref or "").strip()
+    if planned == selected:
+        return None
+    if planned and not selected:
+        # The release record lost authority for a host family the policy
+        # still pins (for example a transiently empty resolution dropped it
+        # from the candidate record). Treating this as no drift would let
+        # qualification succeed while policies stay pinned to an image the
+        # release no longer supplies; fence until the recorded host is
+        # preserved or resolution recovers.
+        return {
+            "policyRef": policy,
+            "plannedHostImageRef": planned,
+            "selectedHostImageRef": selected,
+            "compatibleRebuild": False,
+            "fencePromotion": True,
+            "recovery": (
+                f"release record is missing authority for {policy} "
+                f"(planned={planned[:120]}); preserve the recorded host or "
+                "resolve release candidates before promoting"
+            ),
+        }
+    if not planned or not selected:
+        return None
+    if (
+        not _is_digest_pinned(planned)
+        or not _is_digest_pinned(selected)
+        or _is_placeholder(planned)
+        or _is_placeholder(selected)
+    ):
+        return {
+            "policyRef": policy,
+            "plannedHostImageRef": planned,
+            "selectedHostImageRef": selected,
+            "compatibleRebuild": False,
+            "fencePromotion": True,
+            "recovery": (
+                f"unqualified image refs cannot auto-advance; revise {policy} "
+                "explicitly to a digest-pinned qualified image"
+            ),
+        }
+    if is_compatible_image_drift(planned, selected):
+        return {
+            "policyRef": policy,
+            "plannedHostImageRef": planned,
+            "selectedHostImageRef": selected,
+            "compatibleRebuild": True,
+            "fencePromotion": True,
+            "recovery": (
+                f"run bootstrap reconcile to version {policy} to the qualified "
+                f"image {selected} (same repository rebuild); then refresh "
+                "managed schedules"
+            ),
+        }
+    return {
+        "policyRef": policy,
+        "plannedHostImageRef": planned,
+        "selectedHostImageRef": selected,
+        "compatibleRebuild": False,
+        "fencePromotion": True,
+        "recovery": (
+            f"image family changed for {policy} "
+            f"(planned={planned[:120]} selected={selected[:120]}); revise the "
+            "policy, profile, and schedule explicitly"
+        ),
+    }
+
+
 __all__ = [
     "compatible_deployed_fallback",
+    "describe_policy_hostclass_drift",
     "is_compatible_image_drift",
     "reconcile_effective_launch_to_selected_host",
 ]
