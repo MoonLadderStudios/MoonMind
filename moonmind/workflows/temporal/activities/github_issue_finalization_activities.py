@@ -171,6 +171,44 @@ async def _fetch_issue(*, service: Any, repository: str, issue_number: int) -> d
             return {"ok": False, "reasonCode": "outcome_unknown", "summary": f"Issue read result unknown: {name}."}
 
 
+def terminal_attempt_outcome(
+    *,
+    disposition: str,
+    disposition_evidence: Mapping[str, Any],
+    now_epoch: float = 0.0,
+) -> tuple[str, str, str]:
+    """Return ``(outcome, next_action, cooldown_until)`` for a terminal handoff.
+
+    A release whose deployment never started a runtime is recorded as
+    ``runtime_unavailable`` with a bounded back-off rather than as a work
+    outcome, so the portable allowance is not charged for a deployment fault
+    and a broken launcher cannot hammer one issue.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from moonmind.workflows.temporal.github_issue_attempts import (
+        OUTCOME_RUNTIME_UNAVAILABLE,
+        RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS,
+    )
+
+    evidence = dict(disposition_evidence or {})
+    no_work = disposition == finalization.DISPOSITION_AVAILABLE
+    runtime_unavailable = no_work and finalization._truthy(
+        evidence.get("runtimeUnavailable", evidence.get("runtime_unavailable"))
+    )
+    if runtime_unavailable:
+        started = (
+            datetime.fromtimestamp(now_epoch, UTC)
+            if now_epoch
+            else datetime.now(UTC)
+        )
+        deadline = started + timedelta(seconds=RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS)
+        return OUTCOME_RUNTIME_UNAVAILABLE, "fresh_retry", deadline.isoformat()
+    if no_work:
+        return "no_work", "fresh_retry", ""
+    return "failed", "", ""
+
+
 async def _apply_failed_attempt_finalization(
     *,
     repository: str,
@@ -380,6 +418,10 @@ async def _apply_failed_attempt_finalization(
         if parsed.handoff is None:
             raise ValueError("claim_evidence_conflict: canonical handoff is unreadable")
         no_work = plan.disposition == finalization.DISPOSITION_AVAILABLE
+        outcome, release_action, cooldown_until = terminal_attempt_outcome(
+            disposition=plan.disposition,
+            disposition_evidence=disposition_evidence,
+        )
         remaining = disposition_evidence.get("retryRemaining")
         if type(remaining) is not int or not 0 <= remaining <= parsed.handoff.retry_remaining:
             remaining = parsed.handoff.retry_remaining
@@ -388,9 +430,10 @@ async def _apply_failed_attempt_finalization(
             activity="releasing",
             writers_stopped=True,
             pending_disposition=plan.disposition,
-            outcome="no_work" if no_work else "failed",
-            next_action="fresh_retry" if no_work else next_action or parsed.handoff.next_action,
+            outcome=outcome,
+            next_action=release_action or next_action or parsed.handoff.next_action,
             retry_remaining=remaining,
+            cooldown_until=cooldown_until or parsed.handoff.cooldown_until,
             verification_summary=plan.summary,
         )
         comment_body = render_attempt_comment(releasing) + "\n\n" + proposed_body

@@ -31,7 +31,9 @@ class OmnigentEgressService:
         expected = str(launch_policy.network.get("egressPolicyRef") or "")
         if expected != OMNIGENT_EGRESS_PROFILE.ref:
             raise HarnessPlatformError(
-                "launch policy does not select the deployment Omnigent egress profile",
+                "launch policy does not select the deployment Omnigent egress "
+                f"profile: selected {expected or '(none)'}, "
+                f"expected {OMNIGENT_EGRESS_PROFILE.ref}",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
 
@@ -46,8 +48,12 @@ class OmnigentEgressService:
                 backend_ref="generic-omnigent-host",
             )
         except RuntimeError as exc:
+            # The attestation names the exact broken invariant (unhealthy
+            # gateway, stale live config, invalid attachment). Discarding it
+            # leaves the operator with an unactionable launch failure, so it
+            # travels with the typed platform error.
             raise HarnessPlatformError(
-                "restricted-egress backend attestation failed",
+                f"restricted-egress backend attestation failed: {exc}",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             ) from exc
         evidence = attestation.model_dump(by_alias=True, mode="json")

@@ -49,6 +49,10 @@ def test_portable_release_pins_source_and_preserves_checkout(tmp_path, monkeypat
             assert payload["context"].get("deployment_operator_urls") == ([operator_url] if operator_url else None)
             assert "--submit" in args
             assert kwargs["env"]["MOONMIND_IMAGE"].endswith("@" + digest)
+            # The updater reaches Docker through docker-proxy; host updates
+            # must not recreate that substrate through itself.
+            assert kwargs["env"]["MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES"] == "docker-proxy,sandbox-egress-proxy,postgres"
+            assert "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=docker-proxy,sandbox-egress-proxy,postgres" in args
             output = ""
         else:
             assert args[1] == "pull"
@@ -83,3 +87,244 @@ def test_dry_run_never_fetches_or_launches(tmp_path, monkeypatch):
     monkeypatch.setattr(update, "run", inspect)
     assert update.main(["--repo", str(tmp_path), "--dry-run"]) == 0
     assert calls == [["git", "check-ref-format", "--branch", "main"]]
+
+
+@pytest.mark.parametrize(
+    "rendered",
+    [
+        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "0.0.0.0", "published": "7000", "target": 8000}]}}},
+        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "", "published": "7000", "target": 8000}]}}},
+        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "::", "published": "7000", "target": 8000}]}}},
+        {"name": "existing-project", "services": {"api": {"ports": [{"host_ip": "192.0.2.4", "published": "7000", "target": 8000}]}}},
+        {"name": "existing-project", "services": {"api": {"environment": {"MOONMIND_PUBLIC_BASE_URL": "https://auth.example"}, "ports": [{"host_ip": "0.0.0.0", "published": "7000", "target": 8000}]}}},
+    ],
+)
+def test_bare_invocation_never_invents_operator_urls(tmp_path, monkeypatch, rendered):
+    """A bare invocation records no operator URLs: wildcard bindings require
+    an explicit --operator-url (or MOONMIND_PUBLIC_BASE_URL) so release
+    probes validate the actual operator route instead of loopback."""
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+    git("init", "-b", "main")
+    git("config", "user.email", "qualification@example.invalid")
+    git("config", "user.name", "Qualification")
+    (repo / "source.txt").write_text("committed source")
+    git("add", ".")
+    git("commit", "-m", "source")
+    revision = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    original_run = subprocess.run
+    digest = "sha256:" + "b" * 64
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        if args[1:3] == ["image", "inspect"]:
+            output = json.dumps([{"RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"], "Config": {"Labels": {"org.opencontainers.image.revision": revision}}}])
+        elif args[1:3] == ["compose", "config"]:
+            output = json.dumps(rendered)
+        elif args[1] == "run":
+            output = "services: {}"
+        elif args[1] == "compose":
+            output = ""
+        else:
+            assert args[1] == "pull"
+            output = ""
+        return SimpleNamespace(returncode=0, stdout=output)
+    monkeypatch.setattr(update.subprocess, "run", command)
+    assert update.main(["--repo", str(repo)]) == 0
+    submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
+    payload = json.loads(submission.read_text())
+    assert "deployment_operator_urls" not in payload["context"]
+def _init_repo(path):
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(path), *args], text=True).strip()
+    git("init", "-b", "main")
+    git("config", "user.email", "qualification@example.invalid")
+    git("config", "user.name", "Qualification")
+    (path / "source.txt").write_text("working tree source")
+    git("add", ".")
+    git("commit", "-m", "source")
+    return git
+
+
+def test_local_build_dry_run_never_builds_or_launches(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    _init_repo(repo)
+    calls = []
+    def inspect(args, **kwargs):
+        calls.append(args)
+        return ""
+    monkeypatch.setattr(update, "run", inspect)
+    assert update.main(["--repo", str(repo), "--local-build", "--dry-run"]) == 0
+    assert calls, "local dry-run must inspect the working tree"
+    assert all(args[0] == "git" for args in calls)
+    assert "local_source_overlay_update" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("extra", [["--resume", "00000000-0000-0000-0000-000000000000"], ["--image-repository", "example.invalid/custom"]])
+def test_local_build_rejects_release_inputs(tmp_path, extra):
+    with pytest.raises(ValueError):
+        update.main(["--repo", str(tmp_path), "--local-build", *extra])
+
+
+@pytest.mark.parametrize(
+    ("daemon_output", "hint"),
+    [
+        (
+            "Error response from daemon: manifest for ghcr.io/moonladderstudios/moonmind:sha-abc123 not found: manifest unknown",
+            "no published image",
+        ),
+        (
+            'Error response from daemon: Head "https://ghcr.io/v2/x/manifests/sha-abc": unauthorized: authentication required',
+            "docker login ghcr.io",
+        ),
+        (
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+            "Docker daemon is unreachable",
+        ),
+    ],
+)
+def test_run_reports_actionable_docker_pull_diagnostics(tmp_path, monkeypatch, daemon_output, hint):
+    def failing(args, **kwargs):
+        return SimpleNamespace(returncode=1, stdout="", stderr=daemon_output)
+    monkeypatch.setattr(update.subprocess, "run", failing)
+    with pytest.raises(RuntimeError) as excinfo:
+        update.run(["docker", "pull", "ghcr.io/moonladderstudios/moonmind:sha-abc123"], cwd=tmp_path)
+    message = str(excinfo.value)
+    assert "docker pull failed (exit 1)" in message
+    assert "ghcr.io/moonladderstudios/moonmind:sha-abc123" in message
+    assert daemon_output in message
+    assert hint in message
+    assert "deployment remains owned by its recorded release job" in message
+
+
+def test_run_redacts_credentials_in_diagnostics(tmp_path, monkeypatch):
+    def failing(args, **kwargs):
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="Head https://user:s3cr3t-token@ghcr.io/v2/x: unauthorized token=abcdef123456",
+        )
+    monkeypatch.setattr(update.subprocess, "run", failing)
+    with pytest.raises(RuntimeError) as excinfo:
+        update.run(["docker", "pull", "ghcr.io/moonladderstudios/moonmind:sha-abc123"], cwd=tmp_path)
+    message = str(excinfo.value)
+    assert "s3cr3t-token" not in message
+    assert "***@" in message
+    assert "token=***" in message
+
+
+def test_main_pull_failure_names_branch_revision_and_image(tmp_path, monkeypatch):
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    git = _init_repo(repo)
+    revision = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    original_run = subprocess.run
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        assert args[1] == "pull"
+        return SimpleNamespace(returncode=1, stdout="", stderr="manifest unknown")
+    monkeypatch.setattr(update.subprocess, "run", command)
+    with pytest.raises(RuntimeError) as excinfo:
+        update.main(["--repo", str(repo)])
+    message = str(excinfo.value)
+    assert revision in message
+    assert f":sha-{revision}" in message
+    assert "origin/main" in message
+
+
+def _init_two_commit_repo(repo):
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+    git("init", "-b", "main")
+    git("config", "user.email", "qualification@example.invalid")
+    git("config", "user.name", "Qualification")
+    (repo / "source.txt").write_text("v1")
+    git("add", ".")
+    git("commit", "-m", "first")
+    parent = git("rev-parse", "HEAD")
+    (repo / "source.txt").write_text("v2")
+    git("add", ".")
+    git("commit", "-m", "second")
+    tip = git("rev-parse", "HEAD")
+    git("remote", "add", "origin", str(repo))
+    return parent, tip
+
+
+def test_falls_back_to_newest_published_ancestor(tmp_path, monkeypatch):
+    """Default update uses newest published ancestor when tip has no image yet."""
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    parent, tip = _init_two_commit_repo(repo)
+    assert parent != tip
+    original_run = subprocess.run
+    digest = "sha256:" + "b" * 64
+    pulls = []
+
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        if args[1] == "pull":
+            pulls.append(args[2])
+            if args[2].endswith(tip):
+                return SimpleNamespace(returncode=1, stdout="", stderr="manifest unknown")
+            assert args[2].endswith(parent)
+            return SimpleNamespace(returncode=0, stdout="pulled")
+        if args[1:3] == ["image", "inspect"]:
+            output = json.dumps(
+                [
+                    {
+                        "RepoDigests": [f"ghcr.io/moonladderstudios/moonmind@{digest}"],
+                        "Config": {"Labels": {"org.opencontainers.image.revision": parent}},
+                    }
+                ]
+            )
+            return SimpleNamespace(returncode=0, stdout=output)
+        if args[1:3] == ["compose", "config"]:
+            return SimpleNamespace(returncode=0, stdout='{"name":"existing-project"}')
+        if args[1] == "run":
+            return SimpleNamespace(returncode=0, stdout="services: {}")
+        if args[1] == "compose":
+            payload = json.loads(args[-1])
+            assert payload["inputs"]["sourceRevision"] == parent
+            assert payload["inputs"]["requestedTipRevision"] == tip
+            assert payload["inputs"]["skippedUnpublishedRevisions"] == [tip]
+            return SimpleNamespace(returncode=0, stdout="")
+        raise AssertionError(f"unexpected docker command: {args}")
+
+    monkeypatch.setattr(update.subprocess, "run", command)
+    assert update.main(["--repo", str(repo)]) == 0
+    assert len(pulls) == 2
+    assert pulls[0].endswith(tip)
+    assert pulls[1].endswith(parent)
+    submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
+    record = json.loads(submission.read_text())
+    assert record["inputs"]["sourceRevision"] == parent
+    assert record["inputs"]["requestedTipRevision"] == tip
+
+
+def test_unpublished_tip_does_not_mask_auth_failure(tmp_path, monkeypatch):
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    _init_two_commit_repo(repo)
+    original_run = subprocess.run
+    pulls = []
+
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        assert args[1] == "pull"
+        pulls.append(args[2])
+        return SimpleNamespace(
+            returncode=1, stdout="", stderr="unauthorized: authentication required"
+        )
+
+    monkeypatch.setattr(update.subprocess, "run", command)
+    with pytest.raises(RuntimeError, match="docker login"):
+        update.main(["--repo", str(repo)])
+    assert len(pulls) == 1

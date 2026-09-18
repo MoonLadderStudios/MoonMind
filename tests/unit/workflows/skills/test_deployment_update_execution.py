@@ -6,10 +6,12 @@ import os
 import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import pytest
 
+from moonmind.workflows.skills import deployment_execution
 from moonmind.workflows.skills.deployment_execution import (
     ComposeCommandPlan,
     ComposeVerification,
@@ -22,13 +24,17 @@ from moonmind.workflows.skills.deployment_execution import (
     TemporalDeploymentEvidenceWriter,
     _command_plan_targeting_stack_services,
     _compose_up_args_for_services,
+    _docker_desktop_host_path,
     _ensure_command_succeeded,
     _ensure_runner_survives_update,
     _is_host_absolute_path,
+    _is_wsl_distro_path,
     _remap_host_compose_path,
     _remove_services_from_command_args,
     _service_is_excluded,
     _service_name_matches,
+    _substrate_reconciliation_targets,
+    _substrate_service_mismatches,
     _tail_text,
     _target_image_audit,
     _target_image_build_id,
@@ -2093,7 +2099,11 @@ async def test_run_compose_json_failure_bounds_stderr_in_tool_failure(
         (r"D:\code\MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
         ("C:/Projects/Moon Mind", "/run/desktop/mnt/host/c/Projects/Moon Mind"),
         ("D:/", "/run/desktop/mnt/host/d"),
+        ("/mnt/d/code/MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
+        ("/mnt/c/Users/test", "/run/desktop/mnt/host/c/Users/test"),
+        ("/mnt/d", "/run/desktop/mnt/host/d"),
         ("/srv/moonmind", "/srv/moonmind"),
+        ("/mnt/data", "/mnt/data"),
     ],
 )
 def test_checkout_bind_mapping_preserves_mount_options_and_other_sources(
@@ -2125,3 +2135,663 @@ def test_checkout_bind_mapping_preserves_mount_options_and_other_sources(
     assert volumes[1:] == [other, neighbor, named]
     assert runner._host_bind_source_for_local_path(str(tmp_path)) == expected
     assert checkout["bind"]["create_host_path"] is True
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (r"D:\code\MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
+        ("C:/repo", "/run/desktop/mnt/host/c/repo"),
+        ("/mnt/d/code/MoonMind", "/run/desktop/mnt/host/d/code/MoonMind"),
+        ("/mnt/d", "/run/desktop/mnt/host/d"),
+        ("/mnt/d/", "/run/desktop/mnt/host/d"),
+        ("/mnt/c/Users/test", "/run/desktop/mnt/host/c/Users/test"),
+        ("/srv/moonmind", None),
+        ("/mnt/data", None),
+        ("/mnt/d2/code", None),
+        ("relative/path", None),
+    ],
+)
+def test_desktop_host_path_translates_windows_and_wsl_distro_paths(path, expected):
+    """WSL /mnt/<drive> paths are not daemon-visible; they need the same
+    Desktop host rewrite as Windows drive paths. Longer /mnt/<name> mounts
+    are genuine Linux paths and must pass through.
+
+    Regression: a WSL checkout at /mnt/d/... launched updater containers
+    with empty /workspace/deployment_state volumes, causing three silent
+    FileNotFoundError deliveries and the generic exhaustion error.
+    """
+    assert _docker_desktop_host_path(path) == expected
+
+
+@pytest.mark.parametrize(
+    ("project_dir", "expected"),
+    [
+        (r"D:\code\MoonMind", True),
+        ("C:/repo", True),
+        ("/mnt/d/code/MoonMind", True),
+        ("/mnt/c", True),
+        ("/srv/moonmind", False),
+        ("/mnt/data", False),
+        ("/home/user/repo", False),
+    ],
+)
+def test_desktop_rewrite_triggers_for_windows_and_wsl_project_dirs(
+    tmp_path, project_dir, expected
+):
+    runner = HostDockerComposeRunner(
+        project_dir=project_dir, local_project_dir=str(tmp_path)
+    )
+    assert runner._requires_desktop_host_rewrite() is expected
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/mnt/d/code/MoonMind", True),
+        ("/mnt/c", True),
+        ("/mnt/d/", True),
+        (r"D:\code\MoonMind", False),
+        ("/srv/moonmind", False),
+        ("/mnt/data", False),
+        ("/mnt/d2/code", False),
+        ("relative/path", False),
+    ],
+)
+def test_wsl_distro_path_matches_only_single_letter_mnt_mounts(path, expected):
+    assert _is_wsl_distro_path(path) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("project_dir", "probe_result", "expected"),
+    [
+        # Windows drive paths are unambiguous Desktop signals: always rewrite.
+        (r"D:\code\MoonMind", False, True),
+        (r"D:\code\MoonMind", None, True),
+        # WSL shapes rewrite on Desktop-confirmed or unknown daemons, and keep
+        # the POSIX namespace on a confirmed native Linux daemon.
+        ("/mnt/d/code/MoonMind", True, True),
+        ("/mnt/d/code/MoonMind", None, True),
+        ("/mnt/d/code/MoonMind", False, False),
+        # Native Linux paths never rewrite regardless of the daemon.
+        ("/srv/moonmind", False, False),
+        ("/srv/moonmind", True, False),
+    ],
+)
+async def test_desktop_rewrite_decision_uses_daemon_signal_for_wsl(
+    tmp_path, monkeypatch, project_dir, probe_result, expected
+):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.deployment_execution._probe_docker_desktop_daemon",
+        AsyncMock(return_value=probe_result),
+    )
+    runner = HostDockerComposeRunner(
+        project_dir=project_dir, local_project_dir=str(tmp_path)
+    )
+    assert await runner._use_desktop_host_rewrite() is expected
+
+
+@pytest.mark.asyncio
+async def test_desktop_rewrite_requires_a_local_checkout_for_daemon_input(
+    tmp_path, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    probe = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "moonmind.workflows.skills.deployment_execution._probe_docker_desktop_daemon",
+        probe,
+    )
+    runner = HostDockerComposeRunner(project_dir="/mnt/d/code/MoonMind")
+    assert await runner._use_desktop_host_rewrite() is False
+    probe.assert_not_awaited()
+
+
+@pytest.fixture
+def host_dir_evidence(monkeypatch):
+    """Model what the daemon reports, without touching a real daemon."""
+
+    state = {"installed": (), "self": None}
+    monkeypatch.setattr(deployment_execution, "_host_dir_evidence_cache", {})
+    monkeypatch.setattr(
+        deployment_execution,
+        "installed_bind_sources",
+        lambda local_mount, *, project_name: state["installed"],
+    )
+    monkeypatch.setattr(
+        deployment_execution,
+        "daemon_bind_source",
+        lambda local_mount, **kwargs: state["self"],
+    )
+    return state
+
+
+@pytest.mark.asyncio
+async def test_installed_containers_decide_the_compose_project_directory(
+    tmp_path, monkeypatch, host_dir_evidence
+):
+    """The deployment's own containers settle which host path Compose receives.
+
+    Docker Desktop records two spellings for the same WSL checkout, and Compose
+    hashes the bind source string into every container's config. Following this
+    worker's own ephemeral mount instead recreated every service mid-release —
+    including the socket proxy the updater talks to — so the installed
+    containers decide.
+    """
+
+    from unittest.mock import AsyncMock
+
+    host_dir_evidence["installed"] = ("/mnt/d/code/MoonMind",)
+    host_dir_evidence["self"] = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/x"
+    desktop = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        deployment_execution, "_probe_docker_desktop_daemon", desktop
+    )
+    runner = HostDockerComposeRunner(
+        project_dir="/mnt/d/code/MoonMind", local_project_dir=str(tmp_path)
+    )
+
+    assert await runner._record_daemon_host_dir() == "/mnt/d/code/MoonMind"
+    assert await runner._use_desktop_host_rewrite() is False
+    assert runner._host_dir() == Path("/mnt/d/code/MoonMind")
+    desktop.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_installed_spelling_survives_a_differently_written_project_dir(
+    tmp_path, host_dir_evidence
+):
+    """An equivalent spelling must not rewrite every container's config hash."""
+
+    share = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/abc"
+    host_dir_evidence["installed"] = (share,)
+    runner = HostDockerComposeRunner(
+        project_dir="/mnt/d/code/MoonMind", local_project_dir=str(tmp_path)
+    )
+
+    assert await runner._record_daemon_host_dir() == share
+
+
+@pytest.mark.asyncio
+async def test_configured_project_dir_wins_when_the_deployment_proves_it(
+    tmp_path, host_dir_evidence
+):
+    """A declared path the deployment already uses is never replaced."""
+
+    host_dir_evidence["installed"] = (
+        "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/abc",
+        "/mnt/d/code/MoonMind",
+    )
+    runner = HostDockerComposeRunner(
+        # Compose interpolation can leave a doubled separator; the same path.
+        project_dir="//mnt/d/code/MoonMind",
+        local_project_dir=str(tmp_path),
+    )
+
+    assert await runner._record_daemon_host_dir() == "/mnt/d/code/MoonMind"
+
+
+@pytest.mark.asyncio
+async def test_worker_mount_decides_before_the_deployment_has_containers(
+    tmp_path, host_dir_evidence
+):
+    """A first install has nothing to match, so our own mount is the evidence."""
+
+    host_dir_evidence["self"] = "/mnt/d/code/MoonMind"
+    runner = HostDockerComposeRunner(
+        project_dir="/mnt/d/code/MoonMind", local_project_dir=str(tmp_path)
+    )
+
+    assert await runner._record_daemon_host_dir() == "/mnt/d/code/MoonMind"
+    assert await runner._use_desktop_host_rewrite() is False
+
+
+@pytest.mark.asyncio
+async def test_desktop_rewrite_still_guesses_without_daemon_evidence(
+    tmp_path, monkeypatch, host_dir_evidence
+):
+    """Outside a container the path shape remains the only available signal."""
+
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        deployment_execution,
+        "_probe_docker_desktop_daemon",
+        AsyncMock(return_value=True),
+    )
+    runner = HostDockerComposeRunner(
+        project_dir="/mnt/d/code/MoonMind", local_project_dir=str(tmp_path)
+    )
+
+    assert await runner._use_desktop_host_rewrite() is True
+    assert runner._host_dir() == Path("/mnt/d/code/MoonMind")
+
+
+@pytest.mark.asyncio
+async def test_compose_uses_the_checkout_source_its_deployment_resolves(
+    tmp_path, monkeypatch, host_dir_evidence
+):
+    """Compose runs against the host path this deployment already resolves.
+
+    The detached release updater inherits these bind sources, so a project
+    directory the daemon cannot resolve gives it an empty state volume instead
+    of its durable request.
+    """
+
+    local_dir = tmp_path / "checkout"
+    local_dir.mkdir()
+    (local_dir / "docker-compose.yaml").write_text(
+        "services:\n  api:\n    image: example/app:latest\n", encoding="utf-8"
+    )
+    host_dir = tmp_path / "host-checkout"
+    host_dir.symlink_to(local_dir, target_is_directory=True)
+    host_dir_evidence["installed"] = (str(host_dir),)
+    calls: list[tuple[str, ...]] = []
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return b"ok", b""
+
+    async def fake_create_subprocess_exec(
+        *args: str,
+        cwd: str,
+        env: Mapping[str, str],
+        stdout: Any,
+        stderr: Any,
+    ):
+        calls.append(args)
+        return FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    runner = HostDockerComposeRunner(
+        project_dir="/mnt/d/code/MoonMind", local_project_dir=str(local_dir)
+    )
+
+    result = await runner._run_compose_command(("docker", "compose", "up", "-d"))
+
+    assert result["exitCode"] == 0
+    # One command: the daemon-visible source needs no rendered rewrite pass.
+    assert len(calls) == 1
+    assert calls[0][calls[0].index("--project-directory") + 1] == str(host_dir)
+    assert calls[0][calls[0].index("-f") + 1] == str(local_dir / "docker-compose.yaml")
+
+
+def test_installed_bind_sources_reads_the_deployment_containers(monkeypatch):
+    """Installed services are ranked by how many of them share a spelling."""
+
+    import subprocess
+
+    share = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/abc"
+    recorded: list[list[str]] = []
+
+    def _fake_run(args, **kwargs):
+        recorded.append(list(args))
+        if args[1] == "ps":
+            return SimpleNamespace(stdout="aaa\nbbb\nccc\n", stderr="", returncode=0)
+        mounts = [
+            [{"Source": "/mnt/d/code/MoonMind", "Destination": "/workspace/host_project"}],
+            [{"Source": share, "Destination": "/workspace/host_project"}],
+            [
+                {"Source": "/mnt/d/code/MoonMind", "Destination": "/workspace/host_project/"},
+                {"Source": "/elsewhere", "Destination": "/workspace/other"},
+            ],
+        ]
+        return SimpleNamespace(
+            stdout="\n".join(json.dumps(row) for row in mounts),
+            stderr="",
+            returncode=0,
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    assert deployment_execution.installed_bind_sources(
+        "/workspace/host_project", project_name="moonmind"
+    ) == ("/mnt/d/code/MoonMind", share)
+    assert "label=com.docker.compose.project=moonmind" in recorded[0]
+    # Release cohorts and `compose run` containers are transient, not installed.
+    assert "label=com.docker.compose.oneoff=False" in recorded[0]
+    assert recorded[1][-3:] == ["aaa", "bbb", "ccc"]
+
+
+def test_installed_bind_sources_reports_nothing_without_containers(monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda args, **kwargs: SimpleNamespace(stdout="", stderr="", returncode=0),
+    )
+
+    assert (
+        deployment_execution.installed_bind_sources(
+            "/workspace/host_project", project_name="moonmind"
+        )
+        == ()
+    )
+
+
+def test_daemon_bind_source_reads_the_worker_container_mount_table(monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(
+        deployment_execution, "_read_self_container_id", lambda: "abc123"
+    )
+    recorded: list[list[str]] = []
+
+    def _fake_run(args, **kwargs):
+        recorded.append(list(args))
+        mounts = json.dumps(
+            [
+                {"Source": "/other", "Destination": "/workspace/elsewhere"},
+                {"Source": "/mnt/d/code/MoonMind", "Destination": "/workspace/host_project/"},
+            ]
+        )
+        return SimpleNamespace(stdout=mounts, stderr="", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    assert (
+        deployment_execution.daemon_bind_source("/workspace/host_project")
+        == "/mnt/d/code/MoonMind"
+    )
+    assert recorded[0][:2] == ["docker", "inspect"]
+
+
+def test_daemon_bind_source_retries_a_transient_inspect_failure(monkeypatch):
+    import subprocess
+    import time
+
+    monkeypatch.setattr(
+        deployment_execution, "_read_self_container_id", lambda: "abc123"
+    )
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    attempts = {"count": 0}
+
+    def _fake_run(args, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise subprocess.TimeoutExpired(cmd="docker", timeout=10)
+        mounts = json.dumps(
+            [{"Source": "/host/repo", "Destination": "/workspace/host_project"}]
+        )
+        return SimpleNamespace(stdout=mounts, stderr="", returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+
+    assert (
+        deployment_execution.daemon_bind_source(
+            "/workspace/host_project", attempts=3, backoff_seconds=0.0
+        )
+        == "/host/repo"
+    )
+    assert attempts["count"] == 2
+
+
+def test_daemon_bind_source_returns_none_after_exhausting_retries(monkeypatch):
+    import subprocess
+    import time
+
+    monkeypatch.setattr(
+        deployment_execution, "_read_self_container_id", lambda: "abc123"
+    )
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    calls = {"count": 0}
+
+    def _always_fail(args, **kwargs):
+        calls["count"] += 1
+        raise FileNotFoundError("docker missing")
+
+    monkeypatch.setattr(subprocess, "run", _always_fail)
+
+    assert (
+        deployment_execution.daemon_bind_source(
+            "/workspace/host_project", attempts=3, backoff_seconds=0.0
+        )
+        is None
+    )
+    assert calls["count"] == 3
+
+
+def test_daemon_bind_source_reports_no_evidence_outside_a_container(monkeypatch):
+    monkeypatch.setattr(deployment_execution, "_read_self_container_id", lambda: None)
+
+    assert deployment_execution.daemon_bind_source("/workspace/host_project") is None
+
+
+_SUBSTRATE_CONFIGURED = [
+    "api",
+    "postgres",
+    "docker-proxy",
+    "sandbox-egress-proxy",
+    "temporal-worker-deployment-control",
+]
+_SUBSTRATE_IMAGES = {
+    "api": "ghcr.io/moonladderstudios/moonmind:latest",
+    "postgres": "postgres:17",
+    "docker-proxy": "tecnativa/docker-socket-proxy:0.1.1",
+    "sandbox-egress-proxy": "tecnativa/docker-socket-proxy:0.1.1",
+    "temporal-worker-deployment-control": "ghcr.io/moonladderstudios/moonmind:latest",
+}
+_SUBSTRATE_EXCLUDED = (
+    "temporal-worker-deployment-control",
+    "docker-proxy",
+    "sandbox-egress-proxy",
+    "postgres",
+)
+
+
+def _substrate_ps(*, postgres_image: str, proxy_image: str) -> list[dict[str, str]]:
+    return [
+        {
+            "ID": "api1",
+            "Name": "moonmind-api-1",
+            "Service": "api",
+            "State": "running",
+            "Image": "ghcr.io/moonladderstudios/moonmind:latest",
+        },
+        {
+            "ID": "pg1",
+            "Name": "moonmind-postgres-1",
+            "Service": "postgres",
+            "State": "running",
+            "Image": postgres_image,
+        },
+        {
+            "ID": "proxy1",
+            "Name": "moonmind-docker-proxy-1",
+            "Service": "docker-proxy",
+            "State": "running",
+            "Image": proxy_image,
+        },
+        {
+            "ID": "egress1",
+            "Name": "moonmind-sandbox-egress-proxy-1",
+            "Service": "sandbox-egress-proxy",
+            "State": "running",
+            "Image": "tecnativa/docker-socket-proxy:0.1.1",
+        },
+    ]
+
+
+class SubstrateRunner(RecordingRunner):
+    """Replays a before state and a post-substrate state for staged handoff."""
+
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        before_services: list[dict[str, str]],
+        substrate_services: list[dict[str, str]],
+    ) -> None:
+        super().__init__(events)
+        self.before_services = before_services
+        self.substrate_services = substrate_services
+
+    async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
+        self.events.append(f"runner:capture:{phase}")
+        running = self.substrate_services if phase == "substrate" else self.before_services
+        return {
+            "stack": stack,
+            "phase": phase,
+            "configuredServices": list(_SUBSTRATE_CONFIGURED),
+            "configuredServiceImages": dict(_SUBSTRATE_IMAGES),
+            "services": running,
+            "images": [],
+        }
+
+
+def test_substrate_targets_cover_configured_exclusions_but_never_the_runner():
+    before = {
+        "configuredServices": list(_SUBSTRATE_CONFIGURED),
+        "configuredServiceImages": dict(_SUBSTRATE_IMAGES),
+    }
+    assert _substrate_reconciliation_targets(
+        before_state=before, excluded_services=_SUBSTRATE_EXCLUDED
+    ) == ("postgres", "docker-proxy", "sandbox-egress-proxy")
+    assert _substrate_reconciliation_targets(
+        before_state=before,
+        excluded_services=("temporal-worker-deployment-control",),
+    ) == ()
+    assert _substrate_reconciliation_targets(before_state=before, excluded_services=()) == ()
+    assert _substrate_reconciliation_targets(
+        before_state={"configuredServices": ["api"]},
+        excluded_services=_SUBSTRATE_EXCLUDED,
+    ) == ()
+
+
+def test_substrate_mismatches_detect_stale_and_missing_services():
+    drifted = {
+        "services": _substrate_ps(
+            postgres_image="postgres:16",
+            proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+        ),
+        "images": [],
+    }
+    mismatches = _substrate_service_mismatches(
+        state=drifted,
+        targets=("postgres", "docker-proxy", "sandbox-egress-proxy"),
+        expected_images=_SUBSTRATE_IMAGES,
+    )
+    assert [item["service"] for item in mismatches] == ["postgres"]
+    assert mismatches[0]["expectedImage"] == "postgres:17"
+
+    converged = {
+        "services": _substrate_ps(
+            postgres_image="postgres:17",
+            proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+        ),
+        "images": [],
+    }
+    assert (
+        _substrate_service_mismatches(
+            state=converged,
+            targets=("postgres", "docker-proxy", "sandbox-egress-proxy"),
+            expected_images=_SUBSTRATE_IMAGES,
+        )
+        == []
+    )
+
+    missing = {
+        "services": [
+            entry for entry in converged["services"] if entry["Service"] != "postgres"
+        ],
+        "images": [],
+    }
+    absent = _substrate_service_mismatches(
+        state=missing,
+        targets=("postgres",),
+        expected_images=_SUBSTRATE_IMAGES,
+    )
+    assert [item["service"] for item in absent] == ["postgres"]
+    assert "running" in absent[0]["reason"].lower()
+
+
+@pytest.mark.asyncio
+async def test_update_reconciles_and_verifies_drifted_substrate_before_completion(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    runner = SubstrateRunner(
+        events,
+        before_services=_substrate_ps(
+            postgres_image="postgres:16",
+            proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+        ),
+        substrate_services=_substrate_ps(
+            postgres_image="postgres:17",
+            proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+        ),
+    )
+    executor, _store, evidence, _runner, _events = _executor(
+        runner=runner, events=events, excluded_services=_SUBSTRATE_EXCLUDED
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    kinds = [command[0] for command in runner.commands]
+    assert kinds[:2] == ["pull", "up"]
+    main_up = runner.commands[1][1]
+    assert "postgres" not in main_up
+    assert "docker-proxy" not in main_up
+    substrate_pull = runner.commands[2][1]
+    substrate_up = runner.commands[3][1]
+    assert tuple(substrate_pull[-1:]) == ("postgres",)
+    assert "--no-deps" in substrate_up
+    assert "postgres" in substrate_up
+    assert "temporal-worker-deployment-control" not in substrate_up
+    assert "runner:capture:substrate" in events
+    verification = next(
+        payload for kind, payload in evidence.records if kind == "verification"
+    )
+    assert verification["substrate"]["remaining"] == []
+    assert verification["substrate"]["reconciled"] == ["postgres"]
+
+
+@pytest.mark.asyncio
+async def test_update_skips_substrate_stage_when_already_converged(monkeypatch) -> None:
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    converged = _substrate_ps(
+        postgres_image="postgres:17",
+        proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+    )
+    runner = SubstrateRunner(
+        events, before_services=converged, substrate_services=converged
+    )
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner, events=events, excluded_services=_SUBSTRATE_EXCLUDED
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    assert [command[0] for command in runner.commands] == ["pull", "up"]
+    assert "runner:capture:substrate" not in events
+
+
+@pytest.mark.asyncio
+async def test_update_fails_when_substrate_does_not_converge(monkeypatch) -> None:
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    drifted = _substrate_ps(
+        postgres_image="postgres:16",
+        proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+    )
+    runner = SubstrateRunner(
+        events, before_services=drifted, substrate_services=drifted
+    )
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner, events=events, excluded_services=_SUBSTRATE_EXCLUDED
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "FAILED"
+    assert "substrate" in str(result.outputs.get("failure", {}).get("reason", "")).lower()

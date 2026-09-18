@@ -20,6 +20,8 @@ Temporal Visibility is used for bounded, operationally important workflow querie
 - compute facets and metrics where exact counts are operationally safe;
 - recover gracefully when optional Search Attributes are absent during migration.
 
+The product list, metrics, and facet queries exclude `ExecutionStatus="ContinuedAsNew"` before pagination or counting. Those closed runs are predecessors of the current logical Workflow, not separate executing workflows. The successor supplies the visible status, including after it closes; predecessor history remains available in Temporal.
+
 Temporal Visibility is **not** the source of truth for full workflow details, step ledgers, artifacts, prompts, raw logs, provider-native metadata, or external session internals.
 
 ---

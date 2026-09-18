@@ -15,6 +15,7 @@ from moonmind.provider_profiles.isolation_policy import (
     ISOLATION_LOCK_REASON,
     ISOLATION_POLICY_SOURCE,
     derive_isolation_policy,
+    is_safe_provider_id,
 )
 from moonmind.workflows.temporal.runtime.providers.registry import (
     get_provider,
@@ -204,23 +205,6 @@ _API_KEY_STRATEGIES: dict[tuple[str, str], ProviderApiKeyStrategy] = {
         materialization_mode="api_key_env",
         ready_label="OpenAI API key ready",
     ),
-    ("opencode", "opencode-go"): ProviderApiKeyStrategy(
-        runtime_id="opencode",
-        provider_id="opencode-go",
-        secret_role="opencode_api_key",
-        role_label="OpenCode Go API key",
-        env_key="OPENCODE_API_KEY",
-        clear_env_keys=(
-            "OPENCODE_AUTH_CONTENT",
-            "OPENCODE_CONFIG",
-            "OPENCODE_CONFIG_CONTENT",
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-        ),
-        auth_strategy="opencode_auth_json",
-        materialization_mode="composite",
-        ready_label="OpenCode Go API key ready",
-    ),
 }
 
 
@@ -228,7 +212,32 @@ def provider_api_key_strategy(
     runtime_id: str,
     provider_id: str,
 ) -> ProviderApiKeyStrategy | None:
-    return _API_KEY_STRATEGIES.get((runtime_id.strip(), provider_id.strip()))
+    runtime_id = runtime_id.strip()
+    provider_id = provider_id.strip()
+    if (
+        runtime_id == "opencode"
+        and provider_id != "opencode"
+        and is_safe_provider_id(provider_id)
+    ):
+        policy = derive_isolation_policy(
+            runtime_id=runtime_id,
+            provider_id=provider_id,
+            authentication_method="api_key",
+        )
+        assert policy is not None
+        label = "OpenCode Go" if provider_id == "opencode-go" else provider_id
+        return ProviderApiKeyStrategy(
+            runtime_id=runtime_id,
+            provider_id=provider_id,
+            secret_role="opencode_api_key",
+            role_label=f"{label} API key",
+            env_key="OPENCODE_API_KEY",
+            clear_env_keys=policy.keys,
+            auth_strategy="opencode_auth_json",
+            materialization_mode="composite",
+            ready_label=f"{label} API key ready",
+        )
+    return _API_KEY_STRATEGIES.get((runtime_id, provider_id))
 
 
 def required_secret_roles(runtime_id: str, provider_id: str) -> tuple[str, ...]:

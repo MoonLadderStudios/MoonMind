@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     OPS_DIAGNOSE_STACK_TOOL_NAME,
+    RELEASE_SUPERVISION_MAX_ATTEMPTS,
     build_deployment_update_tool_definition_payload,
     build_ops_diagnose_stack_tool_definition_payload,
 )
@@ -106,7 +109,10 @@ def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
     assert definition.to_payload()["security"]["opsRuntime"] == raw_payload[
         "security"
     ]["opsRuntime"]
-    assert definition.policies.retries.max_attempts == 1
+    # The release is detached and outlives its supervising Activity, so the
+    # attempt budget is derived from the job budget rather than pinned here.
+    # See test_deployment_update_policy_supervises_the_detached_release_budget.
+    assert definition.policies.retries.max_attempts == RELEASE_SUPERVISION_MAX_ATTEMPTS
     assert definition.policies.retries.non_retryable_error_codes == (
         "INVALID_INPUT",
         "PERMISSION_DENIED",
@@ -310,3 +316,107 @@ def test_deployment_update_plan_rejects_shell_path_and_runner_overrides(
 
     with pytest.raises(PlanValidationError, match=f"Unexpected field '{field}'"):
         validate_plan_payload(payload=payload, registry_snapshot=snapshot)
+
+
+def test_deployment_update_policy_supervises_the_detached_release_budget() -> None:
+    """The supervising activity must outlive the job it supervises.
+
+    Regression: the detached updater owns a two-hour budget and retries three
+    times inside it, while ``deployment.update_compose_stack`` was declared
+    with a single 900-second attempt. Promotion replaces every worker fleet,
+    including the one running this activity, so a single attempt could
+    neither wait out a long release nor re-attach after its own worker was
+    replaced. Temporal failed the workflow while the release succeeded.
+    """
+
+    from moonmind.workflows.skills.deployment_release import (
+        RELEASE_JOB_BUDGET_SECONDS,
+    )
+
+    definition = parse_tool_definition(
+        build_deployment_update_tool_definition_payload()
+    )
+    timeouts = definition.policies.timeouts
+    retries = definition.policies.retries
+
+    # Promotion replaces this activity's own worker, so re-attachment - and
+    # therefore more than one attempt - is the normal path, not the edge case.
+    assert retries.max_attempts > 1
+    # The job's own deadline decides when a release stops, so the activity
+    # must still be scheduled when that deadline arrives.
+    assert timeouts.schedule_to_close_seconds >= RELEASE_JOB_BUDGET_SECONDS
+    # Attempts cover the budget end to end; no release inside its own budget
+    # can exhaust the supervisor first.
+    assert (
+        retries.max_attempts * timeouts.start_to_close_seconds
+        >= RELEASE_JOB_BUDGET_SECONDS
+    )
+    # A supervision window that never ends cannot notice a replaced worker.
+    assert timeouts.start_to_close_seconds < RELEASE_JOB_BUDGET_SECONDS
+    # A terminal release failure stays terminal.
+    assert retries.non_retryable_error_codes == (
+        "INVALID_INPUT",
+        "PERMISSION_DENIED",
+        "POLICY_VIOLATION",
+        "DEPLOYMENT_LOCKED",
+    )
+
+
+def test_supervision_window_never_interrupts_pre_launch_work() -> None:
+    """One attempt must outlast a single pre-launch compose command.
+
+    Regression (Codex P1 on #4422): the supervision window was shorter than
+    the deployment runner's own command timeout, so a slow updater pull could
+    not finish inside one attempt. Temporal cancelled it mid-pull and started
+    an overlapping retry, and the durable deadline - established only after
+    the pull - landed past the supervising Activity's schedule, leaving a
+    near-budget release running after its workflow had already timed out.
+    """
+
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+    from moonmind.workflows.skills.deployment_tools import (
+        RELEASE_JOB_BUDGET_SECONDS,
+        RELEASE_SUPERVISION_SCHEDULE_TO_CLOSE_SECONDS,
+        RELEASE_SUPERVISION_WINDOW_SECONDS,
+    )
+
+    # A window shorter than one compose command cancels that command instead
+    # of supervising it.
+    command_timeout = next(
+        field.default
+        for field in dataclasses.fields(HostDockerComposeRunner)
+        if field.name == "command_timeout_seconds"
+    )
+    assert RELEASE_SUPERVISION_WINDOW_SECONDS >= command_timeout
+    # The Activity must still be scheduled when the job's deadline arrives,
+    # with a window of margin for the final re-attachment to read the receipt.
+    assert (
+        RELEASE_SUPERVISION_SCHEDULE_TO_CLOSE_SECONDS
+        >= RELEASE_JOB_BUDGET_SECONDS + RELEASE_SUPERVISION_WINDOW_SECONDS
+    )
+
+
+def test_supervision_window_leaves_headroom_beyond_the_runner_timeout() -> None:
+    """A command that uses its whole timeout must still reach launch.
+
+    Regression (Codex P2 round 2 on #4422): the window merely equalled the
+    runner's command timeout. The Activity clock starts before the compose
+    subprocess does, and after the pull the updater must still be inspected
+    and ``request.json`` published, so a pull that succeeded near its
+    supported timeout was cancelled anyway - forcing another pull on retry
+    and spending the durable budget on repeated pre-launch work.
+    """
+
+    from moonmind.workflows.skills.deployment_tools import (
+        RELEASE_PRELAUNCH_HEADROOM_SECONDS,
+        RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS,
+        RELEASE_SUPERVISION_WINDOW_SECONDS,
+    )
+
+    assert RELEASE_PRELAUNCH_HEADROOM_SECONDS > 0
+    assert (
+        RELEASE_SUPERVISION_WINDOW_SECONDS
+        == RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS + RELEASE_PRELAUNCH_HEADROOM_SECONDS
+    )
+    # Strictly greater: equality is what round 2 rejected.
+    assert RELEASE_SUPERVISION_WINDOW_SECONDS > RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS

@@ -115,6 +115,47 @@ def test_credential_free_profile_derives_empty_policy() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "provider_id", ["openrouter", "future.v2_provider-1", "opencode-go"]
+)
+def test_opencode_api_key_isolation_is_runtime_owned(provider_id: str) -> None:
+    policy = derive_isolation_policy(
+        runtime_id="opencode", provider_id=provider_id, authentication_method="api_key"
+    )
+    go_policy = derive_isolation_policy(
+        runtime_id="opencode", provider_id="opencode-go", authentication_method="api_key"
+    )
+    assert policy is not None
+    assert policy.keys == go_policy.keys
+    merged = merge_enrollment_policy(
+        stored_keys=["CUSTOM_KEY", "PATH", "bad-key"], derived=policy
+    )
+    assert merged == [*policy.keys, "CUSTOM_KEY"]
+    effective, metadata = resolve_launch_clear_env_keys({
+        "runtime_id": "opencode",
+        "provider_id": provider_id,
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "composite",
+        "clear_env_keys": merged,
+    })
+    assert set(effective) == set(merged)
+    assert metadata["strategy_id"] == f"opencode/{provider_id}/api_key"
+
+
+@pytest.mark.parametrize(
+    "provider_id", ["../bad", "bad/provider", "bad provider", "Bad", "-bad"]
+)
+def test_unsafe_opencode_provider_has_no_api_key_isolation(provider_id: str) -> None:
+    assert (
+        derive_isolation_policy(
+            runtime_id="opencode",
+            provider_id=provider_id,
+            authentication_method="api_key",
+        )
+        is None
+    )
+
+
 def test_malformed_override_rejected() -> None:
     policy = derive_isolation_policy(
         runtime_id="codex_cli",

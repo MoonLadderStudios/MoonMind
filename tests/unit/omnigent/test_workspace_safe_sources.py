@@ -1334,7 +1334,42 @@ async def test_forged_grant_does_not_poison_generation_ledger(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_remote_daemon_without_mapping_fails_before_launch(
+async def test_remote_daemon_mounts_the_deployment_volume_subpath(
+    tmp_path, monkeypatch
+):
+    """A remote daemon needs the volume, not a daemon-visible host path.
+
+    The deployment already determines the workspace volume, so no
+    ``WORKFLOW_WORKSPACE_DAEMON_ROOT`` declaration is required: Docker
+    resolves the volume's own storage, which a host path derived from the
+    reported mountpoint cannot reach on every supported daemon.
+    """
+
+    monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
+    monkeypatch.delenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", raising=False)
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(tmp_path))
+    workspace_id = _workspace_id()
+    (tmp_path / "temporal_sandbox" / workspace_id / "repo").mkdir(parents=True)
+
+    async def runner(argv, input_bytes=None):
+        return 0, "", ""
+
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=runner, workspace_root=tmp_path
+    )
+    attachment = await materializer.materialize(
+        _request(_locator_spec(workspace_id)),
+        runtime_uid=os.getuid(),
+        runtime_gid=os.getgid(),
+    )
+
+    assert attachment["kind"] == "volume"
+    assert attachment["sourceRef"] == "agent_workspaces"
+    assert attachment["subPath"] == f"temporal_sandbox/{workspace_id}/repo"
+
+
+@pytest.mark.asyncio
+async def test_remote_daemon_without_a_usable_volume_fails_before_launch(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("WORKFLOW_DOCKER_DAEMON_MODE", "remote")
@@ -1347,7 +1382,9 @@ async def test_remote_daemon_without_mapping_fails_before_launch(
         return 0, "", ""
 
     materializer = OmnigentWorkspaceMaterializer(
-        command_runner=runner, workspace_root=tmp_path
+        command_runner=runner,
+        workspace_root=tmp_path,
+        workspace_volume="not a volume name",
     )
     with pytest.raises(HarnessPlatformError, match="daemon"):
         await materializer.materialize(

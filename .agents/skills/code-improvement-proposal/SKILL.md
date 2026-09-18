@@ -105,16 +105,11 @@ thresholds:
 
 Use trusted tool surfaces, never raw credentials in the shell.
 
-For GitHub, prefer `gh` when available:
-
-```bash
-gh auth status --hostname github.com
-gh repo view <owner/repo> --json nameWithOwner,viewerPermission,isPrivate
-gh issue list --repo <owner/repo> --state open --search "<theme/path terms>" --json number,title,url,labels
-gh issue create --repo <owner/repo> --title "<title>" --body-file <body_file> --label "<label>"
-```
-
-Use a GitHub connector only when `gh` is unavailable or unauthenticated.
+For GitHub, prefer `gh` when available; use a GitHub connector only when `gh`
+is unavailable or unauthenticated. See
+[the provider command catalog](references/provider-commands.md) for the
+selected-provider `gh` invocation shapes and the GitHub payload template; load
+it only when publishing through GitHub.
 
 For Jira, prefer MoonMind's trusted Jira MCP/tool surface or connector. Do not expect raw Jira credentials in the agent shell and do not ask for `ATLASSIAN_*` secrets. Fetch project create metadata before publishing so required fields and issue-type IDs are validated.
 
@@ -127,7 +122,7 @@ Prefer findings that are:
 - evidence-backed and tied to exact files and line ranges,
 - likely to improve correctness, performance, maintainability, modularity, or architecture alignment,
 - specific enough for an engineer to implement,
-- validated by a test or manual verification plan.
+- validated by an executable test or verification plan suitable to the repository.
 
 Avoid findings that are:
 
@@ -266,33 +261,13 @@ For GitHub, before creating an issue:
 3. If no duplicate exists and `mode=publish`, create the issue.
 4. If `mode=dry_run`, output the payload only.
 
-GitHub payload shape:
-
-```json
-{
-  "title": "Code improvement proposal: centralize payments retry and idempotency handling",
-  "body": "<markdown issue body>",
-  "labels": ["code-quality", "technical-debt", "refactor"],
-  "assignees": []
-}
-```
+GitHub payload shape and recommended labels live in
+[the provider command catalog](references/provider-commands.md); load it only
+when publishing through GitHub.
 
 Recommended GitHub labels: `code-quality`, `technical-debt`, `refactor`, `bug`, `performance`, `architecture`, `testing`, `needs-triage`.
 
-For Jira, keep the internal issue body in Markdown first, then convert it to Atlassian Document Format (ADF) at the final publishing step. Fetch create metadata for the target project and issue type first, because Jira fields vary by project; map requested fields to Jira field IDs through metadata instead of hardcoding custom field IDs. Then create the issue via `POST /rest/api/3/issue` (or the trusted Jira tool surface). Payload shape:
-
-```json
-{
-  "fields": {
-    "project": { "key": "ENG" },
-    "issuetype": { "name": "Task" },
-    "summary": "Code improvement proposal: centralize payments retry and idempotency handling",
-    "labels": ["code-quality", "technical-debt", "refactor"],
-    "components": [{ "name": "Payments" }],
-    "description": { "type": "doc", "version": 1, "content": [] }
-  }
-}
-```
+For Jira, keep the internal issue body in Markdown first, then convert it to Atlassian Document Format (ADF) at the final publishing step. Fetch create metadata for the target project and issue type first, because Jira fields vary by project; map requested fields to Jira field IDs through metadata instead of hardcoding custom field IDs. Then create the issue through the trusted Jira tool surface (create operation with metadata-resolved fields, honoring the request's existing write intent, validation, and receipt semantics). A standalone adapter is permitted only when explicitly authorized, with equivalent write-intent, validation, and receipt semantics. Raw provider API shapes such as `POST /rest/api/3/issue` are not the primary path here; they belong only in [the provider command catalog](references/provider-commands.md).
 
 Before retrying after an uncertain network failure on either backend, search for a matching recently created issue (by title/path/theme for GitHub, by project/summary/marker for Jira) to avoid duplicates.
 
@@ -366,7 +341,7 @@ Rationale: `<why this matters now>`
 - [ ] Integration test for `<flow>`
 - [ ] Existing test suite passes
 - [ ] Linter/typechecker passes
-- [ ] Manual smoke test for `<user-facing flow>`
+- [ ] Targeted executable verification from the repository's own acceptance entrypoints (tests, checks, or documented validation commands; not a mandatory human smoke test) covering `<user-facing flow>`
 
 ## Architecture alignment
 
@@ -417,7 +392,9 @@ Use the issue for human planning and the optional SARIF for file/line-level stat
 
 ## Output statuses
 
-Report exactly one terminal status: `dry_run` (payload only), `published` (issue created, include URL/key), `duplicate` (matched an existing open issue, no new issue created), `needs_routing` (no backend could be resolved), or `blocked` (a required tool, permission, or field is unavailable). Include sanitized blocker details when blocked.
+A clean review may legitimately produce no findings: report `no_findings` with the reviewed scope and evidence instead of inventing a ticket to fill a quota.
+
+Report exactly one terminal status: `dry_run` (payload only), `published` (issue created, include URL/key), `duplicate` (matched an existing open issue, no new issue created), `needs_routing` (no backend could be resolved), `no_findings` (review completed with evidence and nothing met the proposal bar), or `blocked` (a required tool, permission, or field is unavailable). Include sanitized blocker details when blocked.
 
 ## Failure modes
 

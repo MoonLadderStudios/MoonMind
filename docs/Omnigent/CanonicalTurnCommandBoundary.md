@@ -3,7 +3,7 @@
 Status: Implemented
 Document Class: System / Feature Design View
 Owners: MoonMind Platform
-Last updated: 2026-08-29
+Last updated: 2026-09-16
 
 **Issue:** [MoonLadderStudios/MoonMind#3707](https://github.com/MoonLadderStudios/MoonMind/issues/3707) ([Omnigent control plane 7/11]).
 
@@ -55,6 +55,14 @@ The source is durable on `omnigent_turn_attempts.lineage_kind`, enforced by a
 database `CHECK` constraint and by `coerce_turn_source`, which fails closed. The
 source changes authorization, evidence, and policy; it never changes the command,
 idempotency, fencing, observation, or terminality model.
+
+The database constraint admits the same vocabulary, including bounded Skill
+terminal-contract continuations. Migration `383_terminal_contract_source` expands
+the existing constraint without rewriting any turn. Downgrade refuses while
+retained turns use the new source, preserving their lineage. Repository inserts
+translate only uniqueness violations into identity conflicts; other integrity
+errors retain the database cause so a schema mismatch is not reported as a
+duplicate request.
 
 ### Where a producer's source comes from
 

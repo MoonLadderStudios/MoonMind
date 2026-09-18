@@ -987,8 +987,18 @@ class RecurringWorkflowsService:
         await self._session.flush()
         return True
 
-    async def refresh_managed_bootstrap_schedules(self, limit: int = 500) -> int:
-        """Refresh scheduled actions after a managed bootstrap policy cutover."""
+    async def refresh_managed_bootstrap_schedules(
+        self, limit: int = 500, *, raise_on_failure: bool = False
+    ) -> int:
+        """Refresh scheduled actions after a managed bootstrap policy cutover.
+
+        Individual schedule failures are contained by default so one broken
+        definition cannot block startup reconciliation. Pass
+        ``raise_on_failure=True`` when the caller must block completion on any
+        failure (for example the singular Omnigent release migration, which
+        cannot publish success while recurring workflows retain stale
+        execution-plan authority).
+        """
 
         batch_size = max(1, int(limit))
         definition_ids: list[UUID] = []
@@ -1018,6 +1028,7 @@ class RecurringWorkflowsService:
                 break
 
         refreshed = 0
+        failed: list[str] = []
         for definition_id in definition_ids:
             try:
                 definition = await self._lock_definition_for_update(definition_id)
@@ -1031,11 +1042,27 @@ class RecurringWorkflowsService:
                 refreshed += 1
             except Exception as exc:
                 await self._session.rollback()
+                # The caller may be a release updater whose container is gone
+                # by the time an operator looks, so carry the reason with the
+                # identifier instead of leaving it only in this log line.
+                from moonmind.utils.logging import redact_sensitive_text
+
+                failed.append(
+                    f"{definition_id}: {redact_sensitive_text(str(exc))[:500]}"
+                )
                 logger.warning(
                     "Failed to refresh managed bootstrap schedule %s: %s",
                     definition_id,
                     exc,
                 )
+        if failed and raise_on_failure:
+            # The release migration cannot publish success while affected
+            # recurring workflows retain stale execution-plan authority.
+            raise RuntimeError(
+                f"Failed to refresh {len(failed)} managed bootstrap "
+                f"schedule(s): {', '.join(failed[:5])}"
+                + ("..." if len(failed) > 5 else "")
+            )
         return refreshed
 
     async def create_definition(

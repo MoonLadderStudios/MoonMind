@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from moonmind.omnigent.harness_platform.harness_registry import harness_registration
-
 import logging
 import os
 from datetime import UTC, datetime
@@ -29,9 +27,8 @@ from moonmind.omnigent.bootstrap.store import (
     load_bootstrap_record,
     save_bootstrap_record,
 )
-from moonmind.omnigent.harness_platform.support import (
-    compute_support_combination_key,
-)
+from moonmind.omnigent.harness_platform.harness_registry import harness_registration
+from moonmind.omnigent.harness_platform.support import compute_support_combination_key
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +48,11 @@ def _resolve_profile_model_effort(profile: Any) -> tuple[str, str]:
     # MoonLadderStudios/MoonMind#4021 req-3: validate effort against the
     # selected model's actual supported values, never the seeded default.
     # Unknown models fall back to the generic set inside the helper.
-    effort = validate_effort_for_model(raw_effort, model) if model else validate_effort(raw_effort)
+    effort = (
+        validate_effort_for_model(raw_effort, model)
+        if model
+        else validate_effort(raw_effort)
+    )
     return model, effort
 
 
@@ -98,7 +99,9 @@ class BootstrapController:
 
         # Validate effort against the selected model's actual values
         # (MoonLadderStudios/MoonMind#4021 req-3); unknown models use generic.
-        eff = validate_effort_for_model(eff, display) if display else validate_effort(eff)
+        eff = (
+            validate_effort_for_model(eff, display) if display else validate_effort(eff)
+        )
 
         # Load or create record
         record = await self.get_state()
@@ -202,7 +205,9 @@ class BootstrapController:
             )
         if provider_profile is None:
             raise ValueError("the persisted OpenCode Provider Profile no longer exists")
-        desired_updates: dict[str, Any] = {}
+        desired_updates: dict[str, Any] = {
+            "provider": str(provider_profile.provider_id or "").strip(),
+        }
         current_model, current_effort = _resolve_profile_model_effort(provider_profile)
         if current_model:
             desired_updates["model_display_name"] = current_model
@@ -710,48 +715,9 @@ class BootstrapController:
                         "Run: docker build -f services/omnigent/opencode-host/Dockerfile "
                         "or set OMNIGENT_OPENCODE_HOST_IMAGE_REF to a digest-pinned image."
                     )
-            # Update record resolved
-            # Resolve model for image selection. Credentialless opencode/*
-            # qualified IDs require the exact observed catalog for execution
-            # selection, but image selection must not fail closed before
-            # catalog sync/qualification: defer exact-ID validation to
-            # _qualify_and_publish (exact-host authority via
-            # resolve_model_exact). Friendly display aliases remain valid
-            # here for image resolution only.
-            # Execution qualification still requires the exact catalog (step 7
-            # of OpenCodeHost §8) via resolve_model_exact before launch.
-            try:
-                model_info = resolve_bootstrap_model(display)
-            except ValueError as exc:
-                text = display.strip()
-                prefix, sep, provider_model_id = text.partition("/")
-                if sep and prefix.strip() == "opencode" and provider_model_id.strip():
-                    # MoonLadderStudios/MoonMind#4021 P1: fresh
-                    # opencode-zen-free default stores its qualified
-                    # opencode/... model in desired with no catalog yet.
-                    # Use the qualified ID directly for image selection and
-                    # let _qualify_and_publish enforce exact-catalog
-                    # authority before launch.
-                    logger.info(
-                        "Deferring exact catalog validation for %r to "
-                        "qualification; using qualified ID for image "
-                        "selection.",
-                        text,
-                    )
-                    model_info = {
-                        "displayName": display,
-                        "providerModelId": provider_model_id.strip(),
-                        "qualifiedId": text,
-                    }
-                else:
-                    record = record.model_copy(
-                        update={
-                            "state": BootstrapState.failed,
-                            "failure": {"code": "model_unavailable", "message": str(exc)},
-                        }
-                    )
-                    save_bootstrap_record(record)
-                    raise
+            model_info = resolve_bootstrap_model(
+                display, provider_id=record.desired.provider
+            )
 
             qualified = model_info["qualifiedId"]
             provider_model = model_info["providerModelId"]
@@ -1387,10 +1353,7 @@ class BootstrapController:
             )
             catalog_evidence: dict[str, Any] = (
                 dict(
-                    getattr(
-                        evidence_profile, "model_catalog_evidence_json", None
-                    )
-                    or {}
+                    getattr(evidence_profile, "model_catalog_evidence_json", None) or {}
                 )
                 if evidence_profile is not None
                 else {}

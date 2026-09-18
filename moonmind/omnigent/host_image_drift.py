@@ -25,8 +25,13 @@ probes) re-verify the series before any session starts.
 
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import os
 import re
+from collections.abc import Mapping
+from typing import Any
 
 from moonmind.omnigent.compatibility import (
     is_same_image_repository,
@@ -217,7 +222,158 @@ def is_compatible_image_drift(
     return is_same_image_repository(planned_ref, observed_ref)
 
 
+def reconcile_effective_launch_to_selected_host(
+    effective_launch: object,
+    selected_host_image_ref: str,
+) -> dict[str, Any] | None:
+    """Reconcile a stale policy image to the currently selected Host Class.
+
+    Fresh planning compiles ``effective_launch`` from the persisted policy
+    snapshot while the Host Class comes from current deployment evidence
+    (env + bootstrap resolved state). After an image rebuild the two digests
+    differ while the repository is identical. Exact-equality planning fails
+    every app update even though launch-time drift recovery (launcher
+    fallback + attestation same-repo gates) already accepts this case.
+
+    Returns a reconciled copy pinning ``selected_host_image_ref`` when the
+    planned image is same-repository drift, ``None`` when the repositories
+    differ (fail closed, different image family). An exact match returns an
+    equal copy without re-hashing. The reconciled copy updates the top-level
+    ``hostImageRef`` and the effective ``boundaries.host.hostImageRef`` so the
+    persisted launch artifact stays internally consistent, then recomputes
+    ``snapshotRef`` with the same canonical JSON as
+    ``_compile_persisted_effective_launch``. ``policyAuthority`` is left as
+    the original policy evidence.
+    """
+
+    if not isinstance(effective_launch, Mapping):
+        return None
+    planned = str(effective_launch.get("hostImageRef") or "").strip()
+    selected = str(selected_host_image_ref or "").strip()
+    if not planned or not selected:
+        return None
+    if planned == selected:
+        return dict(effective_launch)
+    # Mutable tags and synthetic placeholders never participate in drift
+    # recovery: an unadmitted tag or placeholder must fail closed rather than
+    # silently becoming launch authority.
+    if (
+        not _is_digest_pinned(planned)
+        or not _is_digest_pinned(selected)
+        or _is_placeholder(planned)
+        or _is_placeholder(selected)
+    ):
+        return None
+    if not is_compatible_image_drift(planned, selected):
+        return None
+    reconciled = copy.deepcopy(dict(effective_launch))
+    reconciled["hostImageRef"] = selected
+    boundaries = reconciled.get("boundaries")
+    if isinstance(boundaries, dict):
+        host = boundaries.get("host")
+        if isinstance(host, dict) and "hostImageRef" in host:
+            host = dict(host)
+            host["hostImageRef"] = selected
+            boundaries = dict(boundaries)
+            boundaries["host"] = host
+            reconciled["boundaries"] = boundaries
+    reconciled.pop("snapshotRef", None)
+    canonical = json.dumps(reconciled, sort_keys=True, separators=(",", ":"))
+    reconciled["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
+        canonical.encode()
+    ).hexdigest()
+    return reconciled
+
+
+def describe_policy_hostclass_drift(
+    policy_ref: object,
+    policy_host_image_ref: object,
+    selected_host_image_ref: object,
+) -> dict[str, Any] | None:
+    """Describe policy<->Host Class image drift for release qualification.
+
+    Returns None when the policy image already equals the selected Host Class
+    image (no drift, no fencing needed). Otherwise returns a disposition with
+    the pinned policy ref, both digests, whether the drift is a compatible
+    same-repository rebuild (adoptable via automatic bootstrap policy
+    versioning) or an incompatible family change (explicit revision required),
+    and an executable recovery hint. In-flight runs keep their recorded-host
+    plans; only new compilations must adopt the disposition.
+    """
+
+    policy = str(policy_ref or "").strip() or "<unknown-policy>"
+    planned = str(policy_host_image_ref or "").strip()
+    selected = str(selected_host_image_ref or "").strip()
+    if planned == selected:
+        return None
+    if planned and not selected:
+        # The release record lost authority for a host family the policy
+        # still pins (for example a transiently empty resolution dropped it
+        # from the candidate record). Treating this as no drift would let
+        # qualification succeed while policies stay pinned to an image the
+        # release no longer supplies; fence until the recorded host is
+        # preserved or resolution recovers.
+        return {
+            "policyRef": policy,
+            "plannedHostImageRef": planned,
+            "selectedHostImageRef": selected,
+            "compatibleRebuild": False,
+            "fencePromotion": True,
+            "recovery": (
+                f"release record is missing authority for {policy} "
+                f"(planned={planned[:120]}); preserve the recorded host or "
+                "resolve release candidates before promoting"
+            ),
+        }
+    if not planned or not selected:
+        return None
+    if (
+        not _is_digest_pinned(planned)
+        or not _is_digest_pinned(selected)
+        or _is_placeholder(planned)
+        or _is_placeholder(selected)
+    ):
+        return {
+            "policyRef": policy,
+            "plannedHostImageRef": planned,
+            "selectedHostImageRef": selected,
+            "compatibleRebuild": False,
+            "fencePromotion": True,
+            "recovery": (
+                f"unqualified image refs cannot auto-advance; revise {policy} "
+                "explicitly to a digest-pinned qualified image"
+            ),
+        }
+    if is_compatible_image_drift(planned, selected):
+        return {
+            "policyRef": policy,
+            "plannedHostImageRef": planned,
+            "selectedHostImageRef": selected,
+            "compatibleRebuild": True,
+            "fencePromotion": True,
+            "recovery": (
+                f"run bootstrap reconcile to version {policy} to the qualified "
+                f"image {selected} (same repository rebuild); then refresh "
+                "managed schedules"
+            ),
+        }
+    return {
+        "policyRef": policy,
+        "plannedHostImageRef": planned,
+        "selectedHostImageRef": selected,
+        "compatibleRebuild": False,
+        "fencePromotion": True,
+        "recovery": (
+            f"image family changed for {policy} "
+            f"(planned={planned[:120]} selected={selected[:120]}); revise the "
+            "policy, profile, and schedule explicitly"
+        ),
+    }
+
+
 __all__ = [
     "compatible_deployed_fallback",
+    "describe_policy_hostclass_drift",
     "is_compatible_image_drift",
+    "reconcile_effective_launch_to_selected_host",
 ]

@@ -18,17 +18,20 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
+    OmnigentBridgeSession,
     OmnigentOAuthHostBindingRecord,
     OmnigentOAuthHostLeaseRecord,
     ProviderCredentialSource,
     ProviderProfileAuthMethod,
     ProviderProfileAuthState,
     RuntimeMaterializationMode,
-    OmnigentBridgeSession,
 )
 from api_service.services.omnigent_policies import seed_bootstrap_policies
 from moonmind.config.settings import settings
-from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED, parse_bridge_config
+from moonmind.omnigent.bridge_config import (
+    HOST_PROTOCOL_MODE_EMBEDDED,
+    parse_bridge_config,
+)
 from moonmind.omnigent.bridge_embedded import (
     EmbeddedHostAuthContext,
     EmbeddedHostHeartbeatRequest,
@@ -36,20 +39,18 @@ from moonmind.omnigent.bridge_embedded import (
     EmbeddedHostSessionEventRequest,
     OmnigentEmbeddedHostProtocolFacade,
 )
-from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeError
-from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.bridge_store import (
+    OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
     OmnigentIdempotencyError,
 )
 from moonmind.omnigent.execute import OmnigentSessionStillRunningError
+from moonmind.omnigent.host_auth_adapter import OmnigentHostAuthAdapter
+from moonmind.omnigent.host_failures import OmnigentOAuthHostError
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-from moonmind.omnigent.host_failures import OmnigentOAuthHostError
-from moonmind.omnigent.oauth_hosts import (
-    OmnigentOAuthHostRepository,
-)
+from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
 )
@@ -66,8 +67,7 @@ from moonmind.schemas.agent_runtime_models import (
 from moonmind.security.egress import (
     CONTROL_PLANE_NETWORK_REF,
     DEFAULT_EGRESS_PROFILE,
-    EGRESS_CONFIG_DIGEST,
-    EGRESS_PROFILE_SET_DIGEST,
+    EGRESS_FILE_DIGESTS,
     ENFORCER_IMPLEMENTATION,
     OMNIGENT_EGRESS_PROFILE,
 )
@@ -104,81 +104,117 @@ def store(session_factory):
 def _config():
     # Retired (#3955): retained here for drain/recovery coverage through a
     # disabled declaration. Enabled embedded admission fails fast.
-    return parse_bridge_config({
-        "enabled": False,
-        "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
-        "hostConnection": {"embedded": {
-            "proxyConformanceEvidenceRef": "artifact://proxy",
-            "liveSmokeEvidenceRef": "artifact://live",
-            "hostAuthConformanceEvidenceRef": "artifact://auth",
-        }},
-    })
+    return parse_bridge_config(
+        {
+            "enabled": False,
+            "compatibility": {"hostProtocolMode": HOST_PROTOCOL_MODE_EMBEDDED},
+            "hostConnection": {
+                "embedded": {
+                    "proxyConformanceEvidenceRef": "artifact://proxy",
+                    "liveSmokeEvidenceRef": "artifact://live",
+                    "hostAuthConformanceEvidenceRef": "artifact://auth",
+                }
+            },
+        }
+    )
 
 
 def _request() -> AgentExecutionRequest:
     return AgentExecutionRequest(
-        agentKind="external", agentId="omnigent",
-        correlationId="mm:wf-recovery", idempotencyKey="recovery",
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="mm:wf-recovery",
+        idempotencyKey="recovery",
     )
 
 
-async def _seed(store: OmnigentBridgeSessionStore, session_factory) -> EmbeddedHostAuthContext:
+async def _seed(
+    store: OmnigentBridgeSessionStore, session_factory
+) -> EmbeddedHostAuthContext:
     now = datetime.now(UTC)
     async with session_factory() as session:
-        session.add(ManagedAgentProviderProfile(
-            profile_id="profile-1", runtime_id="codex_cli", provider_id="openai",
-            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
-            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-            max_parallel_runs=1, credential_generation=1,
-        ))
-        session.add(OmnigentOAuthHostBindingRecord(
-            binding_ref="binding-1", provider_profile_id="profile-1",
-            endpoint_ref="embedded", harness="codex-native",
-            credential_mount_template_json={
-                "authVolumeRef": {
-                    "providerProfileId": "profile-1",
-                    "runtimeId": "codex_cli",
-                    "providerId": "openai",
-                    "volumeRef": "profile-1-volume",
-                    "credentialGeneration": 1,
-                    "ownerUserId": "user-1",
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="profile-1",
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                max_parallel_runs=1,
+                credential_generation=1,
+            )
+        )
+        session.add(
+            OmnigentOAuthHostBindingRecord(
+                binding_ref="binding-1",
+                provider_profile_id="profile-1",
+                endpoint_ref="embedded",
+                harness="codex-native",
+                credential_mount_template_json={
+                    "authVolumeRef": {
+                        "providerProfileId": "profile-1",
+                        "runtimeId": "codex_cli",
+                        "providerId": "openai",
+                        "volumeRef": "profile-1-volume",
+                        "credentialGeneration": 1,
+                        "ownerUserId": "user-1",
+                    },
+                    "targetPath": "/home/app/.codex",
+                    "accessMode": "read_write",
+                    "runtimeUid": 1000,
+                    "runtimeGid": 1000,
                 },
-                "targetPath": "/home/app/.codex",
-                "accessMode": "read_write",
-                "runtimeUid": 1000,
-                "runtimeGid": 1000,
-            },
-        ))
+            )
+        )
         await session.flush()
-        session.add(OmnigentOAuthHostLeaseRecord(
-            lease_id="host-lease-1", provider_profile_id="profile-1",
-            provider_lease_id="provider-lease-1", binding_ref="binding-1",
-            credential_generation=1, holder_workflow_id="mm:wf-recovery",
-            idempotency_key="host-recovery", lease_purpose="execution_omnigent",
-            omnigent_host_id="host-1", container_name="host-1", status="ready",
-            acquired_at=now, last_heartbeat_at=now, expires_at=now + timedelta(hours=1),
-        ))
+        session.add(
+            OmnigentOAuthHostLeaseRecord(
+                lease_id="host-lease-1",
+                provider_profile_id="profile-1",
+                provider_lease_id="provider-lease-1",
+                binding_ref="binding-1",
+                credential_generation=1,
+                holder_workflow_id="mm:wf-recovery",
+                idempotency_key="host-recovery",
+                lease_purpose="execution_omnigent",
+                omnigent_host_id="host-1",
+                container_name="host-1",
+                status="ready",
+                acquired_at=now,
+                last_heartbeat_at=now,
+                expires_at=now + timedelta(hours=1),
+            )
+        )
         await session.commit()
     await store.get_or_create(
-        request=_request(), endpoint_ref="embedded", agent_id="agent-1",
-        agent_name="Codex", target_metadata={"workspace": "/workspace/repo"},
+        request=_request(),
+        endpoint_ref="embedded",
+        agent_id="agent-1",
+        agent_name="Codex",
+        target_metadata={"workspace": "/workspace/repo"},
     )
     await store.bind_profile_authorization(
-        request=_request(), endpoint_ref="embedded", provider_profile_id="profile-1",
-        provider_lease_id="provider-lease-1", credential_generation=1,
-        host_binding_ref="binding-1", host_lease_ref="host-lease-1",
+        request=_request(),
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
         omnigent_host_id="host-1",
     )
     await store.attach_session("recovery", "session-1")
     return EmbeddedHostAuthContext(
         auth_mode="upstream_runner_tunnel",
         protocol_profile="omnigent.runner_tunnel.7da32637",
-        runner_id="host-1", credential_generation=1,
+        runner_id="host-1",
+        credential_generation=1,
     )
 
 
 async def test_disconnect_restart_reconnect_and_retry_matrix(
-    store, session_factory,
+    store,
+    session_factory,
 ) -> None:
     auth = await _seed(store, session_factory)
     first = OmnigentEmbeddedHostProtocolFacade(run_store=store, config=_config())
@@ -187,11 +223,13 @@ async def test_disconnect_restart_reconnect_and_retry_matrix(
     )
 
     # Duplicate hello/heartbeat delivery is idempotent, including disconnect before launch.
-    assert await first.register_host(request=registration, auth=auth) == await first.register_host(
+    assert await first.register_host(
         request=registration, auth=auth
-    )
+    ) == await first.register_host(request=registration, auth=auth)
     await first.heartbeat(
-        host_id="host-1", request=EmbeddedHostHeartbeatRequest(status="ready"), auth=auth
+        host_id="host-1",
+        request=EmbeddedHostHeartbeatRequest(status="ready"),
+        auth=auth,
     )
     await first.disconnect_host(host_id="host-1", auth=auth)
 
@@ -201,7 +239,9 @@ async def test_disconnect_restart_reconnect_and_retry_matrix(
     await store.bind_embedded_runner("recovery", host_id="host-1", runner_id="runner-1")
     await restarted.disconnect_host(host_id="host-1", auth=auth)  # after launch
     await restarted.heartbeat(
-        host_id="host-1", request=EmbeddedHostHeartbeatRequest(status="ready"), auth=auth
+        host_id="host-1",
+        request=EmbeddedHostHeartbeatRequest(status="ready"),
+        auth=auth,
     )
 
     # Activity retry cannot redirect the persisted runner or duplicate first-message state.
@@ -224,7 +264,8 @@ async def test_disconnect_restart_reconnect_and_retry_matrix(
 
 
 async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_janitor(
-    store, session_factory,
+    store,
+    session_factory,
 ) -> None:
     auth = await _seed(store, session_factory)
     facade = OmnigentEmbeddedHostProtocolFacade(run_store=store, config=_config())
@@ -237,16 +278,25 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
 
         async def list_active_host_leases(self, *, failures=None):
             now = datetime.now(UTC)
-            return [SimpleNamespace(
-                lease_id="host-lease-1", provider_profile_id="profile-1",
-                binding_ref="binding-1", container_name="host-1",
-                omnigent_session_id=None, last_heartbeat_at=now,
-                expires_at=now + timedelta(hours=1),
-                status="ready",
-            )]
+            return [
+                SimpleNamespace(
+                    lease_id="host-lease-1",
+                    provider_profile_id="profile-1",
+                    binding_ref="binding-1",
+                    container_name="host-1",
+                    omnigent_session_id=None,
+                    last_heartbeat_at=now,
+                    expires_at=now + timedelta(hours=1),
+                    status="ready",
+                )
+            ]
 
         async def claim_host_lease_cleanup(
-            self, lease_id, *, expected_status, expected_last_heartbeat_at,
+            self,
+            lease_id,
+            *,
+            expected_status,
+            expected_last_heartbeat_at,
             ttl_seconds,
         ):
             assert lease_id == "host-lease-1"
@@ -270,13 +320,20 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
             self.stopped.append(lease_id)
 
     class Runtime:
-        async def container_exists(self, _name): return True
-        async def stop_host(self, **_kwargs): return None
-        async def list_managed_containers(self): return []
+        async def container_exists(self, _name):
+            return True
+
+        async def stop_host(self, **_kwargs):
+            return None
+
+        async def list_managed_containers(self):
+            return []
 
     repository = Repository()
     result = await OmnigentOAuthHostJanitor(
-        repository=repository, runtime=Runtime(), client=SimpleNamespace(),
+        repository=repository,
+        runtime=Runtime(),
+        client=SimpleNamespace(),
         run_store=store,
     ).run()
     row = await store.get_existing("recovery")
@@ -286,7 +343,9 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
     assert row.terminal_refs["cleanupState"] == "completed"
     assert row.terminal_refs["leaseReleaseState"] == "held"
     assert [event.event_type for event in events] == [
-        "lifecycle.terminal", "lifecycle.control", "lifecycle.control",
+        "lifecycle.terminal",
+        "lifecycle.control",
+        "lifecycle.control",
     ]
     assert events[-1].metadata_["metadata"]["controlOutcome"] == "completed"
     assert result["actions"][-1]["action"] == "runner_exit_cleanup"
@@ -315,9 +374,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
         "temporal_artifact_root",
         str(tmp_path / "temporal-artifacts"),
     )
-    immutable_server = (
-        "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "8" * 64
-    )
+    immutable_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "8" * 64
     immutable_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "9" * 64
 
     async def resolve_image(image_ref: str) -> str:
@@ -372,9 +429,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
             relative_path="repo",
         )
     )
-    prior_workspace = (
-        workspace_root / "temporal_sandbox" / prior_workspace_id / "repo"
-    )
+    prior_workspace = workspace_root / "temporal_sandbox" / prior_workspace_id / "repo"
     prior_workspace.mkdir(parents=True)
     (prior_workspace / "candidate.txt").write_text(
         "verified cumulative remediation head\n",
@@ -525,9 +580,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
             release_signals.append(dict(payload))
 
     lease_client = ProviderProfileLeaseClient(TemporalAdapter())
-    registered_host_id = (
-        "host-" + hashlib.sha256(workflow_id.encode()).hexdigest()[:16]
-    )
+    registered_host_id = "host-" + hashlib.sha256(workflow_id.encode()).hexdigest()[:16]
 
     class HostClient:
         async def list_hosts(self):
@@ -555,12 +608,8 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
     current_host_lease_ref: list[str] = []
     captured_authorization: list[dict[str, object]] = []
     container_running = True
-    server_container_id = hashlib.sha256(
-        f"server:{workflow_id}".encode()
-    ).hexdigest()
-    host_container_id = hashlib.sha256(
-        f"host:{workflow_id}".encode()
-    ).hexdigest()
+    server_container_id = hashlib.sha256(f"server:{workflow_id}".encode()).hexdigest()
+    host_container_id = hashlib.sha256(f"host:{workflow_id}".encode()).hexdigest()
     gateway_image_digest = "sha256:" + "d" * 64
     host_image_digest = immutable_host.rsplit("@", 1)[-1]
     gateway_networks = {
@@ -571,7 +620,12 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
     }
     applied_rule_payload = {
         "profileDigest": OMNIGENT_EGRESS_PROFILE.digest,
-        "configDigest": EGRESS_CONFIG_DIGEST,
+        "configDigest": "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                EGRESS_FILE_DIGESTS, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest(),
         "gatewayImageDigest": gateway_image_digest,
         "internal": True,
         "ipv6": False,
@@ -579,13 +633,16 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
         "gatewayNetworks": sorted(gateway_networks),
         "enforcer": ENFORCER_IMPLEMENTATION,
     }
-    applied_rule_digest = "sha256:" + hashlib.sha256(
-        json.dumps(
-            applied_rule_payload,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-    ).hexdigest()
+    applied_rule_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                applied_rule_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+    )
     client_address = "172.31.0.19"
     observed_architecture = {
         "aarch64": "arm64",
@@ -619,9 +676,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
                     json.dumps(
                         {
                             "labels": {
-                                "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
                                 "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
-                                "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
                             },
                             "networks": gateway_networks,
                             "image": gateway_image_digest,
@@ -635,9 +690,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
                     return (0, json.dumps(immutable_server), "")
                 if format_value == "{{json .Image}}":
                     return (0, json.dumps("sha256:" + "8" * 64), "")
-            if identity == host_container_id and format_value.startswith(
-                '{"labels"'
-            ):
+            if identity == host_container_id and format_value.startswith('{"labels"'):
                 return (
                     0,
                     json.dumps(
@@ -684,8 +737,10 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
             if args[3] == "sha256sum":
                 return (
                     0,
-                    EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
-                    + "  /etc/squid/squid.conf\n",
+                    "".join(
+                        f"{EGRESS_FILE_DIGESTS[p.rsplit('/', 1)[-1]].removeprefix('sha256:')}  {p}\n"
+                        for p in args[4:]
+                    ),
                     "",
                 )
             if args[3] == "cat":
@@ -731,9 +786,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
     persisted_host_lease = await repository.get_host_lease(host_lease_ref)
     assert persisted_host_lease is not None
     continuation_key = f"{request.idempotency_key}:repository-continuation:1"
-    continuation = request.model_copy(
-        update={"idempotency_key": continuation_key}
-    )
+    continuation = request.model_copy(update={"idempotency_key": continuation_key})
     await store.bind_profile_authorization(
         request=continuation,
         endpoint_ref=str(authorization["endpointRef"]),
@@ -750,9 +803,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
         event_type="repository_continuation_1",
         status="failed",
     )
-    authority = await store.get_egress_cleanup_authority(
-        host_lease_ref=host_lease_ref
-    )
+    authority = await store.get_egress_cleanup_authority(host_lease_ref=host_lease_ref)
     assert authority is not None
     assert authority["evidenceRequest"]["remediation"] is True
     launch_ref = authority["launchEvidenceRef"]
@@ -821,9 +872,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
     assert terminal_payload["cleanupResult"] == (
         "drained_owned_static_host" if cleanup_succeeds else "failed"
     )
-    continuation_row = await store.get_existing(
-        continuation_key
-    )
+    continuation_row = await store.get_existing(continuation_key)
     assert continuation_row is not None
     assert continuation_row.terminal_refs["egressLaunchEvidenceRef"] == launch_ref
     assert continuation_row.terminal_refs["egressEvidenceRef"] == terminal_ref
@@ -843,7 +892,10 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
     ],
 )
 async def test_restart_janitor_classifies_each_abandoned_lifecycle_boundary(
-    store, session_factory, state, expected_action,
+    store,
+    session_factory,
+    state,
+    expected_action,
 ) -> None:
     await _seed(store, session_factory)
     row = await store.get_existing("recovery")
@@ -852,7 +904,10 @@ async def test_restart_janitor_classifies_each_abandoned_lifecycle_boundary(
         persisted = await session.get(OmnigentBridgeSession, row.bridge_session_id)
         metadata = dict(persisted.metadata_ or {})
         metadata["embedded_runner_lifecycle"] = {
-            "version": 1, "state": state, "updatedAt": old, "timeline": [],
+            "version": 1,
+            "state": state,
+            "updatedAt": old,
+            "timeline": [],
         }
         persisted.metadata_ = metadata
         await session.commit()
@@ -864,7 +919,8 @@ async def test_restart_janitor_classifies_each_abandoned_lifecycle_boundary(
 
 
 async def test_restart_janitor_rejects_changed_credential_generation(
-    store, session_factory,
+    store,
+    session_factory,
 ) -> None:
     await _seed(store, session_factory)
     async with session_factory() as session:
@@ -891,11 +947,14 @@ async def test_restart_janitor_rejects_changed_credential_generation(
     ],
 )
 async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
-    store, session_factory, crash_boundary,
+    store,
+    session_factory,
+    crash_boundary,
 ) -> None:
     """Crash once at every issue-listed production ownership boundary."""
 
     await _seed(store, session_factory)
+
     class ObservedHost:
         launch_command_count = 0
         post_count = 0
@@ -926,7 +985,8 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
             return {
                 "events": [{"text": "marker-1"}],
                 "firstMessageResponse": {
-                    "pending_id": "pending-1", "item_id": "item-1",
+                    "pending_id": "pending-1",
+                    "item_id": "item-1",
                 },
             }
 
@@ -955,34 +1015,45 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
                     self.injected = True
                     raise RuntimeError(f"injected crash: {crash_boundary}")
                 return result
+
             return call
 
     host = ObservedHost()
     fault_specs = {
         "reservation_before_command": ("begin_embedded_runner_launch", True, None),
         "command_before_acknowledgement": (
-            "mark_embedded_runner_state", False, "launch_acknowledged",
+            "mark_embedded_runner_state",
+            False,
+            "launch_acknowledged",
         ),
         "acknowledgement_before_binding": ("bind_embedded_runner", False, None),
         "binding_before_tunnel": ("bind_embedded_runner", True, None),
         "tunnel_before_readiness_persist": (
-            "mark_embedded_runner_state", True, "runner_tunnel_ready",
+            "mark_embedded_runner_state",
+            True,
+            "runner_tunnel_ready",
         ),
         "message_response_before_posted_persist": ("mark_posted", False, None),
         "runner_exit_before_terminal_bridge_persist": (
-            "record_embedded_runner_exit", False, None,
+            "record_embedded_runner_exit",
+            False,
+            None,
         ),
     }
     method, after, state = fault_specs[crash_boundary]
     crashing_store = OneShotCrashStore(store, method, after=after, state=state)
     facade = OmnigentEmbeddedHostProtocolFacade(
-        run_store=crashing_store, config=_config(), host_channels=host,
+        run_store=crashing_store,
+        config=_config(),
+        host_channels=host,
         runner_binding_root_secret="recovery-root-secret",
     )
 
     if crash_boundary in {
-        "reservation_before_command", "command_before_acknowledgement",
-        "acknowledgement_before_binding", "binding_before_tunnel",
+        "reservation_before_command",
+        "command_before_acknowledgement",
+        "acknowledgement_before_binding",
+        "binding_before_tunnel",
     }:
         with pytest.raises(RuntimeError, match="injected crash"):
             await facade.dispatch_runner(idempotency_key="recovery")
@@ -996,7 +1067,9 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
     # Reconstruct both production owners, then retry the interrupted operation.
     restarted_store = OmnigentBridgeSessionStore(session_factory)
     restarted = OmnigentEmbeddedHostProtocolFacade(
-        run_store=restarted_store, config=_config(), host_channels=host,
+        run_store=restarted_store,
+        config=_config(),
+        host_channels=host,
         runner_binding_root_secret="recovery-root-secret",
     )
     reused = await restarted.dispatch_runner(idempotency_key="recovery")
@@ -1019,26 +1092,23 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
 
     # Retrying execute after either posting boundary must only revalidate the
     # digest; it must not regress the durable embedded lifecycle.
-    lifecycle_before_retry = (
-        (await restarted_store.get_existing("recovery")).metadata_[
-            "embedded_runner_lifecycle"
-        ]["state"]
-    )
+    lifecycle_before_retry = (await restarted_store.get_existing("recovery")).metadata_[
+        "embedded_runner_lifecycle"
+    ]["state"]
     await restarted_store.mark_prepared(
         "recovery", digest="digest-1", marker="marker-1"
     )
-    assert (
-        (await restarted_store.get_existing("recovery")).metadata_[
-            "embedded_runner_lifecycle"
-        ]["state"]
-        == lifecycle_before_retry
-    )
+    assert (await restarted_store.get_existing("recovery")).metadata_[
+        "embedded_runner_lifecycle"
+    ]["state"] == lifecycle_before_retry
 
     if crash_boundary == "runner_exit_before_terminal_bridge_persist":
         with pytest.raises(RuntimeError, match="injected crash"):
             await facade.record_runner_exit(runner_id=runner_id, error="exit 1")
         restarted_store = OmnigentBridgeSessionStore(session_factory)
-    await restarted_store.record_embedded_runner_exit(runner_id=runner_id, error="exit 1")
+    await restarted_store.record_embedded_runner_exit(
+        runner_id=runner_id, error="exit 1"
+    )
 
     row = await restarted_store.get_existing("recovery")
     lifecycle = row.metadata_["embedded_runner_lifecycle"]
@@ -1072,9 +1142,7 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
             select(func.count()).select_from(OmnigentOAuthHostLeaseRecord)
         )
         durable_profile = await session.get(ManagedAgentProviderProfile, "profile-1")
-        durable_binding = await session.get(
-            OmnigentOAuthHostBindingRecord, "binding-1"
-        )
+        durable_binding = await session.get(OmnigentOAuthHostBindingRecord, "binding-1")
     assert profile_count == binding_count == lease_count == 1
     assert durable_profile is not None
     assert durable_profile.credential_generation == 1
@@ -1087,18 +1155,15 @@ async def test_seven_boundary_restart_matrix_preserves_single_side_effects(
         "credentialGeneration": 1,
         "ownerUserId": "user-1",
     }
-    assert [event.sequence for event in events] == list(
-        range(1, len(events) + 1)
-    )
+    assert [event.sequence for event in events] == list(range(1, len(events) + 1))
 
 
 async def test_embedded_response_before_persist_reconciles_and_digest_change_fails_closed(
-    store, session_factory,
+    store,
+    session_factory,
 ) -> None:
     await _seed(store, session_factory)
-    await store.bind_embedded_runner(
-        "recovery", host_id="host-1", runner_id="runner-1"
-    )
+    await store.bind_embedded_runner("recovery", host_id="host-1", runner_id="runner-1")
     await store.mark_embedded_runner_state(
         "recovery", state="runner_tunnel_ready", code="authenticated_runner_handshake"
     )
@@ -1116,7 +1181,8 @@ async def test_embedded_response_before_persist_reconciles_and_digest_change_fai
             return {
                 "events": [{"text": "marker-1"}],
                 "firstMessageResponse": {
-                    "pending_id": "pending-1", "item_id": "item-1",
+                    "pending_id": "pending-1",
+                    "item_id": "item-1",
                 },
             }
 
@@ -1138,7 +1204,9 @@ async def test_embedded_response_before_persist_reconciles_and_digest_change_fai
         run_store=restarted_store, config=_config(), host_channels=runner
     )
     assert await restarted.reconcile_first_message(session_id="session-1") == {
-        "reconciled": True, "pending_id": "pending-1", "item_id": "item-1",
+        "reconciled": True,
+        "pending_id": "pending-1",
+        "item_id": "item-1",
     }
     assert runner.post_count == 1
 

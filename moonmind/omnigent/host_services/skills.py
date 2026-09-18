@@ -14,17 +14,13 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.host_services.workspace import (
-    DaemonCommandRunner,
-    resolve_daemon_workspace_root,
+    resolve_daemon_attachment_source,
 )
 from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
 from moonmind.workflows.skills.run_projection import (
     load_resolved_skillset,
     materialize_run_skill_snapshot,
     verify_skill_projection,
-)
-from moonmind.workflows.temporal.runtime.workspace_locators import (
-    daemon_visible_workspace_path,
 )
 
 
@@ -42,12 +38,10 @@ class OmnigentSkillDeliveryService:
         *,
         workspace_root: str | Path,
         workspace_volume: str,
-        command_runner: DaemonCommandRunner,
         artifact_gateway: OmnigentArtifactGateway,
     ) -> None:
         self._root = Path(workspace_root).resolve()
         self._workspace_volume = workspace_volume
-        self._runner = command_runner
         self._artifacts = _ArtifactAdapter(artifact_gateway)
 
     async def _resolve_authority(
@@ -75,13 +69,10 @@ class OmnigentSkillDeliveryService:
         active_snapshot = (
             projection_root / "runtime" / "skills_active" / resolved.snapshot_id
         )
-        daemon_root = await resolve_daemon_workspace_root(
-            runner=self._runner,
-            workspace_volume=self._workspace_volume,
-        )
         try:
-            daemon_visible = daemon_visible_workspace_path(
-                active_snapshot, daemon_root=daemon_root
+            daemon_source = resolve_daemon_attachment_source(
+                workspace_volume=self._workspace_volume,
+                path=active_snapshot,
             )
         except Exception as exc:
             raise HarnessPlatformError(
@@ -89,8 +80,7 @@ class OmnigentSkillDeliveryService:
                 code=HarnessPlatformFailure.OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE,
             ) from exc
         attachment = {
-            "kind": "bind",
-            "sourceRef": str(daemon_visible),
+            **daemon_source,
             "targetPath": OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR,
             "accessMode": "read-only",
             "deliveryRef": resolved_skills["skillDeliveryRef"],
@@ -143,19 +133,17 @@ class OmnigentSkillDeliveryService:
             resolved_skillset=resolved,
         )
         visible = Path(str(metadata["visiblePath"])).resolve()
-        daemon_root = await resolve_daemon_workspace_root(
-            runner=self._runner, workspace_volume=self._workspace_volume
-        )
         try:
-            daemon_visible = daemon_visible_workspace_path(
-                visible, daemon_root=daemon_root
+            realized_source = resolve_daemon_attachment_source(
+                workspace_volume=self._workspace_volume,
+                path=visible,
             )
         except Exception as exc:
             raise HarnessPlatformError(
                 "Skill projection cannot be translated to the selected Docker daemon",
                 code=HarnessPlatformFailure.OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE,
             ) from exc
-        if str(daemon_visible) != anticipated["sourceRef"]:
+        if any(realized_source[key] != anticipated.get(key) for key in realized_source):
             raise HarnessPlatformError(
                 "Skill materialization changed its anticipated attachment authority",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,

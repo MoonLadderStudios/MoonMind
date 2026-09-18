@@ -19,7 +19,7 @@ from moonmind.deployment_access import DeploymentAccessError, check_compose_acce
 
 from .deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
-    DEPLOYMENT_UPDATE_TOOL_VERSION,
+    RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS,
 )
 from .tool_plan_contracts import ToolFailure, ToolResult
 
@@ -30,6 +30,7 @@ DEPLOYMENT_UPDATE_MODES = frozenset({"changed_services", "force_recreate"})
 DEPLOYMENT_UPDATE_STACKS = frozenset({"moonmind"})
 DEPLOYMENT_FINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "PARTIALLY_VERIFIED"})
 DEPLOYMENT_ONE_SHOT_SERVICES = frozenset({"init-db"})
+DEPLOYMENT_CONTROL_SERVICE = "temporal-worker-deployment-control"
 _REDACTED = "[REDACTED]"
 _STACK_PATH_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _DOCKER_DESKTOP_HOST_MOUNT_ROOT = PurePosixPath("/run/desktop/mnt/host")
@@ -279,10 +280,30 @@ class FileDesiredStateStore:
             if self.json_file_path
             else env_path.with_suffix(env_path.suffix + ".json")
         )
+        # The singular Omnigent release owns `OMNIGENT_*` env refs and the
+        # `omnigentRelease` sidecar document independently of MoonMind image
+        # authority. A plain rewrite would delete them on every MoonMind
+        # update and lose the revision chain, so preserve them here; the
+        # release migration remains the sole writer of those keys.
+        try:
+            existing_env, existing_json = _read_desired_state_files(
+                env_path, json_path
+            )
+        except OSError:
+            existing_env, existing_json = {}, {}
+        preserved_env = {
+            k: v
+            for k, v in existing_env.items()
+            if k.startswith("OMNIGENT_") and str(v or "").strip()
+        }
+        if isinstance(existing_json, dict) and "omnigentRelease" in existing_json:
+            if "omnigentRelease" not in record:
+                record["omnigentRelease"] = existing_json["omnigentRelease"]
         desired_image = _desired_deployed_image(record)
         requested_image = _desired_requested_image(record)
         run_id = str(record.get("sourceRunId") or "").strip()
         env_payload = {
+            **preserved_env,
             self.image_env_var: desired_image,
             f"{self.image_env_var}_REQUESTED": requested_image,
             "MOONMIND_DEPLOYMENT_RUN_ID": run_id,
@@ -295,6 +316,45 @@ class FileDesiredStateStore:
             record,
         )
         return f"file:{env_path}"
+
+    async def merge(
+        self,
+        *,
+        env_updates: Mapping[str, Any] | None = None,
+        json_updates: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Merge keys into the desired-state files, preserving other entries.
+
+        Unlike :meth:`persist`, which rewrites the MoonMind image authority
+        from scratch, merge keeps every existing entry (including entries this
+        release did not author) and only adds or replaces the supplied keys.
+        Unparseable env lines are preserved verbatim so a merge never drops
+        operator content it cannot understand.
+        """
+        env_path = Path(self.env_file_path).expanduser()
+        json_path = (
+            Path(self.json_file_path).expanduser()
+            if self.json_file_path
+            else env_path.with_suffix(env_path.suffix + ".json")
+        )
+        await asyncio.to_thread(
+            _merge_desired_state_files,
+            env_path,
+            json_path,
+            dict(env_updates or {}),
+            dict(json_updates or {}),
+        )
+        return f"file:{env_path}"
+
+    def read(self) -> tuple[Mapping[str, str], Mapping[str, Any]]:
+        """Return the current desired-state env entries and JSON record."""
+        env_path = Path(self.env_file_path).expanduser()
+        json_path = (
+            Path(self.json_file_path).expanduser()
+            if self.json_file_path
+            else env_path.with_suffix(env_path.suffix + ".json")
+        )
+        return _read_desired_state_files(env_path, json_path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -430,21 +490,301 @@ def _is_host_absolute_path(path: Path | str) -> bool:
     return False
 
 
-def _docker_desktop_host_path(path: str) -> str | None:
-    """Translate a Windows drive path into Docker Desktop's daemon namespace.
+def _is_wsl_distro_path(path: str) -> bool:
+    """Return True for WSL user-distro ``/mnt/<drive>`` paths.
 
-    The Linux deployment worker talks directly to the Desktop daemon. WSL's
-    user-distro ``/mnt/<drive>`` paths are not the daemon's host-file mounts.
+    Only single-letter drives qualify; longer ``/mnt/<name>`` mounts (for
+    example ``/mnt/data``) are genuine Linux mounts and keep their POSIX
+    namespace.
+    """
+
+    return (
+        re.match(r"^/mnt/[A-Za-z](?:/.*)?$", path.strip().replace("\\", "/"))
+        is not None
+    )
+
+
+def _read_self_container_id() -> str | None:
+    """Return the container id of the running worker, if it is containerized."""
+
+    identity = os.environ.get("HOSTNAME") or os.environ.get("CONTAINER_ID")
+    if identity and identity.strip():
+        return identity.strip()
+    try:
+        return Path("/etc/hostname").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def _normalized_bind_path(path: str) -> str:
+    """Compare host paths by what they address, not by their spelling."""
+
+    text = str(path or "").strip().replace("\\", "/")
+    while "//" in text:
+        text = text.replace("//", "/")
+    return text.rstrip("/") or "/"
+
+
+def _docker_output(
+    args: Sequence[str], *, attempts: int = 1, backoff_seconds: float = 0.0
+) -> str | None:
+    """Run a read-only Docker query and return its stdout, or None."""
+
+    import subprocess  # local import — only needed when evidence is consulted.
+    import time
+
+    for attempt in range(max(1, attempts)):
+        try:
+            result = subprocess.run(
+                list(args),
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+        except (
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            OSError,
+        ):
+            if attempt + 1 < max(1, attempts):
+                time.sleep(backoff_seconds * (attempt + 1))
+            continue
+        return result.stdout
+    return None
+
+
+def _docker_json_lines(
+    args: Sequence[str], *, attempts: int = 1, backoff_seconds: float = 0.0
+) -> list[Any]:
+    """Decode a Docker query that answers with one JSON document per line."""
+
+    output = _docker_output(args, attempts=attempts, backoff_seconds=backoff_seconds)
+    decoded: list[Any] = []
+    for line in (output or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            decoded.append(json.loads(line))
+        except ValueError:
+            continue
+    return decoded
+
+
+def _mount_sources(mounts: Any, local_mount: str) -> list[str]:
+    """Host sources a container's mount table records for ``local_mount``."""
+
+    target = _normalized_bind_path(local_mount)
+    found: list[str] = []
+    for mount in mounts if isinstance(mounts, list) else []:
+        if not isinstance(mount, Mapping):
+            continue
+        if _normalized_bind_path(str(mount.get("Destination") or "")) != target:
+            continue
+        source = str(mount.get("Source") or "").strip()
+        if source:
+            found.append(source)
+    return found
+
+
+def daemon_bind_source(
+    local_mount: str,
+    *,
+    attempts: int = 1,
+    backoff_seconds: float = 0.0,
+) -> str | None:
+    """Return the daemon-recorded host source of our own ``local_mount``.
+
+    The worker reads the deployment checkout and its durable state through bind
+    mounts the same daemon created, so that daemon's mount table is evidence of
+    which host path resolves to them. Reusing the recorded source keeps new
+    Compose containers on a path the daemon has already resolved, instead of
+    inferring a Desktop/WSL namespace from the path's shape: the namespace that
+    serves a checkout differs between Docker Desktop backends and versions, and
+    a wrong guess mounts empty directories rather than failing.
+
+    Retries with linear backoff so a transient ``docker inspect`` failure (for
+    example the deployment socket proxy still starting) does not permanently
+    discard the evidence. Returns ``None`` when the container identity or the
+    daemon stays unreadable, leaving the caller's configured path in place.
+    """
+
+    container_id = _read_self_container_id()
+    if not container_id:
+        return None
+    for mounts in _docker_json_lines(
+        ["docker", "inspect", "--format", "{{json .Mounts}}", container_id],
+        attempts=attempts,
+        backoff_seconds=backoff_seconds,
+    ):
+        sources = _mount_sources(mounts, local_mount)
+        if sources:
+            return sources[0]
+    return None
+
+
+def installed_bind_sources(local_mount: str, *, project_name: str) -> tuple[str, ...]:
+    """Return host sources this deployment's own containers use, common first.
+
+    Docker Desktop records more than one host path for the same WSL checkout —
+    the ``/mnt/<drive>`` path and a managed ``docker-desktop-bind-mounts``
+    share — depending on which client created the container. Both resolve, but
+    Compose hashes the bind source *string* into each container's config, so
+    switching spelling mid-life recreates every service, including the socket
+    proxy the updater itself talks to. The installed containers therefore
+    decide: their source is proven resolvable and keeps Compose idempotent.
+    """
+
+    identifiers = (
+        _docker_output(
+            [
+                "docker",
+                "ps",
+                "-q",
+                "--filter",
+                f"label=com.docker.compose.project={project_name}",
+                # One-off containers (`compose run`, release cohorts) are
+                # transient; only the installed services define the deployment.
+                "--filter",
+                "label=com.docker.compose.oneoff=False",
+            ]
+        )
+        or ""
+    ).split()
+    if not identifiers:
+        return ()
+    counted: dict[str, int] = {}
+    for mounts in _docker_json_lines(
+        ["docker", "inspect", "--format", "{{json .Mounts}}", *identifiers]
+    ):
+        for source in _mount_sources(mounts, local_mount):
+            counted[source] = counted.get(source, 0) + 1
+    return tuple(sorted(counted, key=lambda source: (-counted[source], source)))
+
+
+_host_dir_evidence_cache: dict[tuple[str, str, str], str | None] = {}
+
+
+async def _resolve_host_dir_evidence(
+    *, local_mount: str, project_name: str, configured: str
+) -> str | None:
+    """Decide, once per daemon and project, which host path Compose receives."""
+
+    key = (
+        os.environ.get("DOCKER_HOST", ""),
+        _normalized_bind_path(local_mount),
+        project_name,
+    )
+    if key not in _host_dir_evidence_cache:
+        _host_dir_evidence_cache[key] = await asyncio.to_thread(
+            _host_dir_evidence, local_mount, project_name, configured
+        )
+    return _host_dir_evidence_cache[key]
+
+
+def _host_dir_evidence(
+    local_mount: str, project_name: str, configured: str
+) -> str | None:
+    installed = installed_bind_sources(local_mount, project_name=project_name)
+    if installed:
+        # The configured path wins whenever the deployment proves it works, so
+        # an operator's declared value is never quietly replaced by an
+        # equivalent spelling.
+        for source in installed:
+            if _normalized_bind_path(source) == _normalized_bind_path(configured):
+                return source
+        return installed[0]
+    return daemon_bind_source(local_mount)
+
+
+def _observed_host_dir_evidence(local_mount: str, project_name: str) -> str | None:
+    """Read an already-resolved decision without blocking on the daemon."""
+
+    return _host_dir_evidence_cache.get(
+        (
+            os.environ.get("DOCKER_HOST", ""),
+            _normalized_bind_path(local_mount),
+            project_name,
+        )
+    )
+
+
+_desktop_daemon_probe_cache: dict[str, bool | None] = {}
+
+
+async def _probe_docker_desktop_daemon() -> bool | None:
+    """Report whether the reachable daemon is Docker Desktop.
+
+    Returns True for Docker Desktop, False for another daemon, and None when
+    the platform cannot be established. Results are cached per ``DOCKER_HOST``
+    so every Compose invocation does not re-probe. ``None`` callers keep the
+    Desktop rewrite: the daemon is unreachable either way, and rewritten binds
+    disable automatic host-directory creation so a misclassified source fails
+    loudly instead of mounting an empty directory.
+    """
+
+    key = os.environ.get("DOCKER_HOST", "")
+    if key in _desktop_daemon_probe_cache:
+        return _desktop_daemon_probe_cache[key]
+    result: bool | None = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "docker",
+            "info",
+            "--format",
+            "{{.OperatingSystem}}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError:
+        result = None
+    else:
+        try:
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+        except TimeoutError:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            result = None
+        except OSError:
+            result = None
+        else:
+            if process.returncode == 0:
+                result = (
+                    stdout.decode("utf-8", errors="replace").strip()
+                    == "Docker Desktop"
+                )
+    _desktop_daemon_probe_cache[key] = result
+    return result
+
+
+def _docker_desktop_host_path(path: str) -> str | None:
+    """Translate Windows and WSL paths into Docker Desktop's daemon namespace.
+
+    The Linux deployment worker talks directly to the Desktop daemon. Both
+    Windows drive paths (``C:\\repo``) and WSL user-distro ``/mnt/<drive>``
+    paths are not the daemon's host-file mounts; they resolve to
+    ``/run/desktop/mnt/host/<drive>/...``. Longer ``/mnt/<name>`` mounts
+    (for example ``/mnt/data``) are genuine Linux mounts and pass through.
     """
 
     normalized = path.strip()
-    if len(normalized) < 3 or normalized[1] != ":" or not normalized[0].isalpha():
-        return None
-    tail = normalized[2:].replace("\\", "/").lstrip("/")
-    drive = normalized[0].lower()
-    if tail:
-        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
-    return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
+    if len(normalized) >= 2 and normalized[1] == ":" and normalized[0].isalpha():
+        tail = normalized[2:].replace("\\", "/").lstrip("/")
+        drive = normalized[0].lower()
+        if tail:
+            return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
+        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
+    unified = normalized.replace("\\", "/")
+    if _is_wsl_distro_path(normalized):
+        drive = unified.split("/")[2].lower()
+        tail = "/".join(part for part in unified.split("/")[3:] if part)
+        if tail:
+            return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive / tail)
+        return str(_DOCKER_DESKTOP_HOST_MOUNT_ROOT / drive)
+    return None
 
 
 def _remap_host_compose_path(
@@ -497,7 +837,9 @@ class HostDockerComposeRunner:
     project_dir: str
     compose_file: str | None = None
     project_name: str = "moonmind"
-    command_timeout_seconds: int = 900
+    # The release supervision window is sized from this same number, so the
+    # Activity watching a release can never be shorter than one command.
+    command_timeout_seconds: int = RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS
     local_project_dir: str | None = None
     env_file: str | None = None
     excluded_services: tuple[str, ...] = ()
@@ -540,6 +882,7 @@ class HostDockerComposeRunner:
     ) -> Mapping[str, Any]:
         # Validate at the side-effect owner, before any Compose recreation.
         # Config rendering uses worker-visible paths; it never creates mounts.
+        await self._record_daemon_host_dir()
         try:
             await asyncio.to_thread(
                 check_compose_access,
@@ -656,7 +999,27 @@ class HostDockerComposeRunner:
     def _local_dir(self) -> Path:
         return Path(self.local_project_dir or self.project_dir).expanduser()
 
+    async def _record_daemon_host_dir(self) -> str | None:
+        """Resolve, once per daemon, the host path serving this checkout."""
+
+        if not self.local_project_dir:
+            return None
+        return await _resolve_host_dir_evidence(
+            local_mount=str(self._local_dir()),
+            project_name=self.project_name,
+            configured=str(self.project_dir),
+        )
+
     def _host_dir(self) -> Path:
+        # A host path this deployment demonstrably resolves outranks one
+        # inferred from the configured path's shape.
+        observed = (
+            _observed_host_dir_evidence(str(self._local_dir()), self.project_name)
+            if self.local_project_dir
+            else None
+        )
+        if observed:
+            return Path(observed)
         return Path(self.project_dir).expanduser()
 
     def _compose_file_path(self) -> Path:
@@ -775,9 +1138,44 @@ class HostDockerComposeRunner:
             *parts[2:],
         ]
 
-    def _uses_windows_host_project_dir(self) -> bool:
+    def _requires_desktop_host_rewrite(self) -> bool:
+        """Return True when the host project dir is not daemon-visible.
+
+        Docker Desktop on Windows serves host files from
+        ``/run/desktop/mnt/host/<drive>/...``. Both Windows drive-letter
+        paths (``C:\\repo``) and WSL distro mounts (``/mnt/<drive>/...``)
+        must be rewritten to that namespace before the daemon can mount
+        them. Native Linux host paths pass through unchanged.
+        """
         text = str(self.project_dir).strip()
-        return len(text) >= 2 and text[1] == ":" and text[0].isalpha()
+        if len(text) >= 2 and text[1] == ":" and text[0].isalpha():
+            return True
+        return _is_wsl_distro_path(text)
+
+    async def _use_desktop_host_rewrite(self) -> bool:
+        """Decide whether daemon-bound Compose input needs the host rewrite.
+
+        The daemon's recorded source for this worker's own checkout bind
+        settles the question without guessing whenever it is readable. Only
+        when that evidence is unavailable does the path's shape decide:
+        Windows drive-letter paths are unambiguous Desktop signals. A bare
+        ``/mnt/<drive>`` shape may instead be a native Linux mount, so it is
+        rewritten only when the reachable daemon confirms Docker Desktop (or
+        when the platform cannot be established, where rewritten binds still
+        fail loudly instead of mounting empty directories). A confirmed
+        non-Desktop daemon keeps the POSIX namespace untouched.
+        """
+        if not (self._requires_desktop_host_rewrite() and self.local_project_dir):
+            return False
+        if await self._record_daemon_host_dir():
+            # The daemon created this worker's own checkout bind, so its
+            # recorded source needs no namespace guess. Rewriting a path the
+            # daemon already resolves is what mounted empty state directories.
+            return False
+        if _is_wsl_distro_path(str(self.project_dir)):
+            if await _probe_docker_desktop_daemon() is False:
+                return False
+        return True
 
     def _host_bind_source_for_local_path(self, local_source: str) -> str:
         local_dir = str(self._local_dir()).replace("\\", "/").rstrip("/")
@@ -834,7 +1232,7 @@ class HostDockerComposeRunner:
         rewritten["services"] = rewritten_services
         return rewritten
 
-    async def _write_windows_host_resolved_compose_file(
+    async def _write_desktop_host_resolved_compose_file(
         self, env: Mapping[str, str]
     ) -> Path:
         resolved = [
@@ -1000,13 +1398,14 @@ class HostDockerComposeRunner:
         max_stdout_chars: int | None = 512,
         max_stderr_chars: int | None = 512,
     ) -> Mapping[str, Any]:
+        await self._record_daemon_host_dir()
         self._ensure_host_project_read_alias()
         env = os.environ.copy()
         if requested_image:
             env["MOONMIND_IMAGE"] = requested_image
         temp_compose_file: Path | None = None
-        if self._uses_windows_host_project_dir() and self.local_project_dir:
-            temp_compose_file = await self._write_windows_host_resolved_compose_file(env)
+        if await self._use_desktop_host_rewrite():
+            temp_compose_file = await self._write_desktop_host_resolved_compose_file(env)
             resolved = self._compose_command(
                 command,
                 project_dir=self._local_dir(),
@@ -1343,6 +1742,103 @@ class DeploymentUpdateExecutor:
             )
         return recovery_ref
 
+    async def _reconcile_excluded_substrate(
+        self,
+        *,
+        stack: str,
+        parsed: Mapping[str, Any],
+        command_plan: ComposeCommandPlan,
+        before_state: Mapping[str, Any],
+        execution_image: str,
+        progress_events: list[dict[str, str]],
+        command_log: dict[str, Any],
+        verified: bool,
+    ) -> dict[str, Any] | None:
+        """Reconcile release-owned substrate excluded from the main update.
+
+        Returns the substrate evidence report, or None when the main update
+        excluded nothing the selected release configures. The staged pass
+        runs only after the main stack verifies, so the controller never
+        recreates its own transport mid-update; substrate that is already
+        converged is left running, and substrate that does not converge
+        fails the release instead of reporting success on stale definitions.
+        """
+        targets = _substrate_reconciliation_targets(
+            before_state=before_state,
+            excluded_services=self.excluded_services,
+        )
+        if not targets:
+            return None
+        configured_images = before_state.get("configuredServiceImages")
+        expected_images = (
+            configured_images if isinstance(configured_images, Mapping) else {}
+        )
+        pending = _substrate_service_mismatches(
+            state=before_state,
+            targets=targets,
+            expected_images=expected_images,
+        )
+        pending_services = [str(item["service"]) for item in pending]
+        report: dict[str, Any] = {
+            "targets": list(targets),
+            "pendingBefore": list(pending_services),
+            "reconciled": [],
+            "remaining": [],
+        }
+        if not pending_services or not verified:
+            command_log["substrate"] = report
+            return report
+        _add_progress(
+            progress_events,
+            "RECONCILING_SUBSTRATE",
+            "Reconciling excluded release substrate.",
+        )
+        substrate_plan = build_compose_command_plan(
+            mode=str(parsed["mode"]),
+            remove_orphans=bool(parsed["removeOrphans"]),
+            wait=bool(parsed["wait"]),
+            runner_mode=command_plan.runner_mode,
+        )
+        pull_command = (*substrate_plan.pull_args, *pending_services)
+        pull_result = await self.runner.pull(
+            stack=stack,
+            command=pull_command,
+            requested_image=execution_image,
+        )
+        command_log["substratePull"] = {
+            "command": list(pull_command),
+            "result": dict(pull_result) if isinstance(pull_result, Mapping) else pull_result,
+        }
+        _ensure_command_succeeded("substrate-pull", pull_result)
+        up_command = (*substrate_plan.up_args, "--no-deps", *pending_services)
+        up_result = await self.runner.up(
+            stack=stack,
+            command=up_command,
+            requested_image=execution_image,
+        )
+        command_log["substrateUp"] = {
+            "command": list(up_command),
+            "result": dict(up_result) if isinstance(up_result, Mapping) else up_result,
+        }
+        _ensure_command_succeeded("substrate-up", up_result)
+        substrate_state = await self.runner.capture_state(
+            stack=stack, phase="substrate"
+        )
+        remaining = _substrate_service_mismatches(
+            state=substrate_state,
+            targets=tuple(pending_services),
+            expected_images=expected_images,
+        )
+        remaining_services = {str(item["service"]) for item in remaining}
+        report["reconciled"] = [
+            service
+            for service in pending_services
+            if service not in remaining_services
+        ]
+        report["remaining"] = remaining
+        command_log["substrate"] = report
+        return report
+
     async def execute(
         self,
         inputs: Mapping[str, Any],
@@ -1582,15 +2078,43 @@ class DeploymentUpdateExecutor:
                 final_status = _verification_final_status(verification)
                 if final_status != "SUCCEEDED":
                     failure_reason = _verification_failure_reason(verification)
+                substrate_report = await self._reconcile_excluded_substrate(
+                    stack=parsed["stack"],
+                    parsed=parsed,
+                    command_plan=command_plan,
+                    before_state=before_state,
+                    execution_image=execution_image,
+                    progress_events=progress_events,
+                    command_log=command_log,
+                    verified=final_status == "SUCCEEDED",
+                )
+                if substrate_report is not None:
+                    # The substrate stage mutated command_log after the
+                    # earlier command-log write: rewrite it so the artifact
+                    # carries the staged handoff alongside the main plan.
+                    command_ref = await write_evidence("command-log", command_log)
+                    remaining = substrate_report.get("remaining") or []
+                    if remaining:
+                        final_status = "FAILED"
+                        failure_reason = (
+                            "Excluded release substrate did not converge: "
+                            + ", ".join(
+                                str(item.get("service") or "unknown")
+                                for item in remaining
+                                if isinstance(item, Mapping)
+                            )
+                        )
+                verification_payload: dict[str, Any] = {
+                    "succeeded": verification.succeeded,
+                    "status": final_status,
+                    "details": dict(verification.details),
+                    "requestedImage": requested_image,
+                    "resolvedDigest": resolved_digest,
+                }
+                if substrate_report is not None:
+                    verification_payload["substrate"] = substrate_report
                 verification_ref = await write_evidence(
-                    "verification",
-                    {
-                        "succeeded": verification.succeeded,
-                        "status": final_status,
-                        "details": dict(verification.details),
-                        "requestedImage": requested_image,
-                        "resolvedDigest": resolved_digest,
-                    },
+                    "verification", verification_payload
                 )
             except Exception as exc:
                 final_status = "FAILED"
@@ -2095,6 +2619,142 @@ def _command_plan_targeting_stack_services(
             *reconciliation_services,
         ),
     )
+
+
+def _substrate_reconciliation_targets(
+    *,
+    before_state: Mapping[str, Any],
+    excluded_services: Sequence[str],
+) -> tuple[str, ...]:
+    """Excluded services the staged substrate pass still reconciles.
+
+    The main update excludes substrate (docker-proxy, sandbox-egress-proxy,
+    postgres, ...) so the controller never recreates its own transport
+    mid-update. Those services are still release-owned: when the selected
+    release configures them, a final staged pass reconciles them after the
+    main stack verifies instead of reporting success on stale substrate.
+    The deployment-control runner itself and one-shot services are never
+    substrate targets.
+    """
+    excluded = _normalized_service_names(excluded_services)
+    if not excluded:
+        return ()
+    protected = _normalized_service_names(
+        (DEPLOYMENT_CONTROL_SERVICE, *DEPLOYMENT_ONE_SHOT_SERVICES)
+    )
+    targets: list[str] = []
+    for service_name in _configured_service_names_from_state(before_state):
+        normalized = str(service_name or "").strip().lower()
+        if not normalized or normalized in protected:
+            continue
+        if _service_is_excluded(service_name, excluded):
+            targets.append(str(service_name).strip())
+    return tuple(targets)
+
+
+def _normalize_configured_image(value: Any) -> str:
+    """Normalize a configured service image for convergence comparison."""
+    text = str(value or "").strip()
+    if "@" in text:
+        text = text.split("@", 1)[0].strip()
+    return text
+
+
+def _running_service_images(
+    state: Mapping[str, Any], service_name: str
+) -> tuple[str, ...]:
+    """Candidate image references for one running Compose service."""
+    services = state.get("services")
+    images = state.get("images")
+    candidates: list[str] = []
+    containers: list[str] = []
+    if isinstance(services, Sequence) and not isinstance(services, (str, bytes)):
+        for entry in services:
+            if not isinstance(entry, Mapping):
+                continue
+            if str(entry.get("State") or "").strip().lower() != "running":
+                continue
+            if not _service_name_matches(
+                entry.get("Service") or entry.get("Name") or "",
+                str(service_name or "").strip().lower(),
+            ):
+                continue
+            image = _normalize_configured_image(entry.get("Image"))
+            if image:
+                candidates.append(image)
+            for key in ("Name", "ID"):
+                value = str(entry.get(key) or "").strip()
+                if value:
+                    containers.append(value)
+    if isinstance(images, Sequence) and not isinstance(images, (str, bytes)):
+        for image in images:
+            if not isinstance(image, Mapping):
+                continue
+            if containers and str(image.get("ContainerName") or "").strip() not in containers:
+                continue
+            repository = str(
+                image.get("Repository") or image.get("repository") or ""
+            ).strip()
+            tag = str(image.get("Tag") or image.get("tag") or "").strip()
+            if repository and tag:
+                candidates.append(f"{repository}:{tag}")
+            elif repository:
+                candidates.append(repository)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for candidate in candidates:
+        if candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+    return tuple(ordered)
+
+
+def _substrate_service_mismatches(
+    *,
+    state: Mapping[str, Any],
+    targets: Sequence[str],
+    expected_images: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Prove each staged substrate service runs its release configuration.
+
+    A target is converged when a running container resolves to the image the
+    selected release configures for it; anything else (stopped, missing, or
+    a previous image) is a mismatch the release must not report as success.
+    """
+    mismatches: list[dict[str, Any]] = []
+    for target in targets:
+        service = str(target or "").strip()
+        if not service:
+            continue
+        running = _running_service_images(state, service)
+        expected = None
+        if isinstance(expected_images, Mapping):
+            for key in (service, service.lower()):
+                if key in expected_images:
+                    expected = _normalize_configured_image(expected_images[key])
+                    break
+        if not running:
+            mismatches.append(
+                {
+                    "service": service,
+                    "expectedImage": expected,
+                    "actualImages": [],
+                    "reason": "substrate service is not running",
+                }
+            )
+            continue
+        if expected and expected not in running:
+            mismatches.append(
+                {
+                    "service": service,
+                    "expectedImage": expected,
+                    "actualImages": list(running),
+                    "reason": (
+                        "substrate service is not running the release image"
+                    ),
+                }
+            )
+    return mismatches
 
 
 def _one_shot_services_from_plan(command_plan: ComposeCommandPlan) -> tuple[str, ...]:
@@ -2988,6 +3648,121 @@ def _write_desired_state_files(
     json_text = json.dumps(record, sort_keys=True, default=str, indent=2) + "\n"
     _atomic_write_bytes(
         json_path,
+        json_text.encode("utf-8"),
+        normalize_permissions=True,
+    )
+
+
+_ENV_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=\"(.*)\"$")
+
+
+def _unescape_desired_state_env_value(text: str) -> str:
+    """Invert :func:`_compose_env_value` for values this store wrote."""
+    out: list[str] = []
+    escaped = False
+    for char in text:
+        if escaped:
+            out.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        else:
+            out.append(char)
+    if escaped:
+        out.append("\\")
+    return "".join(out)
+
+
+def _parse_desired_state_env(
+    text: str,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """Split desired-state env text into entries and preserved lines.
+
+    Returns ``(entries, preserved)`` where entries are ``(key, value)``
+    pairs in file order (last duplicate wins) and preserved holds every
+    line this store did not author (comments, blanks, unparseable lines),
+    kept verbatim so merges never drop operator content.
+    """
+    entries: list[tuple[str, str]] = []
+    seen: dict[str, int] = {}
+    preserved: list[str] = []
+    for line in text.splitlines():
+        match = _ENV_LINE_RE.fullmatch(line.strip())
+        if match is None:
+            preserved.append(line)
+            continue
+        key = match.group(1)
+        value = _unescape_desired_state_env_value(match.group(2))
+        if key in seen:
+            entries[seen[key]] = (key, value)
+        else:
+            seen[key] = len(entries)
+            entries.append((key, value))
+    return entries, preserved
+
+
+def _read_desired_state_files(
+    env_path: Path,
+    json_path: Path,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """Read desired-state files tolerantly; missing files read as empty."""
+    try:
+        env_text = env_path.expanduser().read_text(encoding="utf-8")
+    except OSError:
+        env_text = ""
+    entries, _preserved = _parse_desired_state_env(env_text)
+    try:
+        record_text = json_path.expanduser().read_text(encoding="utf-8")
+    except OSError:
+        return dict(entries), {}
+    try:
+        record = json.loads(record_text)
+    except ValueError:
+        return dict(entries), {}
+    if not isinstance(record, dict):
+        return dict(entries), {}
+    return dict(entries), record
+
+
+def _merge_desired_state_files(
+    env_path: Path,
+    json_path: Path,
+    env_updates: Mapping[str, Any],
+    json_updates: Mapping[str, Any],
+) -> None:
+    """Merge updates into desired-state files, preserving other entries."""
+    try:
+        env_text = env_path.expanduser().read_text(encoding="utf-8")
+    except OSError:
+        env_text = ""
+    entries, preserved = _parse_desired_state_env(env_text)
+    merged = dict(entries)
+    for key, value in env_updates.items():
+        text = _env_value(value)
+        if text:
+            merged[str(key)] = text
+        else:
+            merged.pop(str(key), None)
+    ordered = [(key, merged[key]) for key, _ in entries if key in merged]
+    ordered.extend(
+        (str(key), merged[str(key)])
+        for key in env_updates
+        if _env_value(env_updates[key]) and str(key) not in dict(entries)
+    )
+    lines = [f'{key}="{_compose_env_value(value)}"\n' for key, value in ordered]
+    lines.extend(
+        line + "\n" for line in preserved if line.strip()
+    )
+    _atomic_write_bytes(
+        env_path.expanduser(),
+        "".join(lines).encode("utf-8"),
+        normalize_permissions=True,
+    )
+    _existing_env, record = _read_desired_state_files(env_path, json_path)
+    record = {**record, **{str(k): v for k, v in json_updates.items()}}
+    json_text = json.dumps(record, sort_keys=True, default=str, indent=2) + "\n"
+    _atomic_write_bytes(
+        json_path.expanduser(),
         json_text.encode("utf-8"),
         normalize_permissions=True,
     )

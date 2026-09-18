@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
+import json
 import logging
 import re
 from typing import Any, Mapping
 
 from fastapi import HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
     ManagedAgentProviderProfile,
     OmnigentAgentProfile,
+    OmnigentAgentProfileAuditEvent,
     OmnigentAgentProfileUsage,
     OmnigentAgentProfileVersion,
     OmnigentUpstreamAgentProjection,
@@ -854,6 +858,239 @@ async def resolve_default_agent_profile_snapshot(
     )
 
 
+def _profile_document_digest(document: Mapping[str, Any]) -> str:
+    """Return the canonical digest for a profile document.
+
+    Mirrors the profile API's immutable version identity so cutover versions
+    deduplicate against manually authored equivalents instead of forking.
+    """
+    encoded = json.dumps(
+        document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _allowed_policy_refs(document: Mapping[str, Any]) -> list[str]:
+    """Return the launch policy refs a profile document admits."""
+    if document.get("schemaVersion") == "moonmind.omnigent-agent-profile.v2":
+        refs = document.get("allowedLaunchPolicyRefs")
+    else:
+        execution = document.get("execution")
+        refs = execution.get("allowedLaunchPolicyRefs") if isinstance(execution, Mapping) else None
+    return [str(ref) for ref in refs or () if str(ref or "").strip()]
+
+
+def _replace_policy_ref_deduped(
+    refs: Any, *, old_ref: str, new_ref: str
+) -> list[str]:
+    """Replace ``old_ref`` with ``new_ref`` while deduplicating the result.
+
+    When an active profile already admits both the predecessor and the
+    successor, a plain in-place replacement produces duplicate successor refs
+    such as ``["p@3", "p@3"]``. ``refresh_schedule_deployment_snapshot`` then
+    finds two same-identity candidates and rejects the schedule, so the
+    automatic cutover recreates the wedge it is meant to remove. Deduplicate
+    while preserving order so the cutover admits the successor exactly once.
+    """
+    replaced = [new_ref if str(ref) == old_ref else str(ref) for ref in refs or ()]
+    deduped: list[str] = []
+    for ref in replaced:
+        if ref not in deduped:
+            deduped.append(ref)
+    return deduped
+
+
+async def advance_agent_profiles_for_policy_cutover(
+    session: AsyncSession,
+    *,
+    cutovers: Mapping[str, str],
+    actor: str = "bootstrap",
+) -> list[dict[str, Any]]:
+    """Advance active profiles across a same-policy cutover without manual edits.
+
+    When bootstrap reconcile (or the release migration) moves a policy default
+    from ``policy@14`` to ``policy@16`` for a compatible rebuild, long-lived
+    schedules still pin ``@14`` and the Agent Profile still allows only
+    ``@14``. ``refresh_schedule_deployment_snapshot`` then keeps requiring an
+    explicit revision. This advances every active profile whose active version
+    admits the predecessor ref to an equivalent version admitting the
+    successor ref, preserving all other semantics.
+
+    Only same-policy cutovers advance automatically (``policy@old`` to
+    ``policy@new`` with equal policy ids); a different policy identity still
+    requires an explicit schedule revision. Existing usages and in-flight runs
+    keep their recorded version authority; only the active pointer moves, so
+    the next schedule refresh can cut over while running executions stay on
+    their recorded-host plans. Re-running with the same cutover reuses the
+    existing version instead of forking.
+    """
+    pairs: list[tuple[str, str, str]] = []
+    for old_ref, new_ref in dict(cutovers).items():
+        old_id, separator, _old_version = str(old_ref).rpartition("@")
+        new_id, new_separator, _new_version = str(new_ref).rpartition("@")
+        if not separator or not new_separator or old_id != new_id:
+            continue
+        if str(old_ref) == str(new_ref):
+            continue
+        pairs.append((old_id, str(old_ref), str(new_ref)))
+    if not pairs:
+        return []
+    profiles = list(
+        (
+            await session.execute(
+                select(OmnigentAgentProfile).where(
+                    OmnigentAgentProfile.state == "active",
+                    OmnigentAgentProfile.active_version.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    advanced: list[dict[str, Any]] = []
+    for profile in profiles:
+        observed_version = profile.active_version
+        active = await session.scalar(
+            select(OmnigentAgentProfileVersion).where(
+                OmnigentAgentProfileVersion.profile_id == profile.profile_id,
+                OmnigentAgentProfileVersion.version == observed_version,
+            )
+        )
+        if active is None or not isinstance(active.document, Mapping):
+            continue
+        document = copy.deepcopy(dict(active.document))
+        is_v2 = document.get("schemaVersion") == "moonmind.omnigent-agent-profile.v2"
+        changed = False
+        applied: list[dict[str, str]] = []
+        for policy_id, old_ref, new_ref in pairs:
+            refs = _allowed_policy_refs(document)
+            if old_ref not in refs:
+                continue
+            if is_v2:
+                document["allowedLaunchPolicyRefs"] = _replace_policy_ref_deduped(
+                    document.get("allowedLaunchPolicyRefs"),
+                    old_ref=old_ref,
+                    new_ref=new_ref,
+                )
+            else:
+                execution = copy.deepcopy(dict(document.get("execution") or {}))
+                execution["allowedLaunchPolicyRefs"] = _replace_policy_ref_deduped(
+                    execution.get("allowedLaunchPolicyRefs"),
+                    old_ref=old_ref,
+                    new_ref=new_ref,
+                )
+                document["execution"] = execution
+                if document.get("policyRef") == old_ref:
+                    document["policyRef"] = new_ref
+            changed = True
+            applied.append({"previousRef": old_ref, "policyRef": new_ref})
+        if not changed:
+            continue
+        digest = _profile_document_digest(document)
+        candidate = await session.scalar(
+            select(OmnigentAgentProfileVersion).where(
+                OmnigentAgentProfileVersion.profile_id == profile.profile_id,
+                OmnigentAgentProfileVersion.digest == digest,
+            )
+        )
+        if candidate is None:
+            for _attempt in range(3):
+                latest = int(
+                    await session.scalar(
+                        select(func.max(OmnigentAgentProfileVersion.version)).where(
+                            OmnigentAgentProfileVersion.profile_id == profile.profile_id
+                        )
+                    )
+                    or 0
+                )
+                pending = OmnigentAgentProfileVersion(
+                    profile_id=profile.profile_id,
+                    version=latest + 1,
+                    digest=digest,
+                    document=document,
+                    parent_version=active.version,
+                    upstream_snapshot=copy.deepcopy(active.upstream_snapshot),
+                    validation_result=copy.deepcopy(active.validation_result),
+                    rollout_metadata={
+                        **(copy.deepcopy(active.rollout_metadata) or {}),
+                        "origin": "bootstrap_policy_cutover",
+                        "previousVersion": active.version,
+                        "policyCutovers": applied,
+                        "materializedBy": actor,
+                    },
+                    created_by=None,
+                )
+                try:
+                    async with session.begin_nested():
+                        session.add(pending)
+                        await session.flush()
+                except IntegrityError:
+                    # Concurrent cutover or activation allocated the same
+                    # version number or the same digest first. Reuse whatever
+                    # won instead of forking a duplicate.
+                    candidate = await session.scalar(
+                        select(OmnigentAgentProfileVersion).where(
+                            OmnigentAgentProfileVersion.profile_id
+                            == profile.profile_id,
+                            OmnigentAgentProfileVersion.digest == digest,
+                        )
+                    )
+                    if candidate is not None:
+                        break
+                    continue
+                candidate = pending
+                break
+            if candidate is None:
+                continue
+        validation = candidate.validation_result
+        if not isinstance(validation, Mapping) or validation.get("ready") is not True:
+            # Never activate an unvalidated matching version: normal
+            # resolution rejects a not-ready active version as not
+            # launch-ready, wedging new launches and schedule refreshes.
+            # Leave the current active pointer until the candidate is
+            # validated.
+            continue
+        if observed_version != candidate.version:
+            # Condition the pointer move on the previously observed active
+            # version so an automatic cutover cannot silently undo an explicit
+            # concurrent profile activation. A rowcount of zero means the
+            # operator moved the pointer after our read; keep their choice.
+            moved = await session.execute(
+                update(OmnigentAgentProfile)
+                .where(
+                    OmnigentAgentProfile.profile_id == profile.profile_id,
+                    OmnigentAgentProfile.active_version == observed_version,
+                )
+                .values(active_version=candidate.version)
+            )
+            if (moved.rowcount or 0) == 0:
+                continue
+            profile.active_version = candidate.version
+            session.add(
+                OmnigentAgentProfileAuditEvent(
+                    profile_id=profile.profile_id,
+                    action="bootstrap_launch_policy_cutover",
+                    version=candidate.version,
+                    actor_id=None,
+                    metadata_json={
+                        "previousVersion": observed_version,
+                        "policyCutovers": applied,
+                        "state": "active",
+                    },
+                )
+            )
+            await session.flush()
+        advanced.append(
+            {
+                "profileId": profile.profile_id,
+                "version": candidate.version,
+                "digest": candidate.digest,
+                "policyCutovers": applied,
+            }
+        )
+    return advanced
+
+
 async def refresh_schedule_deployment_snapshot(
     session: AsyncSession,
     *,
@@ -938,7 +1175,13 @@ async def refresh_schedule_deployment_snapshot(
         if ref.rpartition("@")[0] == policy_id
     ]
     if not separator or len(candidates) != 1:
-        raise ValueError("scheduled launch policy identity is no longer available")
+        raise ValueError(
+            "scheduled launch policy identity is no longer available "
+            f"(pinned={old_ref or '<missing>'} "
+            f"profile={profile_id}@active "
+            f"candidates={candidates}); revise the schedule explicitly to a "
+            "currently allowed policy ref"
+        )
     new_ref = candidates[0]
     policies = OmnigentPolicyService(session)
     # A predecessor may already be superseded. Its immutable document is
@@ -960,7 +1203,8 @@ async def refresh_schedule_deployment_snapshot(
         boundaries.append(boundary)
     if boundaries[0] != boundaries[1]:
         raise ValueError(
-            "scheduled launch policy boundaries changed; revise the schedule explicitly"
+            "scheduled launch policy boundaries changed; revise the schedule explicitly "
+            f"(pinned={old_ref} replacement={new_ref})"
         )
 
     refreshed = await resolve_agent_profile_snapshot(
@@ -1119,6 +1363,7 @@ async def refresh_managed_bootstrap_snapshot(
 
 
 __all__ = [
+    "advance_agent_profiles_for_policy_cutover",
     "compile_agent_profile_snapshot_parameters",
     "default_launch_policy_ref",
     "refresh_managed_bootstrap_snapshot",

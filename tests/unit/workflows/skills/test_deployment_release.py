@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -397,9 +398,13 @@ async def test_recording_serving_image_requires_coherent_installed_fleets(
     runner = SimpleNamespace(_run_compose_command=AsyncMock(side_effect=[
         {"exitCode": 0, "stdout": "workflow-id"},
         {"exitCode": 0, "stdout": "llm-id"},
+        {"exitCode": 0, "stdout": "workflow-id"},
+        {"exitCode": 0, "stdout": "llm-id"},
     ]))
     monkeypatch.setattr(release, "worker_readiness", AsyncMock(return_value={"ready": True, "buildId": "a"}))
     docker = AsyncMock(side_effect=[
+        json.dumps([{"Image": "sha256:a"}]),
+        json.dumps([{"Image": "sha256:a" if coherent else "sha256:b"}]),
         json.dumps([{"Image": "sha256:a"}]),
         json.dumps([{"Image": "sha256:a" if coherent else "sha256:b"}]),
     ])
@@ -417,6 +422,68 @@ async def test_recording_serving_image_requires_coherent_installed_fleets(
         assert not (tmp_path / "retained.json").exists()
     assert not cohort.names
     assert all(call.args[0] == "inspect" for call in docker.await_args_list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("receipt_source", ["rev-1", "rev-2", None])
+async def test_terminal_receipt_source_revision_binds_image_authority(
+    tmp_path, monkeypatch, receipt_source
+):
+    from unittest.mock import AsyncMock
+
+    deployment = "release-test"
+    digest = "sha256:" + "c" * 64
+    image_id = "sha256:" + "d" * 64
+    version = deployment + "." + digest
+    directory = tmp_path / "job1"
+    directory.mkdir()
+    release.write_record(
+        directory / "routing.json",
+        {"deployment": deployment, "candidate": digest},
+    )
+    release.write_record(
+        directory / "request.json",
+        {
+            "authored": {
+                "owner": "owner",
+                "inputs": {"sourceRevision": "rev-1"},
+            },
+            "image": "example/image@" + digest,
+            "imageId": image_id,
+        },
+    )
+    outputs = {
+        "resolvedDigest": digest,
+        "releaseReadinessArtifactRef": "artifact://readiness",
+    }
+    if receipt_source is not None:
+        outputs["sourceRevision"] = receipt_source
+    release.write_record(
+        directory / "deployment-result.json",
+        {"owner": "owner", "result": {"status": "COMPLETED", "outputs": outputs}},
+    )
+    docker = AsyncMock(
+        side_effect=[
+            image_id,
+            json.dumps([{"Id": image_id}]),
+            json.dumps({"digest": digest, "sourceRevision": "rev-1"}),
+        ]
+    )
+    monkeypatch.setattr(release, "docker", docker)
+    if receipt_source == "rev-2":
+        # A mismatched source stamp denies authority from that receipt but is
+        # skipped, never fatal to the scan.
+        assert await release.successful_release_image(tmp_path, version) is None
+        docker.assert_not_awaited()
+        return
+    # A matching stamp grants authority; a pre-stamp legacy receipt without
+    # the key still recovers through the live manifest source binding.
+    assert await release.successful_release_image(tmp_path, version) == {
+        "image": image_id,
+        "sourceReceipt": "job1",
+        "sourceRevision": "rev-1",
+    }
+    assert docker.await_count == 3
 
 
 @pytest.mark.asyncio
@@ -510,3 +577,727 @@ async def test_legacy_receipt_without_source_revision_cannot_block_promotion_sca
         "sourceReceipt": "valid-job",
         "sourceRevision": "rev",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_failure", [None, TimeoutError("timed out")])
+async def test_exhausted_deliveries_surface_updater_evidence_and_recovery_hint(
+    tmp_path, monkeypatch, log_failure
+):
+    """Exhaustion must name the recovery owner and preserve inner evidence.
+
+    Regression: WSL /mnt/<drive> checkouts launched updater containers with
+    empty state volumes. The updater exited with FileNotFoundError three
+    times without attempts.json/result.json, and the outer error hid that
+    cause behind a generic message with no recovery path. A failing log
+    collection must not replace the established exhaustion either.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(tmp_path / "desired.json")
+    )
+    owner = "host-update:dc9f2a60-0e8e-464e-bc97-6657fb608d76"
+    digest = "sha256:" + "a" * 64
+    inputs = {
+        "stack": "moonmind",
+        "image": {"repository": "example/moonmind", "reference": "candidate"},
+    }
+    context = {"idempotency_key": owner}
+
+    class Runner:
+        async def pull(self, **kwargs):
+            return {"exitCode": 0}
+
+        async def inspect_image(self, requested):
+            return {"Id": "image-id", "RepoDigests": [f"example/moonmind@{digest}"]}
+
+        async def _run_compose_command(self, command, **kwargs):
+            return {"exitCode": 0, "stdout": json.dumps({"services": {}})}
+
+    async def inspect_owned(name, owner):
+        assert name.startswith("moonmind-release-update-")
+        return {"Image": "image-id", "State": {"Running": False, "ExitCode": 1}}
+
+    async def docker(*args):
+        assert args[0] in {"update", "start"}
+        return ""
+
+    async def logs_tail(name, tail_lines=30, timeout_seconds=60):
+        assert name.startswith("moonmind-release-update-")
+        if log_failure is not None:
+            raise log_failure
+        return "Traceback (most recent call last):\nFileNotFoundError"
+
+    async def coherent(*args):
+        return {}
+
+    monkeypatch.setattr(release, "inspect_owned", inspect_owned)
+    monkeypatch.setattr(release, "docker", docker)
+    monkeypatch.setattr(release, "docker_logs_tail", logs_tail)
+    monkeypatch.setattr(release, "require_coherent_images", coherent)
+
+    async def no_sleep(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(release.asyncio, "sleep", no_sleep)
+    executor = SimpleNamespace(runner=Runner())
+    with pytest.raises(RuntimeError, match="exhausted three deliveries") as exc_info:
+        await release.execute_detached(executor, inputs, context)
+    message = str(exc_info.value)
+    assert "release job" in message
+    assert "do not --resume this submission" in message
+    assert "--resume dc9f2a60" not in message
+    assert "attempts=none" in message
+    assert "updater-exit=1" in message
+    if log_failure is None:
+        assert "FileNotFoundError" in message
+    else:
+        assert "updater-logs=unavailable" in message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bounded", [False, True])
+async def test_docker_failure_preserves_redacted_multiline_diagnostic(
+    monkeypatch, bounded
+):
+    reason = "Error response from daemon: port is already allocated"
+    diagnostic = f"{reason}\npassword=example-secret\n"
+    expected = f"{reason}\npassword=[REDACTED]\n"
+    if bounded:
+        padding = "x" * (990 - len(diagnostic)) + " "
+        diagnostic += padding + "ghp_" + "A" * 36 + "\n" + "y" * 1200 + "\n"
+        expected += padding + "[REDACTED]\n" + "y" * 1200 + "\n"
+    summary = "Error: failed to start containers: release-test"
+    diagnostic += summary
+    expected += summary
+
+    class FakeProcess:
+        returncode = 1
+
+        async def communicate(self, input_bytes):
+            return b"", diagnostic.encode()
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess()
+
+    monkeypatch.setattr(release.asyncio, "create_subprocess_exec", fake_exec)
+    with pytest.raises(RuntimeError) as exc_info:
+        await release.docker("start", "release-test")
+    message = str(exc_info.value)
+    assert reason in message
+    assert "example-secret" not in message
+    assert "ghp_" not in message
+    assert message == f"Docker start failed: {expected[:1000]}"
+    assert len(message) <= len("Docker start failed: ") + 1000
+
+
+@pytest.mark.asyncio
+async def test_docker_logs_tail_merges_stdout_and_stderr(tmp_path, monkeypatch):
+    """Tracebacks reach the logs command over stderr; stdout alone hides them."""
+
+    class FakeProcess:
+        returncode = 0
+
+        async def communicate(self):
+            return (b"container stdout line\n", b"Traceback: FileNotFoundError\n")
+
+        def kill(self):  # pragma: no cover - success path never kills
+            raise AssertionError("kill must not run on success")
+
+        async def wait(self):
+            return self.returncode
+
+    async def fake_exec(*args, **kwargs):
+        assert args[:3] == ("docker", "logs", "--tail")
+        assert kwargs.get("stdout") is release.asyncio.subprocess.PIPE
+        assert kwargs.get("stderr") is release.asyncio.subprocess.PIPE
+        return FakeProcess()
+
+    monkeypatch.setattr(release.asyncio, "create_subprocess_exec", fake_exec)
+    merged = await release.docker_logs_tail("moonmind-release-update-test")
+    assert "container stdout line" in merged
+    assert "Traceback: FileNotFoundError" in merged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repaired", [True, False, "starting", "absent"])
+async def test_unhealthy_gateway_is_repaired_before_previous_pollers_are_required(
+    tmp_path, monkeypatch, repaired
+):
+    """A broken egress gateway must not make a deployment un-updatable.
+
+    Regression: workers attest the singular restricted-egress gateway before
+    they report ready, so an out-of-band change that left it unhealthy stopped
+    the previous release from retaining pollers. Every later release then
+    failed in ``preserve_previous`` — including the one that installs the
+    gateway's replacement. The cohort repairs it from the definition its own
+    image owns, and reports the fleet and gateway when it still cannot.
+    """
+    from unittest.mock import AsyncMock
+
+    from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+    from moonmind.workflows.temporal import workers
+
+    monkeypatch.setattr(
+        workers,
+        "_FLEET_SERVICE_NAMES",
+        {"agent_runtime": "temporal-worker-agent-runtime"},
+    )
+    monkeypatch.setattr(release.asyncio, "sleep", AsyncMock())
+    digest = "sha256:" + "a" * 64
+    (tmp_path / "retained.json").write_text(
+        json.dumps(
+            {
+                "owner": "owner",
+                "version": f"fleet.{digest}",
+                "image": "sha256:previous",
+                "retired": [],
+            }
+        )
+    )
+    health = {
+        "status": None
+        if repaired == "absent"
+        else ("starting" if repaired == "starting" else "unhealthy")
+    }
+    polls = {"count": 0}
+    embedded_compose = "services:\n  sandbox-egress-proxy:\n    image: ubuntu/squid\n"
+
+    async def docker(*args, **kwargs):
+        if args[0] == "run":
+            assert args[-2] == "sha256:previous"
+            assert args[-1] == "/app/release/docker-compose.yaml"
+            return embedded_compose
+        assert args[0] == "inspect" and args[1] == EGRESS_GATEWAY_REF
+        polls["count"] += 1
+        if repaired == "starting" and polls["count"] > 2:
+            # A gateway that converges on its own is never recreated.
+            health["status"] = "healthy"
+        if health["status"] is None:
+            raise RuntimeError("Docker inspect failed: No such object")
+        return json.dumps([{"State": {"Health": {"Status": health["status"]}}}])
+
+    compose_calls = []
+
+    async def fake_compose(self, command, **kwargs):
+        compose_calls.append((command, kwargs))
+        assert command[:4] == ("docker", "compose", "up", "-d")
+        assert command[-1] == EGRESS_GATEWAY_SERVICE
+        assert "--force-recreate" in command
+        assert kwargs["requested_image"] == "sha256:previous"
+        if repaired:
+            health["status"] = "healthy"
+        return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(HostDockerComposeRunner, "_run_compose_command", fake_compose)
+
+    async def readiness(name):
+        if repaired == "absent":
+            # A deployment that runs no gateway has nothing to attest here.
+            return {"ready": True, "buildId": digest}
+        if health["status"] != "healthy":
+            raise RuntimeError("restricted-egress gateway is not healthy")
+        return {"ready": True, "buildId": digest}
+
+    monkeypatch.setattr(release, "docker", AsyncMock(side_effect=docker))
+    monkeypatch.setattr(release, "worker_readiness", readiness)
+    monkeypatch.setattr(
+        release,
+        "inspect_owned",
+        AsyncMock(return_value={"Image": "sha256:previous", "State": {"Running": True}}),
+    )
+    monkeypatch.setattr(
+        release,
+        "docker_logs_tail",
+        AsyncMock(
+            return_value="RuntimeError: restricted-egress gateway is not healthy\n"
+            + "x" * 50
+            + "password=supersecret-value"
+            + "y" * 1489
+        ),
+    )
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file="/deployment/docker-compose.yaml",
+        project_name="moonmind",
+    )
+    captured = {}
+    original_restore = release.ReleaseCohort.restore_gateway
+
+    async def spy_restore(self, gateway_runner, image, **kwargs):
+        captured["compose_file"] = gateway_runner.compose_file
+        captured["project_name"] = gateway_runner.project_name
+        captured["project_dir"] = gateway_runner.project_dir
+        captured["image"] = image
+        return await original_restore(self, gateway_runner, image, **kwargs)
+
+    monkeypatch.setattr(release.ReleaseCohort, "restore_gateway", spy_restore)
+    cohort = release.ReleaseCohort(runner, tmp_path, "owner")
+    if repaired:
+        # ``starting`` converges without a repair; ``True`` converges with one.
+        await cohort.preserve_previous(f"fleet.{digest}", "fleet", "sha256:candidate")
+    else:
+        with pytest.raises(RuntimeError, match="retain compatible pollers") as failure:
+            await cohort.preserve_previous(
+                f"fleet.{digest}", "fleet", "sha256:candidate"
+            )
+        message = str(failure.value)
+        assert "fleet=agent_runtime" in message
+        assert "gateway=unhealthy" in message
+        # Redaction runs over the whole text before the bound, so a tail that
+        # would split the marker from its value cannot publish the value.
+        assert "supersecret-value" not in message
+    # The repair renders the definition the retained image owns — never the
+    # deployment checkout's newer gateway definition — while the
+    # deployment-owned runner identity accompanies the command.
+    expected_compose = (
+        tmp_path
+        / f"retained-compose-{hashlib.sha256(b'sha256:previous').hexdigest()[:16]}.yaml"
+    )
+    if repaired == "absent":
+        # The retained definition is still rendered for the pollers, but no
+        # gateway is recreated or waited on when the deployment runs none.
+        assert not compose_calls
+        return
+    assert captured["compose_file"] == str(expected_compose)
+    assert captured["project_name"] == "moonmind"
+    assert captured["project_dir"] == str(tmp_path)
+    assert captured["image"] == "sha256:previous"
+    assert expected_compose.read_text() == embedded_compose
+    # A repair that converges is never repeated, one that is still starting on
+    # its own is never attempted, and one that does not take is retried on the
+    # cooldown - never per readiness poll.
+    if repaired == "starting":
+        assert not compose_calls
+    elif repaired:
+        assert len(compose_calls) == 1
+    else:
+        assert len(compose_calls) == -(-60 // release._GATEWAY_REPAIR_COOLDOWN_POLLS)
+
+
+@pytest.mark.asyncio
+async def test_preserve_previous_repairs_gateway_before_serving_image_readiness_proof(
+    tmp_path, monkeypatch
+):
+    """The serving-image proof must not precede gateway recovery.
+
+    Regression (Codex P1): on an initial plain-Compose installation with no
+    release receipt and no availability-owned ``retained.json``,
+    ``record_serving_image`` probed every installed worker's ``/readyz``
+    before the new recovery path ran. Worker readiness attests the gateway,
+    so a broken gateway raised ``no coherent live worker owner`` and the
+    repair was never reached. The image must be discovered and validated
+    without gateway-dependent readiness, the gateway repaired, and only then
+    may coherent worker readiness be required.
+    """
+    from unittest.mock import AsyncMock
+
+    from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+    from moonmind.workflows.temporal import workers
+
+    monkeypatch.setattr(
+        workers,
+        "_FLEET_SERVICE_NAMES",
+        {"agent_runtime": "temporal-worker-agent-runtime"},
+    )
+    monkeypatch.setattr(release.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(
+        release, "successful_release_image", AsyncMock(return_value=None)
+    )
+    digest = "sha256:" + "a" * 64
+    health = {"status": "unhealthy"}
+    embedded_compose = "services:\n  sandbox-egress-proxy:\n    image: ubuntu/squid\n"
+
+    async def docker(*args, **kwargs):
+        if args[0] == "run":
+            assert args[-2] == "sha256:previous"
+            assert args[-1] == "/app/release/docker-compose.yaml"
+            return embedded_compose
+        assert args[0] == "inspect"
+        if args[1] == EGRESS_GATEWAY_REF:
+            return json.dumps([{"State": {"Health": {"Status": health["status"]}}}])
+        assert args[1] == "installed-id"
+        return json.dumps([{"Image": "sha256:previous"}])
+
+    compose_calls = []
+
+    async def fake_compose(self, command, **kwargs):
+        compose_calls.append((command, kwargs))
+        if tuple(command[:3]) == ("docker", "compose", "ps"):
+            return {"exitCode": 0, "stdout": "installed-id"}
+        assert command[:4] == ("docker", "compose", "up", "-d")
+        assert command[-1] == EGRESS_GATEWAY_SERVICE
+        assert kwargs["requested_image"] == "sha256:previous"
+        health["status"] = "healthy"
+        return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(HostDockerComposeRunner, "_run_compose_command", fake_compose)
+
+    async def readiness(name):
+        if health["status"] != "healthy":
+            raise RuntimeError("restricted-egress gateway is not healthy")
+        return {"ready": True, "buildId": digest}
+
+    monkeypatch.setattr(release, "docker", AsyncMock(side_effect=docker))
+    monkeypatch.setattr(release, "worker_readiness", readiness)
+    monkeypatch.setattr(
+        release,
+        "inspect_owned",
+        AsyncMock(return_value={"Image": "sha256:previous", "State": {"Running": True}}),
+    )
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file="/deployment/docker-compose.yaml",
+        project_name="moonmind",
+    )
+    cohort = release.ReleaseCohort(runner, tmp_path, "owner")
+    await cohort.preserve_previous(f"fleet.{digest}", "fleet", "sha256:candidate")
+
+    retained = json.loads((tmp_path / "retained.json").read_text())
+    assert retained["image"] == "sha256:previous"
+    assert retained["version"] == f"fleet.{digest}"
+    # Discovery (ps) precedes the gateway repair (up), and the repair runs once.
+    kinds = [
+        "ps" if tuple(command[:3]) == ("docker", "compose", "ps") else command[2]
+        for command, _ in compose_calls
+    ]
+    assert kinds[0] == "ps"
+    assert kinds.count("up") == 1
+    assert kinds.index("up") > kinds.index("ps")
+
+
+@pytest.mark.asyncio
+async def test_retained_worker_diagnostic_redacts_before_truncating(
+    tmp_path, monkeypatch
+):
+    """A long retained log must not leak a credential cut off by truncation.
+
+    Regression (Codex P2): slicing the 1,500-character tail before redacting
+    removes the ``TOKEN=`` context ``redact_sensitive_text`` needs while
+    leaving the complete credential in the failure message. Redact the full
+    text first and only then take the bounded tail.
+    """
+    from unittest.mock import AsyncMock
+
+    from moonmind.security.egress import EGRESS_GATEWAY_REF
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+    from moonmind.workflows.temporal import workers
+
+    monkeypatch.setattr(
+        workers,
+        "_FLEET_SERVICE_NAMES",
+        {"agent_runtime": "temporal-worker-agent-runtime"},
+    )
+    monkeypatch.setattr(release.asyncio, "sleep", AsyncMock())
+    digest = "sha256:" + "a" * 64
+    (tmp_path / "retained.json").write_text(
+        json.dumps(
+            {
+                "owner": "owner",
+                "version": f"fleet.{digest}",
+                "image": "sha256:previous",
+                "retired": [],
+            }
+        )
+    )
+    embedded_compose = "services:\n  sandbox-egress-proxy:\n    image: ubuntu/squid\n"
+
+    async def docker(*args, **kwargs):
+        if args[0] == "run":
+            return embedded_compose
+        assert args[0] == "inspect" and args[1] == EGRESS_GATEWAY_REF
+        return json.dumps([{"State": {"Health": {"Status": "unhealthy"}}}])
+
+    async def fake_compose(self, command, **kwargs):
+        return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(HostDockerComposeRunner, "_run_compose_command", fake_compose)
+    monkeypatch.setattr(release, "docker", AsyncMock(side_effect=docker))
+
+    async def readiness(name):
+        raise RuntimeError("restricted-egress gateway is not healthy")
+
+    monkeypatch.setattr(release, "worker_readiness", readiness)
+    monkeypatch.setattr(
+        release,
+        "inspect_owned",
+        AsyncMock(return_value={"Image": "sha256:previous", "State": {"Running": True}}),
+    )
+    secret = "S" * 3000
+    monkeypatch.setattr(
+        release,
+        "docker_logs_tail",
+        AsyncMock(return_value="event happened\n" * 200 + "MY_TOKEN=" + secret),
+    )
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file="/deployment/docker-compose.yaml",
+        project_name="moonmind",
+    )
+    cohort = release.ReleaseCohort(runner, tmp_path, "owner")
+    with pytest.raises(RuntimeError, match="retain compatible pollers") as failure:
+        await cohort.preserve_previous(f"fleet.{digest}", "fleet", "sha256:candidate")
+    message = str(failure.value)
+    assert "gateway=unhealthy" in message
+    assert "[REDACTED]" in message
+    assert "S" * 20 not in message
+
+
+@pytest.mark.asyncio
+async def test_gateway_repair_is_retried_inside_one_release_attempt(
+    tmp_path, monkeypatch
+):
+    """A recreate that does not take must be retried, not waited out.
+
+    Regression: ``restore_gateway`` recreated the gateway exactly once and
+    then polled out its window. A gateway that needed a second recreate left
+    retention to fail, failing the whole release attempt; the deployment only
+    converged because the job retried the entire update. Two doomed attempts
+    cost nine minutes of wall clock for a repair that belongs inside one.
+    """
+    from unittest.mock import AsyncMock
+
+    from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+
+    monkeypatch.setattr(release.asyncio, "sleep", AsyncMock())
+    health = {"status": "unhealthy"}
+    recreates = {"count": 0}
+
+    async def docker(*args, **kwargs):
+        assert args[0] == "inspect" and args[1] == EGRESS_GATEWAY_REF
+        return json.dumps([{"State": {"Health": {"Status": health["status"]}}}])
+
+    async def fake_compose(self, command, **kwargs):
+        assert command[:4] == ("docker", "compose", "up", "-d")
+        assert command[-1] == EGRESS_GATEWAY_SERVICE
+        recreates["count"] += 1
+        # The first recreate does not take - the observed failure mode.
+        if recreates["count"] >= 2:
+            health["status"] = "healthy"
+        return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(release, "docker", AsyncMock(side_effect=docker))
+    monkeypatch.setattr(HostDockerComposeRunner, "_run_compose_command", fake_compose)
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file=str(tmp_path / "retained.yaml"),
+        project_name="moonmind",
+    )
+    cohort = release.ReleaseCohort(runner, tmp_path, "owner")
+
+    observed = await cohort.restore_gateway(runner, "sha256:previous")
+
+    # The repair converges within its own window instead of handing an
+    # unhealthy gateway to a readiness loop that cannot succeed.
+    assert observed == "healthy"
+    assert recreates["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_durable_deadline_is_established_before_the_updater_pull(
+    tmp_path, monkeypatch
+):
+    """Pre-launch work consumes the budget instead of preceding it.
+
+    Regression (Codex P1 on #4422): the job deadline was computed only after
+    the updater image was pulled and inspected. The runner allows that pull
+    900 seconds, so a slow first pull shifted the detached deadline past the
+    supervising Activity's schedule-to-close, and a near-budget release could
+    still be running after its workflow had already timed out.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(tmp_path / "desired.json")
+    )
+    started = 1_000_000.0
+    now = {"value": started}
+    monkeypatch.setattr(release.time, "time", lambda: now["value"])
+    owner = "workflow:deployment:step:1"
+    digest = "sha256:" + "a" * 64
+    inputs = {
+        "stack": "moonmind",
+        "image": {"repository": "example/moonmind", "reference": "candidate"},
+    }
+    container = None
+
+    class Runner:
+        async def pull(self, **kwargs):
+            # The observed failure mode: a cold pull that burns the runner's
+            # whole command budget before the deadline would have existed.
+            now["value"] += 900
+            return {"exitCode": 0}
+
+        async def inspect_image(self, requested):
+            return {"Id": "image-id", "RepoDigests": [f"example/moonmind@{digest}"]}
+
+        async def _run_compose_command(self, command, **kwargs):
+            nonlocal container
+            request = release.Path(command[-1])
+            release.write_record(
+                request.parent / "result.json",
+                {
+                    "owner": owner,
+                    "result": {
+                        "status": "COMPLETED",
+                        "outputs": {"verified": True},
+                        "progress": {},
+                    },
+                },
+            )
+            container = {"Image": "image-id", "State": {"Running": False}}
+            return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    async def inspect(*args):
+        return container
+
+    async def docker(*args):
+        nonlocal container
+        if args[0] == "rm":
+            container = None
+        return ""
+
+    async def coherent(*args):
+        return {}
+
+    monkeypatch.setattr(release, "inspect_owned", inspect)
+    monkeypatch.setattr(release, "docker", docker)
+    monkeypatch.setattr(release, "require_coherent_images", coherent)
+
+    await release.execute_detached(
+        SimpleNamespace(runner=Runner()),
+        inputs,
+        {"idempotency_key": owner, "principal": "system:deployment"},
+    )
+
+    key = hashlib.sha256(owner.encode()).hexdigest()[:32]
+    record = json.loads((release.state_root() / key / "request.json").read_text())
+    # The deadline is anchored where the Activity began, not after the pull,
+    # so the supervisor's schedule still covers the job's own deadline.
+    assert record["deadline"] == started + release.RELEASE_JOB_BUDGET_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_durable_deadline_is_anchored_to_the_activity_schedule(
+    tmp_path, monkeypatch
+):
+    """Queue delay must not push the job past its supervisor.
+
+    Regression (Codex P1 round 2 on #4422): the deadline was anchored where
+    ``execute_detached`` began running, but Temporal's schedule-to-close clock
+    starts when the Activity is scheduled. The deployment fleet runs one
+    Activity at a time, so a second release can wait in the queue longer than
+    the schedule's margin; its budget then ran past the supervisor again.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(tmp_path / "desired.json")
+    )
+    scheduled = 1_000_000.0
+    # The Activity sat behind another deployment for well over the schedule's
+    # margin before this attempt got to run.
+    monkeypatch.setattr(release.time, "time", lambda: scheduled + 5_000)
+    monkeypatch.setattr(release, "_activity_schedule_anchor", lambda: scheduled)
+    owner = "workflow:deployment:step:1"
+    digest = "sha256:" + "a" * 64
+    container = None
+
+    class Runner:
+        async def pull(self, **kwargs):
+            return {"exitCode": 0}
+
+        async def inspect_image(self, requested):
+            return {"Id": "image-id", "RepoDigests": [f"example/moonmind@{digest}"]}
+
+        async def _run_compose_command(self, command, **kwargs):
+            nonlocal container
+            request = release.Path(command[-1])
+            release.write_record(
+                request.parent / "result.json",
+                {
+                    "owner": owner,
+                    "result": {"status": "COMPLETED", "outputs": {}, "progress": {}},
+                },
+            )
+            container = {"Image": "image-id", "State": {"Running": False}}
+            return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    async def inspect(*args):
+        return container
+
+    async def docker(*args):
+        nonlocal container
+        if args[0] == "rm":
+            container = None
+        return ""
+
+    async def coherent(*args):
+        return {}
+
+    monkeypatch.setattr(release, "inspect_owned", inspect)
+    monkeypatch.setattr(release, "docker", docker)
+    monkeypatch.setattr(release, "require_coherent_images", coherent)
+
+    await release.execute_detached(
+        SimpleNamespace(runner=Runner()),
+        {
+            "stack": "moonmind",
+            "image": {"repository": "example/moonmind", "reference": "candidate"},
+        },
+        {"idempotency_key": owner, "principal": "system:deployment"},
+    )
+
+    key = hashlib.sha256(owner.encode()).hexdigest()[:32]
+    record = json.loads((release.state_root() / key / "request.json").read_text())
+    # Both clocks start at the same instant, so the schedule always covers it.
+    assert record["deadline"] == scheduled + release.RELEASE_JOB_BUDGET_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_recorded_release_failure_keeps_the_line_that_names_it(
+    tmp_path, monkeypatch
+):
+    """A bounded diagnosis must not discard the exception it ends with.
+
+    ``preserve_previous`` reports the retained worker's log tail, and a Python
+    traceback names its cause on its last line. Keeping only the head of a long
+    failure published frame stacks and dropped ``RuntimeError:
+    restricted-egress gateway is not healthy``, so every operator surface fed
+    from this record - the Temporal failure, the run summary, the memo and
+    ``last-error.json`` - reported a release that could not retain pollers
+    without saying why.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(tmp_path / "desired.json")
+    )
+    directory = release.state_root() / "job"
+    directory.mkdir(parents=True)
+    request_file = directory / "request.json"
+    release.write_record(
+        request_file,
+        {"authored": {"owner": "owner"}, "deadline": release.time.time() + 300},
+    )
+    cause = "RuntimeError: restricted-egress gateway is not healthy"
+    diagnosis = (
+        "Previous release could not retain compatible pollers"
+        " (fleet=agent_runtime; gateway=unhealthy; retained-logs="
+        + "  File \"/app/moonmind/workflows/temporal/worker_runtime.py\"\n" * 40
+        + cause
+        + ")"
+    )
+
+    async def body(path):
+        raise RuntimeError(diagnosis)
+
+    async def no_wait(*args):
+        pass
+
+    monkeypatch.setattr(release, "_run_job_body", body)
+    monkeypatch.setattr(release.asyncio, "sleep", no_wait)
+    await release.run_job(request_file)
+
+    recorded = json.loads((directory / "last-error.json").read_text())["error"]
+    assert "fleet=agent_runtime" in recorded
+    assert "gateway=unhealthy" in recorded
+    assert cause in recorded
+    assert len(recorded) <= 1000
+    assert json.loads((directory / "result.json").read_text())["error"] == recorded

@@ -1,0 +1,12 @@
+{
+  "failureShapeId": "deployment-update-wsl-updater-bind-source",
+  "incidentSubmissionId": "dc9f2a60-0e8e-464e-bc97-6657fb608d76",
+  "activityType": "mm.tool.execute",
+  "toolName": "deployment.update_compose_stack",
+  "hostProjectDir": "/mnt/d/code/MoonMind",
+  "daemonProjectDir": "/run/desktop/mnt/host/d/code/MoonMind",
+  "stateBindTarget": "/workspace/deployment_state",
+  "expectedStateBindSourceSuffix": "/deploy/state",
+  "observedFailure": "The host update submitted from a WSL checkout wrote its request to the real deployment state, but the detached updater launched from inside the worker mounted binds the daemon resolved elsewhere. The daemon created empty directories, the updater exited three times with FileNotFoundError: /workspace/deployment_state/release-jobs, and the caller exhausted three deliveries without terminal evidence while hiding that cause. Inferring the namespace from the path's shape reproduced the same empty binds in the opposite direction: Docker Desktop 4.91 with the WSL2 backend serves /mnt/<drive> checkouts directly and leaves /run/desktop/mnt/host/<drive> empty.",
+  "invariant": "Detached updater launches must bind the checkout through the host path this daemon records for the worker's own checkout mount, so the updater observes its durable request. Only without that evidence may the path's shape select a namespace, and a confirmed native Linux daemon keeps the POSIX bind namespace."
+}

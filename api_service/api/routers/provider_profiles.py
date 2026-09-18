@@ -1225,8 +1225,6 @@ async def _enforce_scope_compatibility(
     scope_ref = str(capacity_scope_ref or "").strip()
     if not scope_ref:
         return
-    from sqlalchemy import select as _select
-
     from api_service.db.models import ProviderCapacityScope as _Scope
 
     scope = await session.get(_Scope, scope_ref)
@@ -2213,15 +2211,17 @@ async def setup_provider_api_key(
     mapping = _api_key_mapping_for_profile(profile)
 
     api_key = body.api_key.strip()
+    is_opencode = mapping.auth_strategy == "opencode_auth_json"
+    rotated = mapping.secret_role in (profile.secret_refs or {})
     if not _looks_like_provider_api_key(mapping, api_key):
-        await _mark_api_key_validation_failed(
-            session=session,
-            profile=profile,
-            reason="API key validation failed.",
-        )
+        if not (is_opencode and rotated):
+            await _mark_api_key_validation_failed(
+                session=session,
+                profile=profile,
+                reason="API key validation failed.",
+            )
         raise HTTPException(status_code=422, detail="API key validation failed.")
 
-    is_opencode = mapping.provider_id in {"opencode-go", "opencode"}
     if not is_opencode:
         try:
             await validate_provider_api_key(profile.provider_id, api_key)
@@ -2240,7 +2240,6 @@ async def setup_provider_api_key(
         mapping.secret_role,
     )
     secret_ref = f"db://{secret_slug}"
-    rotated = mapping.secret_role in (profile.secret_refs or {})
     candidate_generation = int(profile.credential_generation) + (1 if rotated else 0)
     runtime_evidence: dict[str, Any] | None = None
     if is_opencode:
@@ -2740,8 +2739,8 @@ def _api_key_mapping_for_profile(
         raise HTTPException(
             status_code=422,
             detail=(
-                "API-key setup is only supported for first-party Anthropic, "
-                "OpenAI, and OpenCode Go profiles."
+                "API-key setup requires a supported runtime/provider strategy; "
+                "the credential-free OpenCode provider does not accept API keys."
             ),
         )
     return mapping
@@ -2775,14 +2774,14 @@ def _looks_like_provider_api_key(
 ) -> bool:
     if not api_key:
         return False
+    if mapping.auth_strategy == "opencode_auth_json":
+        # OpenCode API keys are provider-specific; accept common prefixes
+        # but require minimum entropy to avoid trivial values.
+        return len(api_key.strip()) >= 12 and " " not in api_key.strip()
     if mapping.provider_id == "anthropic":
         return api_key.startswith("sk-ant-") and len(api_key) >= 12
     if mapping.provider_id == "openai":
         return api_key.startswith("sk-") and len(api_key) >= 12
-    if mapping.provider_id in {"opencode-go", "opencode"}:
-        # OpenCode API keys are provider-specific; accept common prefixes
-        # but require minimum entropy to avoid trivial values.
-        return len(api_key.strip()) >= 12 and " " not in api_key.strip()
     return False
 
 
@@ -2934,25 +2933,55 @@ async def _upsert_managed_secret(
     plaintext: str,
     details: dict[str, Any],
 ) -> ManagedSecret:
+    """Write provider credentials through the revision owner.
+
+    Direct ``ManagedSecret.ciphertext`` replacement would bypass credential
+    revisions, outbox evidence, and audit. Route through
+    :class:`SecretsService` with ``commit=False`` so the caller's transaction
+    still owns the commit while every write advances revisions atomically.
+    """
+    from api_service.services.secrets import SecretsService
+
     result = await session.execute(
         select(ManagedSecret).where(ManagedSecret.slug == slug)
     )
-    secret = result.scalar_one_or_none()
-    if secret is None:
-        secret = ManagedSecret(
+    row = result.scalar_one_or_none()
+    if row is None:
+        created = await SecretsService.create_secret(
+            session,
             slug=slug,
-            ciphertext=plaintext,
-            status=SecretStatus.ACTIVE,
+            plaintext=plaintext,
             details=details,
+            commit=False,
         )
-        session.add(secret)
-        return secret
+        return created
+    # Preserve existing owner/details and merge the caller's metadata.
+    current_details = dict(getattr(row, "details", {}) or {})
+    try:
+        updated = await SecretsService.update_secret(
+            session,
+            slug,
+            plaintext,
+            commit=False,
+        )
+    except Exception as exc:
+        from api_service.services.secrets import SecretRepairRequiredError
 
-    secret.ciphertext = plaintext
-    secret.status = SecretStatus.ACTIVE
-    secret.details = {**(secret.details or {}), **details}
-    secret.updated_at = datetime.now(UTC)
-    return secret
+        if not isinstance(exc, SecretRepairRequiredError):
+            raise
+        # A historical ROTATED provider credential is reactivated only with
+        # the just-validated token through the reviewed repair path.
+        updated = await SecretsService.repair_rotated_secret(
+            session,
+            slug,
+            plaintext,
+            validator=lambda _c: True,
+            commit=False,
+        )
+    if updated is None:  # pragma: no cover - defensive; slug existed above
+        raise RuntimeError(f"Managed secret '{slug}' disappeared during upsert.")
+    updated.details = {**current_details, **details}
+    return updated
 
 
 async def validate_claude_manual_token(token: str) -> None:

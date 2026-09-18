@@ -14,7 +14,10 @@ from temporalio.testing import ActivityEnvironment
 from moonmind.workflows.temporal import github_issue_claim_recovery as recovery
 from moonmind.workflows.temporal import story_output_tools as tools
 from moonmind.workflows.temporal.activity_runtime import TemporalIntegrationActivities
-from moonmind.workflows.temporal.github_issue_attempts import parse_attempt_comment
+from moonmind.workflows.temporal.github_issue_attempts import (
+    compute_effective_retry,
+    parse_attempt_comment,
+)
 from moonmind.workflows.temporal.issue_claim_store import IssueClaimStore
 from tests.unit.workflows.temporal.test_issue_claim_journey import journey  # noqa: F401
 
@@ -264,6 +267,87 @@ async def test_fresh_workflow_ids_cannot_reset_the_portable_retry_allowance(jour
     )
     assert next_run.completion_disposition == "idle"
     assert await store.get("default/must-not-reset") is None
+
+
+@pytest.mark.asyncio
+async def test_a_launcher_outage_does_not_burn_the_issue_allowance(journey):
+    """The 2026-09-15..17 outage shape: the run dies before a runtime exists.
+
+    Every attempt died at ``OMNIGENT_HOST_LAUNCH_FAILED`` before an agent
+    started. Charging those to the issue exhausted its allowance and escalated
+    it to needs-attention for a deployment fault, which locked the whole
+    backlog. The allowance must survive, and the candidate must back off
+    instead of being re-announced on every scheduled tick.
+    """
+    state, service, sessions = journey
+    store = IssueClaimStore(sessions)
+
+    class _HostLaunchFailed(Exception):
+        pass
+
+    async def _result():
+        raise _HostLaunchFailed(
+            "Provider request failed with provider error "
+            "OMNIGENT_HOST_LAUNCH_FAILED: Admitted Omnigent execution-plan "
+            "dispatch failed: restricted-egress backend attestation failed"
+        )
+
+    handle = SimpleNamespace(
+        describe=AsyncMock(
+            return_value=SimpleNamespace(
+                status=WorkflowExecutionStatus.FAILED,
+                close_time=datetime.now(UTC) - timedelta(minutes=6),
+                workflow_type="MoonMind.UserWorkflow",
+            )
+        ),
+        fetch_history_events=lambda **kwargs: history_events([]),
+        result=_result,
+    )
+    client = SimpleNamespace(get_workflow_handle=lambda *args, **kwargs: handle)
+
+    owner = "default/launch-fail-0"
+    first = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueSearch": ""},
+        {"execution_owner": owner},
+        github_service_factory=lambda: service,
+    )
+    assert first.status == "COMPLETED" and first.completion_disposition != "idle"
+    recovered = await recovery.reconcile_local_claims(
+        state={},
+        store=store,
+        service=service,
+        client_factory=AsyncMock(return_value=client),
+    )
+    assert recovered["released"] == 1, recovered
+
+    handoff = parse_attempt_comment((await store.get(owner)).comment_body).handoff
+    # A deployment fault is recorded as one, never as a work outcome, and it
+    # carries the back-off that bounds the retry.
+    assert handoff.outcome == "runtime_unavailable"
+    assert handoff.next_action == "fresh_retry"
+    assert handoff.cooldown_until
+
+    # The issue is released, not escalated: no attention label was applied.
+    assert "moonmind:needs-attention" not in state["labels"]
+    assert "status: needs-attention" not in state["labels"]
+
+    # The authoritative recomputation is what admission reads: the launcher
+    # failure left the allowance whole rather than spending an attempt.
+    budget = compute_effective_retry([handoff], max_attempts=3)
+    assert budget.remaining == 3
+
+    # The very next tick backs off this candidate instead of re-announcing on
+    # it, and says so as a deferral rather than an exhausted budget.
+    second = await tools.load_github_issue_preset_brief(
+        {"repository": "example/repo", "issueSearch": ""},
+        {"execution_owner": "default/launch-fail-1"},
+        github_service_factory=lambda: service,
+    )
+    assert second.completion_disposition == "idle"
+    rejections = second.outputs["searchEvidence"]["rejectionCounts"]
+    assert rejections.get("cooling_down") == 1
+    assert "budget_exhausted" not in rejections
+    assert await store.get("default/launch-fail-1") is None
 
 
 async def persist_saved_binding(sessions, *, agent_id, run_id, saved, state="cleaned"):
