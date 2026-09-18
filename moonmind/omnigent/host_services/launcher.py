@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from collections.abc import Mapping
+from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -407,6 +408,24 @@ class DockerOmnigentHostLauncher:
             target = str(attachment["targetPath"])
             readonly = str(attachment.get("accessMode")) == "read-only"
             mount = f"type={kind},src={source},dst={target}"
+            subpath = str(attachment.get("subPath") or "").strip()
+            if subpath:
+                # Only Docker can resolve a volume's own storage, so a
+                # directory inside a deployment volume is named by subpath
+                # rather than by a daemon host path. A leading slash, a
+                # parent traversal, or an embedded ``,`` would escape the
+                # volume or silently become a different mount option.
+                if (
+                    kind != "volume"
+                    or subpath.startswith("/")
+                    or ".." in PurePosixPath(subpath).parts
+                    or "," in subpath
+                ):
+                    raise HarnessPlatformError(
+                        "attachment volume subpath is unsupported",
+                        code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+                    )
+                mount += f",volume-subpath={subpath}"
             if readonly:
                 mount += ",readonly"
             command.extend(["--mount", mount])

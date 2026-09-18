@@ -489,6 +489,46 @@ def resolve_sandbox_workspace_locator(
     return workspace
 
 
+def workspace_volume_subpath(path: Path) -> str:
+    """Return *path* as a subpath of the deployment's workspace volume.
+
+    A remote daemon does not share the worker filesystem, and the volume the
+    worker writes through is the only authority both sides name identically.
+    Docker resolves the volume itself, so the launch boundary mounts
+    ``type=volume,volume-subpath=<this>`` instead of translating the worker
+    path into a daemon host path: the volume mountpoint a daemon reports is
+    not always reachable as a bind source (Docker Desktop serves volumes from
+    a store that host bind paths cannot reach), and an unreachable bind source
+    is created as an empty directory rather than refused.
+
+    :param path: Worker path under ``WORKFLOW_WORKSPACE_ROOT``.
+    :returns: The POSIX-relative subpath, e.g. ``"temporal_sandbox/ws-1/repo"``.
+    """
+
+    worker_root_text = os.getenv("WORKFLOW_WORKSPACE_ROOT", "").strip()
+    if not worker_root_text:
+        raise WorkspaceLocatorResolutionError(
+            WORKSPACE_AUTHORITY_MISMATCH,
+            "daemon workspace mapping requires WORKFLOW_WORKSPACE_ROOT",
+        )
+    worker_root = Path(worker_root_text).resolve()
+    resolved = path.resolve()
+    if resolved == worker_root or not resolved.is_relative_to(worker_root):
+        raise WorkspaceLocatorResolutionError(
+            WORKSPACE_AUTHORITY_MISMATCH,
+            "workspace is outside the daemon mapping authority",
+        )
+    subpath = resolved.relative_to(worker_root).as_posix()
+    # ``,`` terminates a Docker ``--mount`` field, so a path containing one
+    # would silently become a different option rather than a subpath.
+    if not subpath or subpath == "." or "," in subpath:
+        raise WorkspaceLocatorResolutionError(
+            WORKSPACE_AUTHORITY_MISMATCH,
+            "workspace has an invalid volume subpath",
+        )
+    return subpath
+
+
 def daemon_visible_workspace_path(
     path: Path,
     *,
