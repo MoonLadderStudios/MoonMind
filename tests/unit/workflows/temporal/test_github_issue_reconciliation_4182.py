@@ -193,19 +193,22 @@ def test_inconclusive_crash_evidence_surfaced_not_repaired() -> None:
 
 
 def test_mixed_labels_block_until_repaired() -> None:
+    # An interrupted mutation, not the declared attention escalation: the
+    # in-progress/needs-attention pair is a legitimate Needs-attention state
+    # (design section 2.1) and is covered separately below.
     decision = recon.decide_issue_reconciliation(
-        issue=_issue("status: in-progress", "status: needs-attention"),
+        issue=_issue("status: in-progress", "status: code-review"),
         trusted_handoff_present=True,
         remote_handoff={"activity": "active", "attemptId": ATTEMPT_ID},
     )
     assert decision.action == recon.ACTION_ATTENTION
     assert decision.reason_code == "mixed_labels_blocked"
-    assert set(decision.retain_labels) == {"status: in-progress", "status: needs-attention"}
+    assert set(decision.retain_labels) == {"status: in-progress", "status: code-review"}
 
 
 def test_mixed_labels_repaired_with_conclusive_evidence() -> None:
     decision = recon.decide_issue_reconciliation(
-        issue=_issue("status: in-progress", "status: needs-attention"),
+        issue=_issue("status: in-progress", "status: code-review"),
         intended_from_settled="blocked_mixed",
         intended_to_target="to_needs_attention",
         writer_evidence=_conclusive_writer(),
@@ -216,6 +219,23 @@ def test_mixed_labels_repaired_with_conclusive_evidence() -> None:
         remote_handoff={"activity": "releasing", "attemptId": ATTEMPT_ID},
     )
     assert decision.action == recon.ACTION_COMPLETE
+
+
+def test_attention_escalation_is_not_reported_as_a_contradiction() -> None:
+    """The declared escalation pair needs resolution, not reconciliation.
+
+    Reporting it as ``mixed_labels_blocked`` told the operator the labels
+    disagreed when they recorded exactly what the escalation intended, and
+    left the issue with no allowed transition out.
+    """
+    decision = recon.decide_issue_reconciliation(
+        issue=_issue("status: in-progress", "status: needs-attention"),
+        trusted_handoff_present=True,
+        remote_handoff={"activity": "active", "attemptId": ATTEMPT_ID},
+    )
+    assert decision.action == recon.ACTION_ATTENTION
+    assert decision.from_settled == lifecycle.SETTLED_NEEDS_ATTENTION
+    assert decision.reason_code != "mixed_labels_blocked"
 
 
 @pytest.mark.parametrize("successor", ["needs_attention", "closed", "code_review", "available"])

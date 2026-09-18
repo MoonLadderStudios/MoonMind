@@ -59,6 +59,11 @@ SETTLED_BLOCKED_OPEN_DONE = "blocked_open_done"
 
 ELIGIBLE_SETTLED_STATES = frozenset({SETTLED_AVAILABLE, SETTLED_RECOVERY_NEEDED})
 
+#: The one canonical combination that is a declared state rather than an
+#: interrupted mutation (design section 2.1): an attention escalation keeps the
+#: old writer's in-progress status while its stop status is unknown.
+_DELIBERATE_ATTENTION_PAIR = frozenset({STATUS_IN_PROGRESS, STATUS_NEEDS_ATTENTION})
+
 #: Transition targets (``to_*`` names used by :func:`plan_transition`).
 TO_IN_PROGRESS = "to_in_progress"
 TO_CODE_REVIEW = "to_code_review"
@@ -226,6 +231,28 @@ def interpret_issue(issue: Mapping[str, Any]) -> LifecycleInterpretation:
             blocked_reason=(
                 "Open issue carrying status: done is inconsistent; "
                 "not treated as available."
+            ),
+            eligible_for_implement=False,
+            eligible_for_continuation=False,
+        )
+    if canonical == _DELIBERATE_ATTENTION_PAIR:
+        # Design section 2.1: needs-attention always blocks admission and may
+        # deliberately coexist with the old writer's in-progress status while
+        # its stop status is unknown. That pair is the declared outcome of the
+        # attention escalation in ``plan_label_mutation``, not an interrupted
+        # mutation, so it settles as Needs attention and keeps the documented
+        # authorized-resolution exit instead of demanding reconciliation.
+        return LifecycleInterpretation(
+            github_state="open",
+            canonical_present=frozenset(canonical),
+            unknown_status_labels=tuple(unknown),
+            done_present=False,
+            legacy_todo_present=legacy_todo,
+            settled=SETTLED_NEEDS_ATTENTION,
+            blocked_reason=(
+                "Attention is required before automatic implementation; the "
+                "old writer's in-progress status is retained because its stop "
+                "status is unknown."
             ),
             eligible_for_implement=False,
             eligible_for_continuation=False,
@@ -661,6 +688,26 @@ class LabelMutationPlan:
         }
 
 
+def _retained_open_statuses(
+    present: set[str],
+    origin: str | None,
+    destination: str | None,
+) -> list[str]:
+    """Return canonical open statuses a transition must also release.
+
+    The attention escalation deliberately retains the old writer's status
+    (design section 2.1). Every transition out of that state clears it along
+    with the origin, so an authorized resolution leaves exactly its
+    destination behind instead of an immediately re-blocking combination.
+    """
+    exclude = {value.lower() for value in (origin, destination) if value}
+    return sorted(
+        label
+        for label in CANONICAL_OPEN_LABELS
+        if label in present and label.lower() not in exclude
+    )
+
+
 def plan_label_mutation(
     *,
     from_settled: str,
@@ -688,12 +735,18 @@ def plan_label_mutation(
     if origin is not None and to_target not in (TO_CLOSED, TO_NEEDS_ATTENTION):
         if origin.lower() in present and (destination is None or origin.lower() != destination.lower()):
             to_remove.append(origin)
+        # Leaving Needs attention also releases the writer status that the
+        # escalation retained. Resolving the hold without clearing it would
+        # re-block the issue the moment the resolution was applied.
+        for retained in _retained_open_statuses(present, origin, destination):
+            to_remove.append(retained)
     if to_target == TO_CLOSED and origin is not None and origin.lower() in present:
         # The Done destination is added first (above), so a failed close
         # still leaves a blocking terminal destination instead of an
         # unblocked open issue; the open-work blocker itself is released
         # as part of the close.
         to_remove.append(origin)
+        to_remove.extend(_retained_open_statuses(present, origin, destination))
     return LabelMutationPlan(
         labels_to_add=tuple(to_add),
         labels_to_remove=tuple(to_remove),
