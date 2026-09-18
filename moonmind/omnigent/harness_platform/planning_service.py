@@ -492,7 +492,10 @@ class OmnigentExecutionPlanningService:
                 ) is not None:
                     raise HarnessPlatformError(
                         "effective launch host image conflicts with the selected "
-                        "Host Class",
+                        "Host Class "
+                        f"(planned={str(effective_launch.get('hostImageRef') or '')[:120]} "
+                        f"selected={host_class.imageRef[:120]}); refresh the "
+                        "bootstrap policy default to the qualified image and retry",
                         code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
                     )
                 from moonmind.omnigent.host_image_drift import (
@@ -505,7 +508,10 @@ class OmnigentExecutionPlanningService:
                 if reconciled is None:
                     raise HarnessPlatformError(
                         "effective launch host image conflicts with the selected "
-                        "Host Class",
+                        "Host Class "
+                        f"(planned={str(effective_launch.get('hostImageRef') or '')[:120]} "
+                        f"selected={host_class.imageRef[:120]}); refresh the "
+                        "bootstrap policy default to the qualified image and retry",
                         code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
                     )
                 import logging

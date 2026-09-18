@@ -938,7 +938,13 @@ async def refresh_schedule_deployment_snapshot(
         if ref.rpartition("@")[0] == policy_id
     ]
     if not separator or len(candidates) != 1:
-        raise ValueError("scheduled launch policy identity is no longer available")
+        raise ValueError(
+            "scheduled launch policy identity is no longer available "
+            f"(pinned={old_ref or '<missing>'} "
+            f"profile={profile_id}@active "
+            f"candidates={candidates}); revise the schedule explicitly to a "
+            "currently allowed policy ref"
+        )
     new_ref = candidates[0]
     policies = OmnigentPolicyService(session)
     # A predecessor may already be superseded. Its immutable document is
@@ -960,7 +966,8 @@ async def refresh_schedule_deployment_snapshot(
         boundaries.append(boundary)
     if boundaries[0] != boundaries[1]:
         raise ValueError(
-            "scheduled launch policy boundaries changed; revise the schedule explicitly"
+            "scheduled launch policy boundaries changed; revise the schedule explicitly "
+            f"(pinned={old_ref} replacement={new_ref})"
         )
 
     refreshed = await resolve_agent_profile_snapshot(
