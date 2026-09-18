@@ -57,7 +57,10 @@ async def resolve_daemon_workspace_root(
     """Resolve the authoritative workspace volume in local or remote mode."""
 
     mode = os.getenv("WORKFLOW_DOCKER_DAEMON_MODE", "").strip().lower()
-    if mode in {"", "local"}:
+    if not mode:
+        daemon_root = os.getenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "").strip()
+        mode = "remote" if daemon_root else "local"
+    if mode == "local":
         return None
     if mode != "remote" or not _SAFE_VOLUME.fullmatch(workspace_volume):
         raise HarnessPlatformError(
@@ -94,10 +97,17 @@ def resolve_daemon_attachment_source(
     and Docker creates a missing bind source as an empty directory instead of
     refusing it, so the container would mount an empty projection that still
     passes a directory-level check.
+
+    When ``WORKFLOW_DOCKER_DAEMON_MODE`` is unset, remote mode is inferred
+    from a configured ``WORKFLOW_WORKSPACE_DAEMON_ROOT``, matching
+    ``resolve_workspace_backend()`` and ``daemon_visible_workspace_path()``.
     """
 
     mode = os.getenv("WORKFLOW_DOCKER_DAEMON_MODE", "").strip().lower()
-    if mode in {"", "local"}:
+    if not mode:
+        daemon_root = os.getenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "").strip()
+        mode = "remote" if daemon_root else "local"
+    if mode == "local":
         return {"kind": "bind", "sourceRef": str(Path(path).resolve())}
     if mode != "remote" or not _SAFE_VOLUME.fullmatch(workspace_volume):
         raise HarnessPlatformError(

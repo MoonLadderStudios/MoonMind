@@ -4310,6 +4310,61 @@ async def test_workspace_attachment_mounts_the_deployment_volume_subpath(
     assert read_only_attachment["accessMode"] == "read-only"
 
 
+def test_daemon_attachment_source_infers_remote_from_daemon_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unset daemon mode with a configured daemon root must use volume subpath.
+
+    Matches resolve_workspace_backend() and daemon_visible_workspace_path(),
+    which infer remote mode when WORKFLOW_DOCKER_DAEMON_MODE is unset but
+    WORKFLOW_WORKSPACE_DAEMON_ROOT is configured. Returning a worker-only
+    bind here would recreate the empty-workspace failure on such deployments.
+    """
+    from moonmind.omnigent.host_services.workspace import (
+        resolve_daemon_attachment_source,
+    )
+
+    workspace_root = tmp_path / "worker"
+    candidate = workspace_root / "temporal_sandbox" / "ws-1" / "repo"
+    candidate.mkdir(parents=True)
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(workspace_root))
+    monkeypatch.delenv("WORKFLOW_DOCKER_DAEMON_MODE", raising=False)
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "/daemon/root")
+
+    attachment = resolve_daemon_attachment_source(
+        workspace_volume="agent-workspaces",
+        path=candidate,
+    )
+
+    assert attachment["kind"] == "volume"
+    assert attachment["sourceRef"] == "agent-workspaces"
+    assert attachment["subPath"] == "temporal_sandbox/ws-1/repo"
+
+
+@pytest.mark.asyncio
+async def test_daemon_workspace_root_infers_remote_from_daemon_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unset daemon mode with a configured daemon root must inspect the volume."""
+    from moonmind.omnigent.host_services.workspace import (
+        resolve_daemon_workspace_root,
+    )
+
+    monkeypatch.delenv("WORKFLOW_DOCKER_DAEMON_MODE", raising=False)
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "/daemon/root")
+
+    async def runner(argv, input_bytes=None):
+        assert argv[:3] == ["docker", "volume", "inspect"]
+        return (0, "/var/lib/docker/volumes/agent-workspaces/_data\n", "")
+
+    resolved = await resolve_daemon_workspace_root(
+        runner=runner,
+        workspace_volume="agent-workspaces",
+    )
+
+    assert resolved == Path("/var/lib/docker/volumes/agent-workspaces/_data")
+
+
 @pytest.mark.asyncio
 async def test_ready_host_retry_preserves_materialized_input_paths(monkeypatch):
     """Revoke the first Activity after host readiness, before sending its turn."""
