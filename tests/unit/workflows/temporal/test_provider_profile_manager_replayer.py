@@ -47,31 +47,39 @@ async def test_pre_tombstone_purge_manager_history_replays(fixture_name: str) ->
 
 
 class _ProfileActivities:
-    def __init__(self, runtime_id: str, fail_cleanup: bool) -> None:
+    def __init__(
+        self,
+        runtime_id: str,
+        fail_cleanup: bool,
+        max_lease_duration_seconds: int | None = None,
+    ) -> None:
         self.runtime_id = runtime_id
         self.fail_cleanup = fail_cleanup
+        self.max_lease_duration_seconds = max_lease_duration_seconds
         self.actions: list[str] = []
         self.cleaned = asyncio.Event()
         self.verified = asyncio.Event()
         self.released = asyncio.Event()
+        self.redriven = asyncio.Event()
 
     @activity.defn(name="provider_profile.list")
     async def list_profiles(self, request: dict[str, Any]) -> dict[str, Any]:
         assert request == {"runtime_id": self.runtime_id}
-        return {
-            "profiles": [
-                {
-                    "profile_id": "test-default",
-                    "runtime_id": self.runtime_id,
-                    "credential_source": "api_key",
-                    "runtime_materialization_mode": "env",
-                    "max_parallel_runs": 1,
-                    "enabled": True,
-                    "launch_ready": True,
-                    "is_default": True,
-                }
-            ]
+        profile: dict[str, Any] = {
+            "profile_id": "test-default",
+            "runtime_id": self.runtime_id,
+            "credential_source": "api_key",
+            "runtime_materialization_mode": "env",
+            "max_parallel_runs": 1,
+            "enabled": True,
+            "launch_ready": True,
+            "is_default": True,
         }
+        if self.max_lease_duration_seconds is not None:
+            profile["max_lease_duration_seconds"] = (
+                self.max_lease_duration_seconds
+            )
+        return {"profiles": [profile]}
 
     @activity.defn(name="provider_profile.sync_slot_leases")
     async def sync_leases(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -92,6 +100,17 @@ class _ProfileActivities:
             return {
                 "released": True,
                 "outcome": LeaseTransitionOutcome.RELEASED.value,
+            }
+        if action == "request_cleanup":
+            # MoonLadderStudios/MoonMind#1089: an expired lease keeps its
+            # slot spent while the ledger records the durable cleanup
+            # request. The second recorded request proves the redrive
+            # re-issued the same stable claim on a later pass.
+            if self.actions.count("request_cleanup") >= 2:
+                self.redriven.set()
+            return {
+                "outcome": LeaseTransitionOutcome.CLEANUP_REQUESTED.value,
+                "cleanup_requested": True,
             }
         return {"leases": [], "synced": len(request.get("leases", []))}
 
@@ -307,6 +326,110 @@ async def test_lease_cleanup_redrive_marker_pins_redrive_order() -> None:
                 )[0]
                 patch_ids.append(payload["id"])
     assert LEASE_CLEANUP_REDRIVE_PATCH in patch_ids
+    await Replayer(
+        workflows=[MoonMindProviderProfileManagerWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
+async def test_lease_cleanup_redrive_replays_with_outstanding_obligation() -> None:
+    """The redrive marker must pin a history that actually redrove cleanup.
+
+    PR #4425 review (comment 4048923511): the marker-only test shuts the
+    manager down with no leases, so no cleanup obligation ever exists and
+    the redrive activities never appear in the recorded history — it cannot
+    catch Activity-vs-Timer nondeterminism for the affected cohort (a
+    manager with an outstanding cleanup obligation). This test grants a
+    lease, lets it expire past a short max duration, waits until the
+    redrive re-issues the stable claim on a later pass, and then requires
+    the full history (marker plus repeated request_cleanup activities) to
+    replay against the current workflow code.
+    """
+    from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+        LEASE_CLEANUP_REDRIVE_PATCH,
+    )
+
+    runtime_id = "opencode"
+    activities = _ProfileActivities(
+        runtime_id, fail_cleanup=False, max_lease_duration_seconds=60
+    )
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-lease-cleanup-redrive-obligation",
+            workflows=[MoonMindProviderProfileManagerWorkflow, _SlotRequester],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ), Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                activities.list_profiles,
+                activities.sync_leases,
+                activities.pending_order,
+                activities.verify,
+            ],
+        ):
+            manager = await env.client.start_workflow(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": runtime_id},
+                id=f"provider-profile-manager:{runtime_id}",
+                task_queue="test-lease-cleanup-redrive-obligation",
+            )
+            await asyncio.wait_for(activities.cleaned.wait(), timeout=15)
+            requester = await env.client.start_workflow(
+                _SlotRequester.run,
+                id="test-slot-requester-redrive",
+                task_queue="test-lease-cleanup-redrive-obligation",
+            )
+            await manager.signal(
+                "request_slot",
+                {
+                    "requester_workflow_id": requester.id,
+                    "runtime_id": runtime_id,
+                },
+            )
+            async with asyncio.timeout(15):
+                while (
+                    assignment := await requester.query(_SlotRequester.assigned)
+                ) is None:
+                    await asyncio.sleep(0.01)
+            assert assignment["profile_id"] == "test-default"
+            # The live holder keeps its slot while the lease expires, so the
+            # manager owes a cleanup redrive instead of a release.
+            await asyncio.wait_for(activities.redriven.wait(), timeout=120)
+            state = await manager.query("get_state")
+            assert requester.id in state["cleanup_requested_leases"]
+            with env.auto_time_skipping_disabled():
+                await manager.signal("shutdown")
+                await requester.signal(_SlotRequester.shutdown)
+                assert (await manager.result())["status"] == "shutdown"
+                await requester.result()
+            history = await manager.fetch_history()
+
+    patch_ids: list[str] = []
+    redrive_requests = 0
+    for event in history.events:
+        if event.HasField("marker_recorded_event_attributes"):
+            attrs = event.marker_recorded_event_attributes
+            if attrs.marker_name == "core_patch":
+                payload = (
+                    await DataConverter.default.decode(
+                        attrs.details["patch-data"].payloads
+                    )
+                )[0]
+                patch_ids.append(payload["id"])
+        elif event.HasField("activity_task_scheduled_event_attributes"):
+            attrs = event.activity_task_scheduled_event_attributes
+            if attrs.activity_type.name == "provider_profile.sync_slot_leases":
+                payload = (await DataConverter.default.decode(attrs.input.payloads))[0]
+                if payload.get("action") == "request_cleanup":
+                    redrive_requests += 1
+    assert LEASE_CLEANUP_REDRIVE_PATCH in patch_ids
+    assert redrive_requests >= 2, (
+        "the recorded history must contain the initial cleanup request and "
+        "at least one redrive of the same stable claim"
+    )
     await Replayer(
         workflows=[MoonMindProviderProfileManagerWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),

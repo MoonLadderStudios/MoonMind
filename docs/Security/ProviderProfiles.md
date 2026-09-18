@@ -1588,8 +1588,29 @@ it keeps its exact recorded commands: only request-cleanup + retry-unresolved
 per loop, without the redrive activities. New executions record the marker and
 use all four steps. Histories recorded with the four steps but without the
 marker (post-#4330, pre-marker) are ambiguous with the older generation and
-require operational recovery (terminate and restart fresh, restoring leases
-from the durable ledger); they cannot be distinguished by markers alone.
+require operational recovery; they cannot be distinguished by markers alone.
+
+Before routing an ambiguous cohort to the patched worker, detect it: an open
+`provider-profile-manager:<runtime>` history that already contains
+`request_cleanup` activities beyond the first request per obligation (the
+redrive re-issue) but records no `provider-profile-manager-lease-cleanup-
+redrive-v1` marker must not be replayed on the patched worker — replay would
+skip the recorded redrive commands and wedge the singleton manager with
+Activity-vs-Timer nondeterminism. Either cut over with state preserved:
+
+- keep the #4330 worker until the manager's state-preserving Continue-As-New
+  handoff (the rollover payload carries requested cleanups with their
+  original reasons and delivery attempts), then route the new run to the
+  patched worker before it starts; or
+- terminate the ambiguous run and start fresh on the patched worker. The
+  fresh start restores held leases and `cleanup_requested` rows from the
+  durable ledger with their recorded reasons, so the redrive resumes the
+  same stable claim instead of re-requesting or freeing the slot
+  (`test_a_fresh_restart_restores_cleanup_requested_obligations`).
+
+The post-marker redrive path itself is pinned by production replay with an
+outstanding obligation
+(`test_lease_cleanup_redrive_replays_with_outstanding_obligation`).
 
 Periodic released-lease tombstone cleanup has its own workflow marker,
 `provider-profile-manager-lease-tombstone-purge-v1`. Both DB lease persistence and
