@@ -92,7 +92,12 @@ the same module inventories schedules, queued starts, open parent/child
 workflows, retries, pending interventions, serialized launch inputs, resource
 leases, and publication/cleanup work with clean/active/unknown/blocked
 reporting, and records the explicit retained-history disposition per branch
-with its consumer and removal condition. The API publishes desired/deployed/effective phase,
+with its consumer and removal condition. Operators inject live Temporal
+visibility, schedule, lease, publication, and cleanup queries through
+`run_live_codex_drain`/`operator_drain_sources`, which normalize
+heterogeneous rows to the same four states (raising sources become
+`unknown`); the report itself never terminates workflows, erases evidence,
+or deletes credential volumes. The API publishes desired/deployed/effective phase,
 policy/profile versions, generation/expiry, image digests, architectures,
 thresholds, evidence refs, blockers, and direct-launch status in
 `/api/omnigent/codex-catalog-readiness`. Create/edit/rerun defaults

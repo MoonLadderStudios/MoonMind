@@ -34,7 +34,8 @@ from datetime import datetime, timezone
 import importlib
 import json
 import os
-from typing import Any, Mapping, Sequence
+import re
+from typing import Any, Callable, Mapping, Sequence
 
 #: The single deployment-owned cutoff. ISO-8601 instant after which no new
 #: work may enter the retired direct-Codex lane. Unset means the lane is not
@@ -467,6 +468,248 @@ def collect_drain_inventory(
     return inventory
 
 
+#: Conventional zero-argument reader names probed by
+#: :func:`operator_drain_sources`, in preference order. A store or client that
+#: owns live Temporal visibility, schedule, lease, publication, or cleanup
+#: queries exposes one of these per category; categories with no matching
+#: reader stay missing so :func:`build_drain_report` fails closed instead of
+#: implying drain. Readers must be synchronous and zero-argument: async live
+#: clients are resolved by the operator into ready item lists before calling
+#: :func:`run_live_codex_drain`, so this module stays pure and side-effect-free.
+LIVE_READER_METHODS: dict[str, tuple[str, ...]] = {
+    "schedules": ("list_schedules", "list_codex_schedules", "describe_schedules"),
+    "queued_starts": ("list_queued_starts",),
+    "open_parent_workflows": (
+        "list_open_parent_workflows",
+        "list_open_workflows",
+    ),
+    "open_child_workflows": ("list_open_child_workflows",),
+    "retries": ("list_pending_retries", "list_retries"),
+    "pending_interventions": ("list_pending_interventions",),
+    "serialized_launch_inputs": (
+        "list_serialized_launch_inputs",
+        "list_pending_launch_inputs",
+    ),
+    "resource_leases": ("list_resource_leases", "list_active_resource_leases"),
+    "publication_work": ("list_publication_work",),
+    "cleanup_work": ("list_cleanup_work", "cleanup_required_host_lease_refs"),
+}
+
+#: Raw live states that count as drained. Terminal workflow/schedule outcomes
+#: (including a dormant paused schedule, which cannot admit new work) carry
+#: no outstanding drain authority.
+_LIVE_CLEAN_STATES: frozenset[str] = frozenset(
+    {
+        "clean",
+        "closed",
+        "completed",
+        "done",
+        "passed",
+        "paused",
+        "suspended",
+        "cancelled",
+        "canceled",
+        "terminated",
+        "resolved",
+        "drained",
+    }
+)
+
+#: Raw live states that name a blocker needing operator disposition.
+_LIVE_BLOCKED_STATES: frozenset[str] = frozenset(
+    {"blocked", "failed", "failure", "error", "stuck", "deadlocked", "timed_out"}
+)
+
+
+def _classify_live_state(value: Any) -> str:
+    """Map one heterogeneous live status to the four-state drain vocabulary."""
+
+    token = re.sub(r"[\s\-]+", "_", str(value or "").strip().lower())
+    if not token or token in {"unknown", "unreachable", "missing"}:
+        return "unknown"
+    if token in _LIVE_CLEAN_STATES:
+        return "clean"
+    if token in _LIVE_BLOCKED_STATES:
+        return "blocked"
+    return "active" if token else "unknown"
+
+
+def normalize_drain_item(
+    category: str, raw: Any, *, index: int = 0
+) -> dict[str, Any]:
+    """Project one heterogeneous live row to an ``{id, state}`` drain item.
+
+    Accepts mappings (``id``/``workflow_id``/``schedule_id``/``lease_id``/``name``
+    for identity, ``state``/``status``/``lifecycleState``/``executionStatus``
+    for status, in either snake or camel case) or objects exposing the same
+    names as attributes, such as Temporal visibility or schedule handles. A
+    bare string is kept as the id with an ``unknown`` state so cleanup refs
+    stay visible. Anything unrecognized becomes ``unknown``: unknown
+    visibility is reported, never treated as permission to delete. Never
+    raises and never emits a delete/terminate operation.
+    """
+
+    try:
+        if isinstance(raw, (str, bytes)):
+            text = raw.decode() if isinstance(raw, bytes) else raw
+            text = text.strip()
+            return {
+                "id": text or f"{category}-{index}",
+                "state": "unknown",
+            }
+        identifier: Any = None
+        status: Any = None
+        if isinstance(raw, Mapping):
+            for key in (
+                "id",
+                "workflow_id",
+                "workflowId",
+                "run_id",
+                "runId",
+                "schedule_id",
+                "scheduleId",
+                "lease_id",
+                "leaseId",
+                "name",
+            ):
+                if raw.get(key) not in (None, ""):
+                    identifier = raw.get(key)
+                    break
+            for key in (
+                "state",
+                "status",
+                "statusName",
+                "lifecycleState",
+                "executionStatus",
+                "execution_status",
+            ):
+                if raw.get(key) not in (None, ""):
+                    status = raw.get(key)
+                    break
+        else:
+            for name in (
+                "id",
+                "workflow_id",
+                "run_id",
+                "schedule_id",
+                "lease_id",
+                "name",
+            ):
+                candidate = getattr(raw, name, None)
+                if candidate not in (None, ""):
+                    identifier = candidate
+                    break
+            for name in (
+                "state",
+                "status",
+                "lifecycle_state",
+                "execution_status",
+            ):
+                candidate = getattr(raw, name, None)
+                if candidate not in (None, ""):
+                    status = candidate
+                    break
+        item_id = str(identifier).strip() if identifier not in (None, "") else ""
+        return {
+            "id": item_id or f"{category}-{index}",
+            "state": _classify_live_state(status),
+        }
+    except Exception:
+        return {"id": f"{category}-{index}", "state": "unknown"}
+
+
+def live_drain_sources(
+    queries: Mapping[str, Any] | None,
+) -> dict[str, Callable[[], list[dict[str, Any]]]]:
+    """Adapt live drain queries to injectable per-category drain sources.
+
+    Each entry in ``queries`` is either a ready list of heterogeneous live
+    rows (Temporal visibility results, schedule listings, lease/publication/
+    cleanup reads) or a zero-argument callable returning one; every row is
+    projected through :func:`normalize_drain_item` to the four-state drain
+    vocabulary. A raising callable is left raising so
+    :func:`collect_drain_inventory` reports it as ``unknown``; categories
+    with no entry stay missing so :func:`build_drain_report` fails closed.
+    Pure and side-effect-free: performs no termination, erasure, or
+    credential-volume deletion.
+    """
+
+    data = dict(queries or {})
+    sources: dict[str, Callable[[], list[dict[str, Any]]]] = {}
+    for category in DRAIN_INVENTORY_CATEGORIES:
+        if category not in data:
+            continue
+        raw_source = data[category]
+        if callable(raw_source):
+            def _wrap(
+                source: Callable[[], Any] = raw_source,
+                name: str = category,
+            ) -> list[dict[str, Any]]:
+                items = source()
+                if isinstance(items, (str, bytes)) or not isinstance(items, Sequence):
+                    return [{"id": f"{name}-invalid", "state": "unknown"}]
+                return [
+                    normalize_drain_item(name, raw, index=position)
+                    for position, raw in enumerate(items)
+                ]
+
+            sources[category] = _wrap
+        else:
+            if isinstance(raw_source, (str, bytes)) or not isinstance(
+                raw_source, Sequence
+            ):
+                normalized = [{"id": f"{category}-invalid", "state": "unknown"}]
+            else:
+                normalized = [
+                    normalize_drain_item(category, raw, index=position)
+                    for position, raw in enumerate(raw_source)
+                ]
+
+            def _ready(
+                items: list[dict[str, Any]] = normalized,
+            ) -> list[dict[str, Any]]:
+                return list(items)
+
+            sources[category] = _ready
+    return sources
+
+
+def operator_drain_sources(store: Any) -> dict[str, Callable[[], Any]]:
+    """Probe a live store/client for drain readers without adding I/O here.
+
+    Returns the subset of :data:`LIVE_READER_METHODS` the ``store`` actually
+    exposes as callable attributes, as a live-query mapping ready for
+    :func:`live_drain_sources`. Missing readers stay missing (fail closed);
+    raising readers stay raising (reported ``unknown`` downstream). The
+    operator resolves async clients into ready lists before invoking
+    :func:`run_live_codex_drain`; this helper performs no queries itself.
+    """
+
+    queries: dict[str, Callable[[], Any]] = {}
+    for category in DRAIN_INVENTORY_CATEGORIES:
+        for method_name in LIVE_READER_METHODS.get(category, ()):
+            reader = getattr(store, method_name, None)
+            if callable(reader):
+                queries[category] = reader
+                break
+    return live_drain_sources(queries)
+
+
+def run_live_codex_drain(queries: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Run one bounded drain procedure from heterogeneous live drain queries.
+
+    Operator entrypoint composing :func:`live_drain_sources` with
+    :func:`run_codex_drain_procedure`: inject live Temporal visibility,
+    schedule, lease, publication, and cleanup queries as zero-argument
+    callables (or ready row lists) and receive the four-state report payload.
+    Raising queries become ``unknown``; missing categories fail closed. Pure
+    evidence only: never terminates workflows, erases evidence, or deletes
+    credential volumes.
+    """
+
+    return run_codex_drain_procedure(live_drain_sources(queries))
+
+
 def _resolve_binding_target(target: str) -> dict[str, Any]:
     module_name, _, attribute = target.partition(":")
     try:
@@ -610,6 +853,7 @@ __all__ = [
     "DEPLOYMENT_CUTOFF_ENV",
     "RETIRED_DIRECT_RUNTIME_IDS",
     "DRAIN_INVENTORY_CATEGORIES",
+    "LIVE_READER_METHODS",
     "RESOURCE_STATES",
     "REQUIRED_SUPPORT_DIMENSIONS",
     "RETAINED_BRANCHES",
@@ -634,5 +878,9 @@ __all__ = [
     "cutover_authorities",
     "build_drain_report",
     "collect_drain_inventory",
+    "live_drain_sources",
+    "normalize_drain_item",
+    "operator_drain_sources",
     "run_codex_drain_procedure",
+    "run_live_codex_drain",
 ]
