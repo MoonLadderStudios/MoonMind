@@ -1301,3 +1301,125 @@ async def test_recorded_release_failure_keeps_the_line_that_names_it(
     assert cause in recorded
     assert len(recorded) <= 1000
     assert json.loads((directory / "result.json").read_text())["error"] == recorded
+
+
+@pytest.mark.asyncio
+async def test_candidate_gateway_upgrade_serves_new_definition_before_qualify(
+    tmp_path, monkeypatch
+):
+    """An egress-policy change must not deadlock canary qualification.
+
+    Regression: retention repairs the gateway from the previous definition
+    only, so candidates carrying new egress files failed closed against the
+    old gateway (``restricted-egress live config cannot be observed``) while
+    retained workers would fail against a prematurely upgraded one. The
+    cohort now serves the candidate definition after retention converges -
+    running workers attest only at startup - before canary workers prove it.
+    """
+    from unittest.mock import AsyncMock
+
+    from moonmind.security.egress import EGRESS_GATEWAY_REF, EGRESS_GATEWAY_SERVICE
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+
+    monkeypatch.setattr(release.asyncio, "sleep", AsyncMock())
+    new_files = {
+        "squid.conf": "sha256:" + "a" * 64,
+        "omnigent-provider-domains.txt": "sha256:" + "b" * 64,
+        "package-registry-domains.txt": "sha256:" + "c" * 64,
+    }
+    state = {"gateway": "old"}
+
+    def live_lines(files):
+        return "".join(
+            f"{digest.removeprefix('sha256:')}  {directory}/{name}\n"
+            for directory in ("/etc/squid", "/run/moonmind-egress")
+            for name, digest in sorted(files.items())
+        )
+
+    old_files = {
+        "squid.conf": "sha256:" + "d" * 64,
+        "omnigent-provider-domains.txt": "sha256:" + "b" * 64,
+    }
+
+    async def docker(*args, **kwargs):
+        if args[0] == "run":
+            assert "--network" in args and "none" in args
+            return json.dumps(
+                {"liveDirectory": "/run/moonmind-egress", "files": new_files}
+            )
+        if args[0] == "exec":
+            assert args[1] == EGRESS_GATEWAY_REF
+            assert args[2] == "sha256sum"
+            if state["gateway"] == "old":
+                raise RuntimeError("sha256sum: package-registry-domains.txt: No such file")
+            return live_lines(new_files)
+        assert args[0] == "inspect" and args[1] == EGRESS_GATEWAY_REF
+        health = "healthy"
+        return json.dumps([{"State": {"Health": {"Status": health}}}])
+
+    compose_calls = []
+
+    async def fake_compose(self, command, **kwargs):
+        compose_calls.append((command, kwargs))
+        assert command[:4] == ("docker", "compose", "up", "-d")
+        assert command[-1] == EGRESS_GATEWAY_SERVICE
+        assert "--force-recreate" in command
+        assert kwargs["requested_image"] == "sha256:candidate"
+        state["gateway"] = "new"
+        return {"exitCode": 0, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr(HostDockerComposeRunner, "_run_compose_command", fake_compose)
+    monkeypatch.setattr(release, "docker", AsyncMock(side_effect=docker))
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file="/deployment/docker-compose.yaml",
+        project_name="moonmind",
+    )
+    cohort = release.ReleaseCohort(runner, tmp_path, "owner")
+    assert await cohort.align_gateway_to_candidate("sha256:candidate") == "upgraded"
+    assert len(compose_calls) == 1
+    assert old_files["squid.conf"] != new_files["squid.conf"]
+
+
+@pytest.mark.asyncio
+async def test_candidate_gateway_alignment_skips_recreate_when_already_current(
+    tmp_path, monkeypatch
+):
+    """A current gateway must not be bounced before every qualification."""
+    from unittest.mock import AsyncMock
+
+    from moonmind.security.egress import EGRESS_GATEWAY_REF
+    from moonmind.workflows.skills.deployment_execution import HostDockerComposeRunner
+
+    monkeypatch.setattr(release.asyncio, "sleep", AsyncMock())
+    files = {
+        "squid.conf": "sha256:" + "a" * 64,
+        "omnigent-provider-domains.txt": "sha256:" + "b" * 64,
+    }
+    body = "".join(
+        f"{digest.removeprefix('sha256:')}  {directory}/{name}\n"
+        for directory in ("/etc/squid", "/run/moonmind-egress")
+        for name, digest in sorted(files.items())
+    )
+
+    async def docker(*args, **kwargs):
+        if args[0] == "run":
+            return json.dumps(
+                {"liveDirectory": "/run/moonmind-egress", "files": files}
+            )
+        if args[0] == "exec":
+            return body
+        return json.dumps([{"State": {"Health": {"Status": "healthy"}}}])
+
+    async def no_compose(self, command, **kwargs):  # pragma: no cover
+        raise AssertionError("gateway must not be recreated when already current")
+
+    monkeypatch.setattr(HostDockerComposeRunner, "_run_compose_command", no_compose)
+    monkeypatch.setattr(release, "docker", AsyncMock(side_effect=docker))
+    runner = HostDockerComposeRunner(
+        project_dir=str(tmp_path),
+        compose_file="/deployment/docker-compose.yaml",
+        project_name="moonmind",
+    )
+    cohort = release.ReleaseCohort(runner, tmp_path, "owner")
+    assert await cohort.align_gateway_to_candidate("sha256:candidate") == "aligned"
