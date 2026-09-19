@@ -121,6 +121,11 @@ async def load_execution_configurations(
     user: Any,
     providers: list[Any],
 ) -> list[tuple[Any, Any]]:
+    # Single-user (#4349): execution configurations are instance resources.
+    # ``user`` is retained for call-site compatibility (admission identity
+    # stays owned by #4347) but is never a visibility predicate here:
+    # private/workspace scoping by human owner is removed; settings
+    # permission gates at the routers remain the access boundary.
     selected_versions = [
         OmnigentAgentProfileVersion.version == OmnigentAgentProfile.active_version,
     ]
@@ -145,7 +150,6 @@ async def load_execution_configurations(
     return [
         (row, version)
         for row, version in (await session.execute(statement)).all()
-        if row.visibility != "private" or row.owner_id == getattr(user, "id", None)
     ]
 
 

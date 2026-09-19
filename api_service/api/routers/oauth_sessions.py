@@ -16,7 +16,6 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from sqlalchemy import or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -283,21 +282,16 @@ async def _get_profile_for_session(
     db: AsyncSession,
     session: ManagedAgentOAuthSession,
     *,
-    current_user: User,
+    current_user: User | None = None,
 ) -> ManagedAgentProviderProfile | None:
+    # Single-user (#4349): provider profiles are instance resources.
+    # ``current_user`` is accepted for caller compatibility but never used
+    # as a visibility predicate; legacy ``owner_user_id`` is provenance.
     if not session.profile_id:
         return None
-    user_id = getattr(current_user, "id", None)
-    visibility_clause = ManagedAgentProviderProfile.owner_user_id.is_(None)
-    if user_id is not None:
-        visibility_clause = or_(
-            visibility_clause,
-            ManagedAgentProviderProfile.owner_user_id == user_id,
-        )
     result = await db.execute(
         select(ManagedAgentProviderProfile).where(
             ManagedAgentProviderProfile.profile_id == session.profile_id,
-            visibility_clause,
         )
     )
     return result.scalars().first()
@@ -307,14 +301,14 @@ async def _oauth_session_is_superseded(
     db: AsyncSession,
     session: ManagedAgentOAuthSession,
 ) -> bool:
+    # Single-user (#4349): supersession is per-profile credential state,
+    # not per-requester identity.
     if not session.profile_id or not session.created_at:
         return False
     result = await db.execute(
         select(ManagedAgentOAuthSession.session_id).where(
             ManagedAgentOAuthSession.session_id != session.session_id,
             ManagedAgentOAuthSession.profile_id == session.profile_id,
-            ManagedAgentOAuthSession.requested_by_user_id
-            == session.requested_by_user_id,
             ManagedAgentOAuthSession.created_at > session.created_at,
             ManagedAgentOAuthSession.status.in_(_FINALIZE_SUPERSEDING_STATUSES),
         )
@@ -385,15 +379,8 @@ async def create_oauth_session(
         )
     )
     existing_profile = profile_result.scalars().first()
-    if (
-        existing_profile
-        and existing_profile.owner_user_id is not None
-        and str(existing_profile.owner_user_id) != str(current_user.id)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to use this profile ID.",
-        )
+    # Single-user (#4349): no human-owner gate on profile use. Legacy
+    # ``owner_user_id`` is provenance, never an authorization predicate.
 
     # Check for existing active session for this profile
     result = await db.execute(
@@ -409,44 +396,45 @@ async def create_oauth_session(
     )
     existing_session = result.scalars().first()
     if existing_session:
-        if existing_session.requested_by_user_id == str(current_user.id):
-            from api_service.services.oauth_session_service import (
-                get_oauth_session_workflow_status,
+        # Single-user (#4349): one operator, one active enrollment per
+        # profile credential. Session identity is credential/runtime state.
+        from api_service.services.oauth_session_service import (
+            get_oauth_session_workflow_status,
+        )
+
+        try:
+            workflow_status = await get_oauth_session_workflow_status(
+                existing_session.session_id
+            )
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Unable to verify the active OAuth session. Please retry.",
+            ) from exc
+
+        if workflow_status == "RUNNING":
+            if (
+                existing_session.session_transport == "moonmind_pty_ws"
+                and _oauth_terminal_is_connected(existing_session)
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "OAuth terminal is already connected for this profile."
+                    ),
+                )
+            response.status_code = status.HTTP_200_OK
+            return _oauth_session_response(
+                existing_session,
+                profile=existing_profile,
             )
 
-            try:
-                workflow_status = await get_oauth_session_workflow_status(
-                    existing_session.session_id
-                )
-            except RuntimeError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Unable to verify the active OAuth session. Please retry.",
-                ) from exc
-
-            if workflow_status == "RUNNING":
-                if (
-                    existing_session.session_transport == "moonmind_pty_ws"
-                    and _oauth_terminal_is_connected(existing_session)
-                ):
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail=(
-                            "OAuth terminal is already connected for this profile."
-                        ),
-                    )
-                response.status_code = status.HTTP_200_OK
-                return _oauth_session_response(
-                    existing_session,
-                    profile=existing_profile,
-                )
-
-            existing_session.status = OAuthSessionStatus.FAILED
-            existing_session.completed_at = _utcnow()
-            existing_session.failure_reason = "OAuth session workflow is not running"
-            await db.commit()
-            await _stop_oauth_auth_runner(existing_session)
-            existing_session = None
+        existing_session.status = OAuthSessionStatus.FAILED
+        existing_session.completed_at = _utcnow()
+        existing_session.failure_reason = "OAuth session workflow is not running"
+        await db.commit()
+        await _stop_oauth_auth_runner(existing_session)
+        existing_session = None
 
         if existing_session is not None:
             raise HTTPException(
@@ -465,7 +453,10 @@ async def create_oauth_session(
         session_transport=session_transport,
         account_label=request.account_label,
         status=OAuthSessionStatus.PENDING,
-        requested_by_user_id=str(current_user.id),
+        # Single-user (#4349): session identity is credential/runtime
+        # provenance ("operator"), not a MoonMind login. Legacy rows keep
+        # their recorded requester; new rows never encode user identity.
+        requested_by_user_id="operator",
         metadata_json={
             "provider_id": request.provider_id
             or _oauth_default(request.runtime_id, "provider_id")
@@ -507,7 +498,6 @@ async def get_oauth_session(
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
             ManagedAgentOAuthSession.session_id == session_id,
-            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
         )
     )
     session = result.scalars().first()
@@ -529,7 +519,6 @@ async def cancel_oauth_session(
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
             ManagedAgentOAuthSession.session_id == session_id,
-            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
         )
     )
     session = result.scalars().first()
@@ -573,7 +562,6 @@ async def attach_oauth_terminal(
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
             ManagedAgentOAuthSession.session_id == session_id,
-            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
         )
     )
     session_obj = result.scalars().first()
@@ -782,7 +770,6 @@ async def finalize_oauth_session(
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
             ManagedAgentOAuthSession.session_id == session_id,
-            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
         )
     )
     session_obj = result.scalars().first()
@@ -921,15 +908,8 @@ async def finalize_oauth_session(
             detail=f"Unsupported rate_limit_policy: {policy_str}",
         )
 
-    if (
-        existing_profile
-        and existing_profile.owner_user_id is not None
-        and str(existing_profile.owner_user_id) != str(current_user.id)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to update this profile",
-        )
+    # Single-user (#4349): no human-owner gate on profile finalize.
+    # Legacy ``owner_user_id`` is provenance, never authorization.
 
     connected_at = datetime.now(timezone.utc)
     try:
@@ -1014,7 +994,8 @@ async def finalize_oauth_session(
     else:
         new_profile = ManagedAgentProviderProfile(
             profile_id=session_obj.profile_id,
-            owner_user_id=current_user.id,
+            # Single-user (#4349): no human owner on created profiles.
+            owner_user_id=None,
             **profile_data,
         )
         db.add(new_profile)
@@ -1064,7 +1045,7 @@ async def _disable_profile_after_failed_verification(
     session_obj: ManagedAgentOAuthSession,
     *,
     reason: str | None,
-    current_user: User,
+    current_user: User | None = None,
 ) -> None:
     """Leave the OAuth profile visibly disabled after failed verification.
 
@@ -1075,14 +1056,11 @@ async def _disable_profile_after_failed_verification(
     any first-party OAuth profile (Claude or Codex) flowing through
     finalize, not just the Claude-only validate endpoint.
     """
+    # Single-user (#4349): no human-owner gate; legacy owner is provenance.
     if not session_obj.profile_id:
         return
     profile = await db.get(ManagedAgentProviderProfile, session_obj.profile_id)
     if profile is None:
-        return
-    if profile.owner_user_id is not None and str(profile.owner_user_id) != str(
-        current_user.id
-    ):
         return
     apply_oauth_validation_failure(
         profile,
@@ -1145,7 +1123,6 @@ async def get_session_history(
         select(ManagedAgentOAuthSession)
         .where(
             ManagedAgentOAuthSession.profile_id == profile_id,
-            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
         )
         .order_by(desc(ManagedAgentOAuthSession.created_at))
         .limit(min(limit, 100))
@@ -1183,7 +1160,6 @@ async def reconnect_oauth_session(
     result = await db.execute(
         select(ManagedAgentOAuthSession).where(
             ManagedAgentOAuthSession.session_id == session_id,
-            ManagedAgentOAuthSession.requested_by_user_id == str(current_user.id),
         )
     )
     old_session = result.scalars().first()
@@ -1214,7 +1190,8 @@ async def reconnect_oauth_session(
         or _oauth_default(old_session.runtime_id, "session_transport")
         or "none",
         account_label=old_session.account_label,
-        requested_by_user_id=str(current_user.id),
+        # Single-user (#4349): credential/runtime provenance, not login.
+        requested_by_user_id="operator",
         status=OAuthSessionStatus.PENDING,
         created_at=datetime.now(timezone.utc),
         metadata_json={

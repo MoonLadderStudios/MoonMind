@@ -452,6 +452,9 @@ async def test_launch_context_exports_execution_profile_ref() -> None:
 
 
 async def test_launch_context_preserves_profile_workload_mode_and_owner() -> None:
+    # Single-user (#4349): legacy ``owner_user_id``/``ownerUserId`` is
+    # provenance, never launch authority; the execution context carries no
+    # human identity.
     context = build_managed_profile_launch_context(
         profile={
             "profile_id": "codex-no-docker",
@@ -481,7 +484,7 @@ async def test_launch_context_preserves_profile_workload_mode_and_owner() -> Non
     )
 
     assert context.workload_mode == "no-docker"
-    assert context.owner_user_id == "user-123"
+    assert context.owner_user_id is None
 
 
 async def test_pre_cutover_launch_context_defaults_to_container_jobs() -> None:
