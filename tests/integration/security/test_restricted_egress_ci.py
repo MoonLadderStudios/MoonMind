@@ -123,6 +123,10 @@ def test_image_policy_survives_old_checkout_and_restart(
     if provider_data is not None:
         (checkout / "omnigent-provider-domains.txt").write_text(provider_data)
     monkeypatch.setenv("MOONMIND_EGRESS_POLICY_DIRECTORY", str(checkout))
+    # The image keeps its executable policy outside the Python tree (the real
+    # one is /opt/moonmind-egress), so the backend is told where it landed
+    # rather than guessing a source-tree path that does not exist in the image.
+    monkeypatch.setenv("MOONMIND_EGRESS_BUNDLED_POLICY_DIRECTORY", str(bundled))
     for attempt in range(2):
         source = image / f"release-{attempt}/moonmind/security/egress.py"
         source.parent.mkdir(parents=True)
@@ -350,10 +354,12 @@ async def test_deployment_data_drives_runtime_and_proxy_attestation(
         for name in args[3:]:
             if not name.startswith("/etc/squid/"):
                 directory = live
-            elif name.endswith("squid.conf"):
-                directory = bundled
-            else:
+            elif name.endswith("omnigent-provider-domains.txt"):
+                # The only deployment-mounted policy file.
                 directory = policy
+            else:
+                # squid.conf and the package-registry list are image-owned.
+                directory = bundled
             path = directory / Path(name).name
             if not path.exists():
                 return 1, b"", b"missing policy"
@@ -716,3 +722,51 @@ async def test_launch_and_lifecycle_evidence_is_digest_bound_and_resolvable(
     tampered = json.dumps({**lifecycle, "cleanupResult": "failed"}).encode()
     with pytest.raises(EgressEvidenceDigestError):
         parse_and_verify_conformance_evidence(tampered, location="egress-lifecycle")
+
+
+def test_registry_policy_resolves_to_the_path_the_image_actually_ships():
+    """The backend must read the same bytes the gateway enforces.
+
+    `api_service/Dockerfile` copies `docker/moonmind-egress` to
+    `/opt/moonmind-egress`, and `policy.sh` reads it from there. Resolving the
+    registry list to a source-tree path instead would load nothing in the
+    image, derive an empty package-registry policy, and disagree with the
+    gateway on EGRESS_CONFIG_DIGEST — failing every workload attestation closed
+    with no indication why.
+    """
+    from moonmind.security import egress
+
+    dockerfile = (
+        Path(egress.__file__).resolve().parents[2] / "api_service/Dockerfile"
+    ).read_text()
+    assert f"COPY docker/moonmind-egress {egress.EGRESS_INSTALLED_POLICY_DIRECTORY}/" in (
+        dockerfile
+    )
+    # The list ships beside the config it is read with.
+    assert (
+        egress.EGRESS_BUNDLED_POLICY_DIRECTORY
+        / egress.EGRESS_PACKAGE_REGISTRY_POLICY_NAME
+    ).is_file()
+    assert (egress.EGRESS_BUNDLED_POLICY_DIRECTORY / "squid.conf").is_file()
+
+
+def test_missing_registry_policy_fails_loudly_instead_of_emptying(
+    tmp_path, monkeypatch
+):
+    """A packaging fault must not masquerade as a deliberately empty policy."""
+    import importlib.util
+
+    from moonmind.security import egress
+
+    empty = tmp_path / "bundled"
+    empty.mkdir()
+    (empty / "squid.conf").write_text("# no registry list beside me\n")
+    monkeypatch.setenv("MOONMIND_EGRESS_BUNDLED_POLICY_DIRECTORY", str(empty))
+
+    spec = importlib.util.spec_from_file_location(
+        "egress_missing_registry", Path(egress.__file__)
+    )
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    with pytest.raises(RuntimeError, match="policy file is missing"):
+        spec.loader.exec_module(module)

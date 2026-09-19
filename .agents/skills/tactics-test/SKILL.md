@@ -12,11 +12,22 @@ metadata:
 
 Run Linux Unreal build and targeted automation tests for `Tactics.uproject`. Inside a MoonMind managed session, submit typed container jobs so every workflow uses the deployment daemon's shared image cache. Outside MoonMind, use the portable direct-Docker fallback. Capture build and test logs in timestamped artifact folders inside the Tactics repository, and emit a machine-readable gate file for publish blocking.
 
+**Inside a managed session there is no Docker CLI, by design.** The sandbox
+reaches the deployment daemon through `moonmind container`, and
+`run_dood_unreal_tactics.sh` dispatches to it automatically. Do not probe
+`docker`, `docker info`, or `docker --version` to decide whether Unreal tests
+can run: `docker: command not found` is the expected state and says nothing
+about Unreal availability. Run the script and read its diagnostic. If it
+reports an incomplete managed handoff or an image-source failure, that is a
+deployment defect to report, not evidence that UE testing is unavailable.
+
 ## Inputs
 
 - Repository path (defaults to the active managed workspace inside MoonMind and
   `/mnt/d/Unreal/Tactics` in the direct-Docker fallback)
-- Inside MoonMind: `docker` capability and an operator-provisioned `tactics-unreal` image source
+- Inside MoonMind: the `docker` capability (which means container-job service
+  access, not a sandbox Docker binary) and an operator-provisioned
+  `tactics-unreal` image source with a registry credential for its image
 - Outside MoonMind: Docker CLI access and a reachable daemon
 - Container image with the Unreal toolchain in the selected execution substrate
 

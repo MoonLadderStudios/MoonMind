@@ -14,7 +14,7 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Awaitable, Callable, Literal, Sequence
+from typing import Awaitable, Callable, Literal, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -32,13 +32,20 @@ _LEGACY_PROFILE_SET_DIGEST = (
     "sha256:ce9e19f22079cd8dc4dd4d14f943b4055b5788bed49188b5c9085b5af82b7ebc"
 )
 EGRESS_MAIN_CONFIG_DIGEST = (
-    "sha256:305b6d6ebfb141f984aa4c51490d633f03ea3e82886232dc49a1af4efde71df2"
+    "sha256:19e7521f6d20adedf18121c3d53a956d2314eb588c72e340ade75c1bda915641"
 )
 EGRESS_POLICY_DIRECTORY = Path(
     os.environ.get("MOONMIND_EGRESS_POLICY_DIRECTORY")
     or Path(__file__).resolve().parents[2] / "docker/sandbox-egress-proxy"
 )
 EGRESS_PROVIDER_POLICY_PATH = EGRESS_POLICY_DIRECTORY / "omnigent-provider-domains.txt"
+#: Registries an agent installs declared dependencies from. Allowed by default
+#: because a sandbox that cannot install a project's own dependencies cannot
+#: run its tests; an operator who prefers a closed sandbox sets
+#: ``MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED=false`` and the bootstrap feeds
+#: Squid an empty file. The list is image-owned policy, not deployment data, so
+#: it travels with the reviewed enforcer rather than being editable per host.
+EGRESS_PACKAGE_REGISTRY_POLICY_NAME = "package-registry-domains.txt"
 # The enforcer's own policy is image-owned (copied to /opt/moonmind-egress) and
 # keeps its own source directory. A live v1 gateway bind-mounts
 # ``docker/sandbox-egress-proxy/squid.conf`` as its whole configuration and
@@ -46,9 +53,26 @@ EGRESS_PROVIDER_POLICY_PATH = EGRESS_POLICY_DIRECTORY / "omnigent-provider-domai
 # that file stays frozen at the reviewed v1 bytes until the transition is
 # removed. Publishing a newer enforcer through it would leave every running v1
 # gateway permanently unhealthy, before any release could replace it.
-EGRESS_BUNDLED_POLICY_DIRECTORY = (
-    Path(__file__).resolve().parents[2] / "docker/moonmind-egress"
-)
+#: Where the image-owned enforcer policy actually lives at runtime. The
+#: production image copies ``docker/moonmind-egress`` to ``/opt/moonmind-egress``
+#: (api_service/Dockerfile) and the gateway's ``policy.sh`` reads it from there,
+#: so the backend must read the same bytes. Resolving this to the source-tree
+#: path would make the backend load an absent file, silently derive an empty
+#: package-registry policy, and disagree with the gateway on
+#: ``EGRESS_CONFIG_DIGEST`` — which fails every workload attestation closed.
+EGRESS_INSTALLED_POLICY_DIRECTORY = Path("/opt/moonmind-egress")
+
+
+def _resolve_bundled_policy_directory() -> Path:
+    override = os.environ.get("MOONMIND_EGRESS_BUNDLED_POLICY_DIRECTORY", "").strip()
+    if override:
+        return Path(override)
+    if (EGRESS_INSTALLED_POLICY_DIRECTORY / "squid.conf").is_file():
+        return EGRESS_INSTALLED_POLICY_DIRECTORY
+    return Path(__file__).resolve().parents[2] / "docker/moonmind-egress"
+
+
+EGRESS_BUNDLED_POLICY_DIRECTORY = _resolve_bundled_policy_directory()
 EGRESS_LIVE_DIRECTORY = "/run/moonmind-egress"
 # Deployment-owned network names. Compose resolves these same overrides when it
 # creates the networks (``restricted-egress-network`` /
@@ -377,9 +401,49 @@ def _load_provider_policy(path: Path) -> tuple[tuple[EgressDestination, ...], st
 _OMNIGENT_PROVIDER_DESTINATIONS, _PROVIDER_POLICY_DIGEST = _load_provider_policy(
     EGRESS_PROVIDER_POLICY_PATH
 )
+
+
+def package_registry_egress_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """Whether agents may reach package registries to install dependencies.
+
+    Only an explicit false disables the class. An unset or unrecognized value
+    keeps the supported default so a typo cannot quietly close the sandbox and
+    turn every dependency install into an unexplained network failure.
+    """
+
+    source = os.environ if environ is None else environ
+    raw = str(source.get("MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED", "")).strip()
+    return raw.casefold() not in {"false", "0", "no", "off", "disabled"}
+
+
+def _load_package_registry_policy() -> tuple[tuple[EgressDestination, ...], str]:
+    """Load the image-owned registry list, or prove it is deliberately empty.
+
+    A missing file is a packaging fault, not an empty policy: treating it as
+    empty would leave the backend and the gateway attesting different digests.
+    """
+
+    if not package_registry_egress_enabled():
+        return (), "sha256:" + hashlib.sha256(b"").hexdigest()
+    path = EGRESS_BUNDLED_POLICY_DIRECTORY / EGRESS_PACKAGE_REGISTRY_POLICY_NAME
+    if not path.is_file():
+        raise RuntimeError(
+            "package-registry egress is enabled but its policy file is missing at "
+            f"{path}; the enforcer image must ship "
+            f"{EGRESS_PACKAGE_REGISTRY_POLICY_NAME} beside squid.conf, or set "
+            "MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED=false"
+        )
+    return _load_provider_policy(path)
+
+
+_PACKAGE_REGISTRY_DESTINATIONS, _PACKAGE_REGISTRY_POLICY_DIGEST = (
+    _load_package_registry_policy()
+)
+
 EGRESS_FILE_DIGESTS = {
     "squid.conf": EGRESS_MAIN_CONFIG_DIGEST,
     "omnigent-provider-domains.txt": _PROVIDER_POLICY_DIGEST,
+    EGRESS_PACKAGE_REGISTRY_POLICY_NAME: _PACKAGE_REGISTRY_POLICY_DIGEST,
 }
 EGRESS_CONFIG_DIGEST = (
     "sha256:"
@@ -406,9 +470,12 @@ DEFAULT_EGRESS_PROFILE = EgressProfile.model_validate(
                 "google.com",
                 "googleapis.com",
                 "opencode.ai",
-                "registry.npmjs.org",
                 "openai.com",
             )
+        ]
+        + [
+            destination.model_dump(by_alias=True, mode="json")
+            for destination in _PACKAGE_REGISTRY_DESTINATIONS
         ],
         "dnsServers": ["127.0.0.11"],
         "permittedWorkloadClasses": [
