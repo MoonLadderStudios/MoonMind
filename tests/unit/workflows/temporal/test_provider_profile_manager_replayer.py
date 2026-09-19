@@ -14,10 +14,32 @@ from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 from moonmind.provider_profiles.lease_client import LeaseTransitionOutcome
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     ACTIVITY_TASK_QUEUE,
+    LEASE_CLEANUP_REDRIVE_PATCH,
     LEASE_TOMBSTONE_PURGE_PATCH,
     LEASE_TRANSITION_CONTRACT_PATCH,
+    WORKFLOW_NAME,
     MoonMindProviderProfileManagerWorkflow,
 )
+
+
+@workflow.defn(name=WORKFLOW_NAME)
+class _PreRedriveManagerWorkflow(MoonMindProviderProfileManagerWorkflow):
+    """Pre-fix command order for the #4363 opencode wedge boundary.
+
+    MoonLadderStudios/MoonMind#4363 event 506: the recorded manager history
+    schedules the redriven ``provider_profile.sync_slot_leases``
+    ``request_cleanup`` activity where pre-fix code issues the periodic 60s
+    timer. Overriding only the two redrive steps keeps every startup marker
+    and every earlier command identical, so replaying a post-marker redrive
+    history against this variant diverges exactly at the Activity-vs-Timer
+    boundary the incident wedged on.
+    """
+
+    async def _deliver_cleanup_requests(self) -> None:
+        return None
+
+    async def _complete_direct_cleanup_obligations(self) -> None:
+        return None
 
 
 @pytest.mark.asyncio
@@ -570,3 +592,146 @@ async def test_the_lease_transition_contract_replays_from_its_own_history() -> N
         workflows=[MoonMindProviderProfileManagerWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
     ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
+async def test_opencode_506_boundary_replays_patched_and_fails_prefix() -> None:
+    """The #4363 opencode wedge boundary replays on patched code only.
+
+    MoonLadderStudios/MoonMind#4363: the recorded
+    ``provider-profile-manager:opencode`` history wedged at event 506
+    because one workflow-task completion scheduled the redriven
+    ``provider_profile.sync_slot_leases`` ``request_cleanup`` activity (the
+    event 504 analogue) ahead of the periodic 60s timer (the event 506
+    analogue), while pre-fix code issues the timer where the redrive
+    activity now sits. The recorded production prefix is not checked in, so
+    this test rebuilds that boundary live: an outstanding cleanup
+    obligation past a short max duration, whose redrive re-issues the same
+    stable claim on a later pass. It then requires:
+
+    * the redrive marker plus both ``request_cleanup`` commands carrying one
+      stable claim (same lease identity and fencing generation);
+    * the redrive activity scheduled before the next periodic 60s timer —
+      the 504-before-506 shape;
+    * clean Replayer replay of the recorded history on current code;
+    * Replayer failure against the pre-redrive command order, proving this
+      test would have caught the wedge.
+    """
+
+    runtime_id = "opencode"
+    activities = _ProfileActivities(
+        runtime_id, fail_cleanup=False, max_lease_duration_seconds=60
+    )
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-opencode-506-boundary",
+            workflows=[MoonMindProviderProfileManagerWorkflow, _SlotRequester],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ), Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                activities.list_profiles,
+                activities.sync_leases,
+                activities.pending_order,
+                activities.verify,
+            ],
+        ):
+            manager = await env.client.start_workflow(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": runtime_id},
+                id=f"provider-profile-manager:{runtime_id}",
+                task_queue="test-opencode-506-boundary",
+            )
+            await asyncio.wait_for(activities.cleaned.wait(), timeout=15)
+            requester = await env.client.start_workflow(
+                _SlotRequester.run,
+                id="test-slot-requester-506",
+                task_queue="test-opencode-506-boundary",
+            )
+            await manager.signal(
+                "request_slot",
+                {
+                    "requester_workflow_id": requester.id,
+                    "runtime_id": runtime_id,
+                },
+            )
+            async with asyncio.timeout(15):
+                while (
+                    assignment := await requester.query(_SlotRequester.assigned)
+                ) is None:
+                    await asyncio.sleep(0.01)
+            assert assignment["profile_id"] == "test-default"
+            # The live holder keeps its slot while the lease expires, so the
+            # manager owes a cleanup redrive instead of a release.
+            await asyncio.wait_for(activities.redriven.wait(), timeout=120)
+            state = await manager.query("get_state")
+            assert requester.id in state["cleanup_requested_leases"]
+            with env.auto_time_skipping_disabled():
+                await manager.signal("shutdown")
+                await requester.signal(_SlotRequester.shutdown)
+                assert (await manager.result())["status"] == "shutdown"
+                await requester.result()
+            history = await manager.fetch_history()
+
+    patch_ids: list[str] = []
+    cleanup_claims: list[dict[str, Any]] = []
+    cleanup_event_indices: list[int] = []
+    periodic_timer_indices: list[int] = []
+    for index, event in enumerate(history.events):
+        if event.HasField("marker_recorded_event_attributes"):
+            attrs = event.marker_recorded_event_attributes
+            if attrs.marker_name == "core_patch":
+                payload = (
+                    await DataConverter.default.decode(
+                        attrs.details["patch-data"].payloads
+                    )
+                )[0]
+                patch_ids.append(payload["id"])
+        elif event.HasField("activity_task_scheduled_event_attributes"):
+            attrs = event.activity_task_scheduled_event_attributes
+            if attrs.activity_type.name == "provider_profile.sync_slot_leases":
+                payload = (await DataConverter.default.decode(attrs.input.payloads))[0]
+                if payload.get("action") == "request_cleanup":
+                    cleanup_claims.append(payload)
+                    cleanup_event_indices.append(index)
+        elif event.HasField("timer_started_event_attributes"):
+            timer_attrs = event.timer_started_event_attributes
+            timeout = timer_attrs.start_to_fire_timeout.ToTimedelta()
+            if timeout.total_seconds() == 60:
+                periodic_timer_indices.append(index)
+    assert LEASE_CLEANUP_REDRIVE_PATCH in patch_ids
+    assert len(cleanup_claims) >= 2, (
+        "the recorded history must contain the initial cleanup request and "
+        "at least one redrive of the same stable claim"
+    )
+    first_claim = cleanup_claims[0]["leases"][0]
+    redrive_claim = cleanup_claims[1]["leases"][0]
+    assert redrive_claim["lease_id"] == first_claim["lease_id"]
+    assert redrive_claim["fencing_generation"] == first_claim["fencing_generation"]
+    # The 504-before-506 shape: the redriven cleanup activity is scheduled
+    # before the next periodic 60s timer.
+    redrive_index = cleanup_event_indices[1]
+    assert any(
+        timer_index > redrive_index for timer_index in periodic_timer_indices
+    ), "the redrive activity must precede the periodic 60s timer"
+    await Replayer(
+        workflows=[MoonMindProviderProfileManagerWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+    # Pre-fix code issues the periodic timer where the recorded history has
+    # the redrive activity, so replay must diverge at that boundary. The
+    # definition check below keeps this from passing vacuously on a variant
+    # the replayer refuses to load.
+    definition = getattr(
+        _PreRedriveManagerWorkflow, "__temporal_workflow_definition", None
+    )
+    assert definition is not None
+    assert definition.name == WORKFLOW_NAME
+    with pytest.raises(Exception):
+        await Replayer(
+            workflows=[_PreRedriveManagerWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(history)
