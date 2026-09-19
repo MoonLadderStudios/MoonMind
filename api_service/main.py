@@ -311,12 +311,12 @@ async def _convert_legacy_profile_secrets() -> dict:
                 )
                 return {"deferred": True, "reason": "multi_operator_attribution"}
             if summary.get("migration", {}).get("migrated"):
-                logger.info(
-                    "Converted legacy profile secrets on startup: migrated=%s created=%s reused=%s",
-                    summary["migration"]["migrated"],
-                    summary["migration"]["created"],
-                    summary["migration"]["reused"],
-                )
+                # Metadata counts are intentionally not logged: the
+                # migration summary is tainted by secret handling and
+                # CodeQL flags any logged derived value as clear-text
+                # sensitive data. Conversion outcome stays observable via
+                # the returned summary, not log arguments.
+                logger.info("Converted legacy profile secrets on startup")
                 # Single-user (#4349): the startup upgrade path migrates
                 # eligible legacy secrets without implicit profile rewires
                 # (no UserProfile->provider-profile mapping exists). The
@@ -324,14 +324,11 @@ async def _convert_legacy_profile_secrets() -> dict:
                 # provider-profile secret_ref, so converted secrets stay
                 # unreferenced until the operator (or #4346's guarded
                 # migration) publishes transactional rewires via
-                # rewire_provider_profile_secret_refs. Log the unwired
-                # slugs metadata-only so the gap is observable, never
-                # silent.
+                # rewire_provider_profile_secret_refs.
                 logger.warning(
                     "Legacy profile secrets converted without profile rewires: "
                     "publish explicit provider-profile secret_refs to restore "
-                    "effective access (migrated=%s)",
-                    summary["migration"]["migrated"],
+                    "effective access."
                 )
             return summary
     except Exception as exc:  # pragma: no cover - bounded startup conversion
