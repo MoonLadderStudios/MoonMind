@@ -979,6 +979,12 @@ profile.enabled = False
 
 The raw candidate key must not be persisted in workflow payloads, profile rows, diagnostics, audit rows, or artifacts.
 
+Failure to acquire the credential-maintenance lease is an infrastructure failure,
+before key validation. Temporal RPC failures and acquisition timeouts return HTTP
+503 with `provider_credential_manager_unavailable` and a safe retry diagnostic
+for Settings. Existing credentials, generation, and profile readiness remain
+unchanged; the failure does not classify the submitted key as invalid.
+
 ### 9.4 Recommended first-party API-key mappings
 
 ```yaml
@@ -1611,6 +1617,16 @@ Activity-vs-Timer nondeterminism. Either cut over with state preserved:
 The post-marker redrive path itself is pinned by production replay with an
 outstanding obligation
 (`test_lease_cleanup_redrive_replays_with_outstanding_obligation`).
+
+Orphaned validation cleanup has a separate marker,
+`provider-profile-manager-orphaned-validation-cleanup-v1`. The redrive marker
+predates this additional verification and release sequence and cannot authorize
+it during replay. Histories without the new marker retain their recorded order
+through the tombstone-purge marker, lease verification, and timer; normal
+Continue-As-New carries their obligations into a run that uses the new cleanup
+path. The retained OpenCode history and a fresh cleanup-to-maintenance-Update
+journey both have replay coverage. This repair lets the affected pre-cleanup
+history replay without terminating or resetting its manager.
 
 Periodic released-lease tombstone cleanup has its own workflow marker,
 `provider-profile-manager-lease-tombstone-purge-v1`. Both DB lease persistence and

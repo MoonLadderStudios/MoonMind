@@ -1,6 +1,7 @@
 """Production replay and worker-boundary coverage for slot-manager cleanup."""
 
 import asyncio
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,28 @@ async def test_pre_tombstone_purge_manager_history_replays(fixture_name: str) ->
     cleanup activity. Both must preserve the recorded lease verification order.
     """
     fixture = Path(__file__).with_name("fixtures") / fixture_name
+    history = WorkflowHistory.from_json(
+        "provider-profile-manager:opencode", fixture.read_text()
+    )
+    await Replayer(
+        workflows=[MoonMindProviderProfileManagerWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
+async def test_manager_history_before_validation_cleanup_replays() -> None:
+    """An outstanding validation lease must not change committed commands.
+
+    Sanitized production history through the first timer firing: the manager
+    has a continued validation cleanup obligation and an accepted maintenance
+    Update. Adding orphan verification before the recorded tombstone marker
+    wedged replay and made API-key enrollment return an unhandled HTTP 500.
+    """
+    fixture = (
+        Path(__file__).with_name("fixtures")
+        / "provider_profile_manager_before_validation_cleanup.json"
+    )
     history = WorkflowHistory.from_json(
         "provider-profile-manager:opencode", fixture.read_text()
     )
@@ -152,6 +175,126 @@ class _ProfileActivities:
             owner: {"running": True, "status": "NEW_STATUS"}
             for owner in request["workflow_ids"]
         }
+
+
+class _ValidationCleanupActivities(_ProfileActivities):
+    """A durable orphaned probe followed by a fresh credential submission."""
+
+    def __init__(self, acquired_at: str) -> None:
+        super().__init__("opencode", fail_cleanup=False)
+        self.rows = [
+            {
+                "profile_id": "test-default",
+                "workflow_id": "expired-validation",
+                "lease_id": "expired-validation",
+                "granted_at": acquired_at,
+                "purpose": "credential_validation",
+                "fencingGeneration": 10,
+                "leaseState": "cleanup_requested",
+                "ownerIsWorkflow": False,
+                "workflowId": "test-probe-owner",
+                "compatibilityClass": "exclusive_maintenance",
+                "safeMetadata": {
+                    "evidenceIdentity": "test-validation-evidence",
+                    "cleanupReason": "owner_terminal",
+                },
+            }
+        ]
+
+    @activity.defn(name="provider_profile.sync_slot_leases")
+    async def sync_leases(self, request: dict[str, Any]) -> dict[str, Any]:
+        self.actions.append(request["action"])
+        if request["action"] == "load":
+            return {"leases": self.rows, "max_fencing_generation": 10}
+        if request["action"] == "request_cleanup":
+            return {"outcome": "cleanup_requested", "cleanup_requested": True}
+        if request["action"] == "release_verified":
+            assert request["leases"][0]["lease_id"] == "expired-validation"
+            assert request["leases"][0]["fencing_generation"] == 10
+            self.rows = []
+            return {"outcome": "released", "released": True}
+        return {"leases": self.rows, "synced": len(request.get("leases", []))}
+
+    @activity.defn(name="provider_profile.verify_lease_holders")
+    async def verify(self, request: dict[str, Any]) -> dict[str, Any]:
+        return {
+            owner: {
+                "running": owner != "test-probe-owner",
+                "status": "NOT_FOUND" if owner == "test-probe-owner" else "RUNNING",
+            }
+            for owner in request["workflow_ids"]
+        }
+
+
+@pytest.mark.asyncio
+async def test_validation_cleanup_allows_credential_update_and_replays() -> None:
+    """The versioned path actually cleans, grants, and replays a maintenance Update."""
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        acquired_at = ((await env.get_current_time()) - timedelta(hours=5)).isoformat()
+        activities = _ValidationCleanupActivities(acquired_at)
+        async with Worker(
+            env.client,
+            task_queue="test-validation-cleanup",
+            workflows=[MoonMindProviderProfileManagerWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ), Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                activities.list_profiles,
+                activities.sync_leases,
+                activities.pending_order,
+                activities.verify,
+            ],
+        ):
+            manager = await env.client.start_workflow(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": "opencode"},
+                id="provider-profile-manager:opencode",
+                task_queue="test-validation-cleanup",
+            )
+            async with asyncio.timeout(30):
+                while "release_verified" not in activities.actions:
+                    await asyncio.sleep(0.05)
+            request = {
+                "requester_workflow_id": "http-credential-submission",
+                "owner_id": "http-credential-submission",
+                "runtime_id": "opencode",
+                "execution_profile_ref": "test-default",
+                "purpose": "credential_validation",
+                "metadata": {"ownerIsWorkflow": False, "workflowId": "http:test"},
+            }
+            granted = await manager.execute_update(
+                "AcquireCredentialMaintenanceLease", request
+            )
+            retried = await manager.execute_update(
+                "AcquireCredentialMaintenanceLease", request
+            )
+            assert granted["profile_id"] == "test-default"
+            assert granted["already_held"] is False
+            assert retried["already_held"] is True
+            assert granted["lease_id"] == retried["lease_id"]
+            await manager.signal("shutdown")
+            await manager.result()
+            history = await manager.fetch_history()
+
+    patch_ids = []
+    for event in history.events:
+        if event.HasField("marker_recorded_event_attributes"):
+            attrs = event.marker_recorded_event_attributes
+            if attrs.marker_name == "core_patch":
+                marker = (
+                    await DataConverter.default.decode(
+                        attrs.details["patch-data"].payloads
+                    )
+                )[0]
+                patch_ids.append(marker["id"])
+    assert "provider-profile-manager-orphaned-validation-cleanup-v1" in patch_ids
+    assert activities.actions.count("release_verified") == 1
+    await Replayer(
+        workflows=[MoonMindProviderProfileManagerWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
 
 
 @workflow.defn(name="Test.CleanupSlotRequester")
