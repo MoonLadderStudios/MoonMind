@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import uuid
 from typing import AsyncGenerator, Optional
@@ -11,11 +10,9 @@ from fastapi_users.authentication import BearerTransport
 from fastapi_users.db import SQLAlchemyUserDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db import base as db_base
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from api_service.services.identity_service import ControlledEnrollmentRequiredError
-from api_service.services.profile_service import ProfileService
 from moonmind.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -34,17 +31,22 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
     verification_token_secret = settings.security.JWT_SECRET_KEY
 
     async def _ensure_profile(self, user: User) -> None:
-        """Create a profile for the user if it doesn't exist."""
-        async with db_base.async_session_maker() as session:
-            service = ProfileService()
-            try:
-                await service.get_or_create_profile(session, user.id)
-            finally:
-                await session.close()
+        """Single-user (#4349): no implicit legacy ``UserProfile`` creation.
+
+        Application-user lifecycle (the ``User`` row, admission) is owned by
+        #4346/#4347. Provider-profile credentials resolve from explicit
+        provider profiles + managed-secret references, never from a
+        per-user ``UserProfile``. Registration/login therefore must not
+        provision a ``UserProfile`` row; legacy profile-held secrets are
+        converted by ``api_service.services.profile_secret_migration``.
+        Retained as a no-op for call-site compatibility.
+        """
+        return None
 
     async def on_after_register(self, user: User, request: Optional[Request] = None):
-        # Create the user profile asynchronously so registration isn't delayed
-        asyncio.create_task(self._ensure_profile(user))
+        # Single-user (#4349): registration must not provision a legacy
+        # UserProfile. User-row lifecycle stays owned by #4346/#4347.
+        return None
 
     async def on_after_login(
         self,
@@ -52,8 +54,9 @@ class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):
         request: Optional[Request] = None,
         response: Optional[Response] = None,
     ) -> None:
-        # Ensure the user has a profile on first login
-        asyncio.create_task(self._ensure_profile(user))
+        # Single-user (#4349): login must not provision a legacy
+        # UserProfile. See _ensure_profile.
+        return None
 
     async def on_after_forgot_password(
         self, user: User, token: str, request: Optional[Request] = None
