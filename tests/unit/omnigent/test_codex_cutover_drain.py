@@ -793,6 +793,8 @@ def test_codex_direct_drain_report_registered_as_temporal_activity():
         "integrations",
         "codex_direct_drain_report",
     )
-    from moonmind.workflows.temporal.activity_runtime import ActivityRuntime
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalIntegrationActivities,
+    )
 
-    assert callable(getattr(ActivityRuntime, "codex_direct_drain_report"))
+    assert callable(getattr(TemporalIntegrationActivities, "codex_direct_drain_report"))
