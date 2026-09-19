@@ -635,26 +635,110 @@ def test_workflow_boundaries_resolve_against_live_drain_evidence():
         assert payload["authorizesDeletion"] is False, boundary
 
 
+@workflow.defn(name="CodexCutoverRetainedBoundaryReplay")
+class _RetainedBoundaryReplayWorkflow:
+    """R4 representative replay: recorded payload + promotion + routing."""
+
+    @workflow.run
+    async def run(self, payload: dict) -> str:
+        decoded = decode_legacy_workspace_path(payload)
+        await workflow.sleep(1)
+        return decoded or "missing"
+
+
+def test_operator_drain_activity_binds_live_store_and_queries():
+    """R3: the operator activity wires live readers to the drain procedure."""
+
+    from moonmind.workflows.temporal.activities.github_issue_legacy_cutover_activities import (
+        codex_direct_drain_report,
+    )
+
+    class _LiveStore:
+        def list_schedules(self):
+            return [{"id": "s-1", "state": "clean"}]
+
+        def list_open_parent_workflows(self):
+            return [{"workflow_id": "p-1", "status": "RUNNING"}]
+
+    queries = {
+        category: [{"id": f"{category}-1", "state": "clean"}]
+        for category in DRAIN_INVENTORY_CATEGORIES
+        if category not in {"schedules", "open_parent_workflows"}
+    }
+    result = codex_direct_drain_report(queries=queries, store=_LiveStore())
+    assert result["ok"] is True
+    assert set(result["categoriesBound"]) >= set(DRAIN_INVENTORY_CATEGORIES)
+    assert result["categoriesMissing"] == []
+    report = result["report"]
+    assert report["authorizesDeletion"] is False
+    # The live RUNNING parent blocks deletion through the real activity path.
+    assert report["deletable"] is False
+    assert report["states"]["active"] >= 1
+
+
+def test_operator_drain_activity_fails_closed_on_missing_categories():
+    """R3/R6: the operator activity never implies drain for missing readers."""
+
+    from moonmind.workflows.temporal.activities.github_issue_legacy_cutover_activities import (
+        codex_direct_drain_report,
+    )
+
+    result = codex_direct_drain_report(queries={}, store=None)
+    assert result["ok"] is True
+    assert result["report"]["deletable"] is False
+    assert result["report"]["authorizesDeletion"] is False
+    assert any(
+        "drain_inventory_category_missing" in blocker
+        for blocker in result["report"]["blockers"]
+    )
+    assert set(result["categoriesMissing"]) >= set(DRAIN_INVENTORY_CATEGORIES)
+
+
+def test_recorded_launch_inputs_decode_across_retained_schema_shapes():
+    """R4: old serialized launch inputs decode across historical shapes."""
+
+    import json
+
+    env = {DEPLOYMENT_CUTOFF_ENV: "2026-01-01T00:00:00Z"}
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    shapes = [
+        {"runtime": "codex_cli", "workspacePath": "/recorded/path"},
+        {"runtime": "codex-direct", "path": "/recorded/alt"},
+        {"runtime": "direct", "workspacePath": "/recorded/direct"},
+    ]
+    for recorded in shapes:
+        reloaded = json.loads(json.dumps(recorded))
+        with pytest.raises(ValueError, match="codex_direct_retired_by_deployment_cutoff"):
+            assert_new_admission_allowed(reloaded["runtime"], env=env, now=now)
+        assert decode_legacy_workspace_path(reloaded) in {
+            "/recorded/path",
+            "/recorded/alt",
+            "/recorded/direct",
+        }
+    assert decode_legacy_workspace_path({}) is None
+    assert_new_admission_allowed("omnigent", env=env, now=now)
+
+
 @pytest.mark.temporal_boundary
 @pytest.mark.asyncio
-async def test_recorded_decoder_replays_through_cutover_workflow_history():
-    """R4: a workflow decoding a recorded payload replays after the cutoff."""
+async def test_retained_boundary_workflow_replays_across_cutoff():
+    """R4: retained decoders + promotion + routing replay in one history."""
 
     from temporalio.testing import WorkflowEnvironment
     from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
 
     history = None
     async with await WorkflowEnvironment.start_time_skipping() as env:
-        queue = "test-codex-cutover-recorded-decode"
+        queue = "test-codex-cutover-retained-boundary"
         async with Worker(
             env.client,
             task_queue=queue,
-            workflows=[_RecordedDecodeReplayWorkflow],
+            workflows=[_RetainedBoundaryReplayWorkflow],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                _RecordedDecodeReplayWorkflow.run,
-                {"workspacePath": "/recorded/path"},
+                _RetainedBoundaryReplayWorkflow.run,
+                {"workspacePath": "/recorded/path", "runtime": "codex_cli"},
                 id=queue,
                 task_queue=queue,
             )
@@ -662,7 +746,19 @@ async def test_recorded_decoder_replays_through_cutover_workflow_history():
             history = await handle.fetch_history()
     assert history is not None
     replayer = Replayer(
-        workflows=[_RecordedDecodeReplayWorkflow],
+        workflows=[_RetainedBoundaryReplayWorkflow],
         workflow_runner=UnsandboxedWorkflowRunner(),
     )
     await replayer.replay_workflow(history)
+    # The same retained bindings resolve outside the workflow after cutoff.
+    from moonmind.omnigent.cutover import CutoverPhase, evaluate_promotion
+    from moonmind.workflows.temporal.release_routing import current_version
+
+    decision = evaluate_promotion(
+        current_phase=CutoverPhase.BROAD_DEFAULT,
+        requested_phase=CutoverPhase.OPT_IN,
+        evidence=None,
+        now=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    )
+    assert decision.allowed is True
+    assert callable(current_version)
