@@ -2763,6 +2763,11 @@ class MoonMindProviderProfileManagerWorkflow:
                     # Host-attached and run-unknown obligations stay spent for
                     # their janitor, realizer, or operator.
                     await self._complete_direct_cleanup_obligations()
+                    # Bounded validation probes whose owner process is gone
+                    # cannot still hold their ephemeral docker probe: reclaim
+                    # them so a wedged revalidation cannot block enrollment
+                    # behind an exclusive maintenance lease forever.
+                    await self._complete_orphaned_validation_cleanup_obligations()
             else:
                 # Evict leases that exceed the max duration (safety net for
                 # cancelled/terminated workflows that failed to release).
@@ -4559,6 +4564,112 @@ class MoonMindProviderProfileManagerWorkflow:
                     self._get_logger().warning(
                         "Reclaimed direct lease %s on profile %s after "
                         "exact-run termination of %s",
+                        lease_id,
+                        profile_id,
+                        workflow_id,
+                    )
+            else:
+                self._record_unresolved_release(
+                    lease_id,
+                    profile_id=profile_id,
+                    fencing_generation=int(claim.get("fencing_generation") or 0),
+                    outcome=outcome,
+                    kind="verified_cleanup",
+                    teardown_evidence=evidence,
+                )
+
+    async def _complete_orphaned_validation_cleanup_obligations(self) -> None:
+        """Reclaim expired validation probes whose owner process is gone.
+
+        A ``credential_validation`` lease is a bounded ephemeral probe
+        (``docker run --rm ... opencode models --refresh`` with a 120s
+        backend timeout and a 900s purpose lease cap), not a persistent
+        host/container. When such an ``activity_owned`` obligation is
+        expired past its escalation horizon and its recorded owner
+        workflow is terminal or missing, the probe cannot still be
+        running: the activity process that spawned the ``docker run``
+        is gone with its owner. The manager is then the durable
+        automatic owner, mirroring
+        :meth:`_complete_direct_cleanup_obligations` for the direct
+        class. Execution and host-attached purposes, live owners,
+        fresh leases, and run-bound claims stay spent for their
+        janitor, realizer, or operator.
+        """
+
+        if not self._lease_transition_contract:
+            return
+        if not self._cleanup_requested_leases:
+            return
+        claims = [
+            claim
+            for claim in self._pending_cleanup_claims()
+            if str(claim.get("purpose") or "")
+            == CredentialLeasePurpose.CREDENTIAL_VALIDATION.value
+            and str(claim.get("consumer") or "") == "activity_owned"
+            and str(claim.get("workflowId") or "").strip()
+            and not str(claim.get("runId") or "").strip()
+            and int(claim.get("fencing_generation") or 0) > 0
+        ]
+        if not claims:
+            return
+        workflow_ids = list(
+            dict.fromkeys(str(claim["workflowId"]) for claim in claims)
+        )
+        statuses = await self._verify_workflow_statuses(workflow_ids)
+        if not statuses:
+            return
+        now = workflow.now()
+        for claim in claims:
+            lease_id = str(claim["lease_id"])
+            workflow_id = str(claim["workflowId"])
+            status_info = statuses.get(workflow_id, {})
+            if status_info.get("running", True):
+                continue
+            profile_id = str(claim.get("profile_id") or "")
+            profile = self._profiles.get(profile_id)
+            if profile is None or lease_id not in profile.current_leases:
+                continue
+            # Re-check the admitted evidence identity before completing:
+            # a replacement holder under the same owner ID must never be
+            # freed from a stale claim.
+            metadata = profile.lease_metadata.get(lease_id) or {}
+            if str(metadata.get("evidenceIdentity") or "") != str(
+                claim.get("evidenceIdentity") or ""
+            ):
+                continue
+            max_duration = (
+                getattr(profile, "max_lease_duration_seconds", None)
+                or _MAX_LEASE_DURATION_SECONDS
+            )
+            deadline = self._lease_duration_limit(
+                profile, lease_id, max_duration
+            ) + _LEASE_CLEANUP_ESCALATION_SECONDS
+            age = self._lease_age_seconds(profile, lease_id, now)
+            if age is None or age <= deadline:
+                continue
+            evidence = {
+                "consumer_stopped": True,
+                "verified_by": "provider-profile-manager-validation-reclamation",
+                "evidence_identity": str(claim.get("evidenceIdentity") or ""),
+                "owner_status": str(status_info.get("status") or "NOT_FOUND"),
+            }
+            outcome = await self._release_verified_cleanup(
+                lease_id,
+                profile_id=profile_id,
+                fencing_generation=int(claim.get("fencing_generation") or 0),
+                teardown_evidence=evidence,
+                _reason="cleanup_verified_validation_owner_terminal",
+            )
+            if outcome in RELEASING_LEASE_OUTCOMES:
+                self._unresolved_releases.pop(lease_id, None)
+                self._forget_cleanup_obligation(lease_id)
+                current = self._profiles.get(profile_id)
+                if current is not None and current.release(lease_id):
+                    self._unindex_lease(lease_id)
+                    self._has_new_events = True
+                    self._get_logger().warning(
+                        "Reclaimed orphaned validation lease %s on profile %s "
+                        "after owner terminal %s",
                         lease_id,
                         profile_id,
                         workflow_id,
