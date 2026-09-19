@@ -876,15 +876,10 @@ class BootstrapController:
                     RuntimeMaterializationMode,
                 )
 
-                # Scope to requesting user unless principal is superuser
+                # Single-user (#4349): provider profiles are instance
+                # resources; no human-owner scoping. Legacy owner values
+                # persist as provenance only.
                 owner_id = None
-                if principal is not None:
-                    principal_id = getattr(principal, "id", None)
-                    is_super = bool(getattr(principal, "is_superuser", False))
-                    if not is_super and principal_id is not None:
-                        owner_id = principal_id
-                    elif is_super:
-                        owner_id = None
 
                 profile = ManagedAgentProviderProfile(
                     profile_id=profile_id,

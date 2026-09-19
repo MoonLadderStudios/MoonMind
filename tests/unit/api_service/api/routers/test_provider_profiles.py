@@ -1970,6 +1970,9 @@ async def test_guided_oauth_profiles_reserve_distinct_credential_volumes(
 async def test_provider_profile_update_rejects_non_owner(
     client_app: AsyncClient, _module_db
 ) -> None:
+    # Single-user (#4349): provider profiles are instance resources; legacy
+    # ``owner_user_id`` never gates management. An update from any operator
+    # context succeeds instance-wide.
     profile_id = "profile_owned_by_someone_else"
     owner_id = uuid4()
 
@@ -2002,8 +2005,12 @@ async def test_provider_profile_update_rejects_non_owner(
         app.dependency_overrides.clear()
 
     assert str(other_user.id) != str(owner_id)
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Not authorized to manage this provider profile."
+    assert response.status_code == 200
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert row is not None
+        assert row.enabled is False
 
 @pytest.mark.asyncio
 async def test_provider_profile_update_allows_ownerless_shared_profile(
@@ -4611,16 +4618,19 @@ async def test_claude_manual_auth_commit_rejects_non_owner_without_validating_or
     _module_db,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Single-user (#4349): manual-auth commit is instance-scoped; legacy
+    # ``owner_user_id`` never gates credential enrollment. Validation runs
+    # and the secret is persisted as a managed-secret reference.
     profile_id = "claude-anthropic-owned-manual-auth"
     owner_id = uuid4()
     raw_token = "sk-ant-test-non-owner-token"
 
-    async def _unexpected_validate(token: str) -> None:
-        raise AssertionError("unauthorized callers must fail before token validation")
+    async def _validated(token: str) -> None:
+        assert token == raw_token
 
     monkeypatch.setattr(
         "api_service.api.routers.provider_profiles.validate_claude_manual_token",
-        _unexpected_validate,
+        _validated,
     )
 
     async with db_base.async_session_maker() as session:
@@ -4652,9 +4662,8 @@ async def test_claude_manual_auth_commit_rejects_non_owner_without_validating_or
         app.dependency_overrides.clear()
 
     assert str(other_user.id) != str(owner_id)
-    assert response.status_code == 403
+    assert response.status_code == 200
     assert raw_token not in response.text
-    assert response.json()["detail"] == "Not authorized to manage this provider profile."
 
     async with db_base.async_session_maker() as session:
         result = await session.execute(
@@ -4663,7 +4672,7 @@ async def test_claude_manual_auth_commit_rejects_non_owner_without_validating_or
                 == provider_profiles_router._claude_manual_secret_slug(profile_id)
             )
         )
-        assert result.scalar_one_or_none() is None
+        assert result.scalar_one_or_none() is not None
 
 @pytest.mark.asyncio
 async def test_claude_manual_auth_commit_rejects_unsupported_profile_without_persisting(
@@ -5201,6 +5210,8 @@ async def test_mm3788_runtime_filter_composes_with_enabled_only(
 async def test_mm3788_runtime_filter_still_applies_profile_visibility(
     client_app: AsyncClient, _module_db
 ) -> None:
+    # Single-user (#4349): profiles are instance-visible; the runtime filter
+    # narrows by runtime, never by human owner.
     owner = _override_current_user()
     other_owner_id = uuid4()
 
@@ -5234,8 +5245,9 @@ async def test_mm3788_runtime_filter_still_applies_profile_visibility(
     assert listed.status_code == 200
     listed_ids = {row["profile_id"] for row in listed.json()}
     assert "mm3788_visible_owned" in listed_ids
-    # Runtime scoping narrows the result set; it never widens visibility.
-    assert "mm3788_hidden_other_owner" not in listed_ids
+    # Runtime scoping narrows the result set by runtime; human ownership
+    # never filters instance profiles.
+    assert "mm3788_hidden_other_owner" in listed_ids
 
 
 # ---- MoonLadderStudios/MoonMind#3821 launch-safety isolation wiring ----

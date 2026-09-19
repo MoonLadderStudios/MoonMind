@@ -1389,7 +1389,9 @@ async def create_profile(
         file_templates=values["file_templates"],
         home_path_overrides=values["home_path_overrides"],
         command_behavior=values["command_behavior"],
-        owner_user_id=getattr(current_user, "id", None),
+        # Single-user (#4349): new profiles carry no human owner. Legacy
+        # ``owner_user_id`` values persist as provenance only.
+        owner_user_id=None,
         max_parallel_runs=values["max_parallel_runs"],
         cooldown_after_429_seconds=values["cooldown_after_429_seconds"],
         rate_limit_policy=ManagedAgentRateLimitPolicy(values["rate_limit_policy"]),
@@ -2666,24 +2668,17 @@ def _require_provider_profile_permission(user: Any, permission: str) -> None:
 
 
 def _can_view_profile(row: ManagedAgentProviderProfile, user: Any) -> bool:
-    user_id = _user_id(user)
-    if user_id is None or bool(getattr(user, "is_superuser", False)):
-        return True
-    owner_id = row.owner_user_id
-    return owner_id is None or str(owner_id) == user_id
+    # Single-user (#4349): provider profiles are instance resources without
+    # human-owner visibility. ``owner_user_id`` is legacy provenance, never
+    # an access predicate. All profiles are visible to the operator; settings
+    # permission gates (checked separately) remain the access boundary.
+    return True
 
 
 def _require_profile_management(row: ManagedAgentProviderProfile, user: Any) -> None:
-    user_id = _user_id(user)
-    if user_id is None or bool(getattr(user, "is_superuser", False)):
-        return
-    owner_id = row.owner_user_id
-    if owner_id is None or str(owner_id) == user_id:
-        return
-    raise HTTPException(
-        status_code=403,
-        detail="Not authorized to manage this provider profile.",
-    )
+    # Single-user (#4349): no user-owned management gate. Instance-wide
+    # settings permission (checked by callers) is the boundary.
+    return None
 
 
 def _validate_codex_oauth_profile_row(row: ManagedAgentProviderProfile) -> None:

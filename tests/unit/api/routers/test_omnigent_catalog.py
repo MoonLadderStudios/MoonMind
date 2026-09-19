@@ -1214,6 +1214,9 @@ def test_catalog_filters_persisted_policies_not_visible_to_caller(monkeypatch):
 
 
 def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
+    # Single-user (#4349): provider profiles are instance resources; legacy
+    # ``owner_user_id`` is provenance, never visibility. Both profiles are
+    # eligible for the operator.
     visible = _profile(profile_id="visible", owner_user_id=None)
     hidden = _profile(profile_id="hidden", owner_user_id="other-user")
     app = _app(monkeypatch, session=_Session([visible, hidden]))
@@ -1227,7 +1230,8 @@ def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
     assert [item["profileId"] for item in body["eligibleProviderProfiles"]] == [
-        "visible"
+        "visible",
+        "hidden",
     ]
 
 
