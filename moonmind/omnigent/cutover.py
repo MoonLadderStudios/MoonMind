@@ -394,9 +394,31 @@ class EffectivePhase:
                 list(evidence_refs) if isinstance(evidence_refs, list) else []
             ),
             "blockers": list(self.blockers),
-            "directLaunchAllowed": self.phase
-            < CutoverPhase.DIRECT_LAUNCH_DISABLED,
+            "directLaunchAllowed": self._direct_launch_allowed(),
         }
+
+    def _direct_launch_allowed(self) -> bool:
+        """Return whether direct launch is currently admitted.
+
+        The rollout phase is the rollout authority, but the deployment-owned
+        direct-retirement cutoff (MoonLadderStudios/MoonMind#3931,
+        ``MOONMIND_CODEX_DIRECT_RETIRED_AT``) closes the direct lane to new
+        work once it passes. Both must permit direct work; the published
+        readiness must match the admission decision in ``select_runtime``.
+        """
+
+        if self.phase >= CutoverPhase.DIRECT_LAUNCH_DISABLED:
+            return False
+        try:
+            from moonmind.omnigent.codex_cutover_drain import (
+                direct_retired_by_cutoff,
+            )
+        except ImportError:
+            return True
+        try:
+            return not direct_retired_by_cutoff()
+        except ValueError:
+            return False
 
 
 @dataclass(frozen=True, slots=True)

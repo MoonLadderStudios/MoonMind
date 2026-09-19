@@ -1009,7 +1009,7 @@ def default_runtime_provider_rollout_policy(
             label="Codex via legacy profile-bound Omnigent",
             state=(
                 RolloutState.retired_for_new_work
-                if codex_generic
+                if codex_generic_promoted
                 else RolloutState.new_work_default
             ),
             selector={

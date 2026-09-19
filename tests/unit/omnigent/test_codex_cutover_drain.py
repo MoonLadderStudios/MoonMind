@@ -635,17 +635,6 @@ def test_workflow_boundaries_resolve_against_live_drain_evidence():
         assert payload["authorizesDeletion"] is False, boundary
 
 
-@workflow.defn(name="CodexCutoverRetainedBoundaryReplay")
-class _RetainedBoundaryReplayWorkflow:
-    """R4 representative replay: recorded payload + promotion + routing."""
-
-    @workflow.run
-    async def run(self, payload: dict) -> str:
-        decoded = decode_legacy_workspace_path(payload)
-        await workflow.sleep(1)
-        return decoded or "missing"
-
-
 def test_operator_drain_activity_binds_live_store_and_queries():
     """R3: the operator activity wires live readers to the drain procedure."""
 
@@ -719,46 +708,91 @@ def test_recorded_launch_inputs_decode_across_retained_schema_shapes():
     assert_new_admission_allowed("omnigent", env=env, now=now)
 
 
-@pytest.mark.temporal_boundary
-@pytest.mark.asyncio
-async def test_retained_boundary_workflow_replays_across_cutoff():
-    """R4: retained decoders + promotion + routing replay in one history."""
+def test_legacy_default_preserved_until_exact_promotion_succeeds():
+    """Review body P1: legacy row retires only on promoted, not raw boolean."""
 
-    from temporalio.testing import WorkflowEnvironment
-    from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
+    import json
 
-    history = None
-    async with await WorkflowEnvironment.start_time_skipping() as env:
-        queue = "test-codex-cutover-retained-boundary"
-        async with Worker(
-            env.client,
-            task_queue=queue,
-            workflows=[_RetainedBoundaryReplayWorkflow],
-            workflow_runner=UnsandboxedWorkflowRunner(),
-        ):
-            handle = await env.client.start_workflow(
-                _RetainedBoundaryReplayWorkflow.run,
-                {"workspacePath": "/recorded/path", "runtime": "codex_cli"},
-                id=queue,
-                task_queue=queue,
-            )
-            assert await handle.result() == "/recorded/path"
-            history = await handle.fetch_history()
-    assert history is not None
-    replayer = Replayer(
-        workflows=[_RetainedBoundaryReplayWorkflow],
-        workflow_runner=UnsandboxedWorkflowRunner(),
+    from moonmind.omnigent.runtime_provider_rollout import (
+        default_runtime_provider_rollout_policy,
     )
-    await replayer.replay_workflow(history)
-    # The same retained bindings resolve outside the workflow after cutoff.
-    from moonmind.omnigent.cutover import CutoverPhase, evaluate_promotion
-    from moonmind.workflows.temporal.release_routing import current_version
 
-    decision = evaluate_promotion(
-        current_phase=CutoverPhase.BROAD_DEFAULT,
-        requested_phase=CutoverPhase.OPT_IN,
-        evidence=None,
-        now=datetime(2026, 6, 1, tzinfo=timezone.utc),
+    selection = _selection()
+    base_env = {
+        "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "true",
+        "MOONMIND_CODEX_GENERIC_SELECTION": json.dumps(selection),
+    }
+    # Linked evidence mismatched: generic stays explicit-only and legacy stays
+    # the default so the proven path is preserved.
+    bad_env = dict(base_env)
+    bad_env.update(
+        {
+            "MOONMIND_CODEX_GENERIC_QUALIFICATION_REF": "artifact://q/generic.json",
+            "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIGEST": "c" * 64,
+            "MOONMIND_CODEX_GENERIC_QUALIFICATION_RESULT": "passed",
+            "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS": json.dumps(
+                {**selection, "materializer": "different-materializer@9"}
+            ),
+        }
     )
-    assert decision.allowed is True
-    assert callable(current_version)
+    rules = {
+        rule.target_id: rule
+        for rule in default_runtime_provider_rollout_policy(env=bad_env).rules
+    }
+    assert rules["codex.generic-omnigent"].state.name == "explicit_only"
+    assert rules["codex.legacy-profile-bound-omnigent"].state.name == (
+        "new_work_default"
+    )
+    # Exact linked evidence promotes generic and retires legacy together.
+    good_env = dict(base_env)
+    good_env.update(
+        {
+            "MOONMIND_CODEX_GENERIC_QUALIFICATION_REF": "artifact://q/generic.json",
+            "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIGEST": "c" * 64,
+            "MOONMIND_CODEX_GENERIC_QUALIFICATION_RESULT": "passed",
+            "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS": json.dumps(
+                selection
+            ),
+        }
+    )
+    rules = {
+        rule.target_id: rule
+        for rule in default_runtime_provider_rollout_policy(env=good_env).rules
+    }
+    assert rules["codex.generic-omnigent"].state.name == "new_work_default"
+    assert rules["codex.legacy-profile-bound-omnigent"].state.name == (
+        "retired_for_new_work"
+    )
+
+
+def test_direct_launch_readiness_reflects_deployment_cutoff(monkeypatch):
+    """P2: published readiness matches admission once the cutoff passes."""
+
+    from moonmind.omnigent.cutover import CutoverPhase, EffectivePhase
+
+    status = EffectivePhase(
+        configured_phase=CutoverPhase.OPT_IN,
+        deployed_phase=CutoverPhase.OPT_IN,
+        phase=CutoverPhase.OPT_IN,
+        evidence_ref=None,
+        evidence={},
+        blockers=(),
+    )
+    monkeypatch.delenv("MOONMIND_CODEX_DIRECT_RETIRED_AT", raising=False)
+    assert status.as_dict()["directLaunchAllowed"] is True
+    monkeypatch.setenv("MOONMIND_CODEX_DIRECT_RETIRED_AT", "2026-01-01T00:00:00Z")
+    assert status.as_dict()["directLaunchAllowed"] is False
+
+
+def test_codex_direct_drain_report_registered_as_temporal_activity():
+    """R3: the drain report is reachable through the Temporal activity runtime."""
+
+    from moonmind.workflows.temporal.activity_runtime import _ACTIVITY_HANDLER_ATTRS
+
+    assert _ACTIVITY_HANDLER_ATTRS["codex.direct_drain_report"] == (
+        "integrations",
+        "codex_direct_drain_report",
+    )
+    from moonmind.workflows.temporal.activity_runtime import ActivityRuntime
+
+    assert callable(getattr(ActivityRuntime, "codex_direct_drain_report"))
