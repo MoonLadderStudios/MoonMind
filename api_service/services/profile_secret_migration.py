@@ -41,7 +41,13 @@ Rules:
 * Single-operator eligibility (design section 9):
   ``check_single_operator_eligibility`` blocks conversion when legacy
   secret-bearing rows are attributable to more than one operator. It
-  never chooses an owner, merges people, or discards rows.
+  never chooses an owner, merges people, or discards rows. The gate is
+  enforced by default in ``migrate_legacy_profile_secrets`` (raising
+  ``MultiOperatorAttributionError`` before any write) and by the
+  production orchestrator
+  ``run_single_operator_profile_secret_conversion`` (eligibility, then
+  migrate, then optional transactional rewires), which is also invoked
+  from application startup.
 """
 
 from __future__ import annotations
@@ -56,6 +62,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
+
+
+class MultiOperatorAttributionError(ValueError):
+    """Legacy profile-held secrets span more than one operator.
+
+    The single-operator conversion path must not choose an owner, merge
+    people, or silently discard rows. Cross-operator attribution stays owned
+    by #4346's guarded migration; this conversion converts nothing when
+    raised before any write.
+    """
 
 LEGACY_FIELDS: tuple[tuple[str, str], ...] = (
     ("google_api_key_encrypted", "google_api_key"),
@@ -95,8 +111,16 @@ async def migrate_legacy_profile_secrets(
     session: AsyncSession,
     *,
     commit: bool = True,
+    enforce_eligibility: bool = True,
 ) -> dict[str, Any]:
     """Copy eligible legacy ``UserProfile`` secrets into ``ManagedSecret`` rows.
+
+    When ``enforce_eligibility`` is true (default), the single-operator
+    eligibility gate runs first and multi-operator databases raise
+    :class:`MultiOperatorAttributionError` before any write. Pass
+    ``enforce_eligibility=False`` only from an owning guarded migration
+    (e.g. #4346's full-dataset path) that already resolved attribution;
+    the bypass is logged as a warning.
 
     Returns a metadata-only summary: ``{"migrated": N, "created": M,
     "reused": K, "items": [{"slug": ..., "field": ...,
@@ -105,6 +129,25 @@ async def migrate_legacy_profile_secrets(
     Never returns plaintext values.
     """
     from api_service.db.models import ManagedSecret, SecretStatus, UserProfile
+
+    if enforce_eligibility:
+        eligibility = await check_single_operator_eligibility(session)
+        if not eligibility.get("eligible", False):
+            logger.warning(
+                "legacy profile secret conversion blocked: %s",
+                eligibility.get("reason", "ineligible"),
+            )
+            raise MultiOperatorAttributionError(
+                "legacy profile-held secrets are attributable to "
+                f"{eligibility.get('secret_holders', '?')} operators "
+                f"({eligibility.get('reason', 'ineligible')}); refusing to "
+                "choose an owner, merge people, or discard rows"
+            )
+    else:
+        logger.warning(
+            "legacy profile secret conversion running with eligibility "
+            "enforcement bypassed by the owning caller"
+        )
 
     result_items: list[dict[str, Any]] = []
     created = 0
@@ -371,4 +414,57 @@ async def rewire_provider_profile_secret_refs(
             getattr(profile, "credential_generation", generation_before) or 1
         ),
         "credential_generation_before": generation_before,
+    }
+
+
+async def run_single_operator_profile_secret_conversion(
+    session: AsyncSession,
+    *,
+    profile_rewires: Mapping[str, Mapping[str, str]] | None = None,
+    commit: bool = True,
+) -> dict[str, Any]:
+    """Eligibility-gated conversion entrypoint for the #4349 scope.
+
+    This is the production orchestrator for legacy profile-held secret
+    conversion: it checks single-operator eligibility first (read-only, no
+    mutation on block), then migrates eligible secrets into managed secrets,
+    then optionally rewires provider profiles onto the converted references.
+    Rewiring publishes a ``db://`` reference only after verifying its secret
+    exists ACTIVE, so no converted reference is published before its secret
+    exists. Returns metadata only, never plaintext values.
+
+    Full-dataset (settings/presets/artifacts/schedules) attribution remains
+    owned by #4346's guarded migration; this entrypoint covers only the
+    #4349 conversion scope.
+    """
+    eligibility = await check_single_operator_eligibility(session)
+    if not eligibility.get("eligible", False):
+        logger.warning(
+            "single-operator profile secret conversion blocked: %s",
+            eligibility.get("reason", "ineligible"),
+        )
+        raise MultiOperatorAttributionError(
+            "legacy profile-held secrets are attributable to "
+            f"{eligibility.get('secret_holders', '?')} operators "
+            f"({eligibility.get('reason', 'ineligible')}); refusing to "
+            "choose an owner, merge people, or discard rows"
+        )
+    migration = await migrate_legacy_profile_secrets(
+        session, commit=False, enforce_eligibility=False
+    )
+    rewires: list[dict[str, Any]] = []
+    for profile_id, refs in (profile_rewires or {}).items():
+        rewires.append(
+            await rewire_provider_profile_secret_refs(
+                session, profile_id=str(profile_id), refs=refs, commit=False
+            )
+        )
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
+    return {
+        "eligibility": eligibility,
+        "migration": migration,
+        "rewires": rewires,
     }

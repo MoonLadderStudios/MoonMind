@@ -276,6 +276,50 @@ async def _sweep_secret_invalidation_outbox() -> int:
         return 0
 
 
+async def _convert_legacy_profile_secrets() -> dict:
+    """Run the gated #4349 legacy profile-secret conversion on startup.
+
+    Single-user design, sections 6 and 9: eligible legacy ``UserProfile``-held
+    secrets are converted into managed-secret references exactly once; reruns
+    converge without duplicating or changing slugs. Multi-operator databases
+    are blocked without mutation (attribution stays owned by #4346's guarded
+    migration). Resilient by design: conversion must never fail startup, so
+    every failure (including the multi-operator block) is logged and startup
+    continues. Returns the metadata-only conversion summary.
+    """
+    try:
+        from api_service.services.profile_secret_migration import (
+            MultiOperatorAttributionError,
+            run_single_operator_profile_secret_conversion,
+        )
+
+        async with get_async_session_context() as session:
+            try:
+                summary = await run_single_operator_profile_secret_conversion(
+                    session
+                )
+            except MultiOperatorAttributionError as exc:
+                logger.warning(
+                    "Legacy profile secret conversion deferred: %s",
+                    exc,
+                )
+                return {"deferred": True, "reason": "multi_operator_attribution"}
+            if summary.get("migration", {}).get("migrated"):
+                logger.info(
+                    "Converted legacy profile secrets on startup",
+                    migrated=summary["migration"]["migrated"],
+                    created=summary["migration"]["created"],
+                    reused=summary["migration"]["reused"],
+                )
+            return summary
+    except Exception as exc:  # pragma: no cover - bounded startup conversion
+        logger.warning(
+            "Legacy profile secret conversion deferred: %s",
+            type(exc).__name__,
+        )
+        return {"deferred": True, "reason": type(exc).__name__}
+
+
 async def _sync_omnigent_bootstrap_agent_profile() -> bool:
     """Synchronize observed inventory before activating the bootstrap profile."""
 
@@ -3065,6 +3109,7 @@ async def startup_event():
     # HTTP listener closed; execution admission still requires their evidence.
     await _sync_env_managed_secrets()
     await _sweep_secret_invalidation_outbox()
+    await _convert_legacy_profile_secrets()
     # MoonLadderStudios/MoonMind#3955 retired the experimental embedded host
     # transport: startup no longer runs an embedded host-auth preflight or
     # gates on it. Proxy mode is the only supported transport; retained

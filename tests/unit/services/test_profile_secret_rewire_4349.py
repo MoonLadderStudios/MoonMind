@@ -229,13 +229,11 @@ async def test_rewire_keeps_same_value_distinct_credentials_distinct(tmp_path):
         await conn.run_sync(Base.metadata.create_all)
     async with factory() as session:
         u1 = User(id=uuid.uuid4(), email="a@example.com")
-        u2 = User(id=uuid.uuid4(), email="b@example.com")
-        session.add_all([u1, u2])
+        session.add(u1)
         await session.flush()
-        # One legacy row carries two distinct credentials holding the same
-        # value; a second operator holds the same value again. All three
-        # source credentials stay distinct (slugs derive from existing IDs
-        # + field, never value hashes).
+        # One operator holds the same value in two distinct credentials.
+        # Both source credentials stay distinct (slugs derive from existing
+        # IDs + field, never value hashes).
         session.add(
             UserProfile(
                 user_id=u1.id,
@@ -243,15 +241,13 @@ async def test_rewire_keeps_same_value_distinct_credentials_distinct(tmp_path):
                 github_token_encrypted="same-value",
             )
         )
-        session.add(UserProfile(user_id=u2.id, openai_api_key_encrypted="same-value"))
         await session.commit()
         # Distinct legacy fields keep distinct slugs even for identical values.
         slug_openai_u1 = legacy_secret_slug(u1.id, "openai_api_key")
         slug_github_u1 = legacy_secret_slug(u1.id, "github_token")
-        slug_openai_u2 = legacy_secret_slug(u2.id, "openai_api_key")
-        assert len({slug_openai_u1, slug_github_u1, slug_openai_u2}) == 3
+        assert slug_openai_u1 != slug_github_u1
         result = await migrate_legacy_profile_secrets(session)
-        assert result["migrated"] == 3
+        assert result["migrated"] == 2
         session.add(_profile_row("prof-a"))
         session.add(_profile_row("prof-b"))
         await session.commit()
@@ -266,3 +262,75 @@ async def test_rewire_keeps_same_value_distinct_credentials_distinct(tmp_path):
         assert pa.secret_refs != pb.secret_refs
         assert pa.secret_refs["OPENAI_API_KEY"] == f"db://{slug_openai_u1}"
         assert pb.secret_refs["GITHUB_TOKEN"] == f"db://{slug_github_u1}"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_converts_and_rewires_single_operator(tmp_path):
+    from api_service.services.profile_secret_migration import (
+        legacy_secret_slug,
+        run_single_operator_profile_secret_conversion,
+    )
+
+    engine, factory = _factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with factory() as session:
+        u1 = User(id=uuid.uuid4(), email="solo@example.com")
+        session.add(u1)
+        await session.flush()
+        session.add(UserProfile(user_id=u1.id, openai_api_key_encrypted="solo-secret"))
+        session.add(_profile_row("prof-solo"))
+        await session.commit()
+        slug = legacy_secret_slug(u1.id, "openai_api_key")
+        summary = await run_single_operator_profile_secret_conversion(
+            session,
+            profile_rewires={"prof-solo": {"OPENAI_API_KEY": f"db://{slug}"}},
+        )
+        assert summary["eligibility"]["eligible"] is True
+        assert summary["migration"]["migrated"] == 1
+        assert summary["migration"]["created"] == 1
+        assert len(summary["rewires"]) == 1
+        assert summary["rewires"][0]["outcome"] == "rewired"
+        assert summary["rewires"][0]["credential_generation"] == 2
+        assert "solo-secret" not in str(summary)
+        profile = await session.get(ManagedAgentProviderProfile, "prof-solo")
+        assert profile.secret_refs == {"OPENAI_API_KEY": f"db://{slug}"}
+        # Rerun converges: everything reused, generation untouched.
+        rerun = await run_single_operator_profile_secret_conversion(
+            session,
+            profile_rewires={"prof-solo": {"OPENAI_API_KEY": f"db://{slug}"}},
+        )
+        assert rerun["migration"]["created"] == 0
+        assert rerun["rewires"][0]["outcome"] == "reused"
+        assert rerun["rewires"][0]["credential_generation"] == 2
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_blocks_multi_operator_without_mutation(tmp_path):
+    from api_service.services.profile_secret_migration import (
+        MultiOperatorAttributionError,
+        run_single_operator_profile_secret_conversion,
+    )
+
+    engine, factory = _factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with factory() as session:
+        u1 = User(id=uuid.uuid4(), email="a@example.com")
+        u2 = User(id=uuid.uuid4(), email="b@example.com")
+        session.add_all([u1, u2])
+        await session.flush()
+        session.add(UserProfile(user_id=u1.id, openai_api_key_encrypted="tok-a"))
+        session.add(UserProfile(user_id=u2.id, openai_api_key_encrypted="tok-b"))
+        session.add(_profile_row("prof-a"))
+        await session.commit()
+        with pytest.raises(MultiOperatorAttributionError):
+            await run_single_operator_profile_secret_conversion(
+                session,
+                profile_rewires={"prof-a": {"OPENAI_API_KEY": "db://anything"}},
+            )
+        # Blocked before any write: no secrets converted, profile untouched.
+        assert (await session.execute(select(ManagedSecret))).scalars().all() == []
+        profile = await session.get(ManagedAgentProviderProfile, "prof-a")
+        assert (profile.secret_refs or {}) == {}
+        assert profile.credential_generation == 1
