@@ -1,6 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import postcss from 'postcss';
+import type { Root, Rule } from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
@@ -658,6 +660,248 @@ describe('Skills Entrypoint', () => {
       expect(preview?.innerHTML).not.toContain('onerror');
       expect(preview?.innerHTML).not.toContain('javascript:alert(1)');
       expect(preview?.innerHTML).not.toContain('<img');
+    });
+  });
+
+  describe('skills table visual parity (MoonMind#3346)', () => {
+    let parityCss: string;
+    let parityRoot: Root | null = null;
+
+    beforeAll(async () => {
+      const { readFileSync } = await import('node:fs');
+      parityCss = readFileSync(
+        `${process.cwd()}/frontend/src/styles/dashboard.css`,
+        'utf8',
+      );
+    });
+
+    function parityRuleBlocks(selector: string): string[] {
+      parityRoot ??= postcss.parse(parityCss);
+      const expected = selector.trim().replace(/\s+/g, ' ');
+      const expectedParts = selector.split(',').map((part) => part.trim().replace(/\s+/g, ' '));
+      const blocks: string[] = [];
+      parityRoot.walkRules((rule) => {
+        const actual = rule.selector.trim().replace(/\s+/g, ' ');
+        const actualParts = rule.selector.split(',').map((part) => part.trim().replace(/\s+/g, ' '));
+        if (
+          actual === expected ||
+          actualParts.includes(expected) ||
+          expectedParts.every((part) => actualParts.includes(part))
+        ) {
+          blocks.push(rule.nodes.map((node) => `${node.toString()};`).join('\n'));
+        }
+      });
+      return blocks;
+    }
+
+    function parityRuleBlock(selector: string): string {
+      return parityRuleBlocks(selector)[0] ?? '';
+    }
+
+    function parityRuleBlockMatching(matches: (rule: Rule) => boolean): string {
+      parityRoot ??= postcss.parse(parityCss);
+      let block = '';
+      parityRoot.walkRules((rule) => {
+        if (!block && matches(rule)) {
+          block = rule.nodes.map((node) => `${node.toString()};`).join('\n');
+        }
+      });
+      return block;
+    }
+
+    it('renders the catalog chrome covered by the workflow-parity rules', async () => {
+      renderSkills({ path: '/skills' });
+
+      await screen.findByRole('link', { name: 'Open skill pr-resolver' });
+      const table = screen.getByRole('table', { name: 'Skills catalog' });
+      // The parity selectors must match the markup this page actually renders;
+      // a selector rename without a markup update (or vice versa) fails here
+      // rather than silently covering nothing.
+      const workspace = table.closest('.skills-catalog-page');
+      expect(workspace).toBeTruthy();
+      const slab = table.closest('.data-table-slab');
+      expect(slab).toBeTruthy();
+      const primary = table.closest('.skills-catalog-primary');
+      expect(primary?.className).toContain('px-4');
+      expect(primary?.className).toContain('sm:px-6');
+
+      const headers = within(table).getAllByRole('columnheader').map((cell) => cell.textContent);
+      expect(headers.join(' ')).toContain('Skill');
+      const bodyRows = within(table).getAllByRole('row').slice(1);
+      expect(bodyRows.length).toBeGreaterThan(0);
+      expect(
+        within(table).getByRole('link', { name: 'Open skill pr-resolver' }),
+      ).toBeTruthy();
+
+      // Slab: not a card — transparent fill bled to the primary edges, with the
+      // desktop `overflow: visible` that keeps the sticky header on the page.
+      const slabBlock = parityRuleBlock('.skills-catalog-page .data-table-slab');
+      expect(slabBlock).toContain('background: transparent');
+      expect(slabBlock).toContain('border: 0');
+      expect(slabBlock).toContain('margin-inline: calc(var(--skills-table-bleed) * -1)');
+      expect(slabBlock).toContain('overflow: visible;');
+
+      // Body translucency: both odd and even rows run transparent over the page
+      // surface (never `opacity` on the whole table, which would fade text and
+      // controls), with the scoped accent hover in both themes.
+      const bodyBlock = parityRuleBlock(
+        '.skills-catalog-page .data-table tbody tr,\n.skills-catalog-page .data-table tbody tr:nth-child(2n)',
+      );
+      expect(bodyBlock).toContain('background: transparent');
+      expect(parityRuleBlock('.skills-catalog-page .data-table tbody tr:hover')).toContain(
+        'background: rgb(var(--mm-accent) / 0.08)',
+      );
+      expect(parityRuleBlock('.dark .skills-catalog-page .data-table tbody tr:hover')).toContain(
+        'background: rgb(var(--mm-accent) / 0.18)',
+      );
+      for (const block of parityRuleBlocks('.skills-catalog-page .data-table')) {
+        expect(block).not.toMatch(/opacity\s*:/);
+      }
+
+      // Header keeps the translucent workflow treatment and draws its divider
+      // with the shared list token, matching the workflow table's 0.72 rule.
+      const headerBlock = parityRuleBlock('.skills-catalog-page .data-table thead th');
+      expect(headerBlock).toContain('background: rgb(var(--mm-panel) / 0.98)');
+      expect(headerBlock).toContain('box-shadow: 0 1px 0 var(--workflow-list-divider-color)');
+
+      // Row dividers use the same shared token as the workflow list instead of
+      // the generic 0.65 table rule.
+      const rowDividerBlock = parityRuleBlock('.skills-catalog-page .data-table td');
+      expect(rowDividerBlock).toContain('border-bottom-color: var(--workflow-list-divider-color)');
+
+      // Bleed bookkeeping: the token tracks the primary's own responsive padding
+      // so header/divider edges land on the collection boundary, and the edge
+      // cells re-inset text by the same amount to preserve readable padding.
+      expect(parityRuleBlock('.skills-catalog-page .skills-catalog-primary')).toContain(
+        '--skills-table-bleed: 1rem',
+      );
+      const smPrimaryBlock = parityRuleBlockMatching((rule) => (
+        rule.selector.trim().replace(/\s+/g, ' ') === '.skills-catalog-page .skills-catalog-primary' &&
+        rule.parent?.type === 'atrule' &&
+        rule.parent.name === 'media' &&
+        rule.parent.params.includes('min-width: 640px')
+      ));
+      expect(smPrimaryBlock).toContain('--skills-table-bleed: 1.5rem');
+      expect(
+        parityRuleBlock(
+          '.skills-catalog-page .data-table th:first-child,\n.skills-catalog-page .data-table td:first-child',
+        ),
+      ).toContain('padding-left: var(--skills-table-bleed)');
+      expect(
+        parityRuleBlock(
+          '.skills-catalog-page .data-table th:last-child,\n.skills-catalog-page .data-table td:last-child',
+        ),
+      ).toContain('padding-right: var(--skills-table-bleed)');
+
+      // Narrow screens restore a scroll container so the fixed-width catalog
+      // never clips behind `.dashboard-root`'s horizontal clip.
+      const narrowSlabBlock = parityRuleBlockMatching((rule) => (
+        rule.selector.trim().replace(/\s+/g, ' ') === '.skills-catalog-page .data-table-slab' &&
+        rule.parent?.type === 'atrule' &&
+        rule.parent.name === 'media' &&
+        rule.parent.params.includes('max-width: 900px')
+      ));
+      expect(narrowSlabBlock).toContain('overflow-x: auto;');
+    });
+
+    it('keeps loading, empty, error, and long-name rows inside the parity slab', async () => {
+      fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/workflows/skills?includeContent=true')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: { worker: ['a-very-long-skill-name-that-keeps-going-and-going'] },
+              legacyItems: [
+                {
+                  id: 'a-very-long-skill-name-that-keeps-going-and-going',
+                  label: 'A very long skill label that keeps going and going and going',
+                  description: 'A very long description that must wrap instead of stretching the table past the viewport. '.repeat(8),
+                  source: { kind: 'file', path: '/skills/long/SKILL.md' },
+                  markdown: '# Long\n\nContent.',
+                },
+              ],
+            }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: async () => 'Unhandled fetch',
+        } as Response);
+      });
+
+      const { unmount } = renderSkills({ path: '/skills' });
+      await screen.findByRole('link', {
+        name: 'Open skill A very long skill label that keeps going and going and going',
+      });
+      const table = screen.getByRole('table', { name: 'Skills catalog' });
+      expect(table.closest('.data-table-slab')).toBeTruthy();
+      const descriptionCell = table.querySelector('td[data-column-key="description"]');
+      expect(descriptionCell).toBeTruthy();
+      expect(descriptionCell?.textContent ?? '').toContain('must wrap');
+      // Long prose wraps inside the description column instead of forcing the
+      // table wider than the viewport.
+      expect(parityRuleBlock('.skills-catalog-page .data-table')).toContain('white-space: normal');
+      expect(
+        parityRuleBlock('.skills-catalog-page .data-table td[data-column-key="description"]'),
+      ).toContain('max-width: 44rem');
+      unmount();
+
+      fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/workflows/skills?includeContent=true')) {
+          return new Promise(() => {}) as Promise<Response>;
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: async () => 'Unhandled fetch',
+        } as Response);
+      });
+      const loading = renderSkills({ path: '/skills' });
+      expect(await screen.findByText('Loading skills...')).toBeTruthy();
+      expect(screen.getByText('Loading skills...').closest('.data-table-slab')).toBeTruthy();
+      loading.unmount();
+
+      fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/workflows/skills?includeContent=true')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: {}, legacyItems: [] }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: async () => 'Unhandled fetch',
+        } as Response);
+      });
+      const empty = renderSkills({ path: '/skills' });
+      expect(await screen.findByText('No skills available yet.')).toBeTruthy();
+      expect(screen.getByText('No skills available yet.').closest('.data-table-slab')).toBeTruthy();
+      empty.unmount();
+
+      fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/workflows/skills?includeContent=true')) {
+          return Promise.resolve({
+            ok: false,
+            status: 500,
+            text: async () => 'boom',
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: async () => 'Unhandled fetch',
+        } as Response);
+      });
+      const failed = renderSkills({ path: '/skills' });
+      expect(await screen.findByText('Failed to load skills.')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Retry' }).closest('.data-table-slab')).toBeTruthy();
+      failed.unmount();
     });
   });
 });
