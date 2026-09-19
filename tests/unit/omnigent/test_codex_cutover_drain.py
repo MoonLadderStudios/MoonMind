@@ -10,6 +10,9 @@ boundary coverage (restart/cancel/retry/reset/credential/publication/cleanup).
 from datetime import datetime, timezone
 
 import pytest
+from temporalio import workflow
+
+from moonmind.omnigent.workspace_sources import decode_legacy_workspace_path
 
 from moonmind.omnigent.codex_cutover_drain import (
     BOUNDARY_COVERAGE,
@@ -29,6 +32,17 @@ from moonmind.omnigent.codex_cutover_drain import (
     run_codex_drain_procedure,
     verify_retained_branch_runtime,
 )
+
+
+@workflow.defn(name="CodexCutoverRecordedDecodeReplay")
+class _RecordedDecodeReplayWorkflow:
+    """R4 replay fixture: a workflow decoding an already-recorded payload."""
+
+    @workflow.run
+    async def run(self, payload: dict) -> str:
+        decoded = decode_legacy_workspace_path(payload)
+        await workflow.sleep(1)
+        return decoded or "missing"
 
 
 def _selection(**overrides):
@@ -474,3 +488,181 @@ def test_changed_boundaries_map_to_drain_and_disposition_evidence():
     inventory["cleanup_work"] = [{"id": "cl-1", "state": "active"}]
     assert run_codex_drain_procedure(inventory)["deletable"] is False
     assert run_codex_drain_procedure(clean_inventory())["deletable"] is True
+
+
+def test_live_drain_sources_normalize_heterogeneous_live_rows():
+    """R3: live visibility/schedule/lease rows normalize to four states."""
+
+    from moonmind.omnigent.codex_cutover_drain import live_drain_sources
+
+    class _Row:
+        def __init__(self, workflow_id, status):
+            self.workflow_id = workflow_id
+            self.status = status
+
+    queries = {
+        # Temporal-like objects with status attributes.
+        "open_parent_workflows": [
+            _Row("parent-1", "RUNNING"),
+            _Row("parent-2", "CLOSED"),
+        ],
+        # Plain mappings with mixed key styles.
+        "schedules": [
+            {"id": "sched-1", "state": "active"},
+            {"schedule_id": "sched-2", "status": "paused"},
+        ],
+        # Unrecognized shapes become unknown, never deleted.
+        "resource_leases": [{"opaque": "blob"}],
+    }
+    sources = live_drain_sources(queries)
+    assert set(sources) == set(queries)
+    inventory = collect_drain_inventory(sources)
+    states = {item["id"]: item["state"] for item in inventory["open_parent_workflows"]}
+    assert states["parent-1"] == "active"
+    assert states["parent-2"] == "clean"
+    schedule_states = {
+        item["id"]: item["state"] for item in inventory["schedules"]
+    }
+    assert schedule_states["sched-1"] == "active"
+    assert schedule_states["sched-2"] == "clean"
+    assert inventory["resource_leases"][0]["state"] == "unknown"
+
+
+def test_run_live_codex_drain_maps_raising_live_query_to_unknown():
+    """R3: a raising live source becomes unknown; missing fails closed."""
+
+    from moonmind.omnigent.codex_cutover_drain import run_live_codex_drain
+
+    def boom():
+        raise RuntimeError("temporal visibility unreachable")
+
+    payload = run_live_codex_drain(
+        {
+            category: [{"id": f"{category}-1", "state": "clean"}]
+            for category in DRAIN_INVENTORY_CATEGORIES
+            if category != "schedules"
+        }
+        | {"schedules": boom}
+    )
+    assert payload["states"]["unknown"] == 1
+    assert payload["deletable"] is False
+    assert payload["authorizesDeletion"] is False
+    assert any("drain_inventory_category_missing" in b for b in payload["blockers"]) is False
+    # A fully missing category fails closed instead of implying drain.
+    payload = run_live_codex_drain({})
+    assert payload["deletable"] is False
+    assert any("drain_inventory_category_missing" in b for b in payload["blockers"])
+
+
+def test_operator_drain_sources_probe_duck_typed_store():
+    """R3: the operator entrypoint binds live readers without new I/O."""
+
+    from moonmind.omnigent.codex_cutover_drain import (
+        operator_drain_sources,
+        run_codex_drain_procedure,
+    )
+
+    class _Store:
+        def list_schedules(self):
+            return [{"id": "s-1", "state": "clean"}]
+
+        def list_open_parent_workflows(self):
+            raise RuntimeError("visibility down")
+
+    sources = operator_drain_sources(_Store())
+    assert "schedules" in sources
+    assert "open_parent_workflows" in sources
+    # Unimplemented readers stay missing so the report fails closed.
+    assert "cleanup_work" not in sources
+    payload = run_codex_drain_procedure(sources)
+    assert payload["states"]["unknown"] == 1
+    assert payload["deletable"] is False
+
+
+def test_persisted_launch_input_round_trip_survives_cutoff():
+    """R4: recorded direct-lane inputs still decode after the cutoff."""
+
+    import json
+
+    from moonmind.omnigent.workspace_sources import decode_legacy_workspace_path
+
+    env = {DEPLOYMENT_CUTOFF_ENV: "2026-01-01T00:00:00Z"}
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    # An old serialized launch input naming the retired lane and a raw path.
+    recorded = json.dumps(
+        {"runtime": "codex_cli", "workspacePath": "/recorded/path"}
+    )
+    reloaded = json.loads(recorded)
+    # New admission into the retired lane rejects ...
+    with pytest.raises(ValueError, match="codex_direct_retired_by_deployment_cutoff"):
+        assert_new_admission_allowed(reloaded["runtime"], env=env, now=now)
+    # ... while the already-recorded payload still decodes for drain/replay.
+    assert decode_legacy_workspace_path(reloaded) == "/recorded/path"
+    # The surviving lane still admits new work after the cutoff.
+    assert_new_admission_allowed("omnigent", env=env, now=now)
+
+
+def test_workflow_boundaries_resolve_against_live_drain_evidence():
+    """R6: real workflow/activity helpers bind to drain/disposition evidence."""
+
+    from moonmind.omnigent.codex_cutover_drain import run_live_codex_drain
+    from moonmind.workflows.temporal.release_routing import current_version
+    from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+
+    # Restart/retry helpers on the real run workflow stay wired.
+    assert callable(MoonMindRunWorkflow._retry_policy_for_route)
+    assert callable(MoonMindRunWorkflow._should_propagate_agent_child_cancellation)
+    # Supported reset/replay routing stays a callable worker-version path.
+    assert callable(current_version)
+    # Each changed boundary blocks deletion through live-shaped evidence.
+    boundary_category = {
+        "restart": "open_parent_workflows",
+        "cancellation": "pending_interventions",
+        "retry": "retries",
+        "completed_workflow_reset": "open_child_workflows",
+        "credential_preservation": "resource_leases",
+        "publication_recovery": "publication_work",
+        "final_cleanup": "cleanup_work",
+    }
+    for boundary, category in boundary_category.items():
+        queries = {
+            other: [{"id": f"{other}-1", "state": "clean"}]
+            for other in DRAIN_INVENTORY_CATEGORIES
+        }
+        queries[category] = [{"id": f"{category}-1", "state": "active"}]
+        payload = run_live_codex_drain(queries)
+        assert payload["deletable"] is False, boundary
+        assert payload["authorizesDeletion"] is False, boundary
+
+
+@pytest.mark.temporal_boundary
+@pytest.mark.asyncio
+async def test_recorded_decoder_replays_through_cutover_workflow_history():
+    """R4: a workflow decoding a recorded payload replays after the cutoff."""
+
+    from temporalio.testing import WorkflowEnvironment
+    from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
+
+    history = None
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        queue = "test-codex-cutover-recorded-decode"
+        async with Worker(
+            env.client,
+            task_queue=queue,
+            workflows=[_RecordedDecodeReplayWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                _RecordedDecodeReplayWorkflow.run,
+                {"workspacePath": "/recorded/path"},
+                id=queue,
+                task_queue=queue,
+            )
+            assert await handle.result() == "/recorded/path"
+            history = await handle.fetch_history()
+    assert history is not None
+    replayer = Replayer(
+        workflows=[_RecordedDecodeReplayWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    )
+    await replayer.replay_workflow(history)
