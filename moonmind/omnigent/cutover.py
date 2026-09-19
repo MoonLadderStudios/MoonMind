@@ -470,6 +470,8 @@ def select_runtime(
     release_status: EffectivePhase | None = None,
     rollback_generation: str | None = None,
     versioned_default: bool = False,
+    env: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
 ) -> RuntimeSelection:
     """Apply rollout defaults without ever rewriting an explicit selection.
 
@@ -486,13 +488,23 @@ def select_runtime(
     The rollout phase and the code-owned retirement class are separate
     authorities and both must permit a runtime before it becomes a new
     selection (#3835). Neither ever affects an already-recorded plan.
+
+    The deployment-owned direct-retirement cutoff
+    (MoonLadderStudios/MoonMind#3931,
+    ``MOONMIND_CODEX_DIRECT_RETIRED_AT``) is a third authority: once the
+    cutoff passes, no new direct work is admitted regardless of phase. It is
+    evaluated here so the retired lane rejects at the same selection boundary
+    without rewriting already-recorded plans.
     """
+
+    from moonmind.omnigent.codex_cutover_drain import assert_new_admission_allowed
 
     explicit = str(authored_runtime or "").strip().lower()
     if explicit:
         explicit = normalize_runtime_id(explicit)
         if explicit == "codex_cli" and phase >= CutoverPhase.DIRECT_LAUNCH_DISABLED:
             raise ValueError("codex_direct_launch_disabled_by_cutover_phase")
+        assert_new_admission_allowed(explicit, env=env, now=now)
         assert_runtime_new_admission(explicit, rollback_generation=rollback_generation)
         return RuntimeSelection(
             explicit,
@@ -523,6 +535,7 @@ def select_runtime(
         selected = "omnigent" if default == "codex_cli" and phase >= threshold else default
     # A configured default may not keep a direct runtime as a default target
     # once its retirement class stops admitting new work (#3835 required work 2).
+    assert_new_admission_allowed(selected, env=env, now=now)
     assert_runtime_new_admission(selected, rollback_generation=rollback_generation)
     return RuntimeSelection(
         selected,
