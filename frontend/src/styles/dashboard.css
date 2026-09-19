@@ -8324,12 +8324,18 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .skills-catalog-page .data-table thead th {
   background: rgb(var(--mm-panel) / 0.98);
   border-bottom: 0;
-  box-shadow: 0 1px 0 rgb(var(--mm-border) / 0.6);
+  box-shadow: 0 1px 0 var(--workflow-list-divider-color);
 }
 
 .skills-catalog-page .data-table tbody tr,
 .skills-catalog-page .data-table tbody tr:nth-child(2n) {
   background: transparent;
+}
+
+/* Match the workflow list: row dividers use the shared list token rather than
+ * the generic 0.65 table rule, so both tables draw the same 0.72 divider. */
+.skills-catalog-page .data-table td {
+  border-bottom-color: var(--workflow-list-divider-color);
 }
 
 .skills-catalog-page .data-table tbody tr:hover {
