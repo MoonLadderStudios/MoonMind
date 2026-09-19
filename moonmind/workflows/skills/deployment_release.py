@@ -748,6 +748,62 @@ class ReleaseCohort:
             version, deployment, await self.resolve_serving_image(version, deployment)
         )
 
+    async def qualify_provider_managers(self, client):
+        """Gate promotion on provider-profile manager singleton liveness.
+
+        MoonLadderStudios/MoonMind#4363: a release must not be promoted while
+        a ``provider-profile-manager:*`` singleton is wedged in a
+        workflow-task failure loop. The singleton keeps ``running=true`` with
+        every ``get_state`` query failing, slot signals queue forever, and
+        waiters park in ``AWAITING SLOT`` despite free DB capacity. This gate
+        fails closed with precise evidence and the recovery owner instead of
+        reporting success past a wedged singleton.
+        """
+        from moonmind.workflows.skills.provider_manager_liveness import (
+            collect_provider_manager_liveness,
+            describe_liveness_block,
+            evaluate_provider_manager_liveness,
+            read_db_held_lease_counts,
+        )
+
+        db_held_leases = await read_db_held_lease_counts()
+        observations = await collect_provider_manager_liveness(
+            client, db_held_leases=db_held_leases
+        )
+        disposition = evaluate_provider_manager_liveness(observations)
+        if disposition["blocked"] and db_held_leases is not None and any(
+            entry.get("finding") == "ledger_disagreement"
+            for entry in (disposition.get("evidence") or [])
+            if isinstance(entry, dict)
+        ):
+            # The DB count and the manager queries are not one atomic
+            # observation: a concurrent grant or release can move the ledger
+            # between the two reads and present as corruption. Confirm with
+            # one bounded reread before aborting promotion.
+            reread = await read_db_held_lease_counts()
+            if reread is not None:
+                db_held_leases = reread
+                observations = await collect_provider_manager_liveness(
+                    client, db_held_leases=db_held_leases
+                )
+                disposition = evaluate_provider_manager_liveness(observations)
+        write_record(
+            self.directory / "manager-liveness.json",
+            {
+                "owner": self.owner,
+                "dbLedger": (
+                    "reconciled" if db_held_leases is not None else "unavailable"
+                ),
+                **disposition,
+            },
+        )
+        if disposition["blocked"]:
+            raise RuntimeError(
+                "Provider-profile manager singletons are not healthy: "
+                f"{describe_liveness_block(disposition)}. "
+                f"{disposition['recoveryHint']}"
+            )
+
     async def _retained_definition_runner(self, image):
         """Render the retained cohort from the definition its image owns.
 
@@ -1063,6 +1119,7 @@ class ReleaseCohort:
                 states.append(readiness)
             if all(readiness_matches(row, release["digest"]) for row in states):
                 await self.qualify_api(image)
+                await self.qualify_provider_managers(client)
                 return await promote_version(
                     client,
                     deployment=deployment,
