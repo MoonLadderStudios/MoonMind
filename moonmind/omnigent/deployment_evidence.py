@@ -385,9 +385,23 @@ def _unqualified_combination_message(
         )
     else:
         detail = "no deployment evidence is published"
+    # Name the requested credential and policy classes so a default
+    # OpenCode Go + muse-spark + xhigh failure points at the exact stale
+    # materializer/launch-policy combination instead of only the opaque
+    # support key. Values are bounded refs, never secret bodies.
+    try:
+        _identity = plan_payload.supportIdentity
+        _materializers = ",".join(sorted(map(str, getattr(_identity, "materializerRefs", ()) or ())))
+        _launch = str(getattr(_identity, "launchPolicyRef", "") or "")
+    except Exception:
+        _materializers = ""
+        _launch = ""
+    _requested = ""
+    if _materializers or _launch:
+        _requested = f" requested materializerRefs=[{_materializers}] launchPolicyRef={_launch}."
     return (
         "this deployment is not qualified for the requested execution "
-        f"combination {plan_payload.supportCombinationKey} ({detail}). "
+        f"combination {plan_payload.supportCombinationKey} ({detail}).{_requested} "
         "Qualification follows the current launch-ready Provider Profile "
         "materializer classes and Agent Profile launch policy; revalidate the "
         "requested profile and retry deployment qualification."

@@ -132,8 +132,9 @@ LEASE_TRANSITION_CONTRACT_PATCH = (
 # wedges with Activity-vs-Timer nondeterminism, blocking the
 # credential-maintenance lease and thus deployment requalification
 # (no admissible execution evidence for opencode-go-default).
-LEASE_CLEANUP_REDRIVE_PATCH = (
-    "provider-profile-manager-lease-cleanup-redrive-v1"
+LEASE_CLEANUP_REDRIVE_PATCH = "provider-profile-manager-lease-cleanup-redrive-v1"
+ORPHANED_VALIDATION_CLEANUP_PATCH = (
+    "provider-profile-manager-orphaned-validation-cleanup-v1"
 )
 
 # Deterministic sort sentinel for pending requests whose scheduled queue order
@@ -2767,7 +2768,11 @@ class MoonMindProviderProfileManagerWorkflow:
                     # cannot still hold their ephemeral docker probe: reclaim
                     # them so a wedged revalidation cannot block enrollment
                     # behind an exclusive maintenance lease forever.
-                    await self._complete_orphaned_validation_cleanup_obligations()
+                    # This verification/release sequence was added after the
+                    # redrive marker. Reusing that marker changes commands in
+                    # retained histories that already have validation claims.
+                    if workflow.patched(ORPHANED_VALIDATION_CLEANUP_PATCH):
+                        await self._complete_orphaned_validation_cleanup_obligations()
             else:
                 # Evict leases that exceed the max duration (safety net for
                 # cancelled/terminated workflows that failed to release).
