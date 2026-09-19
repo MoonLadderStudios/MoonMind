@@ -23,8 +23,10 @@ RELIABILITY_DIR = REPO_ROOT / "tests" / "integration" / "reliability"
 def test_pytest_split_is_a_test_extra_dependency() -> None:
     """MoonLadderStudios/MoonMind#4366 R2: pytest-split is declared as an
     optional test dependency and part of the ``tests`` extra that CI installs
-    (``uv pip install --system -e .[tests]``). No lockfile owns that install
-    path, so no lockfile update is required; a second dependency manager must
+    (``uv pip install --system -e .[tests]``). The committed ``poetry.lock``
+    owns the image install path (``api_service/Dockerfile`` runs
+    ``poetry export --extras tests`` from the lock), so the lock must stay
+    regenerated alongside this pin; a second dependency manager must
     not appear."""
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = pyproject["tool"]["poetry"]["dependencies"]
