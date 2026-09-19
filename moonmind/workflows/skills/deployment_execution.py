@@ -1164,18 +1164,42 @@ class HostDockerComposeRunner:
         when the platform cannot be established, where rewritten binds still
         fail loudly instead of mounting empty directories). A confirmed
         non-Desktop daemon keeps the POSIX namespace untouched.
+
+        A Windows drive-letter host directory is never usable as a Linux
+        Compose ``--project-directory``: the client treats ``D:\\...`` as a
+        relative path, resolving binds to
+        ``/workspace/host_project/D:\\...`` and failing with ``too many
+        colons``. Even when the daemon previously resolved that spelling,
+        the Linux worker must render through its local checkout and map
+        binds into the daemon's ``/run/desktop/mnt/host`` namespace.
         """
-        if not (self._requires_desktop_host_rewrite() and self.local_project_dir):
+        if not self.local_project_dir:
             return False
-        if await self._record_daemon_host_dir():
-            # The daemon created this worker's own checkout bind, so its
-            # recorded source needs no namespace guess. Rewriting a path the
-            # daemon already resolves is what mounted empty state directories.
-            return False
-        if _is_wsl_distro_path(str(self.project_dir)):
+        observed = await self._record_daemon_host_dir()
+        effective = str(self._host_dir())
+        if len(effective.strip()) >= 2 and effective.strip()[1] == ":" and effective.strip()[0].isalpha():
+            # Windows effective host: Linux Compose cannot use it directly.
+            return True
+        if _is_wsl_distro_path(effective):
+            if observed is not None:
+                # The deployment proves this WSL spelling resolves (both
+                # spellings resolve on Desktop, and Compose hashes the source
+                # string). Keep it to avoid recreating every service,
+                # including the socket proxy this updater talks to.
+                return False
             if await _probe_docker_desktop_daemon() is False:
                 return False
-        return True
+            return True
+        if self._requires_desktop_host_rewrite():
+            # Configured Windows/WSL with an already daemon-visible POSIX
+            # effective (e.g. installed Desktop namespace): keep installed.
+            if observed is not None:
+                return False
+            if _is_wsl_distro_path(str(self.project_dir)):
+                if await _probe_docker_desktop_daemon() is False:
+                    return False
+            return True
+        return False
 
     def _host_bind_source_for_local_path(self, local_source: str) -> str:
         local_dir = str(self._local_dir()).replace("\\", "/").rstrip("/")
@@ -1186,9 +1210,16 @@ class HostDockerComposeRunner:
             suffix = normalized[len(local_dir) + 1 :]
         else:
             return local_source
-        host_dir = (
-            _docker_desktop_host_path(str(self.project_dir)) or str(self.project_dir)
-        ).rstrip("\\/")
+        # Prefer the daemon-proven host directory when available so the
+        # rewritten source keeps the deployment's existing spelling family
+        # (same drive/tail); fall back to the configured path for the
+        # no-evidence guess. Both Windows and WSL spellings translate to
+        # the same Desktop namespace for the same checkout.
+        try:
+            effective = str(self._host_dir())
+        except Exception:
+            effective = str(self.project_dir)
+        host_dir = (_docker_desktop_host_path(effective) or effective).rstrip("\\/")
         if not suffix:
             return host_dir
         separator = "/" if "/" in host_dir else "\\"
