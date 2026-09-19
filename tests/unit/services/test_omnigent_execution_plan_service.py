@@ -1569,7 +1569,6 @@ def test_build_v2_profile_keeps_stable_agent_source_across_model_only_bump() -> 
     profile version digest which includes the default model.
     """
     import hashlib
-    import json
 
     stable_projection = "sha256:" + "d" * 64
 
