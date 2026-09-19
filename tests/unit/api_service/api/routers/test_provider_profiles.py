@@ -3915,6 +3915,91 @@ async def test_provider_api_key_setup_stores_secret_ref_mappings_only(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["failed_workflow_task", "unavailable", "timeout"])
+async def test_api_key_setup_reports_unavailable_manager_without_changing_credentials(
+    client_app: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    from temporalio.service import RPCError, RPCStatusCode
+
+    from moonmind.omnigent.opencode_runtime_validation import (
+        OpenCodeProviderRuntimeValidationService,
+    )
+    from moonmind.provider_profiles import maintenance
+
+    profile_id = f"opencode-unavailable-{failure}"
+    raw_key = "test-submitted-credential-never-echo"
+    errors = {
+        "failed_workflow_task": RPCError(
+            "Unable to perform workflow execution update due to Workflow Task in failed state.",
+            RPCStatusCode.FAILED_PRECONDITION,
+            b"",
+        ),
+        "unavailable": RPCError(raw_key, RPCStatusCode.UNAVAILABLE, b""),
+        "timeout": TimeoutError(raw_key),
+    }
+    acquire = AsyncMock(side_effect=errors[failure])
+    drain = AsyncMock()
+    validate = AsyncMock()
+    monkeypatch.setattr(maintenance, "acquire_credential_maintenance_guard", acquire)
+    monkeypatch.setattr(maintenance, "drain_profile_bound_hosts", drain)
+    monkeypatch.setattr(OpenCodeProviderRuntimeValidationService, "validate", validate)
+    # Exercise the real HTTP dependency, not the successful guard fixture.
+    app.dependency_overrides.pop(provider_profiles_router._credential_validation_guard)
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="opencode",
+                provider_id="opencode-go",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                secret_refs={"opencode_api_key": "db://previous-opencode-key"},
+                credential_generation=7,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            json={"api_key": raw_key},
+        )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_credential_manager_unavailable"
+    assert "could not start" in detail["message"]
+    assert "Try again" in detail["message"]
+    assert raw_key not in response.text
+    acquire.assert_awaited_once()
+    drain.assert_not_awaited()
+    validate.assert_not_awaited()
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.enabled is True
+        assert profile.auth_state == ProviderProfileAuthState.CONNECTED
+        assert profile.credential_generation == 7
+        assert profile.secret_refs == {"opencode_api_key": "db://previous-opencode-key"}
+        slug = provider_profiles_router._provider_api_key_secret_slug(
+            profile_id, "opencode_api_key"
+        )
+        assert (
+            await session.scalar(
+                select(ManagedSecret).where(ManagedSecret.slug == slug)
+            )
+            is None
+        )
+
+
+@pytest.mark.asyncio
 async def test_zen_api_key_setup_is_rejected_without_mutating_profile(
     client_app: AsyncClient,
     _module_db,
@@ -3968,6 +4053,7 @@ async def test_zen_api_key_setup_is_rejected_without_mutating_profile(
     assert persisted.credential_source is ProviderCredentialSource.NONE
     assert persisted.secret_refs == {}
     assert persisted.command_behavior == command_behavior
+
 
 @pytest.mark.asyncio
 async def test_provider_api_key_setup_failed_validation_updates_state_without_secret(

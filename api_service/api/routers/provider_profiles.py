@@ -94,6 +94,8 @@ async def _credential_maintenance_guard(
 ) -> AsyncIterator[object]:
     """Hold the shared credential lane through an HTTP maintenance action."""
 
+    from temporalio.service import RPCError
+
     from moonmind.provider_profiles.lease_client import CredentialLeasePurpose
     from moonmind.provider_profiles.maintenance import (
         acquire_credential_maintenance_guard,
@@ -110,16 +112,42 @@ async def _credential_maintenance_guard(
         or request.headers.get("X-Request-ID")
         or uuid4().hex
     )
-    guard = await acquire_credential_maintenance_guard(
-        runtime_id=profile.runtime_id,
-        profile_id=profile.profile_id,
-        purpose=CredentialLeasePurpose(purpose),
-        operation_id=operation_id,
-        metadata={
-            "workflowId": f"http:{operation_id}",
-            "ownerIsWorkflow": False,
-        },
-    )
+    try:
+        guard = await acquire_credential_maintenance_guard(
+            runtime_id=profile.runtime_id,
+            profile_id=profile.profile_id,
+            purpose=CredentialLeasePurpose(purpose),
+            operation_id=operation_id,
+            metadata={
+                "workflowId": f"http:{operation_id}",
+                "ownerIsWorkflow": False,
+            },
+        )
+    except (RPCError, TimeoutError) as exc:
+        # Acquisition failed before credential validation or persistence. Keep
+        # the current profile intact and return a safe diagnostic the drawer
+        # can display instead of an unhandled, non-JSON 500 response.
+        logger.warning(
+            "Provider credential manager unavailable: runtime_id=%s "
+            "profile_id=%s operation_id=%s error_type=%s rpc_status=%s",
+            profile.runtime_id,
+            profile.profile_id,
+            operation_id,
+            type(exc).__name__,
+            exc.status.name if isinstance(exc, RPCError) else None,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "provider_credential_manager_unavailable",
+                "message": (
+                    "Credential setup could not start because the provider "
+                    "credential manager is temporarily unavailable. "
+                    "Your saved credentials have not changed. Try again; "
+                    "if this continues, check the workflow worker diagnostics."
+                ),
+            },
+        ) from exc
     try:
         await drain_profile_bound_hosts(
             profile_id=profile.profile_id,

@@ -617,6 +617,32 @@ describe('MoonLadderStudios/MoonMind#3822 Provider Profile standard-creation mat
     expect(screen.queryByDisplayValue('test-secret-replacement')).toBeNull();
   });
 
+  it('shows the credential-manager diagnostic when OpenCode key setup cannot start', async () => {
+    const creationClass = CREATION_CLASSES.find((item) => item.providerId === 'opencode-go')!;
+    const profileId = 'opencode-manager-unavailable';
+    const profile = savedProfileFor(creationClass, profileId);
+    const fetchSpy = creationFetch(creationClass, profileId);
+    const baseFetch = fetchSpy.getMockImplementation()!;
+    const message = 'Credential setup could not start because the provider credential manager is temporarily unavailable. Your saved credentials have not changed. Try again; if this continues, check the workflow worker diagnostics.';
+    fetchSpy.mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/credentials/api-key')) {
+        return { ok: false, status: 503, json: async () => ({ detail: {
+          code: 'provider_credential_manager_unavailable', message,
+        } }) } as Response;
+      }
+      return baseFetch(input, init);
+    });
+    renderManager([profile]);
+    fireEvent.click(screen.getByRole('button', { name: `Use OpenCode API key ${profileId}` }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to API key paste' }));
+    fireEvent.change(screen.getByLabelText('OpenCode API key'), { target: { value: 'test-private-key' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Validate and save OpenCode API key' }));
+    await screen.findByText(message);
+    expect(screen.queryByText('Provider credential request failed.')).toBeNull();
+    expect(screen.queryByDisplayValue('test-private-key')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Return to API key paste' })).toBeTruthy();
+  });
+
   it.each(['missing', 'unsupported', 'manual', 'not-ready', 'wrong-identity', 'credentialless'])('does not infer saved API-key enrollment from %s capabilities', (scenario) => {
     const creationClass = {
       ...CREATION_CLASSES.find((item) => item.providerId === 'opencode-go')!,
