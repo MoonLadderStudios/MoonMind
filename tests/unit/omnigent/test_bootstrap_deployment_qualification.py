@@ -1667,3 +1667,133 @@ async def test_launchable_materializer_classes_are_qualified_once(
         assert qualify.await_args.kwargs["effort"] == (
             "high" if zen_uses_tiers else "xhigh"
         )
+
+
+@pytest.mark.asyncio
+async def test_stale_volatile_agent_source_triggers_requalification(
+    monkeypatch,
+) -> None:
+    """Old volatile (version-digest) evidence must not strand default launches.
+
+    After the stable-source fix, a model-only profile bump keeps the same
+    agentSourceRef. Evidence published with the old volatile source still
+    fails admission with ``agentSourceRef differs``; startup reconciliation
+    must detect the stale agent source and requalify instead of requiring a
+    manual retry.
+    """
+    from moonmind.omnigent.bootstrap import controller as ctrl
+
+    stable_doc = {
+        "endpointRef": "default",
+        "source": {
+            "kind": "upstream",
+            "upstreamId": "opencode-native-ui",
+            "upstreamVersion": "1",
+            "upstreamSnapshotDigest": "sha256:" + "d" * 64,
+        },
+    }
+    active_version = SimpleNamespace(
+        version=28,
+        digest="sha256:" + "b" * 64,
+        document=stable_doc,
+        upstream_snapshot=None,
+    )
+    provider_profile = SimpleNamespace(
+        profile_id="opencode-go-default",
+        is_default=True,
+        runtime_id="opencode",
+        provider_id="opencode-go",
+        default_model="opencode-go/muse-spark-1.3-contributor",
+        default_effort="xhigh",
+        credential_generation=1,
+    )
+    agent_profile = SimpleNamespace(
+        profile_id="omnigent-opencode-default",
+        active_version=28,
+    )
+
+    class _Session:
+        async def get(self, model, _identity):
+            return {
+                "ManagedAgentProviderProfile": provider_profile,
+                "OmnigentAgentProfile": agent_profile,
+            }.get(model.__name__)
+
+        async def scalar(self, _statement):
+            return active_version
+
+    @asynccontextmanager
+    async def _session_scope():
+        yield _Session()
+
+    current_images = ResolvedOmnigentDeploymentState(
+        serverImageRef=_SERVER_IMAGE_REF,
+        opencodeHostImageRef=_HOST_IMAGE_REF,
+        omnigentBuildDigest="sha256:" + "a" * 64,
+        architecture="linux/amd64",
+    )
+    # Volatile old evidence: agentSourceRef is hash of version digest, not
+    # the stable projection digest admission now expects.
+    expected_stable = ctrl._expected_stable_agent_source_ref(
+        stable_doc,
+        snapshot_digest="sha256:" + "b" * 64,
+        upstream_snapshot=None,
+    )
+    assert expected_stable.startswith("agent-source:sha256:")
+    stale_evidence = SimpleNamespace(
+        host_image_ref=_HOST_IMAGE_REF,
+        provider={"profileRef": "opencode-go-default", "credentialGeneration": 1},
+        model={
+            "qualifiedId": "opencode-go/muse-spark-1.3-contributor",
+            "effort": "xhigh",
+        },
+        support_identity=SimpleNamespace(agentSourceRef="agent-source:sha256:" + "0" * 64),
+    )
+    assert stale_evidence.support_identity.agentSourceRef != expected_stable
+
+    stale_record = _ready_bootstrap_record(
+        agent_profile_ref="omnigent-opencode-default@28"
+    )
+    # Record already points at the current version with the current model, so
+    # only the stale agent source should force a refresh.
+    stale_record = stale_record.model_copy(
+        update={
+            "resolved": stale_record.resolved.model_copy(
+                update={"qualified_model_id": "opencode-go/muse-spark-1.3-contributor"}
+            ),
+            "desired": stale_record.desired.model_copy(
+                update={
+                    "effort": "xhigh",
+                    "model_display_name": "opencode-go/muse-spark-1.3-contributor",
+                }
+            ),
+        }
+    )
+    monkeypatch.setattr(ctrl, "load_bootstrap_record", lambda: stale_record)
+    monkeypatch.setattr(
+        "moonmind.omnigent.bootstrap.store.load_resolved_state",
+        lambda: current_images,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.deployment_evidence.load_deployment_evidence_for_support_combination",
+        lambda _key: stale_evidence,
+    )
+    # Resolve model/effort from the provider profile without live revalidation.
+    monkeypatch.setattr(
+        ctrl, "_resolve_profile_model_effort",
+        lambda _profile: ("opencode-go/muse-spark-1.3-contributor", "xhigh"),
+    )
+    controller = ctrl.BootstrapController(session_factory=lambda: _session_scope())
+    monkeypatch.setattr(
+        controller,
+        "_ensure_launchable_materializer_qualifications",
+        AsyncMock(return_value=True),
+    )
+    refreshed = stale_record.model_copy(
+        update={"agent_profile_ref": "omnigent-opencode-default@28"}
+    )
+    requalify = AsyncMock(return_value=refreshed)
+    monkeypatch.setattr(controller, "requalify", requalify)
+
+    assert await controller.reconcile_deployment_qualification()
+    requalify.assert_awaited_once_with()
