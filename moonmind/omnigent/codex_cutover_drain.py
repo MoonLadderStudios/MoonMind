@@ -589,6 +589,23 @@ def build_drain_report(
     )
 
 
+def run_codex_drain_procedure(
+    sources: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Run one bounded drain procedure from injectable per-category sources.
+
+    Composes :func:`collect_drain_inventory` with :func:`build_drain_report`
+    so operators have a single procedure entrypoint: inject live Temporal
+    visibility, schedule, lease, publication, and cleanup queries as
+    zero-argument callables (or ready item lists), and receive the four-state
+    report payload. Raising sources become ``unknown`` via the collector;
+    missing categories fail closed via the report. Pure evidence only: never
+    terminates workflows, erases evidence, or deletes credential volumes.
+    """
+
+    return build_drain_report(collect_drain_inventory(sources)).as_dict()
+
+
 __all__ = [
     "DEPLOYMENT_CUTOFF_ENV",
     "RETIRED_DIRECT_RUNTIME_IDS",
@@ -617,4 +634,5 @@ __all__ = [
     "cutover_authorities",
     "build_drain_report",
     "collect_drain_inventory",
+    "run_codex_drain_procedure",
 ]
