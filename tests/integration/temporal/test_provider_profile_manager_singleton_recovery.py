@@ -189,7 +189,7 @@ async def _wait_for_state(
             await asyncio.sleep(0.05)
 
 
-async def _pending_ids(state: dict[str, Any]) -> set[str]:
+def _pending_ids(state: dict[str, Any]) -> set[str]:
     return {
         str(request.get("requester_workflow_id") or "")
         for request in (state.get("pending_requests") or [])
@@ -272,7 +272,8 @@ async def test_wedged_singleton_cutover_restores_ledger_and_regrants(
             )
             restored_profile = restored.get("profiles", {}).get(PROFILE_ID, {})
             restored_metadata = restored_profile.get("lease_metadata", {})
-            assert int(restored_metadata[holder.id]["fencingGeneration"]) >= first_fence
+            restored_fence = int(restored_metadata[holder.id]["fencingGeneration"])
+            assert restored_fence >= first_fence
             assert await _held_count(maker) == 1
 
             # A fresh AgentRun queues honestly at capacity: no phantom grant
@@ -294,16 +295,20 @@ async def test_wedged_singleton_cutover_restores_ledger_and_regrants(
             assert await _held_count(maker) == 1
 
             # A fenced release hands the slot to the waiter, and the DB shows
-            # the waiter's row held: recovery ends in a fresh grant.
+            # the waiter's row held: recovery ends in a fresh grant. Quote the
+            # restored generation: the fresh manager fences stale generations,
+            # so releasing with the pre-cutover number would be dropped. The
+            # freed slot is offered on the manager's periodic wake-up (up to
+            # 60s of workflow time), so allow generously for the grant.
             await manager.signal(
                 "release_slot",
                 {
                     "profile_id": PROFILE_ID,
                     "requester_workflow_id": holder.id,
-                    "fencing_generation": first_fence,
+                    "fencing_generation": restored_fence,
                 },
             )
-            re_assignment = await _wait_for_assignment(waiter)
+            re_assignment = await _wait_for_assignment(waiter, timeout=180)
             assert re_assignment["profile_id"] == PROFILE_ID
             assert int(re_assignment["fencing_generation"]) > first_fence
             assert await _held_count(maker) == 1

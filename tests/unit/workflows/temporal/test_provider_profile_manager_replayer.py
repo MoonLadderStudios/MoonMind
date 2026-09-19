@@ -41,6 +41,10 @@ class _PreRedriveManagerWorkflow(MoonMindProviderProfileManagerWorkflow):
     async def _complete_direct_cleanup_obligations(self) -> None:
         return None
 
+    @workflow.run
+    async def run(self, input_payload: dict[str, Any]) -> Any:
+        return await super().run(input_payload)
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
