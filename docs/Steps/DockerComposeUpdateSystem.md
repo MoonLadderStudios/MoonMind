@@ -1290,7 +1290,10 @@ Every attempt's error is retained in `last-error.json` under `attempts`, and
 the terminal receipt names the failure that started the release alongside the
 final one. A later attempt that fails for an unrelated reason therefore cannot
 erase the cause from the receipt, the Temporal failure or the operator's
-incident reconstruction.
+incident reconstruction. A job already running when that history was
+introduced carries only the record's top-level `attempt` and `error`; its next
+attempt seeds the history from them, so the update that adds the history does
+not erase the failure the history exists to preserve.
 
 ## 15.3 Rollback behavior
 

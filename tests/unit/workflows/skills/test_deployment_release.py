@@ -1895,3 +1895,40 @@ async def test_exhaustion_diagnosis_names_the_first_attempt_error(
         await release.execute_detached(SimpleNamespace(runner=Runner()), inputs, context)
 
     assert original in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_legacy_error_record_is_carried_into_the_attempt_history(
+    tmp_path, monkeypatch
+):
+    """An in-flight release keeps its original error across this update.
+
+    A job already running when the attempt history was introduced has a
+    ``last-error.json`` carrying only the top-level ``attempt`` and ``error``.
+    Seeding an empty history from that record would erase the original failure
+    during the schema transition - the exact diagnostic loss the history
+    exists to prevent.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(tmp_path / "desired.json")
+    )
+    directory = release.state_root() / "job"
+    directory.mkdir(parents=True)
+    original = "Previous release could not retain compatible pollers (fleet=llm)"
+    release.write_record(
+        directory / "last-error.json",
+        {"owner": "owner", "attempt": 1, "error": original},
+    )
+
+    history = release.record_attempt_error(
+        directory, "owner", 2, "DEPLOYMENT_LOCKED: already running"
+    )
+
+    assert [entry["error"] for entry in history] == [
+        original,
+        "DEPLOYMENT_LOCKED: already running",
+    ]
+    assert history[0]["attempt"] == 1
+    recorded = json.loads((directory / "last-error.json").read_text())
+    assert recorded["attempts"] == history
+    assert original in release.release_failure_summary(history)
