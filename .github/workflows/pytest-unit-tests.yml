@@ -214,6 +214,18 @@ jobs:
     # Per-row setup stays isolated: fast rows never build images or start
     # Compose services; each reliability shard starts its own isolated
     # Compose PostgreSQL/Temporal/MinIO under its own Docker project name.
+    # Shard shape (MoonLadderStudios/MoonMind#4366): suite
+    # reliability-shard-N runs pytest-split --group N (groups are 1-based)
+    # with --splits 4 and least_duration over the committed advisory hints.
+    # The consolidated matrix is the "where possible" form of the original
+    # job-ID preservation: native fail-fast needs one matrix boundary.
+    # Accepted deviation from MoonLadderStudios/MoonMind#4366 R1 literal
+    # `max-parallel: 4` (to be recorded on issue #4366 in the first
+    # networked run): max-parallel stays unset on purpose. This is a 7-row
+    # matrix (3 fast rows + 4 reliability shards); capping it at 4 would
+    # queue reliability shards behind fast rows and push the critical path
+    # past the ~10-min PR ceiling below, while the default lets all four
+    # reliability rows run concurrently with isolated services.
     # Reliability budgets (MoonLadderStudios/MoonMind#4369, #4384): short per-test
     # pytest timeout (150s PR / 300s schedule), ~10-min PR step ceiling via
     # `timeout 600s` (12-min schedule ceiling via step timeout-minutes),
@@ -238,13 +250,13 @@ jobs:
           - suite: api-component
           - suite: temporal-boundary
           - suite: reliability-shard-1
-            shard: "0"
-          - suite: reliability-shard-2
             shard: "1"
-          - suite: reliability-shard-3
+          - suite: reliability-shard-2
             shard: "2"
-          - suite: reliability-shard-4
+          - suite: reliability-shard-3
             shard: "3"
+          - suite: reliability-shard-4
+            shard: "4"
     steps:
       - name: Check out code
         uses: actions/checkout@v7
@@ -379,14 +391,35 @@ jobs:
           status=${PIPESTATUS[0]}
           echo $((SECONDS - test_start)) > /tmp/backend-temporal-boundary-test-seconds.txt || true
           exit $status
+      - name: Validate reliability duration hints
+        if: startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
+        run: |
+          set -euo pipefail
+          # Shared warn-and-fallback contract (MoonLadderStudios/MoonMind#4366
+          # R4): all shards use the same checked-out hints, so validation runs
+          # identically on every shard. Missing history is not a failure; an
+          # unusable hint file warns and every shard falls back to the same
+          # deterministic no-history partition instead of skipping tests or
+          # requiring a remote timing service. Keep this small and local.
+          set +e
+          python3 tools/ci/refresh_reliability_durations.py --validate-only
+          validator_status=$?
+          set -e
+          if [[ $validator_status -eq 0 ]]; then
+            echo "DURATIONS_ARGS=--durations-path tests/.reliability-test-durations.json" >> "$GITHUB_ENV"
+          elif [[ $validator_status -eq 3 ]]; then
+            echo "::notice::reliability duration hints missing; using the deterministic no-history partition"
+            echo "DURATIONS_ARGS=" >> "$GITHUB_ENV"
+          else
+            echo "::warning::reliability duration hints unusable (status=$validator_status); using the deterministic no-history partition"
+            echo "DURATIONS_ARGS=" >> "$GITHUB_ENV"
+          fi
       - name: Run hermetic reliability shard
         id: run-reliability
         if: startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         # Schedule ceiling (12 min) covers the longer diagnostic budget;
         # PRs enforce the shorter ~10-min budget via `timeout 600s` below
-        # (MoonLadderStudios/MoonMind#4369, #4384: heaviest duration-balanced
-        # partition load is ~500s, so the PR ceiling keeps headroom for
-        # collection/shutdown overhead). Never cap the serial suite
+        # (MoonLadderStudios/MoonMind#4369, #4384). Never cap the serial suite
         # first: this bound applies per duration-balanced shard only.
         timeout-minutes: 12
         env:
@@ -395,18 +428,23 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          shard="${{ matrix.shard }}"
-          # Single partition authority (MoonLadderStudios/MoonMind#4367):
-          # duration-balanced greedy LPT over advisory hints in
-          # tools/ci/reliability_shard_weights.json, shared with
-          # tools/verify_test_shard_ownership.py. New files absent from
-          # the weights file run via DEFAULT_WEIGHT_SECONDS; never skipped.
-          mapfile -t shard_files < <(python3 tools/ci/reliability_shard_partition.py --shard "$shard")
-          echo "Reliability shard ${{ matrix.suite }} runs ${#shard_files[@]} files"
+          # Node-level duration-balanced sharding
+          # (MoonLadderStudios/MoonMind#4366): pytest-split partitions the
+          # eligible reliability universe per test node -- including
+          # parameterized cases -- with least_duration over the committed
+          # advisory hints in tests/.reliability-test-durations.json. Suite
+          # reliability-shard-N runs 1-based --group N. All shards use the
+          # same checked-out source, hints, and deterministic collection
+          # inputs; new tests without history run via the plugin fallback
+          # and are always selected, never skipped. Serial pytest inside
+          # each isolated runner (no -n): each entry boots its own Compose
+          # PostgreSQL/Temporal/MinIO stack, never a shared service stack.
+          # DURATIONS_ARGS is the pre-validated flag list from the step
+          # above (empty when hints are missing/unusable); word-splitting
+          # here is intentional.
           # Short reliability budgets with PR-vs-schedule differentiation
           # (MoonLadderStudios/MoonMind#4369, #4384): PRs fail fast with a 150s
-          # per-test timeout and a 10-min step ceiling (600s stays above the
-          # ~500s heaviest partition load); schedules keep
+          # per-test timeout and a 10-min step ceiling; schedules keep
           # collecting diagnostics with a 300s per-test timeout under the
           # 12-min step ceiling above.
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
@@ -418,8 +456,11 @@ jobs:
           fi
           test_start=$SECONDS
           set +e
-          timeout "${step_budget}s" python -m pytest "${shard_files[@]}" \
+          timeout "${step_budget}s" python -m pytest tests/integration/reliability \
             -m reliability_journey \
+            --splits 4 --group "${{ matrix.shard }}" \
+            --splitting-algorithm least_duration \
+            $DURATIONS_ARGS \
             -vv --tb=short --durations=25 --timeout "$pytest_timeout" \
             --junitxml=artifacts/pytest-backend-${{ matrix.suite }}.xml 2>&1 | tee artifacts/pytest-backend-${{ matrix.suite }}.log
           status=${PIPESTATUS[0]}
