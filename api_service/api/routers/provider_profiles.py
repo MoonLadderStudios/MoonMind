@@ -127,6 +127,14 @@ async def _credential_maintenance_guard(
         # Acquisition failed before credential validation or persistence. Keep
         # the current profile intact and return a safe diagnostic the drawer
         # can display instead of an unhandled, non-JSON 500 response.
+        # The failure is ambiguous: Temporal may have accepted
+        # AcquireCredentialMaintenanceLease before the result was lost, so the
+        # deterministic owner derived from operation_id may hold a waiter or
+        # lease. Echo operation_id as the stable retry identity: a retry that
+        # reuses it via Idempotency-Key reattaches to the same owner
+        # (already_held) instead of orphaning a competing owner behind the
+        # original. operation_id is a random hex or caller identity, never
+        # credential material, so it is safe to return.
         logger.warning(
             "Provider credential manager unavailable: runtime_id=%s "
             "profile_id=%s operation_id=%s error_type=%s rpc_status=%s",
@@ -146,6 +154,7 @@ async def _credential_maintenance_guard(
                     "Your saved credentials have not changed. Try again; "
                     "if this continues, check the workflow worker diagnostics."
                 ),
+                "retry_idempotency_key": operation_id,
             },
         ) from exc
     try:

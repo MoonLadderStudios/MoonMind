@@ -1064,6 +1064,14 @@ interface ClaudeEnrollmentState {
   failureReason: string | null;
   statusLabel: string | null;
   readiness: ClaudeReadinessMetadata | null;
+  /**
+   * Stable retry identity returned by a 503
+   * `provider_credential_manager_unavailable` response. The next submit for
+   * this profile reuses it as `Idempotency-Key` so the retry reattaches to
+   * the same deterministic lease owner instead of orphaning a new owner
+   * behind an ambiguous acquisition.
+   */
+  retryIdempotencyKey?: string | null;
 }
 
 interface ClaudeManualAuthResult {
@@ -1200,6 +1208,20 @@ function extractErrorCode(payload: unknown): string | null {
     return typeof detail.code === 'string' ? detail.code : null;
   }
   return null;
+}
+
+function extractRetryIdempotencyKey(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  const detail = record.detail;
+  const source: Record<string, unknown> =
+    detail && typeof detail === 'object' ? (detail as Record<string, unknown>) : record;
+  const candidate = source['retry_idempotency_key'] ?? source['retryIdempotencyKey'];
+  return typeof candidate === 'string' && candidate.trim() !== '' ? candidate : null;
+}
+
+interface EnrollmentRequestError extends Error {
+  retryIdempotencyKey?: string | null;
 }
 
 /**
@@ -2749,6 +2771,7 @@ export function ProviderProfilesManager({
       failureReason: null,
       statusLabel: authModel.kind === 'opencode_credentials' ? authModel.statusLabel : null,
       readiness: authModel.kind === 'opencode_credentials' ? authModel.readiness : null,
+      retryIdempotencyKey: null,
     });
     onNotice(null);
   };
@@ -2768,27 +2791,37 @@ export function ProviderProfilesManager({
       profileId,
       submittedToken,
       profile,
+      idempotencyKey,
     }: {
       profileId: string;
       submittedToken: string;
       profile: ProviderProfile;
+      idempotencyKey: string | null;
     }) => {
       const copy = apiKeyEnrollmentCopy(profile);
       const response = await fetch(
         `/api/v1/provider-profiles/${encodeURIComponent(profileId)}/credentials/api-key`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+          },
           body: JSON.stringify({ api_key: submittedToken }),
         },
       );
       const payload: unknown = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(
+        const error: EnrollmentRequestError = new Error(
           redactClaudeSecretText(extractErrorMessage(payload), submittedToken) ??
             `${copy.credentialLabel} validation failed.`,
         );
+        const retryIdempotencyKey = extractRetryIdempotencyKey(payload);
+        if (retryIdempotencyKey) {
+          error.retryIdempotencyKey = retryIdempotencyKey;
+        }
+        throw error;
       }
 
       return payload as ClaudeManualAuthResult;
@@ -2816,6 +2849,7 @@ export function ProviderProfilesManager({
         step: 'ready',
         token: '',
         failureReason: null,
+        retryIdempotencyKey: null,
         statusLabel: formatStatusLabel(result.status_label ?? result.statusLabel ?? current.statusLabel, ''),
         readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
       }));
@@ -2835,11 +2869,16 @@ export function ProviderProfilesManager({
         error instanceof Error
           ? redactClaudeSecretText(error.message, submittedToken)
           : `${copy.credentialLabel} validation failed.`;
+      const retryIdempotencyKey =
+        error instanceof Error
+          ? (error as EnrollmentRequestError).retryIdempotencyKey ?? null
+          : null;
       updateOpencodeEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'failed',
         token: '',
         failureReason: failureReason ?? `${copy.credentialLabel} validation failed.`,
+        retryIdempotencyKey,
       }));
     },
   });
@@ -2855,7 +2894,12 @@ export function ProviderProfilesManager({
       return;
     }
 
-    opencodeEnrollmentMutation.mutate({ profileId, submittedToken, profile });
+    opencodeEnrollmentMutation.mutate({
+      profileId,
+      submittedToken,
+      profile,
+      idempotencyKey: opencodeEnrollment.retryIdempotencyKey ?? null,
+    });
   };
 
   useEffect(() => {
