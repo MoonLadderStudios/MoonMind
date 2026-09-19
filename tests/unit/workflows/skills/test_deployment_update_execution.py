@@ -188,6 +188,7 @@ def _executor(
     events: list[str] | None = None,
     lock_manager: DeploymentUpdateLockManager | None = None,
     excluded_services: tuple[str, ...] = (),
+    lock_wait_seconds: float = 0.0,
 ) -> tuple[
     DeploymentUpdateExecutor,
     RecordingDesiredStateStore,
@@ -206,6 +207,7 @@ def _executor(
             evidence_writer=evidence,
             runner=runner,
             excluded_services=excluded_services,
+            lock_wait_seconds=lock_wait_seconds,
         ),
         store,
         evidence,
@@ -461,6 +463,104 @@ async def test_file_stack_lock_rejects_second_process_boundary_acquire(tmp_path)
     assert (tmp_path / "locks" / "moonmind.lock").exists()
     async with await manager.acquire("moonmind"):
         pass
+
+
+@pytest.mark.asyncio
+async def test_file_stack_lock_waits_out_a_bounded_background_owner(tmp_path) -> None:
+    """A routine background sweep must not fail an operator's update.
+
+    The same stack lock serializes deployment updates and the bounded
+    observation sweeps that run in every deployment worker. A release lost
+    all three of its attempts to those sweeps within six seconds, so an
+    update the operator asked for failed while nothing was updating. A
+    caller that declares a wait budget waits the holder out.
+    """
+    manager = FileDeploymentUpdateLockManager(lock_dir=str(tmp_path / "locks"))
+    background = await manager.acquire("moonmind")
+
+    async def _release_soon() -> None:
+        await asyncio.sleep(0.2)
+        await background.release()
+
+    releaser = asyncio.create_task(_release_soon())
+    lease = await manager.acquire("moonmind", wait_seconds=10)
+    await releaser
+    await lease.release()
+
+
+@pytest.mark.asyncio
+async def test_file_stack_lock_reports_contention_once_the_wait_expires(
+    tmp_path,
+) -> None:
+    manager = FileDeploymentUpdateLockManager(lock_dir=str(tmp_path / "locks"))
+    holder = await manager.acquire("moonmind")
+
+    try:
+        with pytest.raises(ToolFailure) as exc_info:
+            await manager.acquire("moonmind", wait_seconds=0.2)
+    finally:
+        await holder.release()
+
+    assert exc_info.value.error_code == "DEPLOYMENT_LOCKED"
+    assert exc_info.value.retryable is True
+    assert exc_info.value.details["failureClass"] == "deployment_lock_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_file_stack_lock_keeps_nonblocking_acquire_for_background_owners(
+    tmp_path,
+) -> None:
+    """Sweeps must yield to an update immediately, never queue behind it."""
+    manager = FileDeploymentUpdateLockManager(lock_dir=str(tmp_path / "locks"))
+    holder = await manager.acquire("moonmind")
+    started = asyncio.get_running_loop().time()
+
+    try:
+        with pytest.raises(ToolFailure):
+            await manager.acquire("moonmind")
+    finally:
+        await holder.release()
+
+    assert asyncio.get_running_loop().time() - started < 0.2
+
+
+@pytest.mark.asyncio
+async def test_deployment_update_waits_out_a_background_lock_holder(tmp_path) -> None:
+    """The update itself, not only the lock manager, waits out a sweep."""
+    lock_manager = FileDeploymentUpdateLockManager(lock_dir=str(tmp_path / "locks"))
+    background = await lock_manager.acquire("moonmind")
+    executor, store, _evidence, _runner, _events = _executor(
+        lock_manager=lock_manager, lock_wait_seconds=10
+    )
+
+    async def _release_soon() -> None:
+        await asyncio.sleep(0.2)
+        await background.release()
+
+    releaser = asyncio.create_task(_release_soon())
+    result = await executor.execute(_inputs())
+    await releaser
+
+    assert result.status == "COMPLETED"
+    assert store.records
+
+
+def test_update_lock_wait_outlasts_every_bounded_background_owner() -> None:
+    """The wait is derived from the longest bounded hold, not guessed."""
+    assert (
+        deployment_execution.DEPLOYMENT_UPDATE_LOCK_WAIT_SECONDS
+        > deployment_execution.DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS
+        > deployment_execution.DEPLOYMENT_AVAILABILITY_SWEEP_TIMEOUT_SECONDS
+    )
+    assert (
+        DeploymentUpdateExecutor(
+            lock_manager=DeploymentUpdateLockManager(),
+            desired_state_store=InMemoryDesiredStateStore(),
+            evidence_writer=RecordingEvidenceWriter([]),
+            runner=RecordingRunner([]),
+        ).lock_wait_seconds
+        == deployment_execution.DEPLOYMENT_UPDATE_LOCK_WAIT_SECONDS
+    )
 
 
 @pytest.mark.asyncio
