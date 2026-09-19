@@ -53,9 +53,26 @@ EGRESS_PACKAGE_REGISTRY_POLICY_NAME = "package-registry-domains.txt"
 # that file stays frozen at the reviewed v1 bytes until the transition is
 # removed. Publishing a newer enforcer through it would leave every running v1
 # gateway permanently unhealthy, before any release could replace it.
-EGRESS_BUNDLED_POLICY_DIRECTORY = (
-    Path(__file__).resolve().parents[2] / "docker/moonmind-egress"
-)
+#: Where the image-owned enforcer policy actually lives at runtime. The
+#: production image copies ``docker/moonmind-egress`` to ``/opt/moonmind-egress``
+#: (api_service/Dockerfile) and the gateway's ``policy.sh`` reads it from there,
+#: so the backend must read the same bytes. Resolving this to the source-tree
+#: path would make the backend load an absent file, silently derive an empty
+#: package-registry policy, and disagree with the gateway on
+#: ``EGRESS_CONFIG_DIGEST`` — which fails every workload attestation closed.
+EGRESS_INSTALLED_POLICY_DIRECTORY = Path("/opt/moonmind-egress")
+
+
+def _resolve_bundled_policy_directory() -> Path:
+    override = os.environ.get("MOONMIND_EGRESS_BUNDLED_POLICY_DIRECTORY", "").strip()
+    if override:
+        return Path(override)
+    if (EGRESS_INSTALLED_POLICY_DIRECTORY / "squid.conf").is_file():
+        return EGRESS_INSTALLED_POLICY_DIRECTORY
+    return Path(__file__).resolve().parents[2] / "docker/moonmind-egress"
+
+
+EGRESS_BUNDLED_POLICY_DIRECTORY = _resolve_bundled_policy_directory()
 EGRESS_LIVE_DIRECTORY = "/run/moonmind-egress"
 # Deployment-owned network names. Compose resolves these same overrides when it
 # creates the networks (``restricted-egress-network`` /
@@ -399,12 +416,28 @@ def package_registry_egress_enabled(environ: Mapping[str, str] | None = None) ->
     return raw.casefold() not in {"false", "0", "no", "off", "disabled"}
 
 
+def _load_package_registry_policy() -> tuple[tuple[EgressDestination, ...], str]:
+    """Load the image-owned registry list, or prove it is deliberately empty.
+
+    A missing file is a packaging fault, not an empty policy: treating it as
+    empty would leave the backend and the gateway attesting different digests.
+    """
+
+    if not package_registry_egress_enabled():
+        return (), "sha256:" + hashlib.sha256(b"").hexdigest()
+    path = EGRESS_BUNDLED_POLICY_DIRECTORY / EGRESS_PACKAGE_REGISTRY_POLICY_NAME
+    if not path.is_file():
+        raise RuntimeError(
+            "package-registry egress is enabled but its policy file is missing at "
+            f"{path}; the enforcer image must ship "
+            f"{EGRESS_PACKAGE_REGISTRY_POLICY_NAME} beside squid.conf, or set "
+            "MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED=false"
+        )
+    return _load_provider_policy(path)
+
+
 _PACKAGE_REGISTRY_DESTINATIONS, _PACKAGE_REGISTRY_POLICY_DIGEST = (
-    _load_provider_policy(
-        EGRESS_BUNDLED_POLICY_DIRECTORY / EGRESS_PACKAGE_REGISTRY_POLICY_NAME
-    )
-    if package_registry_egress_enabled()
-    else ((), "sha256:" + hashlib.sha256(b"").hexdigest())
+    _load_package_registry_policy()
 )
 
 EGRESS_FILE_DIGESTS = {

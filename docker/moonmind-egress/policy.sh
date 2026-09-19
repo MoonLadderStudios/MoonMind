@@ -11,7 +11,12 @@ fi
 # disables the class; an unset or malformed value keeps the supported default
 # rather than silently closing the sandbox.
 registry_file="$bundled_dir/package-registry-domains.txt"
-case "$(printf '%s' "${MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED:-true}" | tr 'A-Z' 'a-z')" in
+# Strip surrounding whitespace exactly as the backend's .strip() does, so a
+# value like " false " cannot disable the profile while leaving the gateway
+# allowlist enabled and the two attesting different digests.
+_registry_flag=$(printf '%s' "${MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED:-true}" \
+    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')
+case "$_registry_flag" in
     false|0|no|off|disabled) registry_file=/dev/null ;;
 esac
 

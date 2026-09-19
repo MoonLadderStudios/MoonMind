@@ -667,3 +667,78 @@ async def test_job_supplied_ghcr_image_never_borrows_the_github_identity(
 
     await backend.acquire_image(_request(GHCR_IMAGE))
     assert all("--config" not in cmd for cmd in daemon.commands)
+
+
+@pytest.mark.asyncio
+async def test_derived_pull_preserves_non_auth_failure_classes(
+    tmp_path, monkeypatch
+) -> None:
+    """An authorized pull keeps the real failure class and its diagnostics.
+
+    Routing the derived-credential pull through a dedicated authorized helper
+    collapsed every nonzero exit into REGISTRY_AUTH_FAILED, hiding a missing
+    tag, backend outage, or timeout behind an authentication error.
+    """
+    daemon = FakeDaemon()
+    daemon.pull_fails_with = b"Error response from daemon: manifest unknown\n"
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(_ghcr_source_env()),
+    )
+
+    async def _derived(*_a, **_k):
+        return ("octocat", "gh-token-value")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.container_job_backend."
+        "github_derived_ghcr_credentials",
+        _derived,
+    )
+
+    with pytest.raises(ImageAcquisitionError) as excinfo:
+        await backend.acquire_image(
+            _request(None, image_source_ref=GHCR_SOURCE_REF)
+        )
+
+    assert excinfo.value.failure_class is ContainerJobFailureClass.IMAGE_NOT_FOUND
+    assert "gh-token-value" not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_derived_pull_redacts_the_token_from_diagnostics(
+    tmp_path, monkeypatch
+) -> None:
+    daemon = FakeDaemon()
+    daemon.pull_fails_with = b"failed using token gh-token-value\n"
+    published: list[bytes] = []
+
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(_ghcr_source_env()),
+    )
+
+    async def _capture(_request, stdout, stderr):
+        published.append(stdout + stderr)
+        return "art_x"
+
+    monkeypatch.setattr(backend, "_publish_pull_diagnostics", _capture)
+
+    async def _derived(*_a, **_k):
+        return ("octocat", "gh-token-value")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.container_job_backend."
+        "github_derived_ghcr_credentials",
+        _derived,
+    )
+
+    with pytest.raises(ImageAcquisitionError):
+        await backend.acquire_image(
+            _request(None, image_source_ref=GHCR_SOURCE_REF)
+        )
+
+    assert published
+    assert b"gh-token-value" not in b"".join(published)
+    assert b"[redacted]" in b"".join(published)
