@@ -1138,16 +1138,26 @@ class DockerContainerJobBackend:
         image: str,
         *,
         image_source_ref: str | None = None,
+        auth_dir: Path | None = None,
+        secrets: Sequence[str] = (),
     ) -> tuple[int, str | None]:
         """Pull ``image``, returning ``(duration_ms, diagnostics_ref)``.
 
         Raises :class:`ImageAcquisitionError` with a granular failure class when
-        the pull fails, attaching the bounded diagnostics reference.
+        the pull fails, attaching the bounded diagnostics reference. An
+        ``auth_dir`` only selects the transport: an authorized pull is still
+        classified and diagnosed exactly like an anonymous one, so a missing
+        tag, backend outage, or timeout keeps its own failure class instead of
+        collapsing into an authentication error.
         """
 
         started = time.monotonic()
-        code, stdout, stderr = await self._runner(("pull", image))
+        argv = ("pull", image) if auth_dir is None else ("--config", str(auth_dir), "pull", image)
+        code, stdout, stderr = await self._runner(argv)
         duration_ms = int((time.monotonic() - started) * 1000)
+        if secrets:
+            stdout = _redact(stdout.decode(errors="replace"), secrets).encode()
+            stderr = _redact(stderr.decode(errors="replace"), secrets).encode()
         diagnostics_ref = await self._publish_pull_diagnostics(
             request, stdout, stderr
         )
@@ -1703,7 +1713,6 @@ class DockerContainerJobBackend:
                             request, image, image_source_ref=image_source_ref
                         )
                     else:
-                        started = time.monotonic()
                         auth_dir = self._auth_dir(request)
                         try:
                             self._materialize_registry_auth(
@@ -1711,15 +1720,17 @@ class DockerContainerJobBackend:
                                 normalize_image_reference(image).registry,
                                 derived,
                             )
-                            await self._authorized_pull(
-                                image, auth_dir, (derived.username, derived.secret)
+                            pull_ms, diagnostics_ref = await self._pull_image(
+                                request,
+                                image,
+                                image_source_ref=image_source_ref,
+                                auth_dir=auth_dir,
+                                secrets=(derived.username, derived.secret),
                             )
                         finally:
                             # Ephemeral auth never outlives the pull, and never
                             # reaches the agent or a snapshot.
                             self._remove_auth_dir(auth_dir, best_effort=True)
-                        pull_ms = int((time.monotonic() - started) * 1000)
-                        diagnostics_ref = None
                     present, resolved_ref, digest = await self._inspect_image(image)
                     if not present:
                         raise ImageAcquisitionError(
