@@ -1,10 +1,18 @@
-"""An announcement nobody ever finished must not spend the issue's retries.
+"""A pre-dispatch announcement must not spend the issue's retries.
 
 The 2026-09-15 launcher outage left the backlog in a shape the
 ``runtime_unavailable`` exemption cannot see. Every scheduled run announced an
 attempt -- a version-2 handoff comment with ``outcome: in_progress`` and a
-30-minute lease -- and then died before any runtime existed, so it never got to
-record ``runtime_unavailable``, or any other outcome, about itself.
+lease -- and then died before recording any outcome about itself.
+
+Selection announces with the short ``preparing`` lease and holds that deadline
+until dispatch; the first execution renewal promotes the handoff to ``active``.
+An expired ``preparing`` handoff therefore never reached dispatch and could not
+have produced work. An expired ``active`` one did reach dispatch, so it still
+costs an attempt: GitHub alone cannot prove no agent ran, and exempting it
+would let a crash loop bypass the allowance while discarding unrecovered work.
+Proving that no runtime started needs the controlling history, which is what
+the local claim sweep uses to record ``runtime_unavailable``.
 
 Nothing else finalizes those records either. ``reconcile_expired_issue``
 retires the lapsed reservation by removing ``status: in-progress``, and
@@ -22,11 +30,11 @@ allowance rule exists to prevent -- "only attempts that could have produced work
 consume it" (design section 5.3) -- reached from before the attempt could write
 its own outcome down.
 
-A lapsed announcement that recorded no work is therefore treated like the
-``runtime_unavailable`` outcome it never managed to publish: retained in
-lineage, not charged, and carrying the same portable back-off from the moment
-its lease lapsed, so a still-broken deployment rotates past the candidate
-instead of hammering it.
+A lapsed pre-dispatch announcement that recorded no work is therefore treated
+like the ``runtime_unavailable`` outcome it never managed to publish: retained
+in lineage, not charged, and carrying the same portable back-off from the
+moment its lease lapsed, so a still-broken deployment rotates past the
+candidate instead of hammering it.
 """
 
 from __future__ import annotations
@@ -58,9 +66,10 @@ def _announcement(
     predecessor_comment_id: str = "",
     lapsed_minutes: float | None = None,
     leased: bool = True,
+    activity: str = "preparing",
     **overrides,
 ) -> AttemptHandoff:
-    """One start announcement: ``in_progress``, no recorded work.
+    """One pre-dispatch announcement: ``in_progress``, no recorded work.
 
     ``lapsed_minutes`` is how long ago the lease expired; ``None`` leaves a
     live lease. ``leased=False`` produces the version-1 shape, whose writers
@@ -80,7 +89,7 @@ def _announcement(
         issue_number=ISSUE,
         predecessor_attempt_id=predecessor,
         predecessor_comment_id=predecessor_comment_id,
-        activity="active",
+        activity=activity,
         outcome="in_progress",
         next_action="continue_implementation",
         retry_allowance=3,
@@ -137,7 +146,7 @@ def test_lapsed_announcements_do_not_consume_the_allowance() -> None:
 
 
 def test_the_production_lineage_shape_is_admissible_again() -> None:
-    """Issue #4350 on 2026-09-19: one real release, then two dead announcements."""
+    """One real release, then two announcements that never reached dispatch."""
     decision = compute_effective_retry(
         [
             _terminal("att-7b5bc80f4e65-c88b", "no_work"),
@@ -213,6 +222,60 @@ def test_a_live_announcement_still_occupies_a_slot() -> None:
     )
 
     assert decision.remaining == 2
+
+
+def test_an_expired_active_attempt_still_costs_one() -> None:
+    """Dispatch happened: the execution lease was granted and then renewed.
+
+    GitHub alone cannot prove no agent ran, so a worker that crashed after
+    dispatch must stay charged -- otherwise a crash loop bypasses the bounded
+    allowance and keeps discarding work it never published.
+    """
+    decision = compute_effective_retry(
+        [
+            _announcement(
+                "att-000000000001-aaaa", activity="active", lapsed_minutes=4000
+            ),
+            _announcement(
+                "att-000000000002-aaaa",
+                activity="active",
+                predecessor="att-000000000001-aaaa",
+                lapsed_minutes=3900,
+            ),
+            _announcement(
+                "att-000000000003-aaaa",
+                activity="active",
+                predecessor="att-000000000002-aaaa",
+                lapsed_minutes=3800,
+            ),
+        ],
+        max_attempts=3,
+        now_epoch=_now().timestamp(),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "budget_exhausted"
+    assert decision.remaining == 0
+
+
+def test_a_crash_loop_after_dispatch_cannot_outlast_the_allowance() -> None:
+    """Each post-dispatch crash spends a slot even with nothing published."""
+    chain = [
+        _announcement(
+            f"att-00000000000{index}-aaaa",
+            activity="active",
+            predecessor=f"att-00000000000{index - 1}-aaaa" if index > 1 else "",
+            lapsed_minutes=4000 - index,
+        )
+        for index in range(1, 5)
+    ]
+
+    decision = compute_effective_retry(
+        chain, max_attempts=3, now_epoch=_now().timestamp()
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "budget_exhausted"
 
 
 def test_a_version_one_announcement_keeps_its_non_expiring_contract() -> None:

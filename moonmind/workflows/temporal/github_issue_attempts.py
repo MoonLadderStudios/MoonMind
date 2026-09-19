@@ -1041,17 +1041,26 @@ def _cooldown_is_live(cooldown_until: str, now_epoch: float) -> bool:
 
 
 def _lapsed_announcement_at(handoff: AttemptHandoff, now_epoch: float) -> str:
-    """Return when *handoff*'s empty announcement lapsed, else ``""``.
+    """Return when *handoff*'s pre-dispatch announcement lapsed, else ``""``.
 
-    An attempt announces itself before it works, so a handoff that still says
-    ``in_progress`` after its lease expired is an attempt that vanished
-    without ever recording an outcome. It is the ``runtime_unavailable`` case
-    seen from before the attempt could write it down, and nothing else will
-    ever write it: reservation reclamation retires the label and deliberately
-    claims no terminal authority over another deployment's attempt, and the
-    bounded reconciliation scan skips the issue once that label is gone.
-    Charging it would spend the allowance on evidence the system has designed
-    itself never to resolve.
+    Selection announces an attempt with the short ``preparing`` lease and
+    keeps that deadline until dispatch; the first execution renewal promotes
+    it to ``active``. A handoff still reading ``preparing`` after its lease
+    expired therefore never reached dispatch, so it could not have produced
+    work on the issue -- the ``runtime_unavailable`` case seen from before
+    the attempt could write it down. Nothing else will ever write it:
+    reservation reclamation retires the label and deliberately claims no
+    terminal authority over another deployment's attempt, and the bounded
+    reconciliation scan skips the issue once that label is gone. Charging it
+    would spend the allowance on evidence the system has designed itself
+    never to resolve.
+
+    An expired ``active`` attempt is not exempt. Its execution lease was
+    granted, so from GitHub alone we cannot prove no agent ever ran, and an
+    attempt that crashed mid-run must still cost one: otherwise a crash loop
+    bypasses the allowance and keeps discarding unrecovered work. Proving
+    that no runtime started needs the controlling history, which is what the
+    local claim sweep uses to record the ``runtime_unavailable`` outcome.
 
     Recorded work (a pull request, a saved branch or sha) is evidence about
     the issue, so such an attempt keeps costing one. A version-1 handoff
@@ -1059,6 +1068,8 @@ def _lapsed_announcement_at(handoff: AttemptHandoff, now_epoch: float) -> str:
     cannot prove a lapse; both keep their existing accounting.
     """
     if handoff.outcome != "in_progress":
+        return ""
+    if handoff.activity != ATTEMPT_ACTIVITY_PREPARING:
         return ""
     if (
         _string(handoff.pr_url)
@@ -1158,9 +1169,10 @@ def compute_effective_retry(
     # An attempt whose deployment never started a runtime says nothing about
     # this issue, so it is retained as lineage but never charged to the
     # allowance. Charging it lets one broken deployment exhaust every issue.
-    # An announcement that lapsed without ever recording an outcome is the
-    # same fault reached before the attempt could name it: also retained,
-    # also uncharged, and backed off the same way below.
+    # A pre-dispatch announcement that lapsed without ever recording an
+    # outcome is the same fault reached before the attempt could name it:
+    # also retained, also uncharged, and backed off the same way below.
+    # An expired ``active`` attempt reached dispatch and still counts.
     lapses = [_lapsed_announcement_at(handoff, now_epoch) for handoff in ordered]
     counted = [
         handoff
