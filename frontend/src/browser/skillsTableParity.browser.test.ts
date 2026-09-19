@@ -82,16 +82,23 @@ function skillsMarkup(): string {
 
 // Workflow reference slice: the divider treatment the Skills table must match
 // (`.workflow-list-data-slab .queue-table-wrapper td` draws
-// `var(--workflow-list-divider-color)`).
+// `var(--workflow-list-divider-color)`). The reference cell is read only for
+// its computed divider color, but the wrapper bleeds edge to edge by design
+// (width 100% + 2x `--workflow-list-slab-bleed-inline` with matching negative
+// margins), which assumes a padded panel ancestor like production provides.
+// Host it with that same 1rem inset so the scaffolding never spills past the
+// viewport and pollutes the document-overflow assertions below.
 function workflowReferenceMarkup(): string {
   return `
-    <div class="workflow-list-data-slab">
-      <div class="queue-table-wrapper">
-        <table>
-          <tbody>
-            <tr><td data-workflow-divider-reference="true">reference</td></tr>
-          </tbody>
-        </table>
+    <div style="padding-left: 1rem; padding-right: 1rem;">
+      <div class="workflow-list-data-slab">
+        <div class="queue-table-wrapper">
+          <table>
+            <tbody>
+              <tr><td data-workflow-divider-reference="true">reference</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>`;
 }
