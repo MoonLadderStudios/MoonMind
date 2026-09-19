@@ -26,6 +26,7 @@ from moonmind.omnigent.codex_cutover_drain import (
     require_exact_generic_support,
     resolve_linked_generic_qualification,
     retained_disposition,
+    run_codex_drain_procedure,
     verify_retained_branch_runtime,
 )
 
@@ -302,3 +303,174 @@ def test_recorded_history_decoding_survives_retired_lane_cutoff():
     assert (
         decode_legacy_workspace_path({"workspacePath": "/recorded/path"}) == "/recorded/path"
     )
+
+
+def test_select_runtime_rejects_retired_lane_for_explicit_and_default():
+    """R2 at the production admission boundary (cutover.select_runtime)."""
+
+    from moonmind.omnigent.cutover import CutoverPhase, select_runtime
+
+    env = {DEPLOYMENT_CUTOFF_ENV: "2026-01-01T00:00:00Z"}
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    phase = CutoverPhase.OPT_IN
+    with pytest.raises(ValueError, match="codex_direct_retired_by_deployment_cutoff"):
+        select_runtime(
+            authored_runtime="codex_cli",
+            configured_default="omnigent",
+            phase=phase,
+            env=env,
+            now=now,
+        )
+    for kind in ("create", "schedule", "preset"):
+        with pytest.raises(
+            ValueError, match="codex_direct_retired_by_deployment_cutoff"
+        ):
+            select_runtime(
+                authored_runtime=None,
+                configured_default="codex_cli",
+                phase=phase,
+                submission_kind=kind,
+                env=env,
+                now=now,
+            )
+    # The surviving path still admits new work after the cutoff.
+    selected = select_runtime(
+        authored_runtime=None,
+        configured_default="omnigent",
+        phase=phase,
+        env=env,
+        now=now,
+    )
+    assert selected.runtime_id == "omnigent"
+
+
+def test_retained_history_replays_through_cutover_boundary_after_cutoff():
+    """R4: retained decoders/inputs/routing survive the retired-lane cutoff."""
+
+    from moonmind.omnigent.workspace_sources import decode_legacy_workspace_path
+    from moonmind.workflows.temporal.release_routing import current_version
+
+    env = {DEPLOYMENT_CUTOFF_ENV: "2026-01-01T00:00:00Z"}
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="codex_direct_retired_by_deployment_cutoff"):
+        assert_new_admission_allowed("codex_cli", env=env, now=now)
+    # Every retained branch still binds to its runtime mechanism after cutoff.
+    statuses = verify_retained_branch_runtime()
+    assert all(status["resolved"] is True for status in statuses.values())
+    # Old conformance/promotion evidence still evaluates through the cutover
+    # boundary so retained histories replay instead of failing on deleted
+    # command branches.
+    from moonmind.omnigent.cutover import CutoverPhase, evaluate_promotion
+
+    decision = evaluate_promotion(
+        current_phase=CutoverPhase.BROAD_DEFAULT,
+        requested_phase=CutoverPhase.OPT_IN,
+        evidence=None,
+        now=now,
+    )
+    assert decision.allowed is True
+    # Already-recorded raw-path payloads still decode for migration/replay.
+    assert (
+        decode_legacy_workspace_path({"workspacePath": "/recorded/path"})
+        == "/recorded/path"
+    )
+    # Supported reset/replay routing stays a callable worker-version path.
+    assert callable(current_version)
+    # Persisted sessions stay readable without a live worker.
+    import importlib
+
+    assert importlib.import_module(
+        "moonmind.omnigent.control_plane.repositories"
+    ) is not None
+
+
+def test_drain_procedure_caller_reports_four_states():
+    """R3: one drain-procedure entrypoint composes collect -> report."""
+
+    def boom():
+        raise RuntimeError("visibility unreachable")
+
+    payload = run_codex_drain_procedure(
+        {
+            "schedules": [{"id": "s-1", "state": "active"}],
+            "queued_starts": boom,
+            "open_parent_workflows": [{"id": "p-1", "state": "clean"}],
+            "open_child_workflows": [{"id": "c-1", "state": "clean"}],
+            "retries": [{"id": "r-1", "state": "clean"}],
+            "pending_interventions": [{"id": "i-1", "state": "clean"}],
+            "serialized_launch_inputs": [{"id": "l-1", "state": "clean"}],
+            "resource_leases": [{"id": "lease-1", "state": "clean"}],
+            "publication_work": [{"id": "pub-1", "state": "blocked"}],
+            "cleanup_work": [{"id": "cl-1", "state": "clean"}],
+        }
+    )
+    assert payload["authorizesDeletion"] is False
+    assert payload["deletable"] is False
+    assert payload["states"]["active"] == 1
+    assert payload["states"]["unknown"] == 1
+    assert payload["states"]["blocked"] == 1
+    assert "delete credential" not in str(payload).lower()
+    assert "terminate" not in str(payload).lower()
+
+
+def test_drain_procedure_clean_report_is_deletable_evidence_only():
+    inventory = {
+        category: [{"id": f"{category}-1", "state": "clean"}]
+        for category in DRAIN_INVENTORY_CATEGORIES
+    }
+    payload = run_codex_drain_procedure(inventory)
+    assert payload["deletable"] is True
+    assert payload["authorizesDeletion"] is False
+    assert payload["blockers"] == []
+
+
+def test_changed_boundaries_map_to_drain_and_disposition_evidence():
+    """R6: each changed boundary exercises drain states + disposition."""
+
+    def clean_inventory():
+        return {
+            category: [{"id": f"{category}-1", "state": "clean"}]
+            for category in DRAIN_INVENTORY_CATEGORIES
+        }
+
+    # restart: open parent/child activity blocks deletion.
+    inventory = clean_inventory()
+    inventory["open_parent_workflows"] = [{"id": "p-1", "state": "active"}]
+    inventory["open_child_workflows"] = [{"id": "c-1", "state": "active"}]
+    assert run_codex_drain_procedure(inventory)["deletable"] is False
+    assert "temporal_history_decoders" in retained_disposition(
+        "temporal_history_decoders"
+    )["branch"]
+    # cancellation: pending interventions block; routing disposition names reset.
+    inventory = clean_inventory()
+    inventory["pending_interventions"] = [{"id": "i-1", "state": "active"}]
+    assert run_codex_drain_procedure(inventory)["deletable"] is False
+    assert (
+        retained_disposition("supported_worker_routing")["mechanism"]
+        == "supported_worker_routing"
+    )
+    # retry: retries activity blocks deletion.
+    inventory = clean_inventory()
+    inventory["retries"] = [{"id": "r-1", "state": "active"}]
+    assert run_codex_drain_procedure(inventory)["deletable"] is False
+    # completed-workflow reset: routing disposition carries the reset policy.
+    assert "reset" in retained_disposition("supported_worker_routing")[
+        "consumer"
+    ].lower() or "replay" in retained_disposition("supported_worker_routing")[
+        "consumer"
+    ].lower()
+    # credential preservation: unknown leases block; never authorize deletion.
+    inventory = clean_inventory()
+    inventory["resource_leases"] = [{"id": "lease-1", "state": "unknown"}]
+    payload = run_codex_drain_procedure(inventory)
+    assert payload["deletable"] is False
+    assert payload["authorizesDeletion"] is False
+    # publication recovery: blocked publication work blocks deletion.
+    inventory = clean_inventory()
+    inventory["publication_work"] = [{"id": "pub-1", "state": "blocked"}]
+    assert run_codex_drain_procedure(inventory)["deletable"] is False
+    # final cleanup: cleanup work gates the clean report.
+    inventory = clean_inventory()
+    inventory["cleanup_work"] = [{"id": "cl-1", "state": "active"}]
+    assert run_codex_drain_procedure(inventory)["deletable"] is False
+    assert run_codex_drain_procedure(clean_inventory())["deletable"] is True
