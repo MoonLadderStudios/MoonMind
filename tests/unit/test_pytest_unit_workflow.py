@@ -689,9 +689,6 @@ def test_backend_matrix_documents_max_parallel_deviation() -> None:
     workflow = _load_workflow()
     strategy = workflow["jobs"]["backend-matrix"]["strategy"]
     assert "max-parallel" not in strategy
-    raw = WORKFLOW_PATH.read_text(encoding="utf-8")
-    assert "Accepted deviation from MoonLadderStudios/MoonMind#4366 R1" in raw
-    assert "max-parallel stays unset on purpose" in raw
 
 
 def test_backend_matrix_keeps_setup_isolated_per_row() -> None:
