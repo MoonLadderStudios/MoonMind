@@ -45,6 +45,40 @@ _PREREQUISITE_DECLARATION_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+# A section whose heading names it as context rather than work. Parent links,
+# sibling related-work sections, and superseded references stay contextual even
+# when they are written as a checkbox list of issues.
+_CONTEXT_SECTION_RE = re.compile(
+    r"\b(related|superseded|see also|non-goals?|out of scope)\b", re.IGNORECASE
+)
+
+_CHECKBOX_PREFIX_RE = re.compile(r"^\[[ xX]\]\s+")
+
+# GitHub renders a checkbox list item that leads with an issue reference as a
+# tracked task, whatever heading sits above it. That rendering is the
+# convention epics actually use, so the list itself declares the child instead
+# of a heading phrase the parser would have to enumerate.
+_LEADING_ISSUE_REFERENCE_RE = re.compile(r"^(?:[\w.-]+/[\w.-]+)?#[1-9]\d*")
+
+_ISSUE_LINK_RE = re.compile(
+    r"\[[^\]\n]*\]\((https://github\.com/[\w.-]+/[\w.-]+/issues/[1-9]\d*)\)"
+)
+_ISSUE_URL_RE = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)")
+
+
+def _normalize_issue_references(text: str) -> str:
+    """Rewrite Markdown issue links and issue URLs to ``owner/repo#number``."""
+
+    return _ISSUE_URL_RE.sub(r"\1#\2", _ISSUE_LINK_RE.sub(r"\1", text))
+
+
+def _declares_tracked_child(entry: str) -> bool:
+    """Whether a checkbox entry leads with an issue reference GitHub tracks."""
+
+    return bool(
+        _LEADING_ISSUE_REFERENCE_RE.match(_normalize_issue_references(entry).lstrip())
+    )
+
 
 def _declaration_scope(keyword: str) -> str:
     normalized = keyword.strip().lstrip("-* \t").casefold()
@@ -81,20 +115,25 @@ def declared_dependencies(body: str, repository: str) -> dict[tuple[str, int], s
     # completion. Their state is resolved by the same GitHub lookup as
     # sentence declarations, with one shared identity cache and request budget.
     child_section_level: int | None = None
+    context_section_level: int | None = None
     tokens = MarkdownIt("commonmark").parse(body)
     for index, token in enumerate(tokens):
         if token.type == "heading_open" and token.level == 0:
             level = int(token.tag[1:])
+            heading = tokens[index + 1].content
             if child_section_level is not None and level <= child_section_level:
                 child_section_level = None
-            if child_section_level is None and tokens[index + 1].content.casefold() in {
+            if context_section_level is not None and level <= context_section_level:
+                context_section_level = None
+            if child_section_level is None and heading.casefold() in {
                 "child issues",
                 "sub-issues",
             }:
                 child_section_level = level
+            elif context_section_level is None and _CONTEXT_SECTION_RE.search(heading):
+                context_section_level = level
         elif (
-            child_section_level is not None
-            and token.type == "inline"
+            token.type == "inline"
             and index >= 2
             and tokens[index - 1].type == "paragraph_open"
             and tokens[index - 2].type == "list_item_open"
@@ -102,20 +141,21 @@ def declared_dependencies(body: str, repository: str) -> dict[tuple[str, int], s
             # Only the first paragraph of a rendered list item declares a
             # child. Markdown parsing excludes code and HTML-comment examples
             # while retaining legal heading indentation and nested sections.
-            entry = re.sub(r"^\[[ xX]\]\s+", "", token.content)
-            declarations.append((entry, PREREQUISITE_SCOPE_START, True))
+            checkbox = _CHECKBOX_PREFIX_RE.match(token.content)
+            entry = token.content[checkbox.end() :] if checkbox else token.content
+            # An explicit child-issues section declares every entry it lists.
+            # Elsewhere the GitHub tracking-list rendering is the declaration:
+            # a checkbox entry leading with an issue reference. Headings that
+            # name a section as context keep their references contextual.
+            if child_section_level is not None or (
+                checkbox is not None
+                and context_section_level is None
+                and _declares_tracked_child(entry)
+            ):
+                declarations.append((entry, PREREQUISITE_SCOPE_START, True))
     scopes: dict[tuple[str, int], str] = {}
     for declaration, scope, is_child in declarations:
-        text = re.sub(
-            r"\[[^\]\n]*\]\((https://github\.com/[\w.-]+/[\w.-]+/issues/[1-9]\d*)\)",
-            r"\1",
-            declaration,
-        )
-        text = re.sub(
-            r"https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)",
-            r"\1#\2",
-            text,
-        )
+        text = _normalize_issue_references(declaration)
         if is_child:
             # A spaced dash introduces a title, including numeric titles such
             # as "2FA support". A spaced range must name its endpoint with #.

@@ -350,10 +350,12 @@ async def test_deployment_data_drives_runtime_and_proxy_attestation(
         for name in args[3:]:
             if not name.startswith("/etc/squid/"):
                 directory = live
-            elif name.endswith("squid.conf"):
-                directory = bundled
-            else:
+            elif name.endswith("omnigent-provider-domains.txt"):
+                # The only deployment-mounted policy file.
                 directory = policy
+            else:
+                # squid.conf and the package-registry list are image-owned.
+                directory = bundled
             path = directory / Path(name).name
             if not path.exists():
                 return 1, b"", b"missing policy"
