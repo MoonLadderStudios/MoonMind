@@ -377,12 +377,48 @@ def test_reliability_job_runs_the_canonical_journey_suite() -> None:
     job = "backend-matrix"
     command = _run_command(job, "Run hermetic reliability shard")
 
-    assert "tests/integration/reliability/test_" in command or "shard_files" in command
+    # Node-level partitioning through pytest-split
+    # (MoonLadderStudios/MoonMind#4366): the whole eligible reliability
+    # universe is split per node (including parameterized cases) with
+    # --splits/--group, never by file list or file count.
+    assert "tests/integration/reliability" in command
+    assert "shard_files" not in command
+    assert "reliability_shard_partition.py" not in command
+    assert "--splits 4" in command
+    assert "--group" in command
+    assert "${{ matrix.shard }}" in command
+    assert "least_duration" in command
+    assert "tests/.reliability-test-durations.json" in command
     assert "-m reliability_journey" in command
     assert "skipping until #3145 lands" not in command
 
     diagnostics = _run_command(job, "Collect reliability shard diagnostics")
     assert "tests/integration/reliability/replays" in diagnostics
+
+
+def test_reliability_shard_preserves_pytest_exit_status() -> None:
+    """MoonLadderStudios/MoonMind#4366: a selected shard that collects no
+    tests (pytest exit code 5) must stay visible instead of being converted
+    to success. The step exits with the pytest status it measured."""
+    command = _run_command("backend-matrix", "Run hermetic reliability shard")
+
+    assert "status=${PIPESTATUS[0]}" in command
+    assert "exit $status" in command
+
+
+def test_reliability_shard_validates_duration_hints_before_pytest() -> None:
+    """MoonLadderStudios/MoonMind#4366 R4: every shard validates the shared
+    duration hints through the same small local helper. An unusable hint
+    file warns and falls back to the deterministic no-history partition
+    instead of skipping tests or requiring a remote timing service."""
+    workflow = _load_workflow()
+    steps = {step["name"]: step for step in workflow["jobs"]["backend-matrix"]["steps"]}
+
+    validate = steps["Validate reliability duration hints"]
+    assert "tools/ci/refresh_reliability_durations.py" in validate["run"]
+    assert validate["run"].strip().startswith("set ")
+    reliability = steps["Run hermetic reliability shard"]
+    assert "durations" in reliability["run"].lower()
 
 
 def test_preflight_policy_runs_status_token_audit() -> None:
@@ -639,7 +675,20 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
         for entry in strategy["matrix"]["include"]
         if entry["suite"].startswith("reliability-")
     ]
-    assert shards == ["0", "1", "2", "3"]
+    # pytest-split groups are 1-based (MoonLadderStudios/MoonMind#4366):
+    # suite reliability-shard-N runs --group N.
+    assert shards == ["1", "2", "3", "4"]
+
+
+def test_backend_matrix_documents_max_parallel_deviation() -> None:
+    """MoonLadderStudios/MoonMind#4366 R1: the four reliability shards run
+    concurrently with isolated services; the consolidated 7-row matrix
+    intentionally leaves max-parallel unset (capping at 4 would queue shards
+    behind fast rows past the PR ceiling). The deviation rationale must stay
+    recorded in the workflow until it is accepted on the issue."""
+    workflow = _load_workflow()
+    strategy = workflow["jobs"]["backend-matrix"]["strategy"]
+    assert "max-parallel" not in strategy
 
 
 def test_backend_matrix_keeps_setup_isolated_per_row() -> None:
@@ -683,9 +732,11 @@ def test_backend_matrix_reports_are_uniquely_named() -> None:
     )
     reliability_run = steps["Run hermetic reliability shard"]["run"]
     assert "artifacts/pytest-backend-${{ matrix.suite }}.xml" in reliability_run
-    # Duration-balanced sharding uses the single partition authority shared
-    # with the ownership verifier (MoonLadderStudios/MoonMind#4367).
-    assert "tools/ci/reliability_shard_partition.py --shard" in reliability_run
+    # Node-level duration-balanced sharding through pytest-split
+    # (MoonLadderStudios/MoonMind#4366), sharing the committed duration
+    # hints with the ownership verifier. No file-count partitioning.
+    assert "--splits 4" in reliability_run
+    assert "tools/ci/reliability_shard_partition.py --shard" not in reliability_run
     assert "NR % 4" not in reliability_run
     # Short reliability budgets with PR-vs-schedule differentiation
     # (MoonLadderStudios/MoonMind#4369).

@@ -3300,6 +3300,21 @@ pytest-base-url = ">=1.0.0,<3.0.0"
 python-slugify = ">=6.0.0,<9.0.0"
 
 [[package]]
+name = "pytest-split"
+version = "0.11.0"
+description = "Pytest plugin which splits the test suite to equally sized sub suites based on test execution time."
+optional = true
+python-versions = ">=3.10,<4.0"
+groups = ["main"]
+markers = "extra == \"tests\""
+files = [
+    {file = "pytest_split-0.11.0.tar.gz", hash = "sha256:8ebdb29cc72cc962e8eb1ec07db1eeb98ab25e215ed8e3216f6b9fc7ce0ec2b5"},
+]
+
+[package.dependencies]
+pytest = "^5 | ^6 | ^7 | ^8 | ^9"
+
+[[package]]
 name = "pytest-timeout"
 version = "2.4.0"
 description = "pytest plugin to abort hanging tests"
@@ -4549,4 +4564,4 @@ tests = ["aiosqlite", "pytest", "pytest-asyncio", "pytest-mock", "pytest-timeout
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "8ffc39f84bec3f03cd6d03fe570d145e814196ea780bcbfdb25513caaa009e77"
+content-hash = "0f539faefd09e61f4d7830b9a0768e938a1e07f4b9161dd0a7860c6ca334d778"
