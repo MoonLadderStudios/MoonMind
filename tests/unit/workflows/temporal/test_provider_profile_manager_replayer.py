@@ -1,6 +1,7 @@
 """Production replay and worker-boundary coverage for slot-manager cleanup."""
 
 import asyncio
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     LEASE_CLEANUP_REDRIVE_PATCH,
     LEASE_TOMBSTONE_PURGE_PATCH,
     LEASE_TRANSITION_CONTRACT_PATCH,
+    ORPHANED_VALIDATION_CLEANUP_PATCH,
     WORKFLOW_NAME,
     MoonMindProviderProfileManagerWorkflow,
 )
@@ -63,6 +65,28 @@ async def test_pre_tombstone_purge_manager_history_replays(fixture_name: str) ->
     cleanup activity. Both must preserve the recorded lease verification order.
     """
     fixture = Path(__file__).with_name("fixtures") / fixture_name
+    history = WorkflowHistory.from_json(
+        "provider-profile-manager:opencode", fixture.read_text()
+    )
+    await Replayer(
+        workflows=[MoonMindProviderProfileManagerWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
+async def test_manager_history_before_validation_cleanup_replays() -> None:
+    """An outstanding validation lease must not change committed commands.
+
+    Sanitized production history through the first timer firing: the manager
+    has a continued validation cleanup obligation and an accepted maintenance
+    Update. Adding orphan verification before the recorded tombstone marker
+    wedged replay and made API-key enrollment return an unhandled HTTP 500.
+    """
+    fixture = (
+        Path(__file__).with_name("fixtures")
+        / "provider_profile_manager_before_validation_cleanup.json"
+    )
     history = WorkflowHistory.from_json(
         "provider-profile-manager:opencode", fixture.read_text()
     )
@@ -152,6 +176,231 @@ class _ProfileActivities:
             owner: {"running": True, "status": "NEW_STATUS"}
             for owner in request["workflow_ids"]
         }
+
+
+class _ValidationCleanupActivities(_ProfileActivities):
+    """A durable orphaned probe followed by a fresh credential submission."""
+
+    def __init__(self, acquired_at: str) -> None:
+        super().__init__("opencode", fail_cleanup=False)
+        self.rows = [
+            {
+                "profile_id": "test-default",
+                "workflow_id": "expired-validation",
+                "lease_id": "expired-validation",
+                "granted_at": acquired_at,
+                "purpose": "credential_validation",
+                "fencingGeneration": 10,
+                "leaseState": "cleanup_requested",
+                "ownerIsWorkflow": False,
+                "workflowId": "test-probe-owner",
+                "compatibilityClass": "exclusive_maintenance",
+                "safeMetadata": {
+                    "evidenceIdentity": "test-validation-evidence",
+                    "cleanupReason": "owner_terminal",
+                },
+            }
+        ]
+
+    @activity.defn(name="provider_profile.sync_slot_leases")
+    async def sync_leases(self, request: dict[str, Any]) -> dict[str, Any]:
+        self.actions.append(request["action"])
+        if request["action"] == "load":
+            return {"leases": self.rows, "max_fencing_generation": 10}
+        if request["action"] == "request_cleanup":
+            return {"outcome": "cleanup_requested", "cleanup_requested": True}
+        if request["action"] == "release_verified":
+            assert request["leases"][0]["lease_id"] == "expired-validation"
+            assert request["leases"][0]["fencing_generation"] == 10
+            self.rows = []
+            return {"outcome": "released", "released": True}
+        return {"leases": self.rows, "synced": len(request.get("leases", []))}
+
+    @activity.defn(name="provider_profile.verify_lease_holders")
+    async def verify(self, request: dict[str, Any]) -> dict[str, Any]:
+        return {
+            owner: {
+                "running": owner != "test-probe-owner",
+                "status": "NOT_FOUND" if owner == "test-probe-owner" else "RUNNING",
+            }
+            for owner in request["workflow_ids"]
+        }
+
+
+@pytest.mark.asyncio
+async def test_validation_cleanup_allows_credential_update_and_replays() -> None:
+    """The versioned path actually cleans, grants, and replays a maintenance Update."""
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        acquired_at = ((await env.get_current_time()) - timedelta(hours=5)).isoformat()
+        activities = _ValidationCleanupActivities(acquired_at)
+        async with Worker(
+            env.client,
+            task_queue="test-validation-cleanup",
+            workflows=[MoonMindProviderProfileManagerWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ), Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                activities.list_profiles,
+                activities.sync_leases,
+                activities.pending_order,
+                activities.verify,
+            ],
+        ):
+            manager = await env.client.start_workflow(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": "opencode"},
+                id="provider-profile-manager:opencode",
+                task_queue="test-validation-cleanup",
+            )
+            async with asyncio.timeout(30):
+                while "release_verified" not in activities.actions:
+                    await asyncio.sleep(0.05)
+            request = {
+                "requester_workflow_id": "http-credential-submission",
+                "owner_id": "http-credential-submission",
+                "runtime_id": "opencode",
+                "execution_profile_ref": "test-default",
+                "purpose": "credential_validation",
+                "metadata": {"ownerIsWorkflow": False, "workflowId": "http:test"},
+            }
+            granted = await manager.execute_update(
+                "AcquireCredentialMaintenanceLease", request
+            )
+            retried = await manager.execute_update(
+                "AcquireCredentialMaintenanceLease", request
+            )
+            assert granted["profile_id"] == "test-default"
+            assert granted["already_held"] is False
+            assert retried["already_held"] is True
+            assert granted["lease_id"] == retried["lease_id"]
+            await manager.signal("shutdown")
+            await manager.result()
+            history = await manager.fetch_history()
+
+    patch_ids = []
+    for event in history.events:
+        if event.HasField("marker_recorded_event_attributes"):
+            attrs = event.marker_recorded_event_attributes
+            if attrs.marker_name == "core_patch":
+                marker = (
+                    await DataConverter.default.decode(
+                        attrs.details["patch-data"].payloads
+                    )
+                )[0]
+                patch_ids.append(marker["id"])
+    assert "provider-profile-manager-orphaned-validation-cleanup-v1" in patch_ids
+    assert activities.actions.count("release_verified") == 1
+    await Replayer(
+        workflows=[MoonMindProviderProfileManagerWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+
+@pytest.mark.asyncio
+async def test_unguarded_validation_cleanup_history_needs_migration_cutover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Post-#4431, pre-marker orphan cleanup is ambiguous with pre-cleanup.
+
+    PR #4434 review (comment 4052362810): a manager that ran the parent
+    revision (#4431, unconditional orphan cleanup) with an eligible orphaned
+    validation claim recorded ``verify_lease_holders`` and ``release_verified``
+    activities without the orphaned-validation marker. The marker alone cannot
+    distinguish that history from a pre-cleanup one, so the patched worker
+    must not silently skip the recorded commands — skipping wedges the
+    singleton with Activity-vs-Timer nondeterminism. This test rebuilds that
+    intermediate history live with the parent-revision behavior and requires
+    both directions: the parent behavior replays it (so the pre-marker worker
+    stays viable until the state-preserving Continue-As-New handoff), while
+    the patched worker refuses it (so the cohort routes to the controlled
+    migration in ProviderProfiles.md instead of replaying).
+    """
+    from temporalio import workflow as workflow_module
+
+    real_patched = workflow_module.patched
+
+    def _parent_revision_patched(patch_id: str) -> bool:
+        # Parent revision (#4431) ran orphan cleanup unconditionally, so its
+        # histories recorded the verification/release commands with no marker.
+        if patch_id == ORPHANED_VALIDATION_CLEANUP_PATCH:
+            return True
+        return real_patched(patch_id)
+
+    monkeypatch.setattr(workflow_module, "patched", _parent_revision_patched)
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        acquired_at = ((await env.get_current_time()) - timedelta(hours=5)).isoformat()
+        activities = _ValidationCleanupActivities(acquired_at)
+        async with Worker(
+            env.client,
+            task_queue="test-unguarded-validation-cleanup",
+            workflows=[MoonMindProviderProfileManagerWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ), Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                activities.list_profiles,
+                activities.sync_leases,
+                activities.pending_order,
+                activities.verify,
+            ],
+        ):
+            manager = await env.client.start_workflow(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": "opencode"},
+                id="provider-profile-manager:opencode",
+                task_queue="test-unguarded-validation-cleanup",
+            )
+            async with asyncio.timeout(30):
+                while "release_verified" not in activities.actions:
+                    await asyncio.sleep(0.05)
+            with env.auto_time_skipping_disabled():
+                await manager.signal("shutdown")
+                await manager.result()
+            history = await manager.fetch_history()
+
+    patch_ids = []
+    activity_names = []
+    for event in history.events:
+        if event.HasField("marker_recorded_event_attributes"):
+            attrs = event.marker_recorded_event_attributes
+            if attrs.marker_name == "core_patch":
+                marker = (
+                    await DataConverter.default.decode(
+                        attrs.details["patch-data"].payloads
+                    )
+                )[0]
+                patch_ids.append(marker["id"])
+        elif event.HasField("activity_task_scheduled_event_attributes"):
+            activity_names.append(
+                event.activity_task_scheduled_event_attributes.activity_type.name
+            )
+    # Intermediate shape: the parent behavior cleaned without recording the
+    # new marker, on top of the redrive generation.
+    assert LEASE_CLEANUP_REDRIVE_PATCH in patch_ids
+    assert ORPHANED_VALIDATION_CLEANUP_PATCH not in patch_ids
+    assert "release_verified" in activities.actions
+    assert "provider_profile.verify_lease_holders" in activity_names
+    assert "provider_profile.sync_slot_leases" in activity_names
+
+    # The parent behavior replays its own history, so the pre-marker worker
+    # stays viable until the state-preserving Continue-As-New handoff.
+    await Replayer(
+        workflows=[MoonMindProviderProfileManagerWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+    # The patched worker refuses the ambiguous history instead of silently
+    # skipping its recorded orphan commands. The cohort takes the controlled
+    # migration, not a replay.
+    monkeypatch.setattr(workflow_module, "patched", real_patched)
+    with pytest.raises(Exception):
+        await Replayer(
+            workflows=[MoonMindProviderProfileManagerWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(history)
 
 
 @workflow.defn(name="Test.CleanupSlotRequester")
