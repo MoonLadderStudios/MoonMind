@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, ManagedSecret, SecretStatus, User, UserProfile
+from api_service.db.models import Base, ManagedSecret, User, UserProfile
 
 
 def _factory(tmp_path, name="mig4349.db"):

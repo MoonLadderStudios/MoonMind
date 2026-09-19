@@ -161,8 +161,20 @@ async def migrate_legacy_profile_secrets(
         for column, short in LEGACY_FIELDS:
             try:
                 value = getattr(profile, column, None)
-            except Exception:
-                continue
+            except Exception as exc:
+                # Single-user (#4349): an unreadable legacy ciphertext
+                # (rotated/damaged encryption key) must defer conversion,
+                # not silently succeed. The replacement resolver no longer
+                # consults UserProfile, so skipping would lose the
+                # credential without diagnostic or retry signal.
+                logger.warning(
+                    "legacy profile secret undecryptable field=%s error=%s",
+                    short,
+                    type(exc).__name__,
+                )
+                raise RuntimeError(
+                    f"legacy profile secret undecryptable for field {short}"
+                ) from exc
             if not _is_set(value):
                 continue
             plaintext = str(value)
@@ -177,8 +189,15 @@ async def migrate_legacy_profile_secrets(
                 # reuse the winner; never overwrite a converted reference.
                 try:
                     same = str(existing.ciphertext or "") == plaintext
-                except Exception:
-                    same = False
+                except Exception as exc:
+                    logger.warning(
+                        "managed secret undecryptable field=%s error=%s",
+                        short,
+                        type(exc).__name__,
+                    )
+                    raise RuntimeError(
+                        f"managed secret undecryptable for field {short}"
+                    ) from exc
                 if same:
                     reused += 1
                     outcome = "reused"
@@ -186,9 +205,10 @@ async def migrate_legacy_profile_secrets(
                     # Distinct source credential already converted under this
                     # slug with a different value: keep the existing secret
                     # (first-writer wins) and report without plaintext.
+                    # The slug embeds the source user_id, so only the
+                    # field name is logged (no user-derived identifier).
                     logger.warning(
-                        "legacy profile secret conflict keeps existing slug=%s field=%s",
-                        slug,
+                        "legacy profile secret conflict keeps existing field=%s",
                         short,
                     )
                     outcome = "conflict_kept_existing"
