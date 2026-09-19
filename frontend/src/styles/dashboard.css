@@ -8360,9 +8360,22 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 /* Skill descriptions are long prose: let catalog cells wrap instead of
  * inheriting the data-table nowrap default, and keep the description column
- * from stretching the table past the viewport. */
+ * from stretching the table past the viewport. Match the workflow list table
+ * (fixed layout, full width, no cell spacing) so the catalog never forces
+ * horizontal document overflow in any engine. */
 .skills-catalog-page .data-table {
   white-space: normal;
+  width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.skills-catalog-page .data-table th,
+.skills-catalog-page .data-table td {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .skills-catalog-page .data-table td[data-column-key="description"] {
