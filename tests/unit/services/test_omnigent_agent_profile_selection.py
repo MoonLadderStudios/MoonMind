@@ -373,6 +373,8 @@ async def test_resolver_rejects_secret_backed_profile_without_active_secret(
 
 @pytest.mark.asyncio
 async def test_provider_profile_selection_is_scoped_to_requesting_user():
+    # Single-user (#4349): provider profiles are instance resources.
+    # ``owner_user_id`` is legacy provenance, never a selection predicate.
     session = _Session()
     user = SimpleNamespace(id=uuid4(), is_superuser=False)
 
@@ -396,8 +398,8 @@ async def test_provider_profile_selection_is_scoped_to_requesting_user():
     ]
     assert len(provider_queries) == 1
     sql = str(provider_queries[0])
-    assert "owner_user_id IS NULL" in sql
-    assert "owner_user_id =" in sql
+    assert "owner_user_id IS NULL" not in sql
+    assert "owner_user_id =" not in sql
 
 
 @pytest.mark.asyncio
@@ -433,7 +435,9 @@ async def test_idempotent_default_resolution_reuses_exact_profile_usage():
         is ManagedAgentProviderProfile
     ]
     assert provider_queries
-    assert all("owner_user_id IS NULL" in statement for statement in provider_queries)
+    # Single-user (#4349): no human-owner predicate in selection.
+    assert all("owner_user_id IS NULL" not in statement for statement in provider_queries)
+    assert all("owner_user_id =" not in statement for statement in provider_queries)
 
 
 @pytest.mark.asyncio
