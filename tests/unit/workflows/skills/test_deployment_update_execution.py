@@ -2350,6 +2350,40 @@ async def test_worker_mount_decides_before_the_deployment_has_containers(
 
 
 @pytest.mark.asyncio
+async def test_windows_effective_host_rewrites_even_with_daemon_evidence(
+    tmp_path, monkeypatch, host_dir_evidence
+):
+    """A Windows host directory is never a Linux Compose project directory.
+
+    Regression: an installed ``D:\\...`` spelling proved the daemon resolves
+    it, so the runner reused it as ``--project-directory``. Linux Compose
+    treats a drive-letter path as relative, resolving binds to
+    ``/workspace/host_project/D:\\...`` and failing with ``too many colons``.
+    The Linux worker must render through its local checkout and map binds
+    into the Desktop namespace instead.
+    """
+
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr(
+        deployment_execution,
+        "_probe_docker_desktop_daemon",
+        AsyncMock(return_value=True),
+    )
+    # WSL checkout with a previously Windows-created deployment.
+    host_dir_evidence["installed"] = ("D:\\code\\MoonMind",)
+    runner = HostDockerComposeRunner(
+        project_dir="/mnt/d/code/MoonMind", local_project_dir=str(tmp_path)
+    )
+
+    assert await runner._record_daemon_host_dir() == "D:\\code\\MoonMind"
+    assert await runner._use_desktop_host_rewrite() is True
+    assert runner._host_bind_source_for_local_path(str(tmp_path)) == (
+        "/run/desktop/mnt/host/d/code/MoonMind"
+    )
+
+
+@pytest.mark.asyncio
 async def test_desktop_rewrite_still_guesses_without_daemon_evidence(
     tmp_path, monkeypatch, host_dir_evidence
 ):
