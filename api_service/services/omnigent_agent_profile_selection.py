@@ -11,7 +11,7 @@ import re
 from typing import Any, Mapping
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -163,13 +163,9 @@ def _provider_materializer_error(
 def _provider_profile_visibility_filter(user: User | None) -> Any | None:
     """Return the SQL visibility boundary shared by explicit/default selection."""
 
-    user_id = getattr(user, "id", None)
-    if user_id is None or bool(getattr(user, "is_superuser", False)):
-        return None
-    return or_(
-        ManagedAgentProviderProfile.owner_user_id.is_(None),
-        ManagedAgentProviderProfile.owner_user_id == user_id,
-    )
+    # Single-user (#4349): provider profiles are instance resources.
+    # ``owner_user_id`` is legacy provenance, never an access predicate.
+    return None
 
 
 def _enforce_override_ceilings(
@@ -332,10 +328,10 @@ async def resolve_agent_profile_snapshot(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "agentProfile.profileId is required"
         )
     profile = await session.get(OmnigentAgentProfile, profile_id)
-    if profile is None or (
-        profile.visibility == "private"
-        and (user is None or profile.owner_id != user.id)
-    ):
+    # Single-user (#4349): execution configurations are instance resources;
+    # private/workspace scoping by human owner is removed. ``user`` is
+    # retained for call-site compatibility only.
+    if profile is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "agent profile not found")
     if profile.state != "active":
         raise HTTPException(status.HTTP_409_CONFLICT, "agent profile is not active")

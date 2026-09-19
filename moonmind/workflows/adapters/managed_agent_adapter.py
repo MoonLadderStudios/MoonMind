@@ -598,9 +598,12 @@ def build_managed_profile_launch_context(
 
     profile_id = str(profile.get("profile_id") or "").strip()
     profile_runtime = str(runtime_for_profile or "").strip()
-    owner_user_id = str(
-        profile.get("owner_user_id") or profile.get("ownerUserId") or ""
-    ).strip() or None
+    # Single-user (#4349): launch/materialization consumers resolve
+    # credentials from the explicit profile + managed-secret reference.
+    # Profile ``owner_user_id``/``ownerUserId`` is legacy provenance, never
+    # launch authority, so it is not threaded into execution context,
+    # container ownership, or Temporal payloads.
+    owner_user_id: str | None = None
 
     runtime_env_overrides = profile.get("runtime_env_overrides") or {}
     if isinstance(runtime_env_overrides, dict):

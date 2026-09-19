@@ -86,6 +86,37 @@ class OmnigentOAuthHostRepository:
         self._session_factory = session_factory
 
     @staticmethod
+    def _is_legacy_owner_mount(
+        mount: Any,
+        expected: Any,
+        profile: ManagedAgentProviderProfile,
+    ) -> bool:
+        """Accept pre-#4349 mounts that encoded application-user identity.
+
+        Legacy rows wrote ``ownerUserId=str(profile.owner_user_id or
+        "system")``. They remain operational until refreshed; every field
+        except the owner identity must already match the profile-bound
+        expectation.
+        """
+        try:
+            got = mount.auth_volume_ref
+            want = expected.auth_volume_ref
+        except AttributeError:
+            return False
+        legacy_owner = str(getattr(profile, "owner_user_id", None) or "system")
+        if str(getattr(got, "owner_user_id", "")) != legacy_owner:
+            return False
+        return (
+            got.provider_profile_id == want.provider_profile_id
+            and got.runtime_id == want.runtime_id
+            and got.provider_id == want.provider_id
+            and got.volume_ref == want.volume_ref
+            and got.credential_generation == want.credential_generation
+            and mount.target_path == expected.target_path
+            and mount.access_mode == expected.access_mode
+        )
+
+    @staticmethod
     def _mount_from_profile(
         profile: ManagedAgentProviderProfile,
     ) -> CredentialMountRef:
@@ -122,7 +153,13 @@ class OmnigentOAuthHostRepository:
                 providerId=provider_id,
                 volumeRef=profile.volume_ref,
                 credentialGeneration=profile.credential_generation,
-                ownerUserId=str(profile.owner_user_id or "system"),
+                # Single-user (#4349): session identity is a
+                # credential/runtime concern, not a MoonMind login. The
+                # mount is owned by its provider profile; legacy rows
+                # carrying a user id remain readable via the transition
+                # check in ``_binding_model`` but new mounts never encode
+                # application-user identity.
+                ownerUserId=f"profile:{profile.profile_id}",
             ),
             targetPath=target_path,
             accessMode="read_write",
@@ -150,7 +187,7 @@ class OmnigentOAuthHostRepository:
     ) -> OmnigentOAuthHostBinding:
         mount = CredentialMountRef.model_validate(record.credential_mount_template_json)
         expected = cls._mount_from_profile(profile)
-        if mount != expected:
+        if mount != expected and not cls._is_legacy_owner_mount(mount, expected, profile):
             raise OmnigentOAuthHostError(
                 "host binding credential mount differs from the Provider Profile",
                 code=HostPreflightFailure.BINDING_MISMATCH.value,
