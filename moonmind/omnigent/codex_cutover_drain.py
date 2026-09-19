@@ -31,6 +31,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import importlib
+import json
 import os
 from typing import Any, Mapping, Sequence
 
@@ -38,6 +40,31 @@ from typing import Any, Mapping, Sequence
 #: work may enter the retired direct-Codex lane. Unset means the lane is not
 #: retired and the usable path is preserved.
 DEPLOYMENT_CUTOFF_ENV = "MOONMIND_CODEX_DIRECT_RETIRED_AT"
+
+#: Deployment-declared linked qualification for the generic Codex combination
+#: (MoonLadderStudios/MoonMind#3931 R1). The reference plus SHA-256 digest name
+#: independently resolvable observed evidence; the dimensions document carries
+#: the exact qualified combination. When none of these are configured, generic
+#: promotion defers to the existing boolean qualification chain so the usable
+#: path is preserved until its qualified replacement is declared.
+LINKED_QUALIFICATION_REF_ENV = "MOONMIND_CODEX_GENERIC_QUALIFICATION_REF"
+LINKED_QUALIFICATION_DIGEST_ENV = "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIGEST"
+LINKED_QUALIFICATION_RESULT_ENV = "MOONMIND_CODEX_GENERIC_QUALIFICATION_RESULT"
+LINKED_QUALIFICATION_DIMENSIONS_ENV = (
+    "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS"
+)
+
+#: Deployment-declared selected generic Codex combination (JSON object with the
+#: exact dimensions in :data:`REQUIRED_SUPPORT_DIMENSIONS`). Read by
+#: :func:`resolve_generic_codex_selection` so the rollout policy can bind the
+#: declared selection to its linked qualification evidence.
+GENERIC_SELECTION_ENV = "MOONMIND_CODEX_GENERIC_SELECTION"
+
+#: Boolean qualification switch owned by #3832. Read here with the same
+#: fail-closed default (false) as ``settings.generic_codex_qualified`` so this
+#: module never loosens the existing gate; it only adds exactness once linked
+#: evidence is declared.
+GENERIC_CODEX_QUALIFIED_ENV = "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED"
 
 #: Runtime ids that count as the retired direct lane.
 RETIRED_DIRECT_RUNTIME_IDS = frozenset({"codex_cli", "codex-direct", "direct"})
@@ -103,6 +130,30 @@ RETAINED_BRANCHES: tuple[dict[str, str], ...] = (
 
 _BRANCH_INDEX: dict[str, dict[str, str]] = {
     branch["branch"]: dict(branch) for branch in RETAINED_BRANCHES
+}
+
+#: Minimum runtime mechanism behind each retained branch. A fixture alone is
+#: never the mechanism: every branch resolves to an importable production
+#: symbol that still serves retained histories or persisted inputs until the
+#: branch's removal condition is met. :func:`verify_retained_branch_runtime`
+#: proves the binding; deleting a bound symbol without meeting the removal
+#: condition breaks that proof instead of silently dropping compatibility.
+BRANCH_RUNTIME_BINDINGS: dict[str, str] = {
+    # Old conformance/promotion evidence still decodes through the cutover
+    # boundary so retained histories replay.
+    "temporal_history_decoders": "moonmind.omnigent.cutover:evaluate_promotion",
+    # Already-recorded raw-path payloads decode only through this named
+    # historical path; new authoring must use ``workspaceSource``.
+    "persisted_input_decoders": (
+        "moonmind.omnigent.workspace_sources:decode_legacy_workspace_path"
+    ),
+    # Persisted sessions/provenance/journal/artifacts/checkpoints stay
+    # readable without a live worker through the control-plane repositories.
+    "historical_read_model": "moonmind.omnigent.control_plane.repositories",
+    # Supported reset/replay operations route by worker deployment version.
+    "supported_worker_routing": (
+        "moonmind.workflows.temporal.release_routing:current_version"
+    ),
 }
 
 #: Changed-boundary coverage. Each boundary maps to the drain/disposition
@@ -266,6 +317,207 @@ def retained_disposition(branch: str) -> dict[str, str]:
     return dict(record)
 
 
+def _boolean_qualified(values: Mapping[str, Any]) -> bool:
+    return str(values.get(GENERIC_CODEX_QUALIFIED_ENV) or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def resolve_generic_codex_selection(
+    env: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return the deployment-declared generic Codex selection, if any.
+
+    Unset means the deployment has not named its exact selected combination;
+    callers preserve existing behavior in that case rather than guessing.
+    """
+
+    values = os.environ if env is None else env
+    raw = str(values.get(GENERIC_SELECTION_ENV) or "").strip()
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "generic_selection_invalid: MOONMIND_CODEX_GENERIC_SELECTION "
+            "must be a JSON object"
+        ) from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError(
+            "generic_selection_invalid: MOONMIND_CODEX_GENERIC_SELECTION "
+            "must be a JSON object"
+        )
+    return dict(payload)
+
+
+def resolve_linked_generic_qualification(
+    env: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return the deployment-declared linked qualification, if any.
+
+    ``None`` means no linked evidence is declared and the caller defers to the
+    existing boolean qualification chain. A declared reference with a bad
+    digest, a non-pass observed result, or missing dimensions raises: declared
+    evidence is verified exactly, never inferred.
+    """
+
+    values = os.environ if env is None else env
+    ref = str(values.get(LINKED_QUALIFICATION_REF_ENV) or "").strip()
+    if not ref:
+        return None
+    digest = str(values.get(LINKED_QUALIFICATION_DIGEST_ENV) or "").strip().lower()
+    if len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
+        raise ValueError("linked_qualification_digest_required: lowercase SHA-256 required")
+    if str(values.get(LINKED_QUALIFICATION_RESULT_ENV) or "").strip() != "passed":
+        raise ValueError("linked_qualification_not_observed: observed_result must be passed")
+    raw_dimensions = str(values.get(LINKED_QUALIFICATION_DIMENSIONS_ENV) or "").strip()
+    try:
+        dimensions = json.loads(raw_dimensions) if raw_dimensions else None
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "support_dimension_mismatch: qualification dimensions missing"
+        ) from exc
+    if not isinstance(dimensions, Mapping):
+        raise ValueError(
+            "support_dimension_mismatch: qualification dimensions missing"
+        )
+    return {
+        "linked_qualification_ref": ref,
+        "qualification_digest": digest,
+        "observed_result": "passed",
+        "dimensions": dict(dimensions),
+    }
+
+
+def generic_codex_promotion_permitted(
+    selection: Mapping[str, Any] | None,
+    env: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return whether the generic Codex row may promote for new defaults.
+
+    The boolean qualification switch stays fail-closed: false never promotes.
+    While no linked evidence is declared, a true boolean preserves the existing
+    promotion so the usable path survives until its qualified replacement is
+    declared. Once linked evidence is declared, the declared selection must
+    match it exactly via :func:`require_exact_generic_support`; mismatches,
+    missing selections, and invalid declarations fail closed to ``False``
+    (explicit-only, never a fallback to different credentials, a different
+    runtime, or a less-constrained path).
+    """
+
+    values = os.environ if env is None else env
+    if not _boolean_qualified(values):
+        return False
+    try:
+        qualification = resolve_linked_generic_qualification(values)
+    except ValueError:
+        return False
+    if qualification is None:
+        return True
+    if not isinstance(selection, Mapping):
+        return False
+    try:
+        require_exact_generic_support(selection, qualification)
+    except ValueError:
+        return False
+    return True
+
+
+def collect_drain_inventory(
+    sources: Mapping[str, Any] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Collect one drain inventory from injectable per-category sources.
+
+    Each category maps to either a ready item list or a zero-argument callable
+    returning one. A raising source becomes a single ``unknown`` item: unknown
+    visibility is reported, never treated as permission to delete. Categories
+    with no source are left missing so :func:`build_drain_report` fails closed
+    with ``drain_inventory_category_missing``. Live Temporal visibility,
+    schedule, lease, publication, and cleanup queries are injected here by the
+    operator's drain procedure; this collector owns the failure semantics, not
+    the live clients.
+    """
+
+    data = dict(sources or {})
+    inventory: dict[str, list[dict[str, Any]]] = {}
+    for category in DRAIN_INVENTORY_CATEGORIES:
+        if category not in data:
+            continue
+        source = data[category]
+        if callable(source):
+            try:
+                items = source()
+            except Exception:
+                inventory[category] = [
+                    {
+                        "id": f"{category}-unreachable",
+                        "state": "unknown",
+                    }
+                ]
+                continue
+        else:
+            items = source
+        inventory[category] = list(items)
+    return inventory
+
+
+def _resolve_binding_target(target: str) -> dict[str, Any]:
+    module_name, _, attribute = target.partition(":")
+    try:
+        module = importlib.import_module(module_name)
+        if attribute:
+            getattr(module, attribute)
+        return {"resolved": True, "target": target}
+    except (ImportError, AttributeError):
+        return {"resolved": False, "target": target}
+
+
+def verify_retained_branch_runtime(
+    branch: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Prove every retained branch still has its runtime mechanism.
+
+    Returns per-branch ``{resolved, target}`` statuses. With a branch name,
+    verifies only that branch; unknown names raise. A ``resolved: False``
+    status means the minimum implementation or routing path is gone while its
+    consumer/removal condition still names it, so removal work must restore
+    the mechanism or meet the removal condition first.
+    """
+
+    names = [branch] if branch is not None else list(BRANCH_RUNTIME_BINDINGS)
+    statuses: dict[str, dict[str, Any]] = {}
+    for name in names:
+        target = BRANCH_RUNTIME_BINDINGS.get(str(name or "").strip())
+        if target is None:
+            raise ValueError(f"unknown_retained_branch:{branch!r}")
+        statuses[str(name)] = _resolve_binding_target(target)
+    return statuses
+
+
+def cutover_authorities() -> dict[str, Any]:
+    """Name the three cutover authorities without adding a state machine.
+
+    Rollout authority stays in ``moonmind.omnigent.cutover`` (``CutoverPhase``),
+    retirement authority stays in ``moonmind.omnigent.legacy_retirement``
+    (``RetirementClass``), and deployment-owned retirement of the direct lane
+    is exactly one instant (``MOONMIND_CODEX_DIRECT_RETIRED_AT``). This helper
+    records that settlement so overlapping switches converge on the single
+    cutoff instead of growing a competing phase machine.
+    """
+
+    return {
+        "authorities": ("rollout", "retirement", "deployment_cutoff"),
+        "deployment_cutoff_env": DEPLOYMENT_CUTOFF_ENV,
+        "adds_state_machine": False,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class DrainReport:
     """Bounded four-state drain report. Pure evidence; authorizes nothing."""
@@ -344,12 +596,25 @@ __all__ = [
     "RESOURCE_STATES",
     "REQUIRED_SUPPORT_DIMENSIONS",
     "RETAINED_BRANCHES",
+    "BRANCH_RUNTIME_BINDINGS",
     "BOUNDARY_COVERAGE",
+    "GENERIC_SELECTION_ENV",
+    "GENERIC_CODEX_QUALIFIED_ENV",
+    "LINKED_QUALIFICATION_REF_ENV",
+    "LINKED_QUALIFICATION_DIGEST_ENV",
+    "LINKED_QUALIFICATION_RESULT_ENV",
+    "LINKED_QUALIFICATION_DIMENSIONS_ENV",
     "DrainReport",
     "parse_deployment_cutoff",
     "direct_retired_by_cutoff",
     "assert_new_admission_allowed",
     "require_exact_generic_support",
+    "resolve_generic_codex_selection",
+    "resolve_linked_generic_qualification",
+    "generic_codex_promotion_permitted",
     "retained_disposition",
+    "verify_retained_branch_runtime",
+    "cutover_authorities",
     "build_drain_report",
+    "collect_drain_inventory",
 ]

@@ -966,14 +966,33 @@ def default_runtime_provider_rollout_policy(
     claude_generic = generic_claude_qualified(env=source)
     opencode = opencode_support_enabled(env=source)
 
+    # Exact linked qualification for the generic Codex row
+    # (MoonLadderStudios/MoonMind#3931 R1). While the deployment declares no
+    # linked evidence, promotion defers to the boolean switch so the usable
+    # path is preserved; once declared, the declared selection must match it
+    # exactly or the row stays explicit-only with no fallback to different
+    # credentials, a different runtime, or a less-constrained path.
+    from moonmind.omnigent.codex_cutover_drain import (
+        generic_codex_promotion_permitted,
+        resolve_generic_codex_selection,
+    )
+
+    codex_generic_promoted = codex_generic and generic_codex_promotion_permitted(
+        resolve_generic_codex_selection(source), source
+    )
+
     rules = (
         _rule(
             target_id="codex.generic-omnigent",
             label="Codex via generic Omnigent",
             state=(
                 RolloutState.new_work_default
-                if codex_generic
-                else RolloutState.disabled
+                if codex_generic_promoted
+                else (
+                    RolloutState.explicit_only
+                    if codex_generic
+                    else RolloutState.disabled
+                )
             ),
             selector={
                 "harness_id": "codex-native",

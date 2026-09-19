@@ -13,14 +13,20 @@ import pytest
 
 from moonmind.omnigent.codex_cutover_drain import (
     BOUNDARY_COVERAGE,
+    BRANCH_RUNTIME_BINDINGS,
     DEPLOYMENT_CUTOFF_ENV,
     DRAIN_INVENTORY_CATEGORIES,
     RETAINED_BRANCHES,
     assert_new_admission_allowed,
     build_drain_report,
+    collect_drain_inventory,
+    cutover_authorities,
     direct_retired_by_cutoff,
+    generic_codex_promotion_permitted,
     require_exact_generic_support,
+    resolve_linked_generic_qualification,
     retained_disposition,
+    verify_retained_branch_runtime,
 )
 
 
@@ -178,3 +184,121 @@ def test_boundary_coverage_names_changed_boundaries():
     }
     for boundary, coverage in BOUNDARY_COVERAGE.items():
         assert coverage, boundary
+
+
+def _linked_env(selection, **overrides):
+    import json
+
+    env = {
+        "MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "true",
+        "MOONMIND_CODEX_GENERIC_QUALIFICATION_REF": "artifacts/qualification/generic-codex.json",
+        "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIGEST": "b" * 64,
+        "MOONMIND_CODEX_GENERIC_QUALIFICATION_RESULT": "passed",
+        "MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS": json.dumps(
+            {
+                "image": selection["image"],
+                "runtime_pack": selection["runtime_pack"],
+                "materializer": selection["materializer"],
+                "ownership_mode": selection["ownership_mode"],
+                "capabilities": list(selection["capabilities"]),
+            }
+        ),
+    }
+    env.update(overrides)
+    return env
+
+
+def test_linked_qualification_unconfigured_defers_to_boolean_gate():
+    assert resolve_linked_generic_qualification({}) is None
+    assert resolve_linked_generic_qualification(
+        {"MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "true"}
+    ) is None
+
+
+def test_linked_qualification_rejects_bad_digest():
+    selection = _selection()
+    env = _linked_env(selection, MOONMIND_CODEX_GENERIC_QUALIFICATION_DIGEST="zz")
+    with pytest.raises(ValueError, match="linked_qualification_digest_required"):
+        resolve_linked_generic_qualification(env)
+
+
+def test_generic_promotion_requires_linked_evidence_for_new_defaults():
+    selection = _selection()
+    # No linked evidence declared: preserve the existing boolean promotion so
+    # the usable path is not removed before its qualified replacement exists.
+    assert (
+        generic_codex_promotion_permitted(
+            selection, {"MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED": "true"}
+        )
+        is True
+    )
+    # Linked exact evidence promotes.
+    assert (
+        generic_codex_promotion_permitted(selection, _linked_env(selection)) is True
+    )
+    # Dimension mismatch never falls back to another runtime/path.
+    bad = _linked_env(selection)
+    import json
+
+    dims = json.loads(bad["MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS"])
+    dims["materializer"] = "different-materializer@9"
+    bad["MOONMIND_CODEX_GENERIC_QUALIFICATION_DIMENSIONS"] = json.dumps(dims)
+    assert generic_codex_promotion_permitted(selection, bad) is False
+    # Declared linked evidence with no verifiable selection fails closed.
+    assert generic_codex_promotion_permitted(None, _linked_env(selection)) is False
+    # Boolean false stays disabled even with linked evidence present.
+    env = _linked_env(selection)
+    env["MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED"] = "false"
+    assert generic_codex_promotion_permitted(selection, env) is False
+
+
+def test_collect_drain_inventory_maps_source_failure_to_unknown():
+    def ok():
+        return [{"id": "s-1", "state": "clean"}]
+
+    def boom():
+        raise RuntimeError("visibility unreachable")
+
+    inventory = collect_drain_inventory({"schedules": ok, "queued_starts": boom})
+    assert inventory["schedules"] == [{"id": "s-1", "state": "clean"}]
+    assert inventory["queued_starts"][0]["state"] == "unknown"
+    # Missing categories stay missing so build_drain_report fails closed.
+    report = build_drain_report(inventory)
+    assert report.deletable is False
+    assert any("drain_inventory_category_missing" in b for b in report.blockers)
+
+
+def test_retained_branches_bind_to_runtime_mechanisms():
+    assert set(BRANCH_RUNTIME_BINDINGS) == {
+        branch["branch"] for branch in RETAINED_BRANCHES
+    }
+    statuses = verify_retained_branch_runtime()
+    assert set(statuses) == set(BRANCH_RUNTIME_BINDINGS)
+    for branch, status in statuses.items():
+        assert status["resolved"] is True, branch
+        assert status["target"], branch
+    with pytest.raises(ValueError, match="unknown_retained_branch"):
+        verify_retained_branch_runtime("no-such-branch")
+
+
+def test_cutover_authorities_name_single_deployment_cutoff():
+    authorities = cutover_authorities()
+    assert authorities["deployment_cutoff_env"] == DEPLOYMENT_CUTOFF_ENV
+    assert "rollout" in authorities["authorities"]
+    assert "retirement" in authorities["authorities"]
+    assert "deployment_cutoff" in authorities["authorities"]
+    assert authorities["adds_state_machine"] is False
+
+
+def test_recorded_history_decoding_survives_retired_lane_cutoff():
+    from moonmind.omnigent.workspace_sources import decode_legacy_workspace_path
+
+    env = {DEPLOYMENT_CUTOFF_ENV: "2026-01-01T00:00:00Z"}
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="codex_direct_retired_by_deployment_cutoff"):
+        assert_new_admission_allowed("codex_cli", env=env, now=now)
+    # Already-recorded payloads still decode; the cutoff guards new
+    # admission only and never erases historical evidence.
+    assert (
+        decode_legacy_workspace_path({"workspacePath": "/recorded/path"}) == "/recorded/path"
+    )
