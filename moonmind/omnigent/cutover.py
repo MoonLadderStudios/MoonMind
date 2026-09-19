@@ -394,9 +394,31 @@ class EffectivePhase:
                 list(evidence_refs) if isinstance(evidence_refs, list) else []
             ),
             "blockers": list(self.blockers),
-            "directLaunchAllowed": self.phase
-            < CutoverPhase.DIRECT_LAUNCH_DISABLED,
+            "directLaunchAllowed": self._direct_launch_allowed(),
         }
+
+    def _direct_launch_allowed(self) -> bool:
+        """Return whether direct launch is currently admitted.
+
+        The rollout phase is the rollout authority, but the deployment-owned
+        direct-retirement cutoff (MoonLadderStudios/MoonMind#3931,
+        ``MOONMIND_CODEX_DIRECT_RETIRED_AT``) closes the direct lane to new
+        work once it passes. Both must permit direct work; the published
+        readiness must match the admission decision in ``select_runtime``.
+        """
+
+        if self.phase >= CutoverPhase.DIRECT_LAUNCH_DISABLED:
+            return False
+        try:
+            from moonmind.omnigent.codex_cutover_drain import (
+                direct_retired_by_cutoff,
+            )
+        except ImportError:
+            return True
+        try:
+            return not direct_retired_by_cutoff()
+        except ValueError:
+            return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,6 +492,8 @@ def select_runtime(
     release_status: EffectivePhase | None = None,
     rollback_generation: str | None = None,
     versioned_default: bool = False,
+    env: Mapping[str, Any] | None = None,
+    now: datetime | None = None,
 ) -> RuntimeSelection:
     """Apply rollout defaults without ever rewriting an explicit selection.
 
@@ -486,13 +510,23 @@ def select_runtime(
     The rollout phase and the code-owned retirement class are separate
     authorities and both must permit a runtime before it becomes a new
     selection (#3835). Neither ever affects an already-recorded plan.
+
+    The deployment-owned direct-retirement cutoff
+    (MoonLadderStudios/MoonMind#3931,
+    ``MOONMIND_CODEX_DIRECT_RETIRED_AT``) is a third authority: once the
+    cutoff passes, no new direct work is admitted regardless of phase. It is
+    evaluated here so the retired lane rejects at the same selection boundary
+    without rewriting already-recorded plans.
     """
+
+    from moonmind.omnigent.codex_cutover_drain import assert_new_admission_allowed
 
     explicit = str(authored_runtime or "").strip().lower()
     if explicit:
         explicit = normalize_runtime_id(explicit)
         if explicit == "codex_cli" and phase >= CutoverPhase.DIRECT_LAUNCH_DISABLED:
             raise ValueError("codex_direct_launch_disabled_by_cutover_phase")
+        assert_new_admission_allowed(explicit, env=env, now=now)
         assert_runtime_new_admission(explicit, rollback_generation=rollback_generation)
         return RuntimeSelection(
             explicit,
@@ -523,6 +557,7 @@ def select_runtime(
         selected = "omnigent" if default == "codex_cli" and phase >= threshold else default
     # A configured default may not keep a direct runtime as a default target
     # once its retirement class stops admitting new work (#3835 required work 2).
+    assert_new_admission_allowed(selected, env=env, now=now)
     assert_runtime_new_admission(selected, rollback_generation=rollback_generation)
     return RuntimeSelection(
         selected,
