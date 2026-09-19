@@ -482,9 +482,9 @@ async def test_file_stack_lock_waits_out_a_bounded_background_owner(tmp_path) ->
         await asyncio.sleep(0.2)
         await background.release()
 
-    releaser = asyncio.create_task(_release_soon())
-    lease = await manager.acquire("moonmind", wait_seconds=10)
-    await releaser
+    async with asyncio.TaskGroup() as releases:
+        releases.create_task(_release_soon())
+        lease = await manager.acquire("moonmind", wait_seconds=10)
     await lease.release()
 
 
@@ -537,9 +537,9 @@ async def test_deployment_update_waits_out_a_background_lock_holder(tmp_path) ->
         await asyncio.sleep(0.2)
         await background.release()
 
-    releaser = asyncio.create_task(_release_soon())
-    result = await executor.execute(_inputs())
-    await releaser
+    async with asyncio.TaskGroup() as releases:
+        releases.create_task(_release_soon())
+        result = await executor.execute(_inputs())
 
     assert result.status == "COMPLETED"
     assert store.records

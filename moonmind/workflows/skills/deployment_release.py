@@ -66,9 +66,23 @@ def record_attempt_error(directory, owner, attempt, error):
     history = []
     if path.exists():
         try:
-            history = list(json.loads(path.read_text()).get("attempts") or [])
+            previous = json.loads(path.read_text())
         except (OSError, ValueError):
-            history = []
+            previous = {}
+        recorded = previous.get("attempts")
+        if isinstance(recorded, list) and recorded:
+            history = list(recorded)
+        elif previous.get("error"):
+            # A release already running when this history was introduced has a
+            # record carrying only the top-level attempt and error. Seed the
+            # history from it so the update that adds the history does not
+            # erase the failure the history exists to preserve.
+            history = [
+                {
+                    "attempt": previous.get("attempt") or 1,
+                    "error": previous["error"],
+                }
+            ]
     history.append({"attempt": attempt, "error": error})
     write_record(
         path,
