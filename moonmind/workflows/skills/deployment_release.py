@@ -1337,6 +1337,8 @@ class ReleaseCohort:
                         retained_runner, retained_image, force=True
                     )
                 except Exception:
+                    # Best-effort rollback: a failed restore must not mask
+                    # the original qualification failure below.
                     pass
             raise
 
