@@ -119,6 +119,31 @@ deployment whose gateway container is absent or publishes no health is left
 alone; creating one belongs to the stack's own `up`, never to this recovery
 path.
 
+## Package registry egress
+
+Agent sandboxes reach `pypi.org`, `files.pythonhosted.org`, and
+`registry.npmjs.org` by default, on TCP/443 like every other approved
+destination. A sandbox that cannot install a repository's declared
+dependencies cannot run that repository's tests, so this class is on by
+default rather than opt-in.
+
+`MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED=false` denies the whole class. Only
+an explicit false disables it; an unset or unrecognized value keeps the
+default, so a typo cannot quietly close the sandbox and turn dependency
+installs into unexplained network failures. Disabling never withdraws source
+control, container images, or model providers.
+
+The registry list is image-owned policy in
+`docker/moonmind-egress/package-registry-domains.txt`, not deployment data, so
+it travels with the reviewed enforcer and is not editable per host; that is the
+difference from `omnigent-provider-domains.txt`. The bootstrap copies it into
+the live directory, or writes an empty file when the setting is false, and
+Squid reads it as a file-backed `dstdomain` ACL. An empty file is an empty ACL
+that matches nothing, not a startup failure. The setting feeds both the gateway
+and `DEFAULT_EGRESS_PROFILE`, and it changes `EGRESS_CONFIG_DIGEST`, so the
+proxy and the API/worker fleet must be recreated together or attestation fails
+closed against the mismatch.
+
 The proxy permits only HTTPS `CONNECT` to port 443 for approved provider,
 source-control, artifact, and retrieval domains. All other methods, ports, IP
 literals, redirects to unapproved names, and alternate CONNECT targets fail.

@@ -727,11 +727,24 @@ helper. An explicit private `ghcr.io` identity selects exactly one deployment
 configuration, in precedence order: the `MOONMIND_GHCR_PULL_*_SECRET_REF` (or
 `WORKFLOW_` equivalent) SecretRef pair, the deployment `GHCR_PULL_USER` +
 `GHCR_PULL_TOKEN` pair, or the `GHCR_PULL_USER` + `GHCR_PULL_TOKEN`
-managed-secret slug pair read coherently in one store session. The obsolete
-implicit configuration — converting a source `GITHUB_TOKEN` or model-profile
-PAT into pull credentials via GitHub username lookup, or reading
-`GHCR_PULL_*` plaintext from agent-authored launch fields — was removed under
-MoonLadderStudios/MoonMind#4012 and must not be reintroduced. Incomplete
+managed-secret slug pair read coherently in one store session.
+
+When none of those is configured, the deployment's own GitHub credential
+(`GITHUB_TOKEN` / `GITHUB_PAT`, needing `read:packages`) authenticates the pull
+through a GitHub username lookup, rather than downgrading to an anonymous pull
+that a private package denies. This deliberately reverses that part of
+MoonLadderStudios/MoonMind#4012: requiring a separately provisioned registry
+secret to pull an image the deployment itself declared is setup a single-user
+deployment does not need, and #4012 already allowed a registry identity to use
+a provider-supported token. `MOONMIND_GHCR_PULL_FROM_GITHUB_TOKEN_ENABLED=false`
+restores the strict separation.
+
+The derivation is bound to `ghcr.io` and to deployment-declared images — a
+managed-session or Omnigent image from deployment configuration, or a container
+job's `imageSourceRef`. An image reference supplied by a job or any other
+workflow input is never authenticated this way, which is the exposure #4012
+step 5 guards against. Reading `GHCR_PULL_*` plaintext from agent-authored
+launch fields stays removed and must not be reintroduced. Incomplete
 pairs, unresolvable SecretRefs, rotation/disable between the paired reads,
 managed-store outage, and denied/revoked credentials fail at the registry
 boundary without trying another identity, ambient Docker login, or an

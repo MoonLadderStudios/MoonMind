@@ -616,9 +616,28 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
             ("github", ".com"),
             ("opencode", ".ai"),
             ("openai", ".com"),
-            ("registry", ".npmjs", ".org"),
         ]
     }
+    # Package registries moved out of the static allowlist into one file-backed
+    # class that MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED can deny as a unit.
+    # They are still reachable by default, so assert the capability under its
+    # new owner rather than dropping the coverage.
+    registry_policy = (
+        REPO_ROOT / "docker" / "moonmind-egress" / "package-registry-domains.txt"
+    ).read_text(encoding="utf-8").split()
+    assert {
+        "".join(parts)
+        for parts in [
+            ("registry", ".npmjs", ".org"),
+            ("pypi", ".org"),
+            ("files", ".pythonhosted", ".org"),
+        ]
+    } <= set(registry_policy)
+    assert (
+        'acl allowed_package_registry_domains dstdomain -n '
+        '"/run/moonmind-egress/package-registry-domains.txt"'
+    ) in squid_config
+    assert "http_access allow allowed_package_registry_domains" in squid_config
     assert "http_access deny all" in squid_config
     assert "dns_nameservers 127.0.0.11" in squid_config
     assert "request_timeout 300 seconds" in squid_config

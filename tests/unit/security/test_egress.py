@@ -839,3 +839,40 @@ def test_network_ref_resolves_configured_override(monkeypatch):
         # Restore module-level defaults so later tests see the shipped values.
         monkeypatch.undo()
         importlib.reload(egress_module)
+
+
+PACKAGE_REGISTRY_HOSTS = {"pypi.org", "files.pythonhosted.org", "registry.npmjs.org"}
+
+
+def test_package_registry_egress_is_allowed_by_default(configured_egress):
+    """Installing declared dependencies is a supported default, not opt-in."""
+    module = configured_egress()
+
+    names = {d.dns_name for d in module.DEFAULT_EGRESS_PROFILE.destinations}
+    assert PACKAGE_REGISTRY_HOSTS <= names
+    assert all(
+        d.ports == (443,)
+        for d in module.DEFAULT_EGRESS_PROFILE.destinations
+        if d.dns_name in PACKAGE_REGISTRY_HOSTS
+    )
+
+
+def test_package_registry_egress_can_be_disabled(configured_egress, monkeypatch):
+    """An operator who prefers a closed sandbox turns the whole class off."""
+    monkeypatch.setenv("MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED", "false")
+    module = configured_egress()
+
+    names = {d.dns_name for d in module.DEFAULT_EGRESS_PROFILE.destinations}
+    assert not (PACKAGE_REGISTRY_HOSTS & names)
+    # Disabling package installs never withdraws the source-control and
+    # provider destinations the runtime itself depends on.
+    assert {"github.com", "ghcr.io"} <= names
+
+
+def test_package_registry_policy_digest_tracks_the_enabled_setting(
+    configured_egress, monkeypatch
+):
+    """The attested digest distinguishes an open sandbox from a closed one."""
+    enabled = configured_egress().EGRESS_CONFIG_DIGEST
+    monkeypatch.setenv("MOONMIND_PACKAGE_REGISTRY_EGRESS_ENABLED", "false")
+    assert configured_egress().EGRESS_CONFIG_DIGEST != enabled

@@ -1331,3 +1331,62 @@ async def test_seed_sync_refreshes_builtin_without_touching_custom_presets(tmp_p
     finally:
         await session.close()
         await engine.dispose()
+
+
+def test_checkbox_issue_references_declare_children_under_any_heading():
+    """A GitHub tracking list declares children wherever it appears.
+
+    Reproduces MoonLadderStudios/MoonMind#4364, whose children live under
+    ``## Required implementation issues`` rather than a ``Child issues``
+    heading. GitHub renders ``- [ ] #123`` as a tracked task list regardless of
+    the heading above it, so the list itself is the declaration.
+    """
+    body = (
+        "## Goal\n\nThis is a tracking issue. The implementation children own "
+        "the changes and their tests.\n\n"
+        "## Required implementation issues\n\n"
+        "### First increment\n\n"
+        "- [ ] #4366 Split reliability tests into four isolated shards.\n"
+        "- [ ] #4368 Enforce per-test and hard execution deadlines.\n"
+        "### Second increment\n\n"
+        "- [ ] #4373 Remove redundant routing-aging waits.\n"
+        "### Conditional follow-up, not an epic blocker\n\n"
+        "#4377 Cancel sibling backend suites through native matrix fail-fast.\n"
+        "## Ordering and ownership\n\n"
+        "#4373 and #4375 can be developed independently.\n"
+        "## Completion criteria\n\n"
+        "- [ ] The five required children have verified dispositions.\n"
+        "- [ ] Any no-additional-benefit disposition for #4375 includes evidence.\n"
+    )
+    assert declared_prerequisites(body, REPOSITORY) == [
+        (REPOSITORY, 4366),
+        (REPOSITORY, 4368),
+        (REPOSITORY, 4373),
+    ]
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "## Related work",
+        "## Related existing work",
+        "## Superseded issues",
+        "## See also",
+        "## Non-goals",
+        "## Out of scope",
+    ],
+)
+def test_context_sections_keep_tracking_lists_contextual(heading):
+    """A section named as context declares nothing, even as a checkbox list."""
+    body = f"## Work breakdown\n- [ ] #10 Implement.\n{heading}\n- [ ] #90 Background.\n"
+    assert declared_prerequisites(body, REPOSITORY) == [(REPOSITORY, 10)]
+
+
+def test_prose_checkboxes_outside_child_sections_declare_nothing():
+    """Acceptance checklists mentioning issues mid-sentence are not children."""
+    body = (
+        "## Completion gates\n"
+        "- [ ] Every requirement in #4024 has linked evidence.\n"
+        "- [ ] Representative CI runs complete within the new budgets.\n"
+    )
+    assert declared_prerequisites(body, REPOSITORY) == []
