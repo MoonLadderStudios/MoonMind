@@ -1670,7 +1670,13 @@ class ManagedAgentProviderProfile(BaseModel):
 
 
 class AuthVolumeRef(BaseModel):
-    """Secret-free durable identity for a profile-owned OAuth home volume."""
+    """Secret-free durable identity for a profile-owned OAuth home volume.
+
+    ``ownerUserId`` is credential/runtime provenance (``profile:<id>`` for
+    rows written after #4349; legacy application-user values remain
+    readable through the host-binding transition check), never a MoonMind
+    login. It carries no secret material.
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 

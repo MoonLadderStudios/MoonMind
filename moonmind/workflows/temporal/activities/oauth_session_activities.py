@@ -697,17 +697,11 @@ async def oauth_session_register_profile(
                 )
             effective_generation = existing_profile.credential_generation
         else:
-            try:
-                owner_id = (
-                    UUID(session_obj.requested_by_user_id)
-                    if session_obj.requested_by_user_id
-                    else None
-                )
-            except ValueError:
-                owner_id = None
+            # Single-user (#4349): no human owner on created profiles.
+            # ``requested_by_user_id`` is credential/runtime provenance.
             new_profile = ManagedAgentProviderProfile(
                 profile_id=session_obj.profile_id,
-                owner_user_id=owner_id,
+                owner_user_id=None,
                 **profile_data,
             )
             db.add(new_profile)
