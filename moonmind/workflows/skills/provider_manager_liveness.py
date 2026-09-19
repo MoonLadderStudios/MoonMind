@@ -59,7 +59,7 @@ RECOVERY_RUNBOOK = (
 # Visibility query that enumerates the manager singletons without touching
 # any other workflow family.
 MANAGER_VISIBILITY_QUERY = (
-    "WorkflowId STARTS WITH 'provider-profile-manager:'"
+    "WorkflowId STARTS_WITH 'provider-profile-manager:'"
 )
 
 
@@ -90,6 +90,22 @@ def _bounded(text: Any, limit: int = 500) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + "...[truncated]"
+
+
+def _db_count_for_runtime(
+    db_held_leases: Mapping[str, int] | None, runtime_id: str
+) -> int | None:
+    """Resolve the DB active-lease count for one runtime.
+
+    When the ledger was readable (mapping is not None) a runtime with no
+    matching rows is a confirmed count of zero — the grouped query returns no
+    entry for that runtime. When the ledger was unreadable (None), preserve
+    None so the evaluator records unavailable evidence instead of zero.
+    """
+
+    if db_held_leases is None:
+        return None
+    return int(db_held_leases.get(runtime_id, 0))
 
 
 def _sum_execution_grants(state: Mapping[str, Any]) -> tuple[int | None, int | None]:
@@ -185,6 +201,15 @@ def evaluate_provider_manager_liveness(
     blocked_reasons: list[str] = []
     for observation in observations:
         entry = asdict(observation)
+        if observation.status in {"DESCRIBE_FAILED", "VISIBILITY_MISSING"}:
+            blocked_reasons.append(
+                f"{observation.workflow_id}: manager inventory is uncertain "
+                f"({observation.inspection_status or observation.status}); "
+                "Visibility is eventually consistent and must not authorize promotion"
+            )
+            entry["finding"] = "observation_failed_closed"
+            evidence.append(entry)
+            continue
         if not observation.running:
             entry["finding"] = "not_running_starts_on_demand"
             evidence.append(entry)
@@ -277,7 +302,19 @@ def _is_nondeterminism_cause(event: Any) -> bool:
 
 
 def _is_workflow_task_failed(event: Any) -> bool:
-    return event.HasField("workflow_task_failed_event_attributes")
+    try:
+        return bool(event.HasField("workflow_task_failed_event_attributes"))
+    except Exception:
+        return False
+
+
+def _is_workflow_task_completed(event: Any) -> bool:
+    """Whether a history event is a successful workflow task."""
+
+    try:
+        return bool(event.HasField("workflow_task_completed_event_attributes"))
+    except Exception:
+        return False
 
 
 async def collect_provider_manager_liveness(
@@ -329,7 +366,7 @@ async def collect_provider_manager_liveness(
         handle = client.get_workflow_handle(workflow_id)
 
         running = False
-        status = "UNKNOWN"
+        status: str
         observed_run_id = run_id
         try:
             description = await handle.describe()
@@ -347,7 +384,7 @@ async def collect_provider_manager_liveness(
                     inspection_succeeded=False,
                     inspection_status="DESCRIBE_FAILED",
                     error=_bounded(exc),
-                    db_held_leases=(db_held_leases or {}).get(runtime_id),
+                    db_held_leases=_db_count_for_runtime(db_held_leases, runtime_id),
                 )
             )
             continue
@@ -408,13 +445,16 @@ async def collect_provider_manager_liveness(
                 # successful task, or a failure from another cause, ends the
                 # run: only an unbroken nondeterminism streak is the wedge.
                 for event in reversed(tail):
-                    if not _is_workflow_task_failed(event):
-                        continue
-                    task_failures += 1
-                    if _is_nondeterminism_cause(event):
-                        nondeterminism_failures += 1
-                    else:
+                    if _is_workflow_task_failed(event):
+                        task_failures += 1
+                        if _is_nondeterminism_cause(event):
+                            nondeterminism_failures += 1
+                        else:
+                            break
+                    elif _is_workflow_task_completed(event):
                         break
+                    else:
+                        continue
             except Exception:
                 # History scanning is best-effort evidence; the describe +
                 # query pair above already decides the fail-closed cases.
@@ -430,15 +470,55 @@ async def collect_provider_manager_liveness(
                 inspection=inspection,
                 workflow_task_failures=task_failures,
                 nondeterminism_failures=nondeterminism_failures,
-                db_held_leases=(db_held_leases or {}).get(runtime_id),
+                db_held_leases=_db_count_for_runtime(db_held_leases, runtime_id),
                 observed_from_history=observed_from_history,
             )
         )
+    if db_held_leases is not None:
+        observed_runtimes = {
+            str(obs.runtime_id or "").strip()
+            for obs in observations
+            if str(obs.runtime_id or "").strip()
+        }
+        for runtime_id, count in db_held_leases.items():
+            normalized = str(runtime_id or "").strip()
+            if not normalized or normalized in observed_runtimes:
+                continue
+            if wanted and normalized not in wanted:
+                continue
+            try:
+                active = int(count)
+            except (TypeError, ValueError):
+                continue
+            if active <= 0:
+                continue
+            observations.append(
+                ManagerLivenessObservation(
+                    workflow_id=f"provider-profile-manager:{normalized}",
+                    runtime_id=normalized,
+                    run_id="",
+                    running=False,
+                    status="VISIBILITY_MISSING",
+                    inspection_succeeded=False,
+                    inspection_status="VISIBILITY_MISSING",
+                    error=_bounded(
+                        "manager has active durable leases but no Temporal "
+                        "Visibility row; Visibility is eventually consistent "
+                        "and must not authorize promotion"
+                    ),
+                    db_held_leases=active,
+                )
+            )
     return observations
 
 
 async def read_db_held_lease_counts() -> dict[str, int] | None:
-    """Read DB held-lease counts per runtime for ledger reconciliation.
+    """Read DB active-lease counts per runtime for ledger reconciliation.
+
+    Counts both ``held`` and ``cleanup_requested`` rows: both states spend a
+    slot (see ``ACTIVE_DURABLE_LEASE_STATES``) and cleanup-requested leases
+    remain in the manager's ``current_leases``. Counting only ``held`` would
+    manufacture a ledger disagreement whenever cleanup is pending.
 
     Returns ``None`` when the ledger is unreadable so the caller records the
     gap as unavailable evidence instead of treating a missing read as zero
@@ -450,7 +530,9 @@ async def read_db_held_lease_counts() -> dict[str, int] | None:
 
         from api_service.db.base import get_async_session_context
         from api_service.db.models import ProviderProfileSlotLease
-        from moonmind.provider_profiles.lease_client import DurableLeaseState
+        from moonmind.provider_profiles.lease_client import (
+            ACTIVE_DURABLE_LEASE_STATES,
+        )
     except Exception:
         return None
     try:
@@ -460,7 +542,9 @@ async def read_db_held_lease_counts() -> dict[str, int] | None:
                     ProviderProfileSlotLease.runtime_id,
                     func.count(ProviderProfileSlotLease.id),
                 ).where(
-                    ProviderProfileSlotLease.lease_state == DurableLeaseState.HELD.value
+                    ProviderProfileSlotLease.lease_state.in_(
+                        sorted(ACTIVE_DURABLE_LEASE_STATES)
+                    )
                 ).group_by(
                     ProviderProfileSlotLease.runtime_id
                 )
