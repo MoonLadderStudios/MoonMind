@@ -771,6 +771,22 @@ class ReleaseCohort:
             client, db_held_leases=db_held_leases
         )
         disposition = evaluate_provider_manager_liveness(observations)
+        if disposition["blocked"] and db_held_leases is not None and any(
+            entry.get("finding") == "ledger_disagreement"
+            for entry in (disposition.get("evidence") or [])
+            if isinstance(entry, dict)
+        ):
+            # The DB count and the manager queries are not one atomic
+            # observation: a concurrent grant or release can move the ledger
+            # between the two reads and present as corruption. Confirm with
+            # one bounded reread before aborting promotion.
+            reread = await read_db_held_lease_counts()
+            if reread is not None:
+                db_held_leases = reread
+                observations = await collect_provider_manager_liveness(
+                    client, db_held_leases=db_held_leases
+                )
+                disposition = evaluate_provider_manager_liveness(observations)
         write_record(
             self.directory / "manager-liveness.json",
             {

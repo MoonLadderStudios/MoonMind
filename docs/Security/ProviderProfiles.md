@@ -1686,14 +1686,20 @@ revoke authority out from under it. An operator performs the cutover below.
    the redrive resumes the same stable claim instead of re-requesting or
    freeing the slot.
 
-   ```bash
-   temporal workflow terminate --workflow-id provider-profile-manager:<runtime> \
-     --reason "nondeterministic workflow-task loop (<event-id-and-cause>); operator cutover per ProviderProfiles.md 11.9"
-   temporal workflow start --workflow-id provider-profile-manager:<runtime> \
-     --type MoonMind.ProviderProfileManager \
-     --task-queue mm.workflow.user.v2 \
-     --input '{"runtime_id":"<runtime>"}'
-   ```
+    ```bash
+    temporal workflow terminate --workflow-id provider-profile-manager:<runtime> \
+      --reason "nondeterministic workflow-task loop (<event-id-and-cause>); operator cutover per ProviderProfiles.md 11.9"
+    TASK_QUEUE="$(python3 -c 'from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue; print(get_workflow_task_queue())')"
+    temporal workflow start --workflow-id provider-profile-manager:<runtime> \
+      --type MoonMind.ProviderProfileManager \
+      --task-queue "$TASK_QUEUE" \
+      --input '{"runtime_id":"<runtime>"}'
+    ```
+
+    Derive the task queue with `get_workflow_task_queue()` (honoring
+    `TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE`) instead of hard-coding
+    `mm.workflow.user.v2`; a hard-coded queue starts the replacement on an
+    unpolled queue whenever an installation overrides that setting.
 
 4. Verify the fresh manager: the query succeeds, the fencing generation
    resumes above every number the old run issued, and a slot grants:
