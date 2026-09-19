@@ -1637,6 +1637,84 @@ capacity ledger for that runtime is wedged. The one pre-marker behaviour that is
 empty while its scope was cooling down woke immediately and re-evaluated without
 suspending, so it recorded no commands to replay.
 
+### 11.9 Wedged-singleton recovery runbook (#4363)
+
+When `update-moonmind` blocks on `provider_manager_liveness_blocked`, or when
+`AgentRun` waiters park in `AWAITING SLOT` / `awaiting_provider_capacity` while
+the ledger shows free capacity and the wait reason names
+`manager_unqueryable`, the `provider-profile-manager:<runtime>` singleton is
+wedged (running, history not advancing, `get_state` query failing — typically
+`Unable to query workflow due to Workflow Task in failed state` after a
+nondeterminism loop). Automatic code deliberately never terminates the
+singleton itself: killing the run while a credential consumer is live would
+revoke authority out from under it. An operator performs the cutover below.
+`<runtime>` is the runtime family (for example `opencode`).
+
+1. Verify the DB lease ledger first. Terminating is only safe when no live
+   consumer holds a slot; a held row means a real run is executing.
+
+   ```sql
+   SELECT lease_state, count(*)
+     FROM provider_profile_slot_leases
+    WHERE runtime_id = '<runtime>'
+    GROUP BY lease_state;
+   SELECT profile_id, enabled, max_parallel_runs
+     FROM managed_agent_provider_profiles
+    WHERE runtime_id = '<runtime>';
+   ```
+
+   Proceed only when the held count is `0`. If any row is `held`, stop: the
+   manager is not the problem, capacity is genuinely spent.
+
+2. Confirm the wedge signature on the singleton (failing run ID,
+   nondeterminism message, no progress):
+
+   ```bash
+   temporal workflow describe --workflow-id provider-profile-manager:<runtime>
+   temporal workflow query --workflow-id provider-profile-manager:<runtime> \
+     --query-type get_state
+   ```
+
+   Expect `RUNNING` with the query failing (for example
+   `RPC_ERROR_FAILED_PRECONDITION`), plus repeated
+   `WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR` in
+   `temporal workflow show --workflow-id provider-profile-manager:<runtime>`.
+
+3. Terminate the wedged run and start fresh on the current worker. The fresh
+   start restores held leases and `cleanup_requested` rows from the durable
+   ledger with their recorded reasons (`fresh-start-db-lease-restore`), so
+   the redrive resumes the same stable claim instead of re-requesting or
+   freeing the slot.
+
+   ```bash
+   temporal workflow terminate --workflow-id provider-profile-manager:<runtime> \
+     --reason "nondeterministic workflow-task loop (<event-id-and-cause>); operator cutover per ProviderProfiles.md 11.9"
+   temporal workflow start --workflow-id provider-profile-manager:<runtime> \
+     --type MoonMind.ProviderProfileManager \
+     --task-queue mm.workflow.user.v2 \
+     --input '{"runtime_id":"<runtime>"}'
+   ```
+
+4. Verify the fresh manager: the query succeeds, the fencing generation
+   resumes above every number the old run issued, and a slot grants:
+
+   ```bash
+   temporal workflow query --workflow-id provider-profile-manager:<runtime> \
+     --query-type get_state
+   ```
+
+   Expect `current_leases` restored from the ledger (empty when step 1 showed
+   `0` held), `fencingGeneration` at or above the pre-cutover high-water
+   mark, and `total ... fails 0` on `temporal workflow describe`.
+
+5. Do not manually re-signal waiting `AgentRun` workflows. Each waiter keeps
+   its durable slot request and re-queues through its existing 120s slot-wait
+   timeout without operator action; the first timeout after the fresh start
+   grants against the restored ledger and moves the parent from
+   `awaiting_slot` to `executing`. Watch `mm_state='awaiting_slot'` drain
+   instead of poking signals (a duplicate signal is harmless but useless —
+   the manager already holds the request).
+
 ---
 
 ## 12. Runtime Materialization Pipeline
