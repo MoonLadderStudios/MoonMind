@@ -210,7 +210,11 @@ def test_profile_drift_reports_closest_identity_without_historical_error_explosi
     assert "launchPolicyRef differs" not in message
     assert "untrusted-private" not in message
     assert "retry deployment qualification" in message
-    assert len(message) < 700
+    # The default OpenCode Go failure names the exact stale credential and
+    # policy classes so the operator can revalidate the right profile.
+    assert "requested materializerRefs=[opencode-auth-json@1]" in message
+    assert "launchPolicyRef=omnigent-on-demand@1" in message
+    assert len(message) < 900
 
     # Duplicate exact identities still fail closed with a truthful diagnostic.
     exact_plan = SimpleNamespace(

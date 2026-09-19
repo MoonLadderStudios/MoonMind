@@ -979,6 +979,23 @@ profile.enabled = False
 
 The raw candidate key must not be persisted in workflow payloads, profile rows, diagnostics, audit rows, or artifacts.
 
+Failure to acquire the credential-maintenance lease is an infrastructure failure,
+before key validation. Temporal RPC failures and acquisition timeouts return HTTP
+503 with `provider_credential_manager_unavailable` and a safe retry diagnostic
+for Settings. Existing credentials, generation, and profile readiness remain
+unchanged; the failure does not classify the submitted key as invalid.
+
+The acquisition outcome is ambiguous: Temporal may have accepted
+`AcquireCredentialMaintenanceLease` before the result was lost, so the
+deterministic owner derived from the request identity may hold a waiter or
+lease. The 503 therefore echoes `retry_idempotency_key` — the exact
+`operation_id` the owner was derived from (`Idempotency-Key`, else
+`X-Request-ID`, else a generated value). A retry must reuse it as
+`Idempotency-Key` so it reattaches to the same owner (`already_held`) instead
+of orphaning a competing owner behind the original. The key carries no
+credential material. The Settings OpenCode drawer stores it from the 503 and
+resends it on the next submit for that profile.
+
 ### 9.4 Recommended first-party API-key mappings
 
 ```yaml
@@ -1611,6 +1628,36 @@ Activity-vs-Timer nondeterminism. Either cut over with state preserved:
 The post-marker redrive path itself is pinned by production replay with an
 outstanding obligation
 (`test_lease_cleanup_redrive_replays_with_outstanding_obligation`).
+
+Orphaned validation cleanup has a separate marker,
+`provider-profile-manager-orphaned-validation-cleanup-v1`. The redrive marker
+predates this additional verification and release sequence and cannot authorize
+it during replay. Histories without the new marker retain their recorded order
+through the tombstone-purge marker, lease verification, and timer; normal
+Continue-As-New carries their obligations into a run that uses the new cleanup
+path. The retained OpenCode history and a fresh cleanup-to-maintenance-Update
+journey both have replay coverage. This repair lets the affected pre-cleanup
+history replay without terminating or resetting its manager.
+
+Histories recorded between #4431 and this marker (unguarded orphan cleanup
+with an eligible validation claim) already contain unmarked
+`verify_lease_holders` and possibly `release_verified` commands. They are
+ambiguous with the pre-cleanup generation by markers alone and must not replay
+on the patched worker: the worker would skip the recorded orphan commands and
+wedge the singleton with Activity-vs-Timer nondeterminism (review #4434,
+comment 4052362810). Detect the cohort before routing: an open
+`provider-profile-manager:<runtime>` history that contains
+`verify_lease_holders` for a validation probe owner or a `sync_slot_leases`
+`release_verified` command but records no
+`provider-profile-manager-orphaned-validation-cleanup-v1` marker takes the
+same controlled cutover as the ambiguous redrive cohort above — keep the
+pre-marker worker until the state-preserving Continue-As-New handoff, then
+route the new run to the patched worker before it starts, or terminate and
+start fresh per 11.9 (the fresh start restores `cleanup_requested` rows from
+the durable ledger).
+`test_unguarded_validation_cleanup_history_needs_migration_cutover` pins both
+directions: the parent behavior replays the cohort, while the patched worker
+refuses it instead of silently skipping its recorded commands.
 
 Periodic released-lease tombstone cleanup has its own workflow marker,
 `provider-profile-manager-lease-tombstone-purge-v1`. Both DB lease persistence and

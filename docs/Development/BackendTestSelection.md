@@ -198,9 +198,12 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   or alters selection.
 - Duration hints for #4366 maintenance are the per-shard
   `pytest-backend-<suite>-durations.json` snapshots, uploaded as separate
-  artifacts. The committed partition input stays immutable during a matrix
-  run: rows never overwrite a shared baseline, and a partial failed-shard
-  result never replaces a complete baseline.
+  artifacts. The committed partition input (`tests/.reliability-test-
+  durations.json`) stays immutable during a matrix run: rows never overwrite
+  a shared baseline, and a partial failed-shard result never replaces a
+  complete baseline. Refresh it with
+  `python3 tools/ci/refresh_reliability_durations.py` (see below), never by
+  hand-editing node entries.
 - Scope: unrelated `unit-slow`, `integration-ci`, exact-artifact,
   frontend, generated-contract, and `migration-gate` jobs remain
   independently enforced. `ci-required` consumes only the `backend-matrix`
@@ -209,17 +212,22 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   backend selection skips the matrix intentionally without instantiating
   tests or hiding selector errors.
 
-Reliability sharding is deterministic and duration-balanced
-(MoonLadderStudios/MoonMind#4367): files matching
-`tests/integration/reliability/test_*.py` are assigned by greedy
-longest-processing-time balancing over advisory duration hints in
-`tools/ci/reliability_shard_weights.json`. The single partition authority
-is `tools/ci/reliability_shard_partition.py`, called by the CI workflow as
-`python3 tools/ci/reliability_shard_partition.py --shard N` and imported by
-`tools/verify_test_shard_ownership.py` in `reliability_shard_for_path()`,
-so local ownership checks and CI execute each file in the same shard.
-Timing history is an optimization hint only: new or unweighted files run
-via `DEFAULT_WEIGHT_SECONDS` and are never skipped.
+Reliability sharding is deterministic and node-level
+(MoonLadderStudios/MoonMind#4366): `tests/integration/reliability` is
+partitioned per test node -- including parameterized cases -- with
+pytest-split `--splits 4 --group N --splitting-algorithm least_duration`
+over the committed advisory hints in
+`tests/.reliability-test-durations.json`. Suite `reliability-shard-N` runs
+1-based `--group N`. Every shard checks out the same source and hints and
+validates them with `python3 tools/ci/refresh_reliability_durations.py
+--validate-only` before pytest: missing history is not a failure, and an
+unusable hint file warns and falls back to the same deterministic
+no-history partition on every shard instead of skipping tests or requiring
+a remote timing service. Timing history is an optimization hint only: new
+or unlisted tests run via the plugin fallback and are never skipped. The
+ownership verifier (`tools/verify_test_shard_ownership.py`) proves the
+four `--group` collections partition the collected universe exactly once
+through the actual plugin CLI.
 
 ### Reliability Docker Fixture Layers (MoonLadderStudios/MoonMind#4376)
 
@@ -260,8 +268,8 @@ success-path text log/JUnit upload, `-q` reliability verbosity):
 
 1. Fix the selected universe: run with the same selector outputs (same
    `unit_fast`/`api_component`/`temporal_boundary`/`reliability_journey`
-   selection, same reliability file set from
-   `python3 tools/ci/reliability_shard_partition.py --shard N`).
+   selection, same committed hints in
+   `tests/.reliability-test-durations.json`).
 2. Fix the revision/configuration: compare runs on the same commit (or
    adjacent commits with no test/workflow changes), same workflow file,
    same reliability budgets (150s PR / 300s schedule per-test timeout,
@@ -445,18 +453,33 @@ MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability \
   -m reliability_journey -q --durations=25
 ```
 
-Run one deterministic reliability shard locally (mirrors the CI matrix
-`tools/ci/reliability_shard_partition.py --shard N` selection):
+Run one reliability shard locally (mirrors the CI matrix `--group N`
+selection):
 
 ```bash
-mapfile -t shard_files < <(python3 tools/ci/reliability_shard_partition.py --shard 0)
-MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest "${shard_files[@]}" \
-  -m reliability_journey -q --durations=25
+python3 tools/ci/refresh_reliability_durations.py --validate-only
+MOONMIND_FORCE_LOCAL_TESTS=1 python -m pytest tests/integration/reliability \
+  -m reliability_journey --splits 4 --group 1 \
+  --splitting-algorithm least_duration \
+  --durations-path tests/.reliability-test-durations.json -q --durations=25
 ```
 
-Shards 1-3 use `--shard 1` through `--shard 3`.
-`tools/verify_test_shard_ownership.py` assigns each file to
-the same shard via `reliability_shard_for_path()`.
+Groups 2-4 use `--group 2` through `--group 4`. When the hints file is
+missing or unusable, omit `--durations-path` to reproduce the same
+deterministic no-history partition CI falls back to.
+
+Refresh the committed duration hints from a fresh full-corpus collection
+(file seeds live in `tools/ci/reliability_shard_weights.json`):
+
+```bash
+python3 tools/ci/refresh_reliability_durations.py
+```
+
+The refresh rewrites `tests/.reliability-test-durations.json` from the
+collected node IDs, so deleted tests stop being hints and new tests keep
+using the plugin fallback until the next refresh. Commit the regenerated
+file; per-shard `pytest-backend-<suite>-durations.json` snapshots stay
+uncommitted evidence for the next seed review.
 
 Run the checkpoint archive cold-resume replay directly:
 
