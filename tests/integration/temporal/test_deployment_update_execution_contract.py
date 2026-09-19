@@ -227,6 +227,10 @@ async def test_deployment_update_tool_dispatch_surfaces_deployment_locked() -> N
         desired_state_store=InMemoryDesiredStateStore(),
         evidence_writer=InMemoryEvidenceWriter(),
         runner=HermeticRunner(),
+        # An update waits a bounded background owner out before reporting
+        # contention; this holder never releases, so the wait is bounded here
+        # to assert what dispatch surfaces once the budget is spent.
+        lock_wait_seconds=0.1,
     )
     dispatcher = ToolActivityDispatcher()
     register_deployment_update_tool_handler(dispatcher, executor=executor)

@@ -875,12 +875,16 @@ async def migrate_omnigent_release(
     if lock_dir:
         try:
             from moonmind.workflows.skills.deployment_execution import (
+                DEPLOYMENT_UPDATE_LOCK_WAIT_SECONDS,
                 FileDeploymentUpdateLockManager,
             )
 
+            # This is a release step, not a background sweep: wait the bounded
+            # observation and maintenance owners out rather than reporting a
+            # conflict the deployment does not have.
             lock_lease = await FileDeploymentUpdateLockManager(
                 lock_dir=lock_dir
-            ).acquire("moonmind")
+            ).acquire("moonmind", wait_seconds=DEPLOYMENT_UPDATE_LOCK_WAIT_SECONDS)
         except Exception as exc:
             raise OmnigentReleaseError(
                 "conflict",
