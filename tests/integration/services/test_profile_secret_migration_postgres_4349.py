@@ -29,7 +29,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
-    Base,
     ManagedAgentProviderProfile,
     ManagedSecret,
     SecretStatus,

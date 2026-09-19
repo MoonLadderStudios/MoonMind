@@ -35,15 +35,18 @@ async def test_startup_profile_seeding(disabled_env_keys, tmp_path):
         await startup_event()
 
     async with db_base.async_session_maker() as session:
+        # Single-user (#4349): startup must not create or update a
+        # UserProfile row from env keys. Provider credentials resolve
+        # from explicit provider profiles + managed-secret references;
+        # legacy UserProfile-held values convert via
+        # profile_secret_migration, never via seeding here.
         result = await session.execute(
             select(UserProfile).where(
                 UserProfile.user_id == uuid.UUID(_DEFAULT_USER_ID)
             )
         )
         profile = result.scalars().first()
-        assert profile is not None
-        assert profile.openai_api_key_encrypted is not None
-        assert profile.google_api_key_encrypted is not None
+        assert profile is None
         zen = await session.get(
             ManagedAgentProviderProfile,
             "opencode-zen-free",

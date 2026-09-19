@@ -3827,7 +3827,10 @@ async def test_agent_runtime_build_launch_context_temporal_boundary(
             assert "MOONMIND_PROXY_TOKEN" in result["delta_env_overrides"]
             assert "GITHUB_TOKEN" in result["passthrough_env_keys"]
             assert result["workload_mode"] == "no-docker"
-            assert result["owner_user_id"] == "user-boundary"
+            # Single-user (#4349): launch context carries no human owner.
+            # Profile owner_user_id/ownerUserId is legacy provenance, never
+            # launch authority.
+            assert result["owner_user_id"] is None
 
 @pytest.mark.asyncio
 async def test_agent_runtime_build_launch_context_prefers_proxy_for_supported_secret_ref(

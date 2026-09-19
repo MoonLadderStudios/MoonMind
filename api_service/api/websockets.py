@@ -171,9 +171,13 @@ async def terminal_websocket(
     await websocket.accept()
 
     from sqlalchemy import select
+
+    # Single-user (#4349): terminal sessions are instance resources.
+    # ``requested_by_user_id`` is credential/runtime provenance ("operator"
+    # for new rows, legacy requester for old rows), never an access
+    # predicate. The authenticated operator token above is the boundary.
     stmt = select(ManagedAgentOAuthSession).where(
         ManagedAgentOAuthSession.session_id == session_id,
-        ManagedAgentOAuthSession.requested_by_user_id == str(user.id)
     )
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
