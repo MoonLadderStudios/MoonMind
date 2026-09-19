@@ -1,8 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -n "${MOONMIND_AGENT_RUN_ID:-}" && -n "${MOONMIND_RUNTIME_ID:-}" && -n "${MOONMIND_URL:-}" ]]; then
+# Inside a MoonMind managed session the Unreal work runs as a typed container
+# job against the deployment daemon. The sandbox has no Docker CLI and is not
+# supposed to have one, so the direct-Docker path below is for use outside
+# MoonMind only. Any managed marker means the managed path was intended:
+# dispatch when the set is complete, and name what is missing when it is not,
+# rather than falling through to a "docker: command not found" dead end that
+# reads like the toolchain is unavailable.
+_mm_missing=()
+for _mm_var in MOONMIND_AGENT_RUN_ID MOONMIND_RUNTIME_ID MOONMIND_URL; do
+  [[ -n "${!_mm_var:-}" ]] || _mm_missing+=("$_mm_var")
+done
+if [[ ${#_mm_missing[@]} -eq 0 ]]; then
   exec python3 "$(dirname "${BASH_SOURCE[0]}")/run_moonmind_unreal_tactics.py" "$@"
+fi
+if [[ ${#_mm_missing[@]} -lt 3 ]]; then
+  echo "error: this looks like a MoonMind managed session, but the container-job" >&2
+  echo "       handoff is incomplete. Missing: ${_mm_missing[*]}." >&2
+  echo "       Unreal tests run through 'moonmind container', never a sandbox" >&2
+  echo "       Docker CLI. Report this as a managed-session environment defect;" >&2
+  echo "       do not treat it as 'no Docker/UE available'." >&2
+  exit 2
 fi
 
 usage() {
@@ -318,7 +337,13 @@ esac
 
 [[ "$RESULTS_SUBDIR" != /* ]] || fail "--results-subdir must be relative to the repo"
 
-command -v docker >/dev/null 2>&1 || fail "docker command not found on PATH"
+if ! command -v docker >/dev/null 2>&1; then
+  fail "docker command not found on PATH. Inside a MoonMind managed session
+Unreal build/test runs as a container job through 'moonmind container' and this
+script dispatches to it automatically; a missing Docker CLI here means the
+managed-session markers (MOONMIND_AGENT_RUN_ID, MOONMIND_RUNTIME_ID,
+MOONMIND_URL) were absent, not that the Unreal toolchain is unavailable."
+fi
 
 REPO_DIR="$(realpath "$REPO_DIR")"
 [[ -d "$REPO_DIR" ]] || fail "Repo directory not found: $REPO_DIR"

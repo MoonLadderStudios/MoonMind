@@ -362,10 +362,18 @@ async def test_production_private_pull_never_sees_source_pat(
 async def test_production_public_pull_without_identity_uses_no_auth(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Without identity B, cold public acquisition uses no credentials at all."""
+    """Without identity B and without derivation, cold public acquisition is bare.
+
+    The deployment GitHub token now backstops an unconfigured ghcr.io identity
+    (see ``github_ghcr_pull_enabled``), so this covers the setting that restores
+    #4012's strict separation. The properties #4012 established are unchanged:
+    an explicit identity still wins, a configured credential that fails still
+    fails closed, and the derived identity never reaches another registry.
+    """
 
     _clear_ghcr_deployment_env(monkeypatch)
     monkeypatch.setenv("GITHUB_TOKEN", SOURCE_PAT_A)
+    monkeypatch.setenv("MOONMIND_GHCR_PULL_FROM_GITHUB_TOKEN_ENABLED", "false")
     store = _FakeLookupSession()
     monkeypatch.setattr(
         "api_service.db.base.async_session_maker", _FakeSessionMaker(store)
