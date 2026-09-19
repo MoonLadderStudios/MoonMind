@@ -672,6 +672,45 @@ async def test_opencode_506_boundary_replays_patched_and_fails_prefix() -> None:
             await asyncio.wait_for(activities.redriven.wait(), timeout=120)
             state = await manager.query("get_state")
             assert requester.id in state["cleanup_requested_leases"]
+            # MoonLadderStudios/MoonMind#4363 504-before-506 shape: keep the
+            # manager alive (time-skipping still enabled) past the next 60s
+            # workflow-time tick after the redrive, so the recorded history
+            # contains a periodic 60s timer after the redriven activity
+            # before shutdown/fetch_history. Without this the shutdown races
+            # the periodic wake-up and the ordering assertion sees no timer.
+            async with asyncio.timeout(90):
+                while True:
+                    probe = await manager.fetch_history()
+                    probe_cleanups: list[int] = []
+                    probe_timers: list[int] = []
+                    for probe_index, probe_event in enumerate(probe.events):
+                        if probe_event.HasField(
+                            "activity_task_scheduled_event_attributes"
+                        ):
+                            probe_attrs = (
+                                probe_event.activity_task_scheduled_event_attributes
+                            )
+                            if (
+                                probe_attrs.activity_type.name
+                                == "provider_profile.sync_slot_leases"
+                            ):
+                                probe_payload = (
+                                    await DataConverter.default.decode(
+                                        probe_attrs.input.payloads
+                                    )
+                                )[0]
+                                if probe_payload.get("action") == "request_cleanup":
+                                    probe_cleanups.append(probe_index)
+                        elif probe_event.HasField("timer_started_event_attributes"):
+                            probe_timeout = probe_event.timer_started_event_attributes.start_to_fire_timeout.ToTimedelta()
+                            if probe_timeout.total_seconds() == 60:
+                                probe_timers.append(probe_index)
+                    if len(probe_cleanups) >= 2 and any(
+                        timer_index > probe_cleanups[1]
+                        for timer_index in probe_timers
+                    ):
+                        break
+                    await asyncio.sleep(0.2)
             with env.auto_time_skipping_disabled():
                 await manager.signal("shutdown")
                 await requester.signal(_SlotRequester.shutdown)
