@@ -972,6 +972,106 @@ class ReleaseCohort:
             await asyncio.sleep(2)
         return health
 
+    async def align_gateway_to_candidate(self, image, attempts=60):
+        """Serve the candidate's egress definition before candidates attest.
+
+        Worker readiness attests the singular restricted-egress gateway
+        exactly, and retention repairs that gateway from the previous
+        definition only. An egress-policy change (new files or digests)
+        therefore deadlocks canary qualification: candidates fail against
+        the old gateway, while retained workers would fail against a
+        prematurely upgraded one. Retention has already converged above
+        against the previous definition, and running workers attest only at
+        startup, so upgrading the gateway here leaves retained pollers
+        valid while letting candidates prove the new enforcement. When the
+        live gateway already serves the candidate definition this is a
+        read-only no-op. A deployment that runs no gateway is left alone.
+        """
+        from moonmind.security.egress import (
+            EGRESS_GATEWAY_REF,
+            EGRESS_GATEWAY_SERVICE,
+        )
+
+        if await container_health(EGRESS_GATEWAY_REF) is None:
+            return None
+        probe = (
+            "import json;"
+            "from moonmind.security.egress import"
+            " EGRESS_FILE_DIGESTS, EGRESS_LIVE_DIRECTORY;"
+            "print(json.dumps({'liveDirectory': EGRESS_LIVE_DIRECTORY,"
+            " 'files': EGRESS_FILE_DIGESTS}))"
+        )
+        try:
+            rendered = await docker(
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--entrypoint",
+                "python",
+                image,
+                "-c",
+                probe,
+            )
+            expected = json.loads(rendered)
+            files = dict(expected.get("files") or {})
+            live_directory = str(expected.get("liveDirectory") or "").strip()
+        except (RuntimeError, ValueError, AttributeError, TypeError) as exc:
+            raise RuntimeError(
+                "candidate gateway definition cannot be observed"
+            ) from exc
+        if not files or not live_directory:
+            raise RuntimeError("candidate gateway definition is empty")
+        want = {
+            f"{directory}/{name}": str(digest).removeprefix("sha256:")
+            for directory in ("/etc/squid", live_directory)
+            for name, digest in sorted(files.items())
+        }
+
+        async def observed_live():
+            try:
+                out = await docker(
+                    "exec", EGRESS_GATEWAY_REF, "sha256sum", *sorted(want)
+                )
+            except RuntimeError:
+                return None
+            try:
+                seen = {}
+                for line in out.splitlines():
+                    parts = line.split()
+                    seen[parts[1]] = parts[0]
+            except (IndexError, AttributeError, TypeError):
+                return None
+            return seen
+
+        if await observed_live() == want:
+            return "aligned"
+        result = await self.runner._run_compose_command(
+            (
+                "docker",
+                "compose",
+                "up",
+                "-d",
+                "--no-deps",
+                "--force-recreate",
+                EGRESS_GATEWAY_SERVICE,
+            ),
+            requested_image=image,
+        )
+        _ensure_command_succeeded("upgrade release egress gateway", result)
+        for _ in range(attempts):
+            if await container_health(EGRESS_GATEWAY_REF) == "healthy":
+                break
+            await asyncio.sleep(2)
+        else:
+            raise RuntimeError("upgraded egress gateway did not become healthy")
+        if await observed_live() != want:
+            raise RuntimeError(
+                "upgraded egress gateway serves stale config; "
+                "the deployment checkout policy files may predate the candidate image"
+            )
+        return "upgraded"
+
     async def qualify_api(self, image):
         name = f"mm-candidate-{self.directory.name[:16]}-api"
         if name not in self.names:
@@ -1071,6 +1171,12 @@ class ReleaseCohort:
                 },
             )
         await self.preserve_previous(previous, deployment, release["digest"])
+        # Retention converged against the previous gateway definition while
+        # running workers attest only at startup. Serve the candidate's
+        # egress definition now so canary workers can prove the new
+        # enforcement; without this an egress-policy change deadlocks
+        # qualification (candidates fail closed against the old gateway).
+        await self.align_gateway_to_candidate(image)
         for topology in topologies:
             service = _FLEET_SERVICE_NAMES[topology.fleet]
             name = f"mm-candidate-{self.directory.name[:16]}-{topology.fleet.replace('_', '-')}"
