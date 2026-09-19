@@ -1040,6 +1040,81 @@ def _cooldown_is_live(cooldown_until: str, now_epoch: float) -> bool:
     return deadline.timestamp() > now
 
 
+def _lapsed_announcement_at(handoff: AttemptHandoff, now_epoch: float) -> str:
+    """Return when *handoff*'s pre-dispatch announcement lapsed, else ``""``.
+
+    Selection announces an attempt with the short ``preparing`` lease and
+    keeps that deadline until dispatch; the first execution renewal promotes
+    it to ``active``. A handoff still reading ``preparing`` after its lease
+    expired therefore never reached dispatch, so it could not have produced
+    work on the issue -- the ``runtime_unavailable`` case seen from before
+    the attempt could write it down. Nothing else will ever write it:
+    reservation reclamation retires the label and deliberately claims no
+    terminal authority over another deployment's attempt, and the bounded
+    reconciliation scan skips the issue once that label is gone. Charging it
+    would spend the allowance on evidence the system has designed itself
+    never to resolve.
+
+    An expired ``active`` attempt is not exempt. Its execution lease was
+    granted, so from GitHub alone we cannot prove no agent ever ran, and an
+    attempt that crashed mid-run must still cost one: otherwise a crash loop
+    bypasses the allowance and keeps discarding unrecovered work. Proving
+    that no runtime started needs the controlling history, which is what the
+    local claim sweep uses to record the ``runtime_unavailable`` outcome.
+
+    Recorded work (a pull request, a saved branch or sha) is evidence about
+    the issue, so such an attempt keeps costing one. A version-1 handoff
+    carries no lease, and a caller with no clock (``now_epoch`` of zero)
+    cannot prove a lapse; both keep their existing accounting.
+    """
+    if handoff.outcome != "in_progress":
+        return ""
+    if handoff.activity != ATTEMPT_ACTIVITY_PREPARING:
+        return ""
+    if (
+        _string(handoff.pr_url)
+        or _string(handoff.saved_branch)
+        or _string(handoff.saved_sha)
+    ):
+        return ""
+    try:
+        now = float(now_epoch)
+    except (TypeError, ValueError):
+        return ""
+    if now <= 0:
+        return ""
+    from moonmind.workflows.temporal.github_issue_claim_lease import (
+        parse_time,
+        valid_lease,
+    )
+
+    if not valid_lease(handoff):
+        return ""
+    expires = parse_time(handoff.lease_expires_at)
+    if expires is None or expires.timestamp() > now:
+        return ""
+    return expires.isoformat()
+
+
+def _announcement_backoff_until(lapsed_at: str) -> str:
+    """Portable back-off for a lapsed announcement, or ``""`` if unreadable.
+
+    The same window a ``runtime_unavailable`` outcome would have carried, so a
+    deployment that is still broken rotates past the candidate instead of
+    re-announcing on it every scheduled tick.
+    """
+    from datetime import timedelta
+
+    from moonmind.workflows.temporal.github_issue_claim_lease import parse_time
+
+    expires = parse_time(lapsed_at)
+    if expires is None:
+        return ""
+    return (
+        expires + timedelta(seconds=RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS)
+    ).isoformat()
+
+
 def compute_effective_retry(
     handoffs: Sequence[AttemptHandoff],
     *,
@@ -1094,19 +1169,29 @@ def compute_effective_retry(
     # An attempt whose deployment never started a runtime says nothing about
     # this issue, so it is retained as lineage but never charged to the
     # allowance. Charging it lets one broken deployment exhaust every issue.
+    # A pre-dispatch announcement that lapsed without ever recording an
+    # outcome is the same fault reached before the attempt could name it:
+    # also retained, also uncharged, and backed off the same way below.
+    # An expired ``active`` attempt reached dispatch and still counts.
+    lapses = [_lapsed_announcement_at(handoff, now_epoch) for handoff in ordered]
     counted = [
         handoff
-        for handoff in ordered
-        if handoff.outcome != OUTCOME_RUNTIME_UNAVAILABLE
+        for handoff, lapsed in zip(ordered, lapses)
+        if handoff.outcome != OUTCOME_RUNTIME_UNAVAILABLE and not lapsed
     ]
     failures = sum(1 for handoff in counted if handoff.outcome in {"failed", "cancelled", "held"})
     no_progress = sum(1 for handoff in counted if handoff.outcome == "no_work")
     observed_attempts = failures + no_progress + sum(1 for handoff in counted if handoff.outcome in {"implemented", "in_progress"})
     remaining = max(0, int(max_attempts) - observed_attempts)
     latest_cooldown = ""
-    for handoff in ordered:
-        if handoff.cooldown_until and handoff.cooldown_until > latest_cooldown:
-            latest_cooldown = handoff.cooldown_until
+    for handoff, lapsed in zip(ordered, lapses):
+        recorded = [
+            handoff.cooldown_until,
+            _announcement_backoff_until(lapsed) if lapsed else "",
+        ]
+        for candidate in recorded:
+            if candidate and candidate > latest_cooldown:
+                latest_cooldown = candidate
     _ = cooldown_seconds
     if remaining <= 0:
         return RetryDecision(
