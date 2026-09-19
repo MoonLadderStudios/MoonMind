@@ -6,6 +6,7 @@ import type { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { SkillsPage } from './skills';
 import { SKILLS_CREATE_REQUEST_EVENT } from '../lib/skillsCreateRequest';
+import '../styles/dashboard.css';
 
 // The "Create New Skill" trigger now lives in the masthead nav (outside the
 // SkillsPage subtree these tests mount), so open the drawer the same way the
@@ -658,6 +659,51 @@ describe('Skills Entrypoint', () => {
       expect(preview?.innerHTML).not.toContain('onerror');
       expect(preview?.innerHTML).not.toContain('javascript:alert(1)');
       expect(preview?.innerHTML).not.toContain('<img');
+    });
+  });
+
+  describe('catalog table visual parity (MoonLadderStudios/MoonMind#3346)', () => {
+    it('renders the catalog body over the page surface like the workflow table', async () => {
+      const { readFileSync } = await import('node:fs');
+      const { default: postcss } = await import('postcss');
+      const dashboardCss = readFileSync(
+        `${process.cwd()}/frontend/src/styles/dashboard.css`,
+        'utf8',
+      );
+      const root = postcss.parse(dashboardCss);
+      const tableBlocks: string[] = [];
+      root.walkRules((rule) => {
+        if (rule.selector.trim() === '.skills-catalog-page .data-table') {
+          tableBlocks.push(rule.nodes.map((node) => `${node.toString()};`).join('\n'));
+        }
+      });
+      const tableRule = tableBlocks.join('\n');
+      // The table element itself must stay transparent. The generic `table`
+      // rule paints a panel fill (via --mm-panel), so without this override
+      // the transparent rows would still read as an opaque slab, unlike the
+      // workflow `.queue-table-wrapper table` treatment. (jsdom cannot resolve
+      // var()-based backgrounds, so this is asserted at the rule level.)
+      expect(tableRule).toContain('background: transparent');
+
+      renderSkills({ path: '/skills', mode: 'table' });
+
+      const table = await screen.findByRole('table', { name: 'Skills catalog' });
+      const slab = table.closest('.data-table-slab') as HTMLElement | null;
+      expect(slab).toBeTruthy();
+
+      // The slab is not a card: no border so the page background shows through.
+      expect(getComputedStyle(slab as HTMLElement).borderTopWidth).toBe('0px');
+
+      // Separate borders let the sticky-header divider shadow render, matching
+      // the workflow table's `border-collapse: separate; border-spacing: 0`.
+      expect(getComputedStyle(table).borderCollapse).toBe('separate');
+
+      // The sticky header keeps its divider treatment instead of a full border.
+      const firstHeader = table.querySelector('thead th') as HTMLElement | null;
+      expect(firstHeader).toBeTruthy();
+      expect(getComputedStyle(firstHeader as HTMLElement).position).toBe('sticky');
+      expect(getComputedStyle(firstHeader as HTMLElement).top).toBe('0px');
+      expect(getComputedStyle(firstHeader as HTMLElement).borderBottomWidth).toBe('0px');
     });
   });
 });
