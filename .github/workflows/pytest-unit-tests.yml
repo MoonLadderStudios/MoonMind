@@ -246,8 +246,9 @@ jobs:
       needs.select-test-suites.outputs.reliability_journey == 'true'
     runs-on: ubuntu-latest
     # Per-row job bounds (MoonLadderStudios/MoonMind#4369): fast rows get a
-    # 10-minute job budget covering setup, the 7-minute test step, and
-    # bounded reporting; reliability rows keep a 20-minute budget covering
+    # 15-minute job budget covering setup (~2-3 minutes), the 7-minute test
+    # step, and bounded reporting (2-minute caps that typically finish in
+    # seconds); reliability rows keep a 20-minute budget covering
     # setup, the 12-minute test step, and bounded diagnostics/cleanup. The
     # blanket 30-minute ceiling is replaced, not raised.
     timeout-minutes: ${{ matrix.job_minutes }}
@@ -256,11 +257,11 @@ jobs:
       matrix:
         include:
           - suite: unit-fast
-            job_minutes: 10
+            job_minutes: 15
           - suite: api-component
-            job_minutes: 10
+            job_minutes: 15
           - suite: temporal-boundary
-            job_minutes: 10
+            job_minutes: 15
           - suite: reliability-shard-1
             shard: "1"
             job_minutes: 20
@@ -537,21 +538,21 @@ jobs:
               seconds_file="/tmp/backend-unit-fast-test-seconds.txt"
               effective_command="python -m pytest tests/unit -m unit_fast -v --tb=short -n auto --dist loadfile --durations=25 --timeout 60 --maxfail=1 (ordinary; omitted on schedule)"
               pytest_timeout="60s per-test"
-              step_budget="7-min test step within 10-min job" ;;
+              step_budget="7-min test step within 15-min job" ;;
             api-component)
               selected="${{ needs.select-test-suites.outputs.api_component }}"
               outcome="${{ steps.run-api.outcome }}"
               seconds_file="/tmp/backend-api-component-test-seconds.txt"
               effective_command="python -m pytest tests/unit/api tests/unit/api_service tests/component/api -m component -v --tb=short -n auto --dist load --durations=25 --timeout 120 --maxfail=1 (ordinary; omitted on schedule)"
               pytest_timeout="120s per-test"
-              step_budget="7-min test step within 10-min job" ;;
+              step_budget="7-min test step within 15-min job" ;;
             temporal-boundary)
               selected="${{ needs.select-test-suites.outputs.temporal_boundary }}"
               outcome="${{ steps.run-temporal.outcome }}"
               seconds_file="/tmp/backend-temporal-boundary-test-seconds.txt"
               effective_command="python -m pytest tests/unit/workflows/temporal -m temporal_boundary -v --tb=short -n auto --dist loadfile --durations=25 --timeout 120 --maxfail=1 (ordinary; omitted on schedule)"
               pytest_timeout="120s per-test"
-              step_budget="7-min test step within 10-min job" ;;
+              step_budget="7-min test step within 15-min job" ;;
             reliability-*)
               selected="${{ needs.select-test-suites.outputs.reliability_journey }}"
               outcome="${{ steps.run-reliability.outcome }}"

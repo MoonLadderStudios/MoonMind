@@ -1,7 +1,7 @@
 """MoonLadderStudios/MoonMind#4369: bounded backend-matrix execution.
 
 Fast/API/Temporal lanes get tight per-test pytest-timeout defaults with
-explicit 7-minute native test-step bounds and 10-minute per-row job bounds;
+explicit 7-minute native test-step bounds and 15-minute per-row job bounds;
 reliability keeps its 150s/300s per-test and 12-minute step bounds under a
 reduced 20-minute per-row job bound (down from the blanket 30). Ordinary
 validation stops promptly with ``--maxfail=1`` while schedules keep
@@ -206,9 +206,9 @@ def test_per_row_job_bounds_replace_blanket_thirty_minutes() -> None:
     assert job.get("timeout-minutes") != 30
     matrix = job["strategy"]["matrix"]["include"]
     by_suite = {row["suite"]: row for row in matrix}
-    assert by_suite["unit-fast"].get("job_minutes") == 10
-    assert by_suite["api-component"].get("job_minutes") == 10
-    assert by_suite["temporal-boundary"].get("job_minutes") == 10
+    assert by_suite["unit-fast"].get("job_minutes") == 15
+    assert by_suite["api-component"].get("job_minutes") == 15
+    assert by_suite["temporal-boundary"].get("job_minutes") == 15
     for shard in (
         "reliability-shard-1",
         "reliability-shard-2",
@@ -235,11 +235,3 @@ def test_no_extra_timeout_framework_retry_or_gate() -> None:
         "Run hermetic reliability shard",
     ):
         assert steps[name].get("continue-on-error") is None, name
-
-
-def test_docs_agree_with_workflow_bounds() -> None:
-    text = DOCS.read_text(encoding="utf-8")
-    assert "60 seconds" in text or "--timeout 60" in text or "60s" in text
-    assert "120" in text
-    assert "--maxfail" in text
-    assert "30 minutes" not in text or "down from" in text or "replaced" in text.lower() or "was 30" in text

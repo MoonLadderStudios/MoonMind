@@ -88,13 +88,13 @@ from observed setup, testing, and bounded diagnostics/cleanup:
 
 | Lane | Per-test timeout | Test-step bound | Job bound |
 | --- | --- | --- | --- |
-| Unit-fast | 60s (`--timeout 60`) | 7-minute native test step | 10-minute job |
-| API/component | 120s (`--timeout 120`) | 7-minute native test step | 10-minute job |
-| Temporal boundary | 120s (`--timeout 120`) | 7-minute native test step | 10-minute job |
+| Unit-fast | 60s (`--timeout 60`) | 7-minute native test step | 15-minute job |
+| API/component | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
+| Temporal boundary | 120s (`--timeout 120`) | 7-minute native test step | 15-minute job |
 | Ordinary reliability shard | 150s | 600-second shell deadline inside a 12-minute Actions step | 20-minute job |
 | Scheduled reliability shard | 300s | 660-second shell deadline inside a 12-minute Actions step | 20-minute job |
 
-Fast 10-minute jobs cover observed setup (~2-3 minutes: checkout,
+Fast 15-minute jobs cover observed setup (~2-3 minutes: checkout,
 Python, dependencies, submodules), the 7-minute test step, and bounded
 reporting (2-minute caps that typically finish in seconds). Reliability
 20-minute jobs cover the same setup shape plus Compose pull/up (~1-2
