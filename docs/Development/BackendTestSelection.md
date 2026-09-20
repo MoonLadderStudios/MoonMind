@@ -82,19 +82,35 @@ The workflow initializes only submodules a selected job needs. In the reviewed i
 
 ### Execution Budgets
 
-The workflow is the authority for effective limits. At the September 20, 2026 review baseline `557d4781f58577c12a2784929953286abff3b925`, primary execution has these bounds:
+The workflow is the authority for effective limits. The #4369 revision
+replaced the blanket 30-minute job ceiling with simple per-row bounds sized
+from observed setup, testing, and bounded diagnostics/cleanup:
 
 | Lane | Per-test timeout | Test-step bound | Job bound |
 | --- | --- | --- | --- |
-| Unit-fast, API/component, Temporal | 600 seconds | No separate native test-step timeout | 30 minutes |
-| Ordinary reliability shard | 150 seconds | 600-second shell deadline inside a 12-minute Actions step | 30 minutes |
-| Scheduled reliability shard | 300 seconds | 660-second shell deadline inside a 12-minute Actions step | 30 minutes |
+| Unit-fast | 60s (`--timeout 60`) | 7-minute native test step | 10-minute job |
+| API/component | 120s (`--timeout 120`) | 7-minute native test step | 10-minute job |
+| Temporal boundary | 120s (`--timeout 120`) | 7-minute native test step | 10-minute job |
+| Ordinary reliability shard | 150s | 600-second shell deadline inside a 12-minute Actions step | 20-minute job |
+| Scheduled reliability shard | 300s | 660-second shell deadline inside a 12-minute Actions step | 20-minute job |
 
-This is a code snapshot, not approval of those oversized fast-lane/job limits. The revised #4369 owns the remaining reductions. Its proposed shorter limits must fit measured healthy setup, tests, and bounded cleanup. Do not turn proposed values into claims that they already run, or apply a shorter deadline than the selected healthy corpus can satisfy.
+Fast 10-minute jobs cover observed setup (~2-3 minutes: checkout,
+Python, dependencies, submodules), the 7-minute test step, and bounded
+reporting (2-minute caps that typically finish in seconds). Reliability
+20-minute jobs cover the same setup shape plus Compose pull/up (~1-2
+minutes), the 12-minute test step, and bounded diagnostics/cleanup (2-minute
+caps each). The 20-minute reliability bound is a measured exception: the
+heaviest duration-balanced partition holds ~500s of tests plus
+collection/shutdown overhead, so it must not receive a shorter aspirational
+cutoff. A justified individual slow test can use the installed
+pytest-timeout per-test marker as a documented exception; global defaults
+are never raised to fit the table.
 
 Use the installed pytest timeout mechanism for stuck tests and native Actions step/job bounds for the outer process. Keep an existing shell deadline only where it provides a distinct useful bound. A cooperative session timeout and a diagnostic stack dump do not replace a hard process bound. No additional timeout framework, test retry loop, watchdog, or cancellation service is needed.
 
-Pytest fail-fast stops one invocation. Native matrix fail-fast stops its siblings. The reviewed pytest invocations do not yet set `--maxfail`; finishing that behavior belongs to #4369 rather than another matrix consolidation.
+Pytest fail-fast (`--maxfail=1` on ordinary runs, omitted on schedules so
+diagnostic collection continues) stops one invocation. Native matrix fail-fast stops its siblings. The #4369 bounds above are the implemented
+behavior, not tuning proposals.
 
 ### Reliability Sharding
 
