@@ -151,8 +151,8 @@ async def test_supported_workflow_routes_render_console_shell(
         "/settings/",
         "/settings/providers-secrets",
         "/settings/providers-secrets/",
-        "/settings/user-workspace",
-        "/settings/user-workspace/",
+        "/settings/instance",
+        "/settings/instance/",
         "/settings/operations",
         "/settings/operations/",
         "/oauth-terminal",
@@ -196,6 +196,8 @@ async def test_settings_entry_ignores_retired_section_page_identity(
     (
         ("/secrets", "/settings/providers-secrets"),
         ("/workers", "/settings/operations"),
+        ("/settings/user-workspace", "/settings/instance"),
+        ("/settings/user-workspace/", "/settings/instance"),
     ),
 )
 async def test_legacy_settings_paths_redirect_and_strip_retired_section(
