@@ -896,12 +896,6 @@ The pass names the containers, scoped to this deployment's Compose project so
 a second deployment on the same host is never implicated, and the operator
 decides.
 
-Installed-fleet verification counts only installed containers. `compose run`
-stamps one-off containers with the same project and service labels, and the
-updater executing the check is itself a one-off of
-`temporal-worker-deployment-control`, so an exact-one count over `compose ps`
-could never pass during a release.
-
 The primary result is persisted before auxiliary cleanup. Failed cleanup records
 its pending owner for `release.reconcile` without replacing verified deployment
 success. Default scheduled maintenance continues release reconciliation even
