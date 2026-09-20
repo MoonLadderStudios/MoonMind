@@ -138,3 +138,39 @@ async def test_websocket_blank_token_refused_before_store_access() -> None:
             await get_current_user_ws(blank, None, None)
         assert exc.value.status_code == 401
         assert exc.value.detail == {"code": "auth_required"}
+
+
+def test_host_header_never_forwarded_even_when_allowlisted() -> None:
+    """A forged Host header cannot be smuggled upstream via the allowlist.
+
+    Exercises the real proxy-sanitization boundary: ``Host`` is a routing
+    header, so even an explicit allowlist entry must not forward it --
+    direct container/host-gateway bypass material stays inside the hop.
+    """
+    forged = {"Host": "evil-4356.example", "X-Request-Id": "req-4356"}
+    forwarded = sanitize_proxy_headers(
+        forged, allowed_upstream_headers=["Host", "X-Request-Id"]
+    )
+    assert "Host" not in forwarded
+    assert "host" not in {key.lower() for key in forwarded}
+    assert forwarded == {"X-Request-Id": "req-4356"}
+
+
+def test_forged_routing_and_identity_headers_dropped_by_default() -> None:
+    """Spoofed forwarding/identity headers never forward without allowlist."""
+    forged = {
+        "X-Forwarded-Host": "evil-4356.example",
+        "X-Forwarded-For": "10.9.9.9",
+        "Forwarded": "for=10.9.9.9;host=evil-4356.example",
+        "X-Forwarded-Authorization": "Bearer forged",
+        "Origin": "https://evil-4356.example",
+    }
+    assert sanitize_proxy_headers(forged) == {}
+
+
+def test_nested_provider_secret_redacted_before_persistence() -> None:
+    """Credential-shaped values at nesting depth never reach stored events."""
+    synthetic = "sk-live-synthetic-4356-nested-abcdef"
+    events = [{"nested": {"token": synthetic}, "list": [synthetic]}]
+    (redacted,) = redact_raw_events(events)
+    assert synthetic not in str(redacted)

@@ -134,3 +134,23 @@ def test_generic_route_changes_select_api_component(changed_path: str) -> None:
     outputs = _outputs([changed_path])
     assert outputs["unit_fast"] == "true"
     assert outputs["api_component"] == "true"
+
+
+def test_recurring_service_changes_select_reliability_journey() -> None:
+    """Recurring-execution edits must re-run the schedule journey suite."""
+    outputs = _outputs(["api_service/services/recurring_workflows_service.py"])
+    assert outputs["unit_fast"] == "true"
+    assert outputs["reliability_journey"] == "true"
+
+
+def test_bridge_security_changes_select_integration() -> None:
+    """Admission-boundary edits cannot skip the hermetic integration suite."""
+    outputs = _outputs(["moonmind/omnigent/bridge_security.py"])
+    assert outputs["integration_ci"] == "true"
+
+
+def test_single_user_unit_changes_select_integration() -> None:
+    """Single-user conformance unit edits must re-run their owning suite."""
+    outputs = _outputs(["tests/unit/single_user/test_first_run_4356.py"])
+    assert outputs["unit_fast"] == "true"
+    assert outputs["integration_ci"] == "true"

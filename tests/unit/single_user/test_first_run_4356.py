@@ -165,3 +165,61 @@ def test_recurring_policy_backfill_clamped_to_global_max() -> None:
         {"catchup": {"maxBackfill": 99}}, global_max_backfill=4
     )
     assert policy.max_backfill == 4
+
+
+def test_recurring_policy_cancel_recover_primitive_accepted() -> None:
+    """Cancel-previous overlap is an admitted recover primitive, not a refusal.
+
+    A first-run operator that cancels in-flight work and reschedules with
+    ``cancel_previous`` must normalize cleanly through the real production
+    boundary; an unknown mode must still fail closed.
+    """
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowValidationError,
+        _normalize_policy,
+    )
+
+    admitted = _normalize_policy(
+        {"overlap": {"mode": "cancel_previous", "maxConcurrentRuns": 2}},
+        global_max_backfill=10,
+    )
+    assert admitted.overlap_mode == "cancel_previous"
+    assert admitted.max_concurrent_runs == 2
+    with pytest.raises(RecurringWorkflowValidationError):
+        _normalize_policy(
+            {"overlap": {"mode": "cancel-everything-4356"}},
+            global_max_backfill=10,
+        )
+
+
+def test_recurring_policy_negative_bounds_clamped_not_scheduled() -> None:
+    """Negative misfire/jitter bounds clamp to zero instead of scheduling."""
+    from api_service.services.recurring_workflows_service import _normalize_policy
+
+    policy = _normalize_policy(
+        {"misfireGraceSeconds": -30, "jitterSeconds": -5},
+        global_max_backfill=10,
+    )
+    assert policy.misfire_grace_seconds == 0
+    assert policy.jitter_seconds == 0
+
+
+def test_recurring_policy_defaults_survive_temporal_round_trip() -> None:
+    """Documented defaults map to the Temporal overlap/catchup vocabulary.
+
+    The first-run omitted-input policy (skip/last) must translate to the
+    Temporal ``SKIP`` overlap and a last-only catchup window so the
+    scheduled work the operator observes matches the documented defaults.
+    """
+    from api_service.services.recurring_workflows_service import (
+        _catchup_mode_from_temporal_window,
+        _normalize_policy,
+        _overlap_mode_from_temporal,
+    )
+
+    policy = _normalize_policy(None, global_max_backfill=10)
+    assert policy.overlap_mode == "skip"
+    assert _overlap_mode_from_temporal(policy.overlap_mode) == "skip"
+    assert _overlap_mode_from_temporal("SKIP") == "skip"
+    assert _catchup_mode_from_temporal_window(None) == "last"
+    assert policy.catchup_mode == "last"

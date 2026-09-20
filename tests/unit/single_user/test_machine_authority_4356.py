@@ -109,3 +109,88 @@ def test_bridge_session_bound_to_owning_workflow_not_arbitrary_proxy() -> None:
             context,
             BridgeSessionBinding(workflow_id="proxy-workflow", agent_run_id="proxy-run"),
         )
+
+
+def test_secret_rotation_invalidates_prior_generation() -> None:
+    """A rotated signing secret ends the prior generation's authority.
+
+    The old token verifies under the old secret and fails under the new
+    one; a token minted after rotation verifies under the new secret.
+    This is the hermetic lease/generation primitive: rotation bounds the
+    lifetime of admitted work without touching browser state.
+    """
+    old_token = _mint(now=100)
+    assert (
+        verify_container_job_session_capability(
+            old_token, secret=_SECRET, now=120
+        ).session_id
+        == "session-4356"
+    )
+    rotated_secret = "machine-authority-4356-secret-rotated"
+    with pytest.raises(ContainerJobCapabilityError, match="invalid"):
+        verify_container_job_session_capability(
+            old_token, secret=rotated_secret, now=120
+        )
+    rotated_token = _mint(secret=rotated_secret, now=130)
+    assert (
+        verify_container_job_session_capability(
+            rotated_token, secret=rotated_secret, now=140
+        ).session_id
+        == "session-4356"
+    )
+
+
+def test_workspace_scope_tamper_fails_closed() -> None:
+    """Escalating workspace scope without re-signing is refused.
+
+    Flips ``workspaceReadOnly`` in the payload while keeping the original
+    signature: verification must fail because the signature no longer
+    covers the payload. Exercises the real verifier, not a model copy.
+    """
+    import base64
+    import json
+
+    token = _mint(now=100)
+    encoded_payload, _, encoded_signature = token.partition(".")
+    padding = "=" * (-len(encoded_payload) % 4)
+    payload = json.loads(
+        base64.urlsafe_b64decode(encoded_payload + padding).decode("utf-8")
+    )
+    payload["workspaceReadOnly"] = not payload["workspaceReadOnly"]
+    payload["workspaceId"] = "escalated-workspace-4356"
+    tampered_payload = (
+        base64.urlsafe_b64encode(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        )
+        .rstrip(b"=")
+        .decode("ascii")
+    )
+    with pytest.raises(ContainerJobCapabilityError, match="invalid"):
+        verify_container_job_session_capability(
+            f"{tampered_payload}.{encoded_signature}",
+            secret=_SECRET,
+            now=120,
+        )
+
+
+def test_independent_worker_sessions_verify_concurrently() -> None:
+    """Two workers/tabs hold independent authority without cross-grant.
+
+    Both capabilities verify under the same deployment secret while each
+    stays bound to its own session/workflow -- the hermetic continuity
+    primitive for multiple tabs/workers before the integrated restart
+    suite runs.
+    """
+    first = verify_container_job_session_capability(
+        _mint(session_id="tab-A-4356", workflow_id="workflow-A-4356", now=100),
+        secret=_SECRET,
+        now=120,
+    )
+    second = verify_container_job_session_capability(
+        _mint(session_id="tab-B-4356", workflow_id="workflow-B-4356", now=100),
+        secret=_SECRET,
+        now=120,
+    )
+    assert first.session_id == "tab-A-4356"
+    assert second.session_id == "tab-B-4356"
+    assert first.workflow_id != second.workflow_id
