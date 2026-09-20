@@ -201,20 +201,52 @@ def sign_deployment_evidence(payload: Mapping[str, Any]) -> dict[str, Any]:
     return signed
 
 
+class DeploymentEvidenceUnusable(ValueError):
+    """One published document cannot back an admission, and why.
+
+    ``reason`` is always one of this module's own fixed strings. A candidate is
+    untrusted until its schema, secret scan, and HMAC all pass, and a parser
+    error quotes the values it rejected, so no candidate-derived text may ever
+    reach a diagnostic. Keeping the vocabulary here gives the reader one safe
+    thing to report instead of choosing between silence and leaking evidence.
+    """
+
+    def __init__(self, message: str, *, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+#: The complete bounded vocabulary of :class:`DeploymentEvidenceUnusable`.
+UNUSABLE_UNVERIFIED = "failed structural or signature verification"
+UNUSABLE_FUTURE_DATED = "is future-dated"
+UNUSABLE_EXPIRED = "is expired or past the maximum evidence age"
+UNUSABLE_GENERATION = "targets a different compatibility generation"
+
+
 def validate_deployment_evidence(
     evidence: Mapping[str, Any],
     *,
     now: datetime | None = None,
 ) -> DeploymentExecutionEvidence:
-    parsed = DeploymentExecutionEvidence.model_validate(evidence)
+    try:
+        parsed = DeploymentExecutionEvidence.model_validate(evidence)
+    except Exception as exc:
+        raise DeploymentEvidenceUnusable(
+            "deployment evidence failed structural or signature verification",
+            reason=UNUSABLE_UNVERIFIED,
+        ) from exc
     observed_at = now or datetime.now(UTC)
     if parsed.generated_at > observed_at:
-        raise ValueError("deployment evidence is future-dated")
+        raise DeploymentEvidenceUnusable(
+            "deployment evidence is future-dated", reason=UNUSABLE_FUTURE_DATED
+        )
     if (
         observed_at - parsed.generated_at > MAX_DEPLOYMENT_EVIDENCE_AGE
         or parsed.expires_at <= observed_at
     ):
-        raise ValueError("deployment evidence is stale or expired")
+        raise DeploymentEvidenceUnusable(
+            "deployment evidence is stale or expired", reason=UNUSABLE_EXPIRED
+        )
     # Enforce compatibility generations at validation time so stale-generation evidence
     # is rejected even before plan comparison (admission must be generation-aware).
     from moonmind.omnigent.session_supervisor_rollback import (
@@ -226,19 +258,22 @@ def validate_deployment_evidence(
     )
 
     if parsed.feature_generation != OMNIGENT_SESSION_FEATURE_GENERATION:
-        raise ValueError(
+        raise DeploymentEvidenceUnusable(
             f"deployment evidence featureGeneration {parsed.feature_generation!r} "
-            f"does not match current {OMNIGENT_SESSION_FEATURE_GENERATION!r}"
+            f"does not match current {OMNIGENT_SESSION_FEATURE_GENERATION!r}",
+            reason=UNUSABLE_GENERATION,
         )
     if parsed.replay_compatibility_version != OMNIGENT_SESSION_COMPATIBILITY_VERSION:
-        raise ValueError(
+        raise DeploymentEvidenceUnusable(
             f"deployment evidence replayCompatibilityVersion {parsed.replay_compatibility_version!r} "
-            f"does not match current {OMNIGENT_SESSION_COMPATIBILITY_VERSION!r}"
+            f"does not match current {OMNIGENT_SESSION_COMPATIBILITY_VERSION!r}",
+            reason=UNUSABLE_GENERATION,
         )
     if parsed.rollback_policy_version != SUPERVISOR_ROLLBACK_POLICY_VERSION:
-        raise ValueError(
+        raise DeploymentEvidenceUnusable(
             f"deployment evidence rollbackPolicyVersion {parsed.rollback_policy_version!r} "
-            f"does not match current {SUPERVISOR_ROLLBACK_POLICY_VERSION!r}"
+            f"does not match current {SUPERVISOR_ROLLBACK_POLICY_VERSION!r}",
+            reason=UNUSABLE_GENERATION,
         )
     return parsed
 
@@ -485,16 +520,22 @@ def find_deployment_evidence_entry(
         candidates = _load_deployment_evidence_candidates(path)
     except ValueError:
         return None
+    matching: list[DeploymentExecutionEvidence] = []
     for candidate in candidates:
         if not isinstance(candidate, Mapping):
             continue
         if _candidate_qualification_key(candidate) != expected:
             continue
         try:
-            return DeploymentExecutionEvidence.model_validate(candidate)
+            matching.append(DeploymentExecutionEvidence.model_validate(candidate))
         except Exception:
             continue
-    return None
+    if not matching:
+        return None
+    # One class can hold several published documents, so the probe has to
+    # select the one admission would. Reporting an older document's freshness
+    # would let a rollout gate call a class expired that the loader admits.
+    return max(matching, key=lambda entry: entry.generated_at)
 
 
 def load_deployment_evidence(
@@ -526,12 +567,16 @@ def load_deployment_evidence(
     ]
     admissible: list[DeploymentExecutionEvidence] = []
     conflict: ValueError | None = None
+    unusable: list[str] = []
     for candidate in matching:
         try:
             parsed = validate_deployment_evidence(candidate, now=now)
-        except ValueError:
-            # Expired, superseded-generation, or unverifiable history. The
-            # requested class may still hold a current document.
+        except DeploymentEvidenceUnusable as exc:
+            # Invalid history never blocks a current document, but if nothing
+            # current remains the operator needs the real reason: routine
+            # expiry and evidence corruption are different problems.
+            if exc.reason not in unusable:
+                unusable.append(exc.reason)
             continue
         try:
             assert_deployment_evidence_matches_plan(parsed, plan_payload)
@@ -545,6 +590,14 @@ def load_deployment_evidence(
     if not admissible:
         if conflict is not None:
             raise conflict
+        if unusable:
+            raise ValueError(
+                "this deployment published a qualification for the requested "
+                f"execution combination {plan_payload.supportCombinationKey}, "
+                "but no published document is usable: "
+                + "; ".join(f"evidence {reason}" for reason in sorted(unusable))
+                + ". Requalify this combination to publish current evidence."
+            )
         raise ValueError(_unqualified_combination_message(plan_payload, candidates))
     current = max(admissible, key=lambda entry: entry.generated_at)
     return current.model_dump(mode="json", by_alias=True)
@@ -556,6 +609,7 @@ __all__ = [
     "DEPLOYMENT_EVIDENCE_KEY_ID",
     "DEPLOYMENT_EVIDENCE_VERSION",
     "DeploymentEvidenceSignature",
+    "DeploymentEvidenceUnusable",
     "DeploymentExecutionEvidence",
     "assert_deployment_evidence_matches_plan",
     "find_deployment_evidence_entry",
