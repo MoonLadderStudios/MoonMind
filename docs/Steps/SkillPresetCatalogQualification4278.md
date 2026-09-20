@@ -34,7 +34,12 @@ Scope and honesty notes (read first):
   valid. Required regression CI depends on no live model or paid inference.
 - Before/after comparison (REQ-08, bounded): audit baseline 35 skills / 19
   presets; candidate 35 skills / 19 presets (no additions or removals in this
-  step). No percentage reduction is promised and no token savings are inferred
+  step). Pinned equivalent cases (`document-author`, then
+  `github-issue-search-and-implement`) are measured at the candidate for root
+  bytes, rendered bytes, step/tool/skill/reference counts, accounted
+  objectives, and false-completion guards
+  (`test_bounded_before_after_comparison_from_pinned_cases`). No percentage
+  reduction is promised and no token savings are inferred
   from byte counts. Deterministic contract fixtures are reported as fixtures,
   not as measured agent performance. Failed trials, estimates, and unavailable
   metrics are identified in the scenario matrix and limitations sections.
@@ -132,15 +137,15 @@ honestly; no fixture result is claimed as a live observation.
 | --- | --- | --- | --- | --- |
 | Repairable unchecked checklist | Authorized repair and verification without fabricated approval | Out of scope for this slice; feature children own repairs | Not run in this step | Gap: no owning test yet |
 | Genuine authority or product decision | Safe work completes; exact remaining decision preserved | Out of scope for this slice | Not run in this step | Gap: no owning test yet |
-| Technical requirement without a business metric | API/protocol/migration preserved; no invented threshold | Preset input schemas round-trip without invented thresholds (`_validate_inputs_schema` passthrough) | String-for-boolean rejected rather than coerced | `test_boolean_inputs_keep_type_and_reject_strings` (partial: typing boundary) |
+| Technical requirement without a business metric | API/protocol/migration preserved; no invented threshold | Preset input schemas round-trip without invented thresholds (`_validate_inputs_schema` passthrough); integer `github_issue.number` keeps `int` type through the capability contract | String-for-boolean rejected rather than coerced | `test_boolean_inputs_keep_type_and_reject_strings` (partial: typing boundary) + `test_numeric_and_boolean_inputs_retain_type_through_expansion` |
 | Missing local Docker CLI with working managed backend | Check runs at owning boundary; no socket fallback | Targeted tests run via the managed container-job service (`moonmind container python-tests`), never a local socket fallback | Local `./tools/test_unit.sh` path documented as unavailable here; no fallback attempted | Procedural evidence: this step's test runs |
 | Optional enrichment outage | Disclosed limitation without blocking required work | Limitations section below discloses unavailable metrics | N/A (disclosure, not a gate) | This ledger |
 | Unverified mandatory criterion or truncated required source | No whole-scope success or completion mutation | Unknown preset slug raises `PresetNotFoundError` through the production expansion boundary | Test asserts the raise; no success payload is produced | `test_unknown_preset_slug_never_reports_success` |
-| Candidate-only versus landed implementation | Correct publication/review path versus already-completed path | Re-sync after seed is a no-op (landed state needs no republication) | Second sync creates zero rows | `test_sync_preserves_personal_custom_preset` (partial: idempotency boundary) |
-| Stale assessment or changed candidate/head | Invalidated evidence refreshed, unrelated success not reused | Deterministic digest changes with intent; identical inputs reproduce identical candidates | Altered intent changes step ids | `test_preset_expansion_is_deterministic_with_effect_assertions` (partial: freshness boundary) |
+| Candidate-only versus landed implementation | Correct publication/review path versus already-completed path | Re-sync after seed is a no-op (landed state needs no republication); Apply/Reapply reproduces the candidate and refreshes recency instead of violating the uniqueness constraint (sqlite parity fix in `record_recent`) | Second sync creates zero rows; duplicate Apply updates one recent row | `test_sync_preserves_personal_custom_preset` (partial: idempotency boundary) + `test_apply_reapply_and_saved_dispatch_record_recent` |
+| Stale assessment or changed candidate/head | Invalidated evidence refreshed, unrelated success not reused | Deterministic digest changes with intent; identical inputs reproduce identical candidates; built-in digest stable across syncs (pinned snapshot); stale plan missing a required input reports a specific incompatibility | Altered intent changes step ids; stale plan raises `PresetValidationError` naming the input | `test_preset_expansion_is_deterministic_with_effect_assertions` (partial: freshness boundary) + `test_pinned_snapshot_retained_and_stale_plan_reports_incompatibility` |
 | Two remediation attempts | Cumulative content survives to final handoff | Out of scope for this slice (orchestration history, not catalog) | Not run in this step | Gap: no owning test yet |
 | Initial current verification pass | No redundant repair to traverse stages | Ledger records retained-correct rows without rewrites | Completeness test fails on any omitted row | `test_qualification_ledger_covers_every_preset_and_skill` (partial: no-op guard) |
-| Omitted/true/false verification setting | Correct type through generation, resume, saved dispatch | Boolean defaults (`false`/`true`) survive seed; explicit booleans survive expansion; strings rejected | `"true"` string raises `PresetValidationError` | `test_boolean_inputs_keep_type_and_reject_strings` |
+| Omitted/true/false verification setting | Correct type through generation, resume, saved dispatch | Boolean defaults (`false`/`true`) survive seed; explicit booleans survive expansion; integer `number` survives as `int`; strings rejected; Apply records recent, Reapply reproduces the candidate; personal save/edit/rerun round-trips through `PresetSaveService` | `"true"` string raises `PresetValidationError`; unknown slug raises `PresetNotFoundError` | `test_boolean_inputs_keep_type_and_reject_strings` + `test_numeric_and_boolean_inputs_retain_type_through_expansion` + `test_apply_reapply_and_saved_dispatch_record_recent` + `test_saved_preset_edit_rerun_round_trip` |
 | Existing PR continuation on another deployment | Same issue/PR/candidate, preserved retry history | Out of scope for this slice (deployment composition) | Not run in this step | Gap: no owning test yet |
 | Non-main PR base with unrelated worktree edits | Correct base + task-only commit | Out of scope for this slice (publication path; no PR created here) | Not run in this step | Gap: no owning test yet |
 | Fix-only review loop | Zero merge calls from every entrypoint | Out of scope for this slice | Not run in this step | Gap: no owning test yet |
@@ -156,8 +161,10 @@ honestly; no fixture result is claimed as a live observation.
 Affected files in this step:
 
 - `tests/unit/api/test_skill_preset_catalog_qualification_4278.py`
+- `api_service/services/presets/catalog.py` (sqlite `record_recent` Reapply
+  parity fix: refresh recency instead of violating the uniqueness
+  constraint; postgres path unchanged)
 - `docs/Steps/SkillPresetCatalogQualification4278.md`
-- (production catalog service and preset YAMLs are exercised but unchanged)
 
 Required CI consumes the selector (`.github/workflows/pytest-unit-tests.yml`
 pipes changed files through `tools/select_test_suites.py`). Actual collection
@@ -175,9 +182,14 @@ omitted row.
   qualification. Any future behavioral comparison using actual agent runs must
   retain exact configuration provenance and be separately authorized.
 - Three-deployment composition (REQ-06), old-worker/partial-bundle cutover
-  (REQ-05), in-flight history replay, and saved-schedule/edit/rerun journeys
-  (REQ-04 remainder) have no owning tests in this step; the scenario matrix
-  marks them as gaps rather than claiming coverage.
+  (REQ-05 remainder), in-flight history replay, and saved-schedule/edit/rerun journeys
+  (REQ-04 remainder: saved schedules, API/MCP/CLI submission paths, current
+  defaults beyond booleans/numerics) have no owning tests in this step; the scenario matrix
+  marks them as gaps rather than claiming coverage. The disposable-repo
+  side-effect journey (`test_expansion_side_effect_journey_writes_artifact_in_disposable_repo`),
+  numeric-type preservation, Apply/Reapply recency, personal save/edit/rerun,
+  pinned-snapshot retention, stale-plan incompatibility, and pinned-case
+  measurements are proven at the candidate through the production owners.
 - Before/after context-size, tool/step-count, and resource-use measurements
   (REQ-08 remainder) need pinned equivalent cases from the integrated feature
   children; this step reports only the deterministic equivalences it measured
