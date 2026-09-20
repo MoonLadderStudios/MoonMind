@@ -19816,3 +19816,48 @@ def test_create_execution_allows_read_only_plan_without_managed_publish(
         "initial_parameters"
     ]
     assert initial_parameters["publishMode"] == "none"
+
+
+def test_create_execution_rejects_recurring_read_only_plan_with_branch_publish(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """A recurring schedule returns before the task-shaped check.
+
+    Left unguarded it would repeat the guaranteed late failure on every tick.
+    """
+
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publishMode": "branch",
+                "schedule": {"mode": "recurring", "cron": "0 3 * * *"},
+                "workflow": {
+                    "instructions": "Resolve the target pull request.",
+                    "runtime": {"mode": "codex"},
+                    "publish": {"mode": "branch"},
+                    "steps": [
+                        {
+                            "id": "tpl:pr-review-resolve:01",
+                            "title": "Resolve target pull request",
+                            "type": "tool",
+                            "repositoryOperation": "read",
+                            "instructions": "Resolve the target pull request.",
+                            "tool": {
+                                "id": "github.resolve_pull_request_target",
+                                "inputs": {"pullRequest": "831"},
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "repositoryOperation" in response.json()["detail"]["message"]

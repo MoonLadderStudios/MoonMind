@@ -9233,6 +9233,28 @@ def _first_present_publish_mode(
             return source[key]
     return None
 
+def _validate_publish_authority_for_payload(payload: Mapping[str, Any]) -> None:
+    """Reject an authored publish mode no step in the payload can satisfy."""
+
+    task_payload = _coerce_mapping(payload.get("workflow")) or _coerce_mapping(
+        payload.get("task")
+    )
+    if not task_payload:
+        return
+    publish = _coerce_mapping(task_payload.get("publish"))
+    publish_mode = publish.get("mode")
+    if publish_mode is None:
+        publish_mode = task_payload.get("publishMode") or payload.get("publishMode")
+    raw_steps = task_payload.get("steps")
+    try:
+        validate_publish_mode_repository_authority(
+            publish_mode=publish_mode,
+            steps=raw_steps if isinstance(raw_steps, list) else None,
+        )
+    except WorkflowContractError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+
+
 def _resolve_workflow_publish_payload(
     *,
     payload: Mapping[str, Any],
@@ -11154,6 +11176,10 @@ async def _create_execution_from_workflow_request(
     elif isinstance(raw_schedule, ScheduleParameters):
         schedule = raw_schedule
 
+    # A recurring schedule returns before the task-shaped publish check below,
+    # so validate the same invariant first: an unsatisfiable publish mode would
+    # otherwise repeat its guaranteed late failure on every tick.
+    _validate_publish_authority_for_payload(payload)
     route = await _resolve_schedule_routing(
         schedule,
         request_payload=payload,

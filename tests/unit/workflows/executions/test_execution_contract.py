@@ -2617,8 +2617,10 @@ def test_read_only_plan_rejects_managed_repository_publish_modes() -> None:
 
 
 def test_read_only_plan_allows_non_publishing_modes() -> None:
+    """`auto` is excluded: it also requires execution-bound publish evidence."""
+
     read_only_steps = [{"id": "step-1", "repositoryOperation": "read"}]
-    for mode in ("none", "auto", None, ""):
+    for mode in ("none", None, ""):
         validate_publish_mode_repository_authority(
             publish_mode=mode,
             steps=read_only_steps,
@@ -2645,3 +2647,53 @@ def test_publish_mode_repository_authority_accepts_write_or_undeclared_step() ->
     # A single-task workflow authors no steps and keeps its publish selection.
     validate_publish_mode_repository_authority(publish_mode="branch", steps=[])
     validate_publish_mode_repository_authority(publish_mode="branch", steps=None)
+
+
+def test_auto_publish_also_requires_repository_mutation_authority() -> None:
+    """`auto` fails finalization the same way when no step can publish.
+
+    The compiler forces `publishMode='none'` on every read step, so an
+    agent-owned `auto` policy has no step that can produce evidence and the run
+    ends `auto_publish_evidence_missing`.
+    """
+
+    with pytest.raises(WorkflowContractError, match="repositoryOperation"):
+        validate_publish_mode_repository_authority(
+            publish_mode="auto",
+            steps=[{"id": "step-1", "repositoryOperation": "read"}],
+        )
+
+
+def test_publish_authority_reads_repository_operation_from_step_bindings() -> None:
+    """The compiler reads this from nested tool/skill inputs too.
+
+    A step that declares read-only authority inside its tool inputs is compiled
+    to `publishMode='none'` exactly like a top-level declaration, so admission
+    must see it the same way.
+    """
+
+    for binding in ("tool", "skill"):
+        for field in ("inputs", "args"):
+            with pytest.raises(WorkflowContractError, match="repositoryOperation"):
+                validate_publish_mode_repository_authority(
+                    publish_mode="branch",
+                    steps=[
+                        {
+                            "id": "step-1",
+                            binding: {
+                                "id": "github.resolve_pull_request_target",
+                                field: {"repositoryOperation": "read"},
+                            },
+                        }
+                    ],
+                )
+
+
+def test_nested_write_authority_still_admits_managed_publish() -> None:
+    validate_publish_mode_repository_authority(
+        publish_mode="branch",
+        steps=[
+            {"id": "step-1", "repositoryOperation": "read"},
+            {"id": "step-2", "tool": {"inputs": {"repositoryOperation": "write"}}},
+        ],
+    )
