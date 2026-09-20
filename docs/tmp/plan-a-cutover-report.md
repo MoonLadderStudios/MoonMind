@@ -72,14 +72,53 @@ counts, so a full host count never blocks an agent's own test job.
    schema — dropped rows are not restored, so rollback needing that data
    must restore a pre-upgrade backup.
 
-## Verification that could not run in this environment
+## Verification (MoonLadderStudios/MoonMind#4457)
 
-No pytest, Docker, PostgreSQL, or Temporal here (offline sandbox), so suites
-were verified by compilation, targeted logic checks (slot parsing/admission,
-settings resolution, host-capacity decisions, historical decoding), doc-link
-and doc-architecture checks, and careful replay-boundary review. CI must run:
-targeted unit suites, `integration_ci`, the container-job authority and
-recurring-cleanup reliability journeys, and the hermetic container-job path
-(2 CPU / 4 GiB default; agent-alive-while-test-runs; final-slot race; worker
-loss during launch; wait/cancel; historical replay; fixed-limit Docker
-inspection; truthful limit/launch failures; Batch PR Resolver preset route).
+Qualification owners: `moonmind/workflows/temporal/container_job_backend.py`
+(`start_container` reconciles the existing container before `docker start`;
+`reconcile_container` fails closed on an unreadable daemon instead of
+reporting absence; the `created`-exclusion fix is preserved).
+
+- `tests/unit/workflows/temporal/test_container_job_plan_a_4457.py` — lost
+  start-acknowledgment matrix (running reattach, finished no-restart,
+  created starts once), reconcile fail-closed vs vanished distinction,
+  two-process shared-lock race for the final slot at limit 1, created-waiter
+  forward progress, host/container ledger independence, CLI stock limits
+  reaching Docker verbatim with no `info` probe, preset profiles on fixed
+  limits. 11 tests.
+- `tests/integration/reliability/test_container_job_plan_a_qualification_4457.py`
+  — production workflow/Activities journeys for slot wait/release/cancel/
+  restart and host separation, preset-route effective-launch compilation,
+  plus two real-Docker tests (two-process final-slot race with external
+  overlap observation; real `docker inspect` of the CLI stock 2 CPU / 4 GiB /
+  512 PID limits). The real-Docker tests skip without a reachable daemon and
+  run in required CI. 4 hermetic tests + 2 real-Docker tests.
+- Existing hermetic coverage is preserved:
+  `tests/integration/reliability/test_container_job_authority_journey.py` and
+  `tests/unit/workflows/temporal/test_container_job_backend.py` still pass
+  unchanged.
+
+Executed 2026-09-20 on `main` at `100a08d6ed146b0038e2c6751f5d99f08e0eff3b`
+plus the uncommitted change above, via the normal route:
+
+- `moonmind container python-tests
+  tests/unit/workflows/temporal/test_container_job_plan_a_4457.py
+  tests/unit/workflows/temporal/test_container_job_backend.py` → 96 passed.
+- `moonmind container python-tests
+  tests/integration/reliability/test_container_job_plan_a_qualification_4457.py
+  tests/unit/workflows/temporal/test_container_job_plan_a_4457.py
+  tests/integration/reliability/test_container_job_authority_journey.py`
+  → 16 passed, 2 skipped (real-Docker tests, no daemon in this sandbox).
+- Adjacent suites: `test_container_job_workflow.py` +
+  `test_generic_host_capacity.py` → 74 passed; `test_container_job_evidence.py`
+  + `test_container_job_backend_registry_auth.py` +
+  `test_container_image_acquisition.py` → 70 passed;
+  `test_container_job_cli.py` + `test_container_job_cli_4226.py` +
+  `test_concurrency_qualification.py` → 133 passed.
+- `python3 tools/select_test_suites.py` on the changed files selects
+  `reliability_journey`, `integration_ci`, `temporal_boundary`, and the unit
+  suites, so the new tests run in existing required CI with no config change.
+
+Remaining for CI: the two real-Docker tests execute on runners with a Docker
+daemon (reliability shards); the handoff claim above the line is the
+locally executed evidence, not a substitute for that run.
