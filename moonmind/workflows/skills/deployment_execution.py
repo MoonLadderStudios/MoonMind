@@ -2102,17 +2102,30 @@ class DeploymentUpdateExecutor:
                 )
                 one_shot_services = _one_shot_services_from_plan(command_plan)
                 # The egress gateway is aligned ahead of the workers that
-                # attest it, but it stays in the main recreation. The
-                # deployment-update-infrastructure-reconciliation replay
-                # records the incident that holding it out causes: the
-                # restricted-egress network the gateway defines was then
-                # absent and the agent-runtime worker restarted with exit
-                # code 1. Compose leaves the already-aligned gateway alone
-                # here, so including it costs nothing and preserves that
-                # invariant.
+                # attest it, and normally stays in the main recreation too:
+                # the deployment-update-infrastructure-reconciliation replay
+                # records the incident that holding it out causes, where the
+                # restricted-egress network it defines went absent and the
+                # worker restarted with exit code 1. Compose leaves an
+                # already-aligned service alone, so including it costs
+                # nothing.
+                #
+                # `--force-recreate` is the exception: it would bounce the
+                # gateway a second time, concurrently with the workers whose
+                # startup attests it, defeating the alignment. The pre-pass
+                # inherits the same force flag, so the gateway has already
+                # been recreated and its network exists; excluding it here
+                # keeps that guarantee without the second bounce.
+                forced = "--force-recreate" in tuple(command_plan.up_args)
+                excluded_from_main = set(one_shot_services)
+                if forced:
+                    excluded_from_main |= {
+                        service.strip().lower()
+                        for service in _attested_gateway_services(before_state)
+                    }
                 service_command_plan = _command_plan_without_services(
                     command_plan,
-                    excluded_services=one_shot_services,
+                    excluded_services=excluded_from_main,
                 )
                 command_log["pull"]["command"] = list(command_plan.pull_args)
                 command_log["up"]["command"] = list(service_command_plan.up_args)

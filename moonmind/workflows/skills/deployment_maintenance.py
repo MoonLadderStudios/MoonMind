@@ -17,6 +17,13 @@ from moonmind.workflows.skills.deployment_release import (
 
 logger = logging.getLogger(__name__)
 
+
+def _deployment_project():
+    """The Compose project this deployment owns."""
+    import os
+
+    return os.environ.get("COMPOSE_PROJECT_NAME") or "moonmind"
+
 # Containers a pre-recreate-in-place release or availability owner created
 # beside the installed fleet. They reuse the deployment's own Compose project
 # and service labels, so `docker compose ps -q <service>` returns more than one
@@ -24,8 +31,8 @@ logger = logging.getLogger(__name__)
 _LEGACY_COHORT_PREFIXES = ("mm-candidate-", "mm-retained-")
 
 
-async def observed_legacy_cohorts():
-    """Names of leftover blue/green cohort containers, newest Docker first.
+async def observed_legacy_cohorts(project="moonmind"):
+    """Names of this deployment's leftover blue/green cohort containers.
 
     Recreate-in-place never creates these. A deployment upgrading across that
     change can still be carrying some, and they must be removed before an
@@ -34,10 +41,17 @@ async def observed_legacy_cohorts():
     may still be the only pollers for pinned work, and no proof available here
     distinguishes that safely. Reporting them makes the blocker obvious
     instead of silently deleting or silently ignoring it.
+
+    Scoped to this deployment's Compose project. One host can run several
+    independent MoonMind deployments, and a daemon-wide listing would name
+    another deployment's cohorts as blocking this one -- sending the operator
+    to force-remove containers that may be its last pollers.
     """
     listed = await docker(
         "ps",
         "-a",
+        "--filter",
+        f"label=com.docker.compose.project={project}",
         "--format",
         "{{.Names}}",
     )
@@ -94,7 +108,7 @@ async def reconcile_releases():
     result = {
         "jobs": [],
         "errors": [],
-        "legacyCohorts": await observed_legacy_cohorts(),
+        "legacyCohorts": await observed_legacy_cohorts(_deployment_project()),
     }
     # Visit least-recently reconciled jobs first so one job cannot starve the
     # rest. Each pass is bounded.

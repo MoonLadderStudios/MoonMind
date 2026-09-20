@@ -718,15 +718,27 @@ async def verify_installed_fleet(runner, image, *, expected=None, attempts=60):
     from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
 
     expected = expected or installed_release()["digest"]
+    project = getattr(runner, "project_name", None) or "moonmind"
     for _ in range(attempts):
         ready = True
         for service in _FLEET_SERVICE_NAMES.values():
-            found = await runner._run_compose_command(
-                ("docker", "compose", "ps", "-q", service),
-                requested_image=image,
+            # `compose ps` returns one-off containers alongside the installed
+            # service: `compose run` stamps them with the same project and
+            # service labels. The updater executing this check is itself one
+            # of them for temporal-worker-deployment-control, so an exact-one
+            # count over `compose ps` can never pass during a release. Count
+            # only installed containers, as installed_bind_sources does.
+            found = await docker(
+                "ps",
+                "-q",
+                "--filter",
+                f"label=com.docker.compose.project={project}",
+                "--filter",
+                f"label=com.docker.compose.service={service}",
+                "--filter",
+                "label=com.docker.compose.oneoff=False",
             )
-            _ensure_command_succeeded("inspect installed worker", found)
-            identifiers = found["stdout"].split()
+            identifiers = found.split()
             if len(identifiers) != 1:
                 ready = False
                 break
@@ -975,7 +987,14 @@ async def _run_job_body(request_file):
                     reason = result.outputs.get("failure", {}).get("reason")
                     raise RuntimeError(
                         reason
-                        or "Release verification did not establish completion; retained workers own recovery"
+                        or (
+                            "Release verification did not establish completion. "
+                            "The installed fleet is whatever this attempt left "
+                            "running; no retained cohort exists and maintenance "
+                            "does not resume this job. Re-run "
+                            "./tools/update-moonmind.sh to start a fresh audited "
+                            "release."
+                        )
                     )
                 if result.status == "COMPLETED":
                     readiness = await verify_installed_fleet(runner, record["image"])
@@ -1010,8 +1029,12 @@ async def _run_job_body(request_file):
                             },
                         )
                         raise RuntimeError(
-                            f"Omnigent release migration did not establish "
-                            f"completion ({exc}); retained workers own recovery"
+                            "Omnigent release migration did not establish "
+                            f"completion ({exc}). The MoonMind fleet was "
+                            "recreated and verified; only the Omnigent release "
+                            "is unaligned. No retained cohort exists and "
+                            "maintenance does not resume this job. Re-run "
+                            "./tools/update-moonmind.sh to converge it."
                         ) from exc
                     result = replace(
                         result,
