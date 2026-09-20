@@ -113,6 +113,32 @@ async def version_availability(
     }
 
 
+async def version_drained(client, version: str) -> bool:
+    """Only Temporal's terminal drainage evidence releases old pollers.
+
+    Production routing no longer waits on drainage: recreate-in-place serves
+    one version at a time. This remains the supported observation of Temporal's
+    drainage status for the release-routing reliability journeys, which cover
+    the startup promotion path that is still live.
+    """
+    from temporalio.api.enums.v1 import VersionDrainageStatus
+
+    try:
+        response = await client.workflow_service.describe_worker_deployment_version(
+            DescribeWorkerDeploymentVersionRequest(
+                namespace=client.namespace, version=version
+            )
+        )
+    except RPCError as exc:
+        if exc.status == RPCStatusCode.NOT_FOUND:
+            return False
+        raise
+    return (
+        response.worker_deployment_version_info.drainage_info.status
+        == VersionDrainageStatus.VERSION_DRAINAGE_STATUS_DRAINED
+    )
+
+
 async def await_registered_queues(
     client, *, version, workflow_queue, activity_queues, workflow_queues=()
 ):
