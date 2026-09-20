@@ -20,10 +20,11 @@ from typing import Any
 import pytest
 
 from moonmind.provider_profiles.manager_recovery import (
-    MANAGER_UNREADABLE_LEDGER,
     MANAGER_HELD_LEASE_PRESENT,
     MANAGER_NOT_RUNNING,
     MANAGER_NOT_WEDGED,
+    MANAGER_RECOVERY_FAILED,
+    MANAGER_UNREADABLE_LEDGER,
     ProviderManagerUnavailableError,
     recover_wedged_provider_manager,
 )
@@ -55,13 +56,15 @@ class _FailedAttrs:
 
 
 class _Cause:
+    """A cause with no integer form, like an unknown server-side value.
+
+    ``int()`` on an object without ``__int__`` already raises ``TypeError``,
+    which is what drives the scan's documented fallback to the cause name, so
+    implementing the special method just to raise would add nothing.
+    """
+
     def __init__(self, name: str) -> None:
         self.name = name
-
-    def __int__(self) -> int:
-        # Deliberately unmappable to the SDK enum so the scan falls back to the
-        # cause name, exactly as it does for an unknown server-side value.
-        raise TypeError("test cause is not an enum value")
 
     def __str__(self) -> str:
         return self.name
@@ -92,12 +95,19 @@ class _Description:
 
 
 class _Handle:
-    def __init__(self, events: list[Any]) -> None:
+    def __init__(self, events: list[Any], restored: bool | None) -> None:
         self._events = events
+        self._restored = restored
 
     async def fetch_history_events(self, **_kwargs: Any):
         for event in self._events:
             yield event
+
+    async def query(self, name: str) -> Any:
+        assert name == "get_state"
+        if self._restored is None:
+            raise RuntimeError("query unavailable")
+        return {"startup_restored": self._restored}
 
 
 class _Adapter:
@@ -109,10 +119,12 @@ class _Adapter:
         status: str = "RUNNING",
         run_id: str = "wedged-run",
         events: list[Any] | None = None,
+        restored: bool | None = True,
     ) -> None:
         self._status = status
         self._run_id = run_id
         self._events = events if events is not None else _nondeterminism_tail()
+        self._restored = restored
         self.terminated: list[tuple[str, str, str]] = []
         self.handle_run_ids: list[str | None] = []
 
@@ -125,7 +137,7 @@ class _Adapter:
     ) -> Any:
         assert workflow_id == WORKFLOW_ID
         self.handle_run_ids.append(run_id)
-        return _Handle(self._events)
+        return _Handle(self._events, self._restored)
 
     async def terminate_workflow(
         self, workflow_id: str, *, reason: str, run_id: str | None = None
@@ -149,18 +161,30 @@ def _starter(started: list[str]):
     return start_manager
 
 
+async def _no_sleep(_seconds: float) -> None:
+    """Collapse the bounded readiness backoff so tests stay fast."""
+
+    return None
+
+
+def _recover(adapter: Any, started: list[str], held: int | None, **kwargs: Any):
+    return recover_wedged_provider_manager(
+        adapter,
+        runtime_id=RUNTIME_ID,
+        start_manager=_starter(started),
+        held_lease_probe=_probe(held),
+        sleep=_no_sleep,
+        **kwargs,
+    )
+
+
 @pytest.mark.asyncio
 async def test_replaces_a_wedged_manager_when_the_ledger_shows_no_held_lease() -> None:
     """Confirmed nondeterminism plus a free ledger is a recoverable wedge."""
     adapter = _Adapter()
     started: list[str] = []
 
-    recovery = await recover_wedged_provider_manager(
-        adapter,
-        runtime_id=RUNTIME_ID,
-        start_manager=_starter(started),
-        held_lease_probe=_probe(0),
-    )
+    recovery = await _recover(adapter, started, 0)
 
     assert recovery.recovered is True
     assert recovery.refusal == ""
@@ -184,12 +208,7 @@ async def test_refuses_to_replace_a_manager_while_a_lease_is_held() -> None:
     adapter = _Adapter()
     started: list[str] = []
 
-    recovery = await recover_wedged_provider_manager(
-        adapter,
-        runtime_id=RUNTIME_ID,
-        start_manager=_starter(started),
-        held_lease_probe=_probe(2),
-    )
+    recovery = await _recover(adapter, started, 2)
 
     assert recovery.recovered is False
     assert recovery.refusal == MANAGER_HELD_LEASE_PRESENT
@@ -204,12 +223,7 @@ async def test_refuses_to_replace_a_manager_when_the_ledger_is_unreadable() -> N
     adapter = _Adapter()
     started: list[str] = []
 
-    recovery = await recover_wedged_provider_manager(
-        adapter,
-        runtime_id=RUNTIME_ID,
-        start_manager=_starter(started),
-        held_lease_probe=_probe(None),
-    )
+    recovery = await _recover(adapter, started, None)
 
     assert recovery.recovered is False
     assert recovery.refusal == MANAGER_UNREADABLE_LEDGER
@@ -226,12 +240,7 @@ async def test_refuses_when_the_tail_shows_a_completed_workflow_task() -> None:
     adapter = _Adapter(events=[events[1], events[0]])
     started: list[str] = []
 
-    recovery = await recover_wedged_provider_manager(
-        adapter,
-        runtime_id=RUNTIME_ID,
-        start_manager=_starter(started),
-        held_lease_probe=_probe(0),
-    )
+    recovery = await _recover(adapter, started, 0)
 
     assert recovery.recovered is False
     assert recovery.refusal == MANAGER_NOT_WEDGED
@@ -245,12 +254,7 @@ async def test_refuses_when_the_manager_is_not_running() -> None:
     adapter = _Adapter(status="COMPLETED")
     started: list[str] = []
 
-    recovery = await recover_wedged_provider_manager(
-        adapter,
-        runtime_id=RUNTIME_ID,
-        start_manager=_starter(started),
-        held_lease_probe=_probe(0),
-    )
+    recovery = await _recover(adapter, started, 0)
 
     assert recovery.recovered is False
     assert recovery.refusal == MANAGER_NOT_RUNNING
@@ -261,14 +265,71 @@ async def test_refuses_when_the_manager_is_not_running() -> None:
 async def test_unavailable_error_reports_the_refusal_and_the_evidence() -> None:
     """The operator-facing failure names what was observed, not a guess."""
     adapter = _Adapter()
-    recovery = await recover_wedged_provider_manager(
-        adapter,
-        runtime_id=RUNTIME_ID,
-        start_manager=_starter([]),
-        held_lease_probe=_probe(1),
-    )
+    recovery = await _recover(adapter, [], 1)
     error = ProviderManagerUnavailableError(recovery)
 
     assert error.recovery is recovery
     assert MANAGER_HELD_LEASE_PRESENT in str(error)
     assert RUNTIME_ID in str(error)
+
+
+@pytest.mark.asyncio
+async def test_recovery_reports_the_restored_replacement() -> None:
+    """A replacement only counts once it owns the authoritative ledger."""
+    adapter = _Adapter()
+    started: list[str] = []
+
+    recovery = await _recover(adapter, started, 0)
+
+    assert recovery.recovered is True
+    assert recovery.startup_restored is True
+
+
+@pytest.mark.asyncio
+async def test_refuses_when_the_replacement_never_reports_restored_state() -> None:
+    """Starting the run is not the same as the run owning the ledger.
+
+    ``start_workflow`` only submits the replacement; its ``run()`` restores
+    profiles and durable leases through Activities while Temporal is already
+    dispatching Update handlers. Resubmitting before restoration completes can
+    admit a credential mutation against empty in-memory state, over a restored
+    cleanup obligation whose consumer may still be running.
+    """
+    adapter = _Adapter(restored=False)
+    started: list[str] = []
+
+    recovery = await _recover(
+        adapter, started, 0, startup_restore_attempts=3
+    )
+
+    assert recovery.recovered is False
+    assert recovery.refusal == MANAGER_RECOVERY_FAILED
+    assert recovery.startup_restored is False
+    # The wedged run was still replaced; what is withheld is the resubmission.
+    assert len(adapter.terminated) == 1
+    assert started == [WORKFLOW_ID]
+    assert "did not confirm restored ledger state" in recovery.detail
+
+
+@pytest.mark.asyncio
+async def test_unknown_and_legacy_lease_states_are_not_free_capacity() -> None:
+    """Only a released tombstone frees a slot, per the durable contract.
+
+    The authoritative ``sync_slot_leases`` loader treats a legacy ``NULL``
+    state as held and an unrecognized state as unreconciled. A probe that
+    counted only ``held`` would read either as free and authorize a
+    termination whose replacement cannot restore it.
+    """
+    from moonmind.provider_profiles.manager_recovery import RELEASED_LEASE_STATE
+
+    assert RELEASED_LEASE_STATE == "released"
+
+    adapter = _Adapter()
+    started: list[str] = []
+    # One legacy/unreconciled row is reported by the probe as spending a slot.
+    recovery = await _recover(adapter, started, 1)
+
+    assert recovery.recovered is False
+    assert recovery.refusal == MANAGER_HELD_LEASE_PRESENT
+    assert "reconciled" in recovery.detail
+    assert adapter.terminated == []

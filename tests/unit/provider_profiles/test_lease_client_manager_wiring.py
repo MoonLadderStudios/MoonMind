@@ -562,7 +562,13 @@ class _WedgedManagerAdapter:
     exact seam, including the describe and history evidence recovery reads.
     """
 
-    def __init__(self, *, heal_after: int = 1, nondeterminism: int = 3) -> None:
+    def __init__(
+        self,
+        *,
+        heal_after: int | None = 1,
+        nondeterminism: int = 3,
+    ) -> None:
+        #: ``None`` never heals, so a reattach cannot mask the original error.
         self.heal_after = heal_after
         self.nondeterminism = nondeterminism
         self.update_calls = 0
@@ -584,7 +590,7 @@ class _WedgedManagerAdapter:
         self.update_calls += 1
         if self.healed:
             return {"profile_id": PROFILE_ID, "lease_id": "lease-after-recovery"}
-        if self.update_calls >= self.heal_after + 1:
+        if self.heal_after is not None and self.update_calls >= self.heal_after + 1:
             return {"profile_id": PROFILE_ID, "lease_id": "lease-after-recovery"}
         raise RPCError(
             "Unable to perform workflow execution update",
@@ -607,6 +613,12 @@ class _WedgedManagerAdapter:
             async def fetch_history_events(self, **_kwargs):
                 for _ in range(outer.nondeterminism):
                     yield _wedge_event()
+
+            async def query(self, name):
+                assert name == "get_state"
+                # The replacement reports it finished restoring the ledger, so
+                # the resubmission admits against real state.
+                return {"startup_restored": True}
 
         return _Handle()
 
@@ -634,11 +646,10 @@ def _wedge_event():
     return _Event()
 
 
-def _free_ledger(_runtime_id: str):
-    async def probe(_runtime: str) -> int:
-        return 0
+async def _free_ledger(_runtime_id: str) -> int:
+    """A ledger with nothing left spending capacity."""
 
-    return probe(_runtime_id)
+    return 0
 
 
 @pytest.mark.asyncio
@@ -648,8 +659,8 @@ async def test_a_wedged_manager_is_replaced_and_the_update_retried(
     """A blocked caller recovers the ledger instead of reporting an outage."""
 
     monkeypatch.setattr(
-        "moonmind.provider_profiles.manager_recovery.count_held_provider_leases",
-        lambda runtime_id: _free_ledger(runtime_id),
+        "moonmind.provider_profiles.manager_recovery.count_unreleased_provider_leases",
+        _free_ledger,
     )
     adapter = _WedgedManagerAdapter()
     client = ProviderProfileLeaseClient(adapter)
@@ -673,7 +684,7 @@ async def test_a_wedge_that_cannot_be_recovered_reports_why(
         return 1
 
     monkeypatch.setattr(
-        "moonmind.provider_profiles.manager_recovery.count_held_provider_leases",
+        "moonmind.provider_profiles.manager_recovery.count_unreleased_provider_leases",
         _held,
     )
     adapter = _WedgedManagerAdapter()
@@ -700,10 +711,10 @@ async def test_a_manager_rpc_failure_that_is_not_a_wedge_reports_temporals_error
     """
 
     monkeypatch.setattr(
-        "moonmind.provider_profiles.manager_recovery.count_held_provider_leases",
-        lambda runtime_id: _free_ledger(runtime_id),
+        "moonmind.provider_profiles.manager_recovery.count_unreleased_provider_leases",
+        _free_ledger,
     )
-    adapter = _WedgedManagerAdapter(nondeterminism=0)
+    adapter = _WedgedManagerAdapter(nondeterminism=0, heal_after=None)
     client = ProviderProfileLeaseClient(adapter)
 
     with pytest.raises(RPCError) as excinfo:
@@ -711,3 +722,5 @@ async def test_a_manager_rpc_failure_that_is_not_a_wedge_reports_temporals_error
 
     assert excinfo.value.status == RPCStatusCode.FAILED_PRECONDITION
     assert adapter.terminated == []
+    # One bounded reattach was attempted before the original error stood.
+    assert adapter.update_calls == 2

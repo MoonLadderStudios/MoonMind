@@ -5286,42 +5286,78 @@ class TemporalArtifactActivities:
                 "inspection_succeeded": True,
             }
 
-        try:
-            state = await asyncio.wait_for(
-                handle.query("get_state"),
-                timeout=_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS,
-            )
-        except TimeoutError:
-            return {
-                "running": True,
-                "workflow_id": workflow_id,
-                "runtime_id": runtime_id,
-                "status": status_name,
-                "inspection_succeeded": False,
-                "inspection_status": "QUERY_TIMEOUT",
-            }
-        except RPCError as exc:
-            return {
-                "running": True,
-                "workflow_id": workflow_id,
-                "runtime_id": runtime_id,
-                "status": status_name,
-                "inspection_succeeded": False,
-                "inspection_status": f"RPC_ERROR_{exc.status.name}",
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            }
+        # A manager that runs while every query fails is the replay-wedge
+        # signature. MoonLadderStudios/MoonMind#4363: ordinary AgentRun
+        # admission reaches the manager by *signal*, and Temporal appends a
+        # signal to a still-RUNNING execution even when every workflow task
+        # fails, so no Update RPC ever fails and the caller-side recovery in
+        # ProviderProfileLeaseClient is never entered. Without a repair here,
+        # a runtime whose only traffic is managed AgentRuns waits in
+        # awaiting_provider_capacity forever. Attempt the same bounded,
+        # ledger-gated replacement once, then re-inspect the successor.
+        state: Any = None
+        inspection: dict[str, Any] | None = None
+        for attempt in range(2):
+            inspection = None
+            try:
+                state = await asyncio.wait_for(
+                    handle.query("get_state"),
+                    timeout=_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                state = None
+                inspection = {
+                    "running": True,
+                    "workflow_id": workflow_id,
+                    "runtime_id": runtime_id,
+                    "status": status_name,
+                    "inspection_succeeded": False,
+                    "inspection_status": "QUERY_TIMEOUT",
+                }
+            except RPCError as exc:
+                state = None
+                inspection = {
+                    "running": True,
+                    "workflow_id": workflow_id,
+                    "runtime_id": runtime_id,
+                    "status": status_name,
+                    "inspection_succeeded": False,
+                    "inspection_status": f"RPC_ERROR_{exc.status.name}",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            if inspection is None and not isinstance(state, dict):
+                inspection = {
+                    "running": True,
+                    "workflow_id": workflow_id,
+                    "runtime_id": runtime_id,
+                    "status": status_name,
+                    "inspection_succeeded": False,
+                    "inspection_status": "INVALID_QUERY_PAYLOAD",
+                    "error_type": "InvalidQueryPayload",
+                }
+            if inspection is None:
+                break
+            if attempt == 0:
+                from moonmind.provider_profiles.manager_recovery import (
+                    recover_manager_for_runtime,
+                )
 
-        if not isinstance(state, dict):
-            return {
-                "running": True,
-                "workflow_id": workflow_id,
-                "runtime_id": runtime_id,
-                "status": status_name,
-                "inspection_succeeded": False,
-                "inspection_status": "INVALID_QUERY_PAYLOAD",
-                "error_type": "InvalidQueryPayload",
-            }
+                recovery = await recover_manager_for_runtime(
+                    adapter, runtime_id
+                )
+                if recovery is not None and recovery.recovered:
+                    handle = client.get_workflow_handle(workflow_id)
+                    continue
+                if recovery is not None and recovery.nondeterminism_failures > 0:
+                    # Only a confirmed wedge that recovery declined to repair
+                    # tells a waiter something new. A busy or slow manager
+                    # gets its ordinary snapshot, unchanged.
+                    inspection["recovery_refusal"] = recovery.refusal
+                    inspection["recovery_detail"] = recovery.detail
+            break
+        if inspection is not None:
+            return inspection
 
         profiles = state.get("profiles")
         pending_requests = state.get("pending_requests")
