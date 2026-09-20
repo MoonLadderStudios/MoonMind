@@ -468,6 +468,7 @@ jobs:
           exit $status
       - name: Write backend-matrix evidence summary
         if: always()
+        timeout-minutes: 2
         env:
           PYTHONUNBUFFERED: "1"
         run: |
@@ -476,20 +477,32 @@ jobs:
             unit-fast)
               selected="${{ needs.select-test-suites.outputs.unit_fast }}"
               outcome="${{ steps.run-unit.outcome }}"
-              seconds_file="/tmp/backend-unit-fast-test-seconds.txt" ;;
+              seconds_file="/tmp/backend-unit-fast-test-seconds.txt"
+              effective_command="python -m pytest tests/unit -m unit_fast -q -n auto --dist loadfile --durations=25 --timeout 600"
+              pytest_timeout="600s per-test"
+              step_budget="30-min job" ;;
             api-component)
               selected="${{ needs.select-test-suites.outputs.api_component }}"
               outcome="${{ steps.run-api.outcome }}"
-              seconds_file="/tmp/backend-api-component-test-seconds.txt" ;;
+              seconds_file="/tmp/backend-api-component-test-seconds.txt"
+              effective_command="python -m pytest tests/unit/api tests/unit/api_service tests/component/api -m component -q -n auto --dist load --durations=25 --timeout 600"
+              pytest_timeout="600s per-test"
+              step_budget="30-min job" ;;
             temporal-boundary)
               selected="${{ needs.select-test-suites.outputs.temporal_boundary }}"
               outcome="${{ steps.run-temporal.outcome }}"
-              seconds_file="/tmp/backend-temporal-boundary-test-seconds.txt" ;;
+              seconds_file="/tmp/backend-temporal-boundary-test-seconds.txt"
+              effective_command="python -m pytest tests/unit/workflows/temporal -m temporal_boundary -q -n auto --dist loadfile --durations=25 --timeout 600"
+              pytest_timeout="600s per-test"
+              step_budget="30-min job" ;;
             reliability-*)
               selected="${{ needs.select-test-suites.outputs.reliability_journey }}"
               outcome="${{ steps.run-reliability.outcome }}"
-              seconds_file="/tmp/backend-${{ matrix.suite }}-test-seconds.txt" ;;
-            *) selected="false"; outcome="skipped"; seconds_file="" ;;
+              seconds_file="/tmp/backend-${{ matrix.suite }}-test-seconds.txt"
+              effective_command="python -m pytest tests/integration/reliability -m reliability_journey --splits 4 --group <N> --splitting-algorithm least_duration -vv --tb=short --durations=25 --timeout 150s PR / 300s schedule"
+              pytest_timeout="150s PR / 300s schedule per-test"
+              step_budget="600s PR step / 12-min schedule step within 30-min job" ;;
+            *) selected="false"; outcome="skipped"; seconds_file=""; effective_command=""; pytest_timeout=""; step_budget="" ;;
           esac
           if [[ "$selected" != "true" ]]; then
             outcome="skipped"
@@ -507,8 +520,13 @@ jobs:
             --slowest "artifacts/pytest-backend-${{ matrix.suite }}-slowest.txt" \
             --durations-snapshot "artifacts/pytest-backend-${{ matrix.suite }}-durations.json" \
             --summary "$GITHUB_STEP_SUMMARY" \
-            --test-seconds-file "$seconds_file"
+            --test-seconds-file "$seconds_file" \
+            --effective-command "$effective_command" \
+            --pytest-timeout "$pytest_timeout" \
+            --step-budget "$step_budget" \
+            --collection-status "/tmp/pytest-${{ matrix.suite }}/collection-status.txt"
       - name: Upload backend-matrix pytest evidence
+        timeout-minutes: 2
         if: >-
           always() && (
             (matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true') ||
@@ -527,6 +545,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Upload generated fault-lab diagnostics
+        timeout-minutes: 2
         if: failure() && matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -538,8 +557,11 @@ jobs:
         # Every-run retention (MoonLadderStudios/MoonMind#4371): dependency
         # logs, replays, manifests and per-shard timings upload on every
         # run, not only on failure/cancellation. Collection stays bounded
-        # (timeout 100s logs, timeout 60s manifest copy) and never replaces
-        # the original test outcome.
+        # (2-min step cap plus timeout 100s logs, timeout 60s manifest copy)
+        # and never replaces the original test outcome. Scope is limited to
+        # known test-owned roots; collected text is redacted before upload
+        # and the environment is never dumped.
+        timeout-minutes: 2
         if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         run: |
           set -uo pipefail
@@ -561,8 +583,10 @@ jobs:
           fi
           timeout 60s bash -c "find . -type f \( -name 'workspace-manifest*.json' -o -name 'provider-transcript*.jsonl' -o -name 'temporal-diagnostics*.json' -o -name 'replay-manifest*.json' \) -exec cp --parents '{}' /tmp/pytest-${{ matrix.suite }}/ \; 2>/dev/null" \
             || echo "scoped manifest copy failed or timed out (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
+          python3 tools/ci/redact_diagnostics.py --diagnostics-dir /tmp/pytest-${{ matrix.suite }} --status-file /tmp/pytest-${{ matrix.suite }}/collection-status.txt || echo "redaction failed (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
           echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > /tmp/pytest-${{ matrix.suite }}/cancellation-context.txt
       - name: Upload reliability shard diagnostics
+        timeout-minutes: 2
         if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         uses: actions/upload-artifact@v7
         with:
@@ -571,6 +595,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Record backend-matrix cancellation diagnostics
+        timeout-minutes: 2
         if: (failure() || cancelled())
         run: |
           set -uo pipefail
@@ -586,6 +611,7 @@ jobs:
           } > /tmp/backend-matrix-${{ matrix.suite }}/attempted-cancellation.txt
           ls artifacts/pytest-backend-${{ matrix.suite }}.xml >> /tmp/backend-matrix-${{ matrix.suite }}/attempted-cancellation.txt 2>&1 || echo "no junit report (cancelled before tests wrote one)" >> /tmp/backend-matrix-${{ matrix.suite }}/attempted-cancellation.txt
       - name: Upload backend-matrix cancellation diagnostics
+        timeout-minutes: 2
         if: (failure() || cancelled())
         uses: actions/upload-artifact@v7
         with:
@@ -594,8 +620,40 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Remove isolated reliability dependencies
+        timeout-minutes: 2
         if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
         run: timeout 100s docker compose -p moonmind-reliability-${{ matrix.suite }} -f tests/integration/reliability/compose.yaml down -v || echo "compose down failed or timed out; continuing cleanup"
+      - name: Report secondary diagnostics failures
+        # MoonLadderStudios/MoonMind#4371 R6: secondary diagnostics/teardown
+        # failures are surfaced distinctly (annotation + summary note) while
+        # the primary pytest result is preserved. This step always exits 0
+        # so diagnostic success can never turn a failure green, and an
+        # `if: always()` step cannot promise cleanup after a hard job kill.
+        timeout-minutes: 2
+        if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
+        run: |
+          set -uo pipefail
+          status_file="/tmp/pytest-${{ matrix.suite }}/collection-status.txt"
+          if [[ ! -f "$status_file" ]]; then
+            echo "No collection status (interrupted before collection ran; primary outcome unchanged)."
+            exit 0
+          fi
+          if grep -Ei -q "failed|timed out|missing|redaction failed" "$status_file"; then
+            echo "::warning::secondary diagnostics/teardown reported an issue for ${{ matrix.suite }} (primary pytest outcome unchanged; see collection-status.txt)"
+            {
+              echo ""
+              echo "### Secondary diagnostics/teardown (does not change the primary outcome)"
+              echo ""
+              echo "Secondary collection/teardown reported an issue for \`${{ matrix.suite }}\` (primary pytest outcome unchanged):"
+              echo ""
+              echo '```'
+              head -c 2000 "$status_file"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Diagnostics collection reported no secondary failures."
+          fi
+          exit 0
 
   moonspec-projection:
     runs-on: ubuntu-latest

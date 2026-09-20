@@ -162,11 +162,16 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   (MoonLadderStudios/MoonMind#4369, #4384): 150s per-test timeout and a ~10-min
   step ceiling on PRs (`timeout 600s`, above the ~500s heaviest partition
   load), 300s per-test under a 12-min step
-  ceiling on schedules. Reliability collection steps are additionally
-  wrapped in `timeout 100s`/`timeout 60s` so one slow diagnostic command
-  cannot stall the row; each command records its own failure to
-  `collection-status.txt` without stopping the remaining bounded collection
-  or cleanup, and the original test failure is never replaced.
+  ceiling on schedules. Reliability collection, upload, and teardown steps
+  each carry a 2-minute `timeout-minutes` cap (MoonLadderStudios/MoonMind#4371)
+  on top of the inner `timeout 100s`/`timeout 60s` command wrappers, so one
+  slow diagnostic, upload, or `compose down` cannot stall the row; each
+  command records its own failure to `collection-status.txt` without stopping
+  the remaining bounded collection or cleanup, and the original test failure
+  is never replaced. A dedicated always()-run reporting step surfaces those
+  secondary failures as a `::warning::` annotation plus a summary note that
+  explicitly preserves the primary pytest outcome (and always exits 0, so
+  diagnostic success can never turn a failure green).
 - Each row streams combined stdout/stderr through
   `2>&1 | tee artifacts/pytest-backend-<suite>.log` with
   `PYTHONUNBUFFERED=1` and `set -euo pipefail` (plus `PIPESTATUS`
@@ -187,13 +192,23 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   and (best-effort) normal cancellation via `always()` plus the native
   selection guard. Reliability Compose logs and scoped manifests upload the
   same way on every selected run (MoonLadderStudios/MoonMind#4371) with the
-  same retention. No hidden environment files, tokens,
+  same retention. Collection is limited to known test-owned roots
+  (pytest XML/log/slowest/durations, replays, named manifests); the
+  environment is never dumped. Collected text passes through the small
+  `tools/ci/redact_diagnostics.py` helper (GitHub/bearer/API-key-shaped
+  secrets redacted in place, ordinary node IDs and durations preserved)
+  before upload. No hidden environment files, tokens,
   unrestricted workspaces, or whole source trees are staged.
 - Each row appends a per-job `$GITHUB_STEP_SUMMARY` (via the same hook)
-  with suite/shard identity, tested revision, run/attempt, JUnit counts
-  (never progress-% parsing), outcome (`passed`, `failed`, `canceled`,
-  `intentionally unselected`, or `unavailable`), measured test-step wall
-  time plus JUnit suite time, top slowest cases, and evidence paths. The
+  with suite/shard identity, tested revision, run/attempt, effective pytest
+  command and timeout/step budgets, JUnit counts (never progress-% parsing),
+  outcome (`passed`, `failed`, `canceled`, `intentionally unselected`, or
+  `unavailable`), measured test-step wall time plus JUnit suite time, setup /
+  collection / cleanup reported as separate lines (explicitly unavailable as
+  separate measurements when not instrumented, never folded into a passing
+  total), top slowest cases, evidence paths, and a small reporting-overhead
+  note (hook seconds plus retained evidence bytes; rich bundles stay
+  failure-gated so the normal successful-run path stays small). The
   hook always exits 0 so a parsing problem never hides an unsuccessful job
   or alters selection.
 - Duration hints for #4366 maintenance are the per-shard
