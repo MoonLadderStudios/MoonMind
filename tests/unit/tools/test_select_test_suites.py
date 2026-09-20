@@ -895,3 +895,36 @@ def test_shared_resource_changes_require_real_docker_journey():
         "tests/integration/reliability/test_container_job_authority_journey.py",
     ):
         assert select_suites([path]).reliability_journey, path
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "api_service/services/profile_secret_migration.py",
+        "tests/unit/single_user/test_first_run_4356.py",
+        "tests/integration/single_user/test_first_run_4356.py",
+        "tests/integration/single_user/test_protected_ingress_4356.py",
+        "tests/integration/single_user/test_machine_authority_4356.py",
+        "moonmind/security/container_job_capabilities.py",
+        "moonmind/workflows/temporal/worker_runtime.py",
+    ],
+)
+def test_single_user_taxonomy_selects_integration_ci(changed_path: str) -> None:
+    """MoonLadderStudios/MoonMind#4356 R8: single-user rows own integration_ci.
+
+    Canonical taxonomy pin: a change to the credential-conversion service,
+    its unit or integration suites, or the machine-authority/worker-binding
+    seams must run the hermetic integration foundation. Aggregation needs no
+    workflow change: .github/workflows/pytest-unit-tests.yml already runs
+    the integration-ci job whenever integration_ci=true.
+    """
+    outputs = _outputs([changed_path])
+    assert outputs["unit_fast"] == "true", changed_path
+    assert outputs["integration_ci"] == "true", changed_path
+
+
+def test_single_user_integration_never_selects_reliability_journey() -> None:
+    """Single-user integration suites stay out of the reliability corpus."""
+    outputs = _outputs(["tests/integration/single_user/test_first_run_4356.py"])
+    assert outputs["integration_ci"] == "true"
+    assert outputs["reliability_journey"] == "false"

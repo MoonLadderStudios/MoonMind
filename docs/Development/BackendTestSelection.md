@@ -137,6 +137,9 @@ If the change removes an authorized obsolete capability, identify the retired wo
 
 Compose, Docker/runtime infrastructure, database and migration changes, integration tests, and their runner/dependencies select the existing credential-free integration path. Reliability journeys keep their separate owner.
 
+- Single-user impact (MoonLadderStudios/MoonMind#4356): settings/secrets/preset routers and services, frontend transport, worker binding, machine-authority helpers, the credential-conversion service (`api_service/services/profile_secret_migration.py`), and the single-user test packages (`moonmind/single_user/`, `tests/unit/single_user/`, `tests/integration/single_user/`).
+- Single-user integration suites select `integration_ci=true` through the `tests/integration/` prefix (reliability-owned `tests/integration/reliability/` stays excluded). Required-check aggregation needs no workflow change: the existing `integration-ci` job in `.github/workflows/pytest-unit-tests.yml` already runs whenever `integration_ci=true`, and `ci-required` already aggregates its result.
+
 `tools/test_integration.sh` builds its test image unless `MOONMIND_PYTHON_TEST_IMAGE` supplies an already loadable image. CI's existing image layer cache and per-file xdist execution are reused. `MOONMIND_INTEGRATION_WORKERS` controls the supported worker override. This host-side path is not a reason to expose Docker to a managed agent.
 
 ### Omnigent Conformance Selection
