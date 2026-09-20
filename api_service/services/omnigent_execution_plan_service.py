@@ -22,7 +22,11 @@ from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
 from moonmind.omnigent.execution_support_evidence import (
     load_protected_execution_support_evidence,  # re-export for hermetic test patching
 )
-from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
+from moonmind.omnigent.harness_platform.agent_profile import (
+    OmnigentAgentProfileV2,
+    stable_imported_content_digest,
+    stable_upstream_snapshot_digest,
+)
 from moonmind.omnigent.harness_platform.catalog import (
     HarnessImplementationIdentity,
     HarnessRecord,
@@ -587,29 +591,13 @@ def _build_v2_profile(
     snapshot_digest = str(snapshot.get("digest") or "").strip()
     if not snapshot_digest.startswith("sha256:"):
         raise ValueError("Agent Profile snapshot digest is invalid")
-    # Agent source identity must be stable across per-run selections. The
-    # profile version digest includes the default model, tools, and other
-    # planning inputs, so using it as the upstream snapshot (or imported
-    # content) digest makes every model-only version bump change
-    # ``agentSourceRef`` and invalidate deployment evidence, even though
-    # model/effort are explicitly per-run and excluded from the deployment
-    # qualification key. Use the stable source digests from the document
-    # instead; genuine upstream or bundle content changes still advance the
-    # identity and require requalification.
-    def _stable_digest(value: Any) -> str:
-        text = str(value or "").strip()
-        if len(text) == 71 and text.startswith("sha256:"):
-            hexpart = text[len("sha256:") :]
-            if len(hexpart) == 64 and all(
-                c in "0123456789abcdefABCDEF" for c in hexpart
-            ):
-                return "sha256:" + hexpart.lower()
-        return ""
-
+    # ``stable_upstream_snapshot_digest`` / ``stable_imported_content_digest``
+    # own this derivation; launch-time plan verification recomputes the same
+    # identity from the same document, so writer and reader cannot diverge.
     if source.get("upstreamId"):
-        stable_upstream_digest = _stable_digest(
-            source.get("upstreamSnapshotDigest")
-        ) or snapshot_digest
+        stable_upstream_digest = stable_upstream_snapshot_digest(
+            source, snapshot_digest
+        )
         agent_source: dict[str, Any] = {
             "kind": "upstream",
             "upstreamId": str(source["upstreamId"]),
@@ -627,15 +615,7 @@ def _build_v2_profile(
         )
         if not bundle_ref or not bundle_digest or not import_receipt:
             raise ValueError("bundle Agent Profile lacks immutable import authority")
-        # Prefer the stable bundle content identity from the document; the
-        # profile version digest would otherwise leak per-run model/tools
-        # selections into the agent source and force requalification.
-        stable_content_digest = (
-            _stable_digest(source.get("importedContentDigest"))
-            or _stable_digest(source.get("bundleDigest"))
-            or _stable_digest(bundle_digest)
-            or snapshot_digest
-        )
+        stable_content_digest = stable_imported_content_digest(source, snapshot_digest)
         stable_agent_id = str(
             source.get("importedAgentId") or snapshot.get("agentId") or ""
         ).strip()

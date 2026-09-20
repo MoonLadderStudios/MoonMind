@@ -964,6 +964,7 @@ async def _compile_opencode_plan(
     plan_store=None,
     extra_parameters: dict | None = None,
     provider_id: str = "opencode-go",
+    document_source: dict | None = None,
 ):
     """Compile one real OpenCode plan through the product admission boundary."""
 
@@ -984,6 +985,8 @@ async def _compile_opencode_plan(
     snapshot["document"]["execution"][
         "allowedLaunchPolicyRefs"
     ] = _OPENCODE_ALLOWED_LAUNCH_POLICIES
+    if document_source is not None:
+        snapshot["document"]["source"] = document_source
     return await service.compile_and_persist_execution_plan(
         session_factory=object(),
         artifact_service=artifacts,

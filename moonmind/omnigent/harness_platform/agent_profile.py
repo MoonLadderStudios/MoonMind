@@ -12,12 +12,61 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def normalize_source_digest(value: Any) -> str:
+    """Return ``sha256:<lowercase hex>`` or "" when the value is not one."""
+
+    text = str(value or "").strip()
+    if len(text) == 71 and text.startswith("sha256:"):
+        hexpart = text[len("sha256:") :]
+        if len(hexpart) == 64 and all(c in "0123456789abcdefABCDEF" for c in hexpart):
+            return "sha256:" + hexpart.lower()
+    return ""
+
+
+# Agent source identity must stay stable across per-run selections. The Agent
+# Profile *version* digest includes the default model, tools, and other
+# planning inputs, so using it as the source digest makes every model-only
+# version bump change ``agentSourceRef`` and invalidate deployment evidence,
+# even though model/effort are explicitly per-run. The document's own source
+# digests are the stable identity; genuine upstream or bundle content changes
+# still advance it and require requalification.
+#
+# These two functions are the single owner of that derivation. The plan
+# compiler, bootstrap qualification, and launch-time plan verification all
+# call them, so a writer and a reader can never disagree about which digest
+# the plan pinned.
+
+
+def stable_upstream_snapshot_digest(
+    source: Mapping[str, Any], snapshot_digest: str = ""
+) -> str:
+    """Upstream projection digest the compiled plan pins for ``source``."""
+
+    return (
+        normalize_source_digest(source.get("upstreamSnapshotDigest"))
+        or str(snapshot_digest or "").strip()
+    )
+
+
+def stable_imported_content_digest(
+    source: Mapping[str, Any], snapshot_digest: str = ""
+) -> str:
+    """Bundle content digest the compiled plan pins for ``source``."""
+
+    return (
+        normalize_source_digest(source.get("importedContentDigest"))
+        or normalize_source_digest(source.get("bundleDigest"))
+        or str(snapshot_digest or "").strip()
+    )
 
 
 class UpstreamSource(BaseModel):
