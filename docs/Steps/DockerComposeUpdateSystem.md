@@ -862,11 +862,9 @@ runs that pinned canary and the compare-and-set promotion itself, qualified
 across every queue the current version served. Whenever the current version
 still serves traffic, startup preserves the route and parks: the outgoing fleet
 may drain for its full `stop_grace_period`, which outlasts the route-death
-wait, so a bounded reconciler retries the same canary-gated promotion until the
-old pollers are gone. If that budget is exhausted without promoting, the worker
-reports unready rather than serving while ordinary work routes to a version
-with no pollers. Local presence alone grants nothing; only the canary identity
-proof and the compare-and-set authorize the handoff.
+wait, so a background reconciler retries the same canary-gated promotion until
+it succeeds or shutdown cancels it. Local presence alone grants nothing; only
+the canary identity proof and the compare-and-set authorize the handoff.
 
 Workers attest deployment-owned singleton infrastructure before they report
 ready, so the restricted-egress gateway is recreated on the incoming release
