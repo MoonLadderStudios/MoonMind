@@ -879,24 +879,28 @@ already matches, so no separate convergence check is kept here. A gateway that
 cannot come up on the incoming release fails the update at that point, rather
 than after workers fail an attestation against it.
 
-Releases authored before recreate-in-place are never resumed. A request records
-the controller generation it was authored for, and a request without it would
-execute the removed cohort controller from its own pinned image -- recreating
-cohorts beside the installed fleet or promoting its older digest over the
-installed release. Maintenance retires such a job instead.
+No release is resumed from maintenance. The updater runs from the image its
+request pinned, so relaunching a job authored before recreate-in-place would
+execute the removed cohort controller against the installed fleet. Re-running
+`./tools/update-moonmind.sh` starts a fresh audited release, which is simpler
+and cannot resurrect a deleted controller.
 
-Retiring a cohort left by one of those releases requires two independent
-proofs: the installed fleet is observed uniquely serving the verified installed
-digest, and Temporal agrees the cohort's version is finished. Cohort containers
-reuse the deployment's own Compose project and service labels, so the installed
-check excludes cohort-named containers -- counting both would fail exactly while
-a leftover exists. Temporal's agreement is the current route being the version
-formed from that verified digest, the version reporting drained, or, for a
-candidate that failed qualification without ever being promoted, a terminal
-owner with a closed canary and server-confirmed inactive status. Inactive
-versions never enter the drainage state machine, so without that last proof
-those containers would survive indefinitely and keep blocking updates. Unknown
-drainage or ownership keeps the cohort.
+Cohorts left by those releases are reported, not retired automatically. They
+reuse the deployment's own Compose project and service labels, so
+`docker compose ps -q <service>` returns more than one id while they exist and
+an update cannot verify the installed fleet; they must be removed with
+`docker rm -f`. Deciding that automatically needs drainage, current-route and
+inactivity proofs whose failure modes are worse than the command they replace:
+each proof can be wrong in a way that stops the last poller for pinned work.
+The pass names the containers, scoped to this deployment's Compose project so
+a second deployment on the same host is never implicated, and the operator
+decides.
+
+Installed-fleet verification counts only installed containers. `compose run`
+stamps one-off containers with the same project and service labels, and the
+updater executing the check is itself a one-off of
+`temporal-worker-deployment-control`, so an exact-one count over `compose ps`
+could never pass during a release.
 
 The primary result is persisted before auxiliary cleanup. Failed cleanup records
 its pending owner for `release.reconcile` without replacing verified deployment

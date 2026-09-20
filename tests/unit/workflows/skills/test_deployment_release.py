@@ -914,3 +914,48 @@ async def test_legacy_error_record_is_carried_into_the_attempt_history(
     recorded = json.loads((directory / "last-error.json").read_text())
     assert recorded["attempts"] == history
     assert original in release.release_failure_summary(history)
+
+
+@pytest.mark.asyncio
+async def test_installed_fleet_verification_ignores_compose_one_off_containers(
+    monkeypatch,
+):
+    """The updater is a one-off of the service it is verifying.
+
+    `compose run` stamps one-off containers with the same project and service
+    labels as the installed deployment, and the release updater is created as
+    `compose run ... temporal-worker-deployment-control`. An exact-one count
+    taken over `compose ps` therefore sees the installed container plus the
+    updater itself -- and every leftover cohort container -- so it could never
+    pass during a release, failing the job after the fleet was recreated
+    successfully. Verification must count only `oneoff=False` containers.
+    """
+    from moonmind.workflows.skills import deployment_release as release
+
+    calls = []
+
+    async def fake_docker(*args):
+        calls.append(args)
+        if args[0] == "ps":
+            assert "label=com.docker.compose.oneoff=False" in args, args
+            return "installed-container-id"
+        raise AssertionError(f"unexpected docker call: {args}")
+
+    async def fake_readiness(container):
+        assert container == "installed-container-id"
+        return {"release": {"digest": "sha256:" + "a" * 64}}
+
+    monkeypatch.setattr(release, "docker", fake_docker)
+    monkeypatch.setattr(release, "worker_readiness", fake_readiness)
+    monkeypatch.setattr(release, "readiness_matches", lambda state, expected: True)
+
+    runner = SimpleNamespace(project_name="moonmind")
+    result = await release.verify_installed_fleet(
+        runner, "image@sha256:" + "a" * 64, expected="sha256:" + "a" * 64, attempts=1
+    )
+
+    assert result["status"] == "verified"
+    # Every fleet service was inspected through the label-filtered listing,
+    # never through `compose ps`, which cannot exclude one-offs.
+    assert calls and all(call[0] == "ps" for call in calls)
+    assert all("label=com.docker.compose.oneoff=False" in call for call in calls)
