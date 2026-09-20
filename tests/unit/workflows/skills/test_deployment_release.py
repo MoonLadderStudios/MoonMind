@@ -1932,3 +1932,126 @@ async def test_legacy_error_record_is_carried_into_the_attempt_history(
     recorded = json.loads((directory / "last-error.json").read_text())
     assert recorded["attempts"] == history
     assert original in release.release_failure_summary(history)
+
+
+def _wedged_manager_disposition(blocked: bool = True) -> dict:
+    """A liveness disposition carrying the wedged-singleton signature."""
+
+    return {
+        "blocked": blocked,
+        "reasonCode": (
+            "provider_manager_liveness_blocked" if blocked
+            else "provider_manager_liveness_ok"
+        ),
+        "reasons": ["opencode: nondeterminism_loop"] if blocked else [],
+        "evidence": (
+            [{"runtime_id": "opencode", "finding": "nondeterminism_loop"}]
+            if blocked
+            else []
+        ),
+        "recoveryOwner": "provider-profile-manager-recovery" if blocked else None,
+        "recoveryRunbook": "docs/Security/ProviderProfiles.md" if blocked else None,
+        "recoveryHint": "hint" if blocked else None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_promotion_gate_recovers_a_wedged_manager_before_failing_closed(
+    tmp_path, monkeypatch
+):
+    """The gate must repair the wedge it exists to detect.
+
+    MoonLadderStudios/MoonMind#4363: a wedged singleton is owned by the
+    *currently routed* worker, which predates the candidate's caller-side
+    recovery. Failing closed before promotion would stop that repair from ever
+    becoming current, so the incident this gate exists for would deadlock on
+    the old manual cutover. The gate attempts the shared, ledger-gated
+    replacement first and re-observes once.
+    """
+    from unittest.mock import AsyncMock
+
+    import moonmind.provider_profiles.manager_recovery as manager_recovery
+    import moonmind.workflows.skills.provider_manager_liveness as liveness
+
+    dispositions = [
+        _wedged_manager_disposition(True),
+        _wedged_manager_disposition(False),
+    ]
+    monkeypatch.setattr(
+        liveness, "read_db_held_lease_counts", AsyncMock(return_value={})
+    )
+    monkeypatch.setattr(
+        liveness, "collect_provider_manager_liveness", AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(
+        liveness,
+        "evaluate_provider_manager_liveness",
+        lambda _observations: dispositions.pop(0),
+    )
+    recovered = manager_recovery.ManagerReplayRecovery(
+        runtime_id="opencode",
+        workflow_id="provider-profile-manager:opencode",
+        recovered=True,
+        terminated_run_id="wedged-run",
+        nondeterminism_failures=3,
+        startup_restored=True,
+    )
+    recover = AsyncMock(return_value=recovered)
+    monkeypatch.setattr(manager_recovery, "recover_manager_for_runtime", recover)
+
+    cohort = release.ReleaseCohort(SimpleNamespace(), tmp_path, "owner")
+    await cohort.qualify_provider_managers(object())
+
+    recover.assert_awaited_once()
+    assert recover.await_args.args[1] == "opencode"
+    record = json.loads((tmp_path / "manager-liveness.json").read_text())
+    assert record["blocked"] is False
+    assert record["recoveries"][0]["recovered"] is True
+    assert record["recoveries"][0]["terminatedRunId"] == "wedged-run"
+
+
+@pytest.mark.asyncio
+async def test_promotion_gate_still_blocks_when_recovery_is_refused(
+    tmp_path, monkeypatch
+):
+    """A ledger that still spends capacity keeps promotion closed."""
+    from unittest.mock import AsyncMock
+
+    import moonmind.provider_profiles.manager_recovery as manager_recovery
+    import moonmind.workflows.skills.provider_manager_liveness as liveness
+
+    monkeypatch.setattr(
+        liveness, "read_db_held_lease_counts", AsyncMock(return_value={})
+    )
+    monkeypatch.setattr(
+        liveness, "collect_provider_manager_liveness", AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(
+        liveness,
+        "evaluate_provider_manager_liveness",
+        lambda _observations: _wedged_manager_disposition(True),
+    )
+    refused = manager_recovery.ManagerReplayRecovery(
+        runtime_id="opencode",
+        workflow_id="provider-profile-manager:opencode",
+        recovered=False,
+        refusal=manager_recovery.MANAGER_HELD_LEASE_PRESENT,
+        detail="1 unreleased lease row(s)",
+        nondeterminism_failures=3,
+        held_leases=1,
+    )
+    monkeypatch.setattr(
+        manager_recovery,
+        "recover_manager_for_runtime",
+        AsyncMock(return_value=refused),
+    )
+
+    cohort = release.ReleaseCohort(SimpleNamespace(), tmp_path, "owner")
+    with pytest.raises(RuntimeError, match="not healthy"):
+        await cohort.qualify_provider_managers(object())
+
+    record = json.loads((tmp_path / "manager-liveness.json").read_text())
+    assert record["blocked"] is True
+    assert record["recoveries"][0]["refusal"] == (
+        manager_recovery.MANAGER_HELD_LEASE_PRESENT
+    )

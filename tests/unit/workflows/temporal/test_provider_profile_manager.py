@@ -4014,3 +4014,134 @@ def test_provider_profile_manager_get_state_projects_scopes():
             "last_increase_at": None,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_manager_state_recovers_a_wedged_manager_for_signal_waiters(
+    monkeypatch,
+):
+    """Signal-based slot admission must reach recovery too.
+
+    MoonLadderStudios/MoonMind#4363: managed AgentRuns ask for capacity with a
+    ``request_slot`` *signal*, and Temporal appends a signal to a still-RUNNING
+    execution even while every workflow task fails. No Update RPC ever fails,
+    so the caller-side recovery in ProviderProfileLeaseClient is never entered
+    and a runtime whose only traffic is managed AgentRuns waits in
+    ``awaiting_provider_capacity`` forever. This inspection is the path those
+    waiters do take, so the same bounded replacement runs here.
+    """
+    from unittest.mock import AsyncMock
+
+    from temporalio.service import RPCError, RPCStatusCode
+
+    import moonmind.provider_profiles.manager_recovery as manager_recovery
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    queries: list[int] = []
+
+    class FakeHandle:
+        async def describe(self):
+            return SimpleNamespace(status=SimpleNamespace(name="RUNNING"))
+
+        async def query(self, query_name):
+            assert query_name == "get_state"
+            queries.append(1)
+            if len(queries) == 1:
+                raise RPCError(
+                    "Unable to query workflow due to Workflow Task in failed state",
+                    RPCStatusCode.FAILED_PRECONDITION,
+                    b"",
+                )
+            return {"profiles": {}, "pending_requests": [], "event_count": 4}
+
+    class FakeClient:
+        def get_workflow_handle(self, workflow_id):
+            assert workflow_id == "provider-profile-manager:opencode"
+            return FakeHandle()
+
+    class FakeAdapter:
+        async def get_client(self):
+            return FakeClient()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter", FakeAdapter
+    )
+    recovered = manager_recovery.ManagerReplayRecovery(
+        runtime_id="opencode",
+        workflow_id="provider-profile-manager:opencode",
+        recovered=True,
+        terminated_run_id="wedged-run",
+        nondeterminism_failures=3,
+        startup_restored=True,
+    )
+    recover = AsyncMock(return_value=recovered)
+    monkeypatch.setattr(manager_recovery, "recover_manager_for_runtime", recover)
+
+    result = await TemporalArtifactActivities(object()).provider_profile_manager_state(
+        runtime_id="opencode",
+        requester_workflow_id="agent-run-1",
+    )
+
+    recover.assert_awaited_once()
+    assert recover.await_args.args[1] == "opencode"
+    # The successor answered, so the waiter sees a healthy manager rather than
+    # a permanent unqueryable one.
+    assert result["inspection_succeeded"] is True
+    assert len(queries) == 2
+
+
+@pytest.mark.asyncio
+async def test_manager_state_reports_a_wedge_recovery_refused(monkeypatch):
+    """A confirmed wedge that must not be replaced is named to the waiter."""
+    from unittest.mock import AsyncMock
+
+    from temporalio.service import RPCError, RPCStatusCode
+
+    import moonmind.provider_profiles.manager_recovery as manager_recovery
+    from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+    class FakeHandle:
+        async def describe(self):
+            return SimpleNamespace(status=SimpleNamespace(name="RUNNING"))
+
+        async def query(self, query_name):
+            assert query_name == "get_state"
+            raise RPCError(
+                "Unable to query workflow due to Workflow Task in failed state",
+                RPCStatusCode.FAILED_PRECONDITION,
+                b"",
+            )
+
+    class FakeClient:
+        def get_workflow_handle(self, workflow_id):
+            return FakeHandle()
+
+    class FakeAdapter:
+        async def get_client(self):
+            return FakeClient()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.client.TemporalClientAdapter", FakeAdapter
+    )
+    refused = manager_recovery.ManagerReplayRecovery(
+        runtime_id="opencode",
+        workflow_id="provider-profile-manager:opencode",
+        recovered=False,
+        refusal=manager_recovery.MANAGER_HELD_LEASE_PRESENT,
+        detail="1 unreleased lease row(s) for this runtime",
+        nondeterminism_failures=3,
+        held_leases=1,
+    )
+    monkeypatch.setattr(
+        manager_recovery,
+        "recover_manager_for_runtime",
+        AsyncMock(return_value=refused),
+    )
+
+    result = await TemporalArtifactActivities(object()).provider_profile_manager_state(
+        runtime_id="opencode",
+    )
+
+    assert result["inspection_succeeded"] is False
+    assert result["recovery_refusal"] == manager_recovery.MANAGER_HELD_LEASE_PRESENT
+    assert "unreleased lease row" in result["recovery_detail"]
