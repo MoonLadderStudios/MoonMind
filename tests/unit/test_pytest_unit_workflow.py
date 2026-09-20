@@ -661,7 +661,7 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     assert "needs.select-test-suites.outputs.api_component" in job_if
     assert "needs.select-test-suites.outputs.temporal_boundary" in job_if
     assert "needs.select-test-suites.outputs.reliability_journey" in job_if
-    # Per-row job bounds (MoonLadderStudios/MoonMind#4369): fast rows get 10
+    # Per-row job bounds (MoonLadderStudios/MoonMind#4369): fast rows get 15
     # minutes, reliability rows keep a measured 20-minute bound. The blanket
     # 30-minute ceiling is replaced, not raised.
     assert job["timeout-minutes"] == "${{ matrix.job_minutes }}"
@@ -689,9 +689,9 @@ def test_backend_matrix_consolidates_primary_suites_with_native_fail_fast() -> N
     # suite reliability-shard-N runs --group N.
     assert shards == ["1", "2", "3", "4"]
     rows = {entry["suite"]: entry for entry in strategy["matrix"]["include"]}
-    assert rows["unit-fast"]["job_minutes"] == 10
-    assert rows["api-component"]["job_minutes"] == 10
-    assert rows["temporal-boundary"]["job_minutes"] == 10
+    assert rows["unit-fast"]["job_minutes"] == 15
+    assert rows["api-component"]["job_minutes"] == 15
+    assert rows["temporal-boundary"]["job_minutes"] == 15
     for shard in (
         "reliability-shard-1",
         "reliability-shard-2",
