@@ -290,7 +290,7 @@ async def test_steward_preserves_live_current_route(monkeypatch):
         "status": "awaiting_promotion",
         "currentVersion": old,
         "candidateVersion": new,
-        "recoveryOwner": "deployment-control",
+        "recoveryOwner": "workflow-fleet-startup",
     }
     assert server.canaries_started == []
     assert server.set_current_calls == []
@@ -362,7 +362,7 @@ async def test_steward_parks_on_lost_promotion_race(monkeypatch):
         "status": "awaiting_promotion",
         "currentVersion": rival,
         "candidateVersion": new,
-        "recoveryOwner": "deployment-control",
+        "recoveryOwner": "workflow-fleet-startup",
     }
     # The losing compare-and-set attempt must not move routing itself.
     assert server.current == rival
@@ -412,7 +412,7 @@ async def test_steward_parks_on_partial_outage(monkeypatch):
         "status": "awaiting_promotion",
         "currentVersion": old,
         "candidateVersion": new,
-        "recoveryOwner": "deployment-control",
+        "recoveryOwner": "workflow-fleet-startup",
     }
     assert server.canaries_started == []
     assert server.set_current_calls == []

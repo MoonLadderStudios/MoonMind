@@ -1668,15 +1668,26 @@ on replay. Histories without cleanup proceed directly to lease verification at
 that boundary. New executions record the cleanup marker and perform periodic
 cleanup, with failures contained so lease verification and admission can proceed.
 
-Deployment requires replaying every active singleton manager history against the
-candidate worker. Histories that already contain an unmarked `purge_released`
-activity cannot be distinguished from the older generation by its maintenance
-marker. Those histories require a controlled cutover: retain their compatible
-worker until its state-preserving Continue-As-New handoff, then route the new run
-to the patched worker before it starts. The handoff must retain held leases,
-fencing counters, pending slot requests and maintenance queue order. A direct
-worker replacement, termination, or reset is not a safe substitute. Managers
-whose histories contain no purge can upgrade directly after successful replay.
+Deployment replaces the manager's worker directly. It does not retain a second
+worker to carry old histories, and it must not: a retained worker is another
+code version polling the same task queue, which is how
+MoonLadderStudios/MoonMind#4363 wedged this manager in the first place. The
+recorded failure was `Non-deprecated patch marker encountered for change
+provider-profile-manager-lease-tombstone-purge-v1, but there is no
+corresponding change command` -- a marker present in history that the
+*replaying* code did not emit, which happens only when the code is older than
+the history. One version at a time, moving forward only, makes that
+unreachable; the newer code replays an older history through `workflow.patched`
+exactly as Temporal intends.
+
+An earlier revision of this document required a controlled cutover for
+histories containing an unmarked `purge_released` activity, on the grounds that
+only the pre-patch generation could replay them. That shape stopped existing
+when `provider-profile-manager-lease-tombstone-purge-v1` shipped on 2026-09-05:
+these singletons Continue-As-New every two to three hours, so every live
+history has rolled over hundreds of times and carries the marker. The
+requirement outlived the hazard, and the machinery it justified was itself the
+larger risk.
 
 A grant that moved under a recorded history would emit a reservation — and, under
 DB lease persistence, a `provider_profile.sync_slot_leases` activity — where the
@@ -1703,8 +1714,8 @@ wedge is treated as a recoverable fault rather than an outage.
 #### Automatic replacement
 
 `moonmind.provider_profiles.manager_recovery` owns the replacement and is the
-only thing that performs it. Three callers reach it, because a wedge can be
-discovered three ways:
+only thing that performs it. Two callers reach it, because a wedge can be
+discovered two ways:
 
 - `ProviderProfileLeaseClient` invokes it when a manager **Update** fails at
   the RPC level — an HTTP credential submission, an admission Activity, an
@@ -1716,20 +1727,12 @@ discovered three ways:
   while every workflow task fails, so no Update RPC ever fails. A runtime
   whose only traffic is managed AgentRuns would otherwise wait in
   `awaiting_provider_capacity` forever.
-- `DeploymentRelease.qualify_provider_managers` invokes it **before failing
-  closed**. The wedged manager is owned by the currently routed worker, which
-  predates the candidate's caller-side recovery, so blocking promotion first
-  would keep the repair from ever becoming current — the exact upgrade
-  incident would deadlock on the manual cutover. A refusal still blocks
-  promotion.
-
 Replacement is deliberately narrow:
 
 - **Confirmed evidence only.** The trailing run of failed workflow tasks must
   name a nondeterminism cause. The scan is
-  `scan_workflow_task_failure_tail`, shared with the release liveness gate in
-  `moonmind.workflows.skills.provider_manager_liveness`, so recovery and
-  promotion cannot disagree about whether a singleton is wedged.
+  `scan_workflow_task_failure_tail` in
+  `moonmind.workflows.skills.provider_manager_liveness`.
 - **The observed run only.** Termination quotes the run ID the describe
   returned, so a healthy replacement started by a concurrent caller between
   the describe and the terminate is never killed.
@@ -2545,3 +2548,12 @@ Most importantly, it cleanly fits alongside the newer MoonMind architecture:
 - [SecretsSystem.md](./SecretsSystem.md) owns secret references, storage, and resolution
 - [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md) owns interactive OAuth session transport
 - `ProviderProfiles.md` owns the durable runtime/provider launch contract and Settings activation semantics
+
+A wedged manager no longer gates a deployment update. The release path used to
+refuse promotion until every manager singleton answered `get_state`, which made
+the deployment unfixable exactly when it was broken: the repair could not
+become current because the fault the repair addresses blocked it. Updates
+recreate the installed fleet in place and do not consult manager liveness; the
+automatic replacement above owns this fault, on the credential and admission
+paths where it actually shows up. See
+[Docker Compose Deployment Update System](../Steps/DockerComposeUpdateSystem.md).
