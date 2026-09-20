@@ -510,6 +510,8 @@ def _carry_forward_repair_findings(
                 if carried:
                     result_payload["issues"] = carried
     except Exception:
+        # Best-effort diagnostics carry-forward only: a failure here must not
+        # break the repaired gate outcome, so keep the repaired payload as-is.
         pass
 
 
