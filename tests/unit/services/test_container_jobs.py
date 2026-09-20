@@ -591,35 +591,46 @@ async def test_exact_retry_of_legacy_job_preserves_original_and_restarts_tempora
 ) -> None:
     """MoonLadderStudios/MoonMind#4456: a legacy retry keeps a continuation.
 
-    An exact replay of a persisted legacy job with a prior Temporal-start
-    failure is accepted, keeps the original serialized request (historical
-    zero-valued CPU and memory range intact), and resubmits that original
-    request to Temporal so the workflow/backend composition can resolve the
-    fixed-resource successor. A duplicate retry converges on the same job.
+    The persisted legacy row is seeded directly through the repository layer,
+    simulating a pre-upgrade admitted job (historical zero-valued CPU and
+    memory range intact) with a prior Temporal-start terminal outcome. An
+    exact replay is then accepted, keeps the original serialized request,
+    and resubmits that original request to Temporal so the
+    workflow/backend composition can resolve the fixed-resource successor.
+    A duplicate retry converges on the same job.
     """
 
     from unittest.mock import AsyncMock
 
     owner = OwnerIdentity(principalId="legacy-owner", principalType="user")
     temporal = AsyncMock()
-    temporal.start_container_job.side_effect = [
-        RuntimeError("temporal unavailable"),
-        None,
-        None,
-    ]
+    temporal.start_container_job.side_effect = RuntimeError("temporal unavailable")
 
-    with pytest.raises(RuntimeError, match="temporal unavailable"):
-        async with session_factory() as first_session:
-            await ContainerJobService(
-                first_session,
-                temporal=temporal,
-            ).submit(owner=owner, request=legacy_submission())
+    # Seed the pre-upgrade admitted row without going through submit, which
+    # must (and does) reject new legacy-shaped identities.
+    async with session_factory() as seed_session:
+        seed_service = ContainerJobService(seed_session, temporal=AsyncMock())
+        seeded, created = await seed_service.repository.create_or_replay(
+            owner=owner, request=legacy_submission()
+        )
+        assert created is False or seeded is not None
+        seeded.state = ContainerJobState.FAILED.value
+        seeded.terminal_outcome_json = TerminalOutcome(
+            failureClass=ContainerJobFailureClass.TEMPORAL_START,
+            message="Temporal workflow start failed before the durable handoff completed.",
+        ).model_dump(mode="json", by_alias=True, exclude_none=True)
+        await seed_session.commit()
+        seeded_job_id = seeded.job_id
+
+    temporal.start_container_job.side_effect = None
+    temporal.start_container_job.return_value = None
 
     async with session_factory() as retry_session:
         accepted = await ContainerJobService(
             retry_session,
             temporal=temporal,
         ).submit(owner=owner, request=legacy_submission())
+    assert accepted.job_id == seeded_job_id
     assert accepted.replayed is True
 
     restarted = temporal.start_container_job.await_args_list[-1].args[0]
