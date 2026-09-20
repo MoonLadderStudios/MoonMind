@@ -197,6 +197,15 @@ _GPU_LAUNCH_FAILURE_CLASSES: dict[
     "device_request_unsupported": ContainerJobFailureClass.GPU_BACKEND_UNSUPPORTED,
     "gpu_device_request_rejected": ContainerJobFailureClass.GPU_BACKEND_UNSUPPORTED,
 }
+#: Daemon-side refusal when a retried ``docker start`` names a container that
+#: is already started. A lost start acknowledgment retries into exactly this
+#: state: the container provably holds this job's slot, so the refusal is the
+#: same successful outcome, never a second side effect or a launch failure.
+_START_ALREADY_STARTED_MARKERS = (
+    "already started",
+    "already running",
+    "is running",
+)
 _CAPACITY_LOCK_WAIT_SECONDS = 45.0
 _CAPACITY_LOCK_POLL_SECONDS = 0.1
 #: Docker's answer when the object an ``inspect`` names does not exist. Any
@@ -928,8 +937,9 @@ class DockerContainerJobBackend:
         enumeration and the ``docker start`` that follows are one serialized
         operation: two workers racing for the final slot cannot both observe
         it free. A retry never acquires a second slot for the same job — a
-        job whose own container is already running already holds its slot and
-        is admitted unconditionally. A job whose container is only created has
+        job whose own container is already in a started Docker state already
+        holds its slot and is admitted unconditionally. A job whose container
+        is only created has
         not yet claimed a slot, so it is admitted on the same basis as a job
         with no container yet; the lock serializes competing created waiters
         so exactly one starts per free slot. Agent hosts and their
@@ -940,9 +950,11 @@ class DockerContainerJobBackend:
 
         holders = await self._slot_holders()
         own_state = holders.get(container_name)
-        if own_state == "running":
+        if own_state in self._SLOT_HOLDING_STATES:
             # A retry after an uncertain start: the container provably holds
-            # this job's slot, so it must proceed, never wait or double-count.
+            # this job's slot in a started Docker state (restarting, running,
+            # paused, or being removed), so it must proceed, never wait or
+            # double-count.
             return
         others = sum(1 for name in holders if name != container_name)
         if others < int(self._settings.max_active_jobs):
@@ -2343,7 +2355,20 @@ class DockerContainerJobBackend:
                     requested_gpu, stderr=start_stderr, exit_code=code
                 )
                 detail = start_stderr.decode(errors="replace").strip()[:1000]
-                raise RuntimeError(f"docker start failed: {detail}")
+                if any(
+                    marker in detail.lower()
+                    for marker in _START_ALREADY_STARTED_MARKERS
+                ):
+                    # Lost start acknowledgment: the container is already
+                    # started and holds this job's slot, so the retry is
+                    # already successful. Fall through with no duplicate side
+                    # effect rather than failing the launch.
+                    logger.info(
+                        "Container-job start retried into an already-started "
+                        "container; treating the retry as successful"
+                    )
+                else:
+                    raise RuntimeError(f"docker start failed: {detail}")
         finally:
             try:
                 await self._capacity_lock.release(capacity_lease)
