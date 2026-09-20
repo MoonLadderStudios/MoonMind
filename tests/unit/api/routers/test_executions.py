@@ -15870,6 +15870,7 @@ def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() 
                 "state": "completed",
                 "closeStatus": "completed",
                 "workflowType": "MoonMind.UserWorkflow",
+                "attentionRequired": False,
             }
         ]
         assert payload["dependents"] == [
@@ -15880,6 +15881,7 @@ def test_describe_execution_enriches_dependency_summaries_without_dunder_dict() 
                 "state": "executing",
                 "closeStatus": None,
                 "workflowType": "MoonMind.UserWorkflow",
+                "attentionRequired": False,
             }
         ]
 

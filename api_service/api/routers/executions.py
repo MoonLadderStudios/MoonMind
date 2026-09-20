@@ -5946,6 +5946,9 @@ async def _enrich_execution_dependencies(
                     state=item.state,
                     closeStatus=item.close_status,
                     workflowType=item.workflow_type,
+                    attentionRequired=bool(
+                        getattr(item, "attention_required", False)
+                    ),
                 )
                 for item in prerequisites
             ],
@@ -5957,6 +5960,9 @@ async def _enrich_execution_dependencies(
                     state=item.state,
                     closeStatus=item.close_status,
                     workflowType=item.workflow_type,
+                    attentionRequired=bool(
+                        getattr(item, "attention_required", False)
+                    ),
                 )
                 for item in dependents
             ],

@@ -3238,6 +3238,7 @@ class ExecutionDependencySummaryModel(BaseModel):
     state: Optional[str] = Field(None, alias="state")
     close_status: Optional[str] = Field(None, alias="closeStatus")
     workflow_type: Optional[str] = Field(None, alias="workflowType")
+    attention_required: bool = Field(False, alias="attentionRequired")
 
 class ExecutionSkillEvidenceSummaryModel(BaseModel):
     """Compact operator-safe evidence for one selected skill."""
