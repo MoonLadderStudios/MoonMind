@@ -57,6 +57,7 @@ def normalize_temporal_snapshot(
         open=raw.get("pullRequestOpen") is not False,
         draft=raw.get("draft") is True or "draft" in kinds,
         merge_conflict=bool({"merge_conflict", "merge_conflicts"} & set(kinds)),
+        approving_review_required="approving_review_required" in kinds,
         mergeability_unknown=bool(
             {
                 "mergeability_unknown",
@@ -118,6 +119,7 @@ def normalize_temporal_snapshot(
                 "publish_unavailable",
                 "automated_review_request_required",
                 "automated_review_wait",
+                "approving_review_required",
                 "draft",
             }
         )
@@ -175,6 +177,9 @@ def normalize_portable_snapshot(
         mergeability_unknown=(
             merge_state in {"UNKNOWN", "UNSTABLE", "BLOCKED"}
             or mergeable_text in {"UNKNOWN", "UNSTABLE"}
+        ),
+        approving_review_required=(
+            _text(pr.get("reviewDecision")).upper() == "REVIEW_REQUIRED"
         ),
         checks_complete=not _bool(ci.get("isRunning")),
         checks_passing=(

@@ -28,6 +28,11 @@ class CanonicalPullRequestSnapshot:
     draft: bool = False
     merge_conflict: bool = False
     mergeability_unknown: bool = False
+    # The merge gate needs an approving review that no automated action can
+    # supply. Unlike ``mergeability_unknown`` this is durable: retrying or
+    # waiting cannot change it, and under ``fix_only`` it does not stand
+    # between the resolver and a clean review.
+    approving_review_required: bool = False
     checks_complete: bool = False
     checks_passing: bool = False
     checks_failed: bool = False

@@ -59,8 +59,9 @@ inputSchema:
       default: merge
       description: >-
         "merge" finishes by merging the pull request once the merge gate opens.
-        "fix_only" keeps remediating comments, CI, and conflicts but stops at an
-        open merge gate and reports review_clean instead of merging.
+        "fix_only" keeps remediating comments, CI, and conflicts but stops once
+        nothing resolver-owned is left to address and reports review_clean
+        instead of merging.
   anyOf:
     - required:
         - pr
@@ -85,10 +86,16 @@ and continue the agent, but must not reclassify CI or choose fixes themselves.
 
 `inputs.finishMode = fix_only` is the one exception, and it narrows only the
 final side effect: every remediation, push, verification, and gate check still
-applies, but when the merge gate opens with nothing left to address the resolver
-reports `review_clean` and stops instead of merging. `fix_only` never relaxes a
-blocker, never merges, and never reports success while comments, CI, or
-conflicts remain actionable.
+applies, but once nothing is left to address the resolver reports `review_clean`
+and stops instead of merging. `fix_only` never relaxes a blocker, never merges,
+and never reports success while comments, CI, or conflicts remain actionable.
+
+Because `fix_only` never merges, merge *authorization* is not its blocker. A
+merge gate held closed only by a missing human approving review
+(`reviewDecision=REVIEW_REQUIRED`) does not stand between `fix_only` and
+`review_clean`: no automated action can produce an approval, and the run was
+never going to use one. Under `finishMode=merge` the same state is a durable
+`merge_gate_requires_human_approval` blocker, never a transient wait to retry.
 
 ## Inputs (skill args)
 - inputs.repo (optional)
@@ -178,9 +185,11 @@ metadata flag.
    non-agent automation.
 
 3. Read `var/pr_resolver/result.json` and perform exactly the indicated action:
-   - `review_clean`: `finishMode` is `fix_only`, the merge gate opened, and
-     nothing is left to address. Publish terminal evidence for the verified
-     branch head and stop without merging.
+   - `review_clean`: `finishMode` is `fix_only` and nothing resolver-owned is
+     left to address -- no conflicts, no CI failures, no actionable or deferred
+     comments, and a fresh automated review for this head. Publish terminal
+     evidence for the verified branch head and stop without merging, whether or
+     not the merge gate would authorize a merge.
    - `merged` or independently verified `already_merged`: publish terminal
      evidence and stop. A successful `gh pr merge` request is not terminal
      evidence until a fresh `gh pr view` reports `state=MERGED`; merge-queue or
@@ -240,18 +249,21 @@ metadata flag.
 Allowed successful terminal states:
 - `var/pr_resolver/result.json` has `status=merged`, `merge_outcome=merged`, and `mergeAutomationDisposition=merged`.
 - The PR is independently confirmed as already merged after a snapshot/finalize race, with `mergeAutomationDisposition=already_merged`.
-- `finishMode=fix_only` reached an open merge gate: `status=review_clean`,
-  `merge_outcome=skipped`, and `mergeAutomationDisposition=review_clean`. This
-  state is allowed only when the same gate that authorizes a merge is fully
-  open; it is never a way to report an unresolved blocker as success.
+- `finishMode=fix_only` cleared every resolver-owned blocker:
+  `status=review_clean`, `merge_outcome=skipped`, and
+  `mergeAutomationDisposition=review_clean`. This state requires no conflicts, no
+  CI failures, no actionable or deferred comments, and a fresh automated review
+  for the verified head; it is never a way to report an unresolved blocker as
+  success. A merge gate awaiting a human approving review is not a resolver-owned
+  blocker, because `fix_only` never merges.
 
 ## Merge Automation Result Contract
 Every terminal `var/pr_resolver/result.json` MUST include `mergeAutomationDisposition`:
 - `merged`: the resolver merged the PR.
 - `already_merged`: the PR was independently confirmed as already merged.
-- `review_clean`: `finishMode` is `fix_only` and the merge gate opened with no
-  actionable comments, CI failures, or conflicts left. The resolver did not
-  merge and must not claim a merge.
+- `review_clean`: `finishMode` is `fix_only` and no actionable comments, CI
+  failures, or conflicts are left for the freshly reviewed head. The resolver did
+  not merge and must not claim a merge.
 - `request_review`: the current head SHA needs one fresh automated review from
   the configured provider before merge is allowed. Include a
   `gated-continuation/v2` `gatedContinuation` naming only the provider, the

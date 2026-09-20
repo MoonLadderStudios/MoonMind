@@ -363,3 +363,115 @@ def test_external_state_unavailable_honors_retryability(retryable) -> None:
     else:
         assert decision.classification == "mergeability_transient"
         assert decision.action is ResolverAction.WAIT
+
+
+def test_missing_approving_review_is_durable_not_transient() -> None:
+    """A gate held only by a missing approving review will never self-resolve.
+
+    PR 831 sat in ``external_state_transient`` for 48 minutes because
+    ``mergeStateStatus=BLOCKED`` was folded into ``mergeability_unknown``. No
+    retry can produce a human approval, so it must classify as its own durable
+    state instead of a wait.
+    """
+
+    snapshot = normalize_portable_snapshot(
+        {
+            "repository": "g3-qrtr/crash_server_main",
+            "pr": {
+                "number": 831,
+                "state": "OPEN",
+                "headRefOid": "b" * 40,
+                "mergeStateStatus": "BLOCKED",
+                "mergeable": "MERGEABLE",
+                "reviewDecision": "REVIEW_REQUIRED",
+            },
+            "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+            "commentsFetch": {"succeeded": True},
+            "commentsSummary": {
+                "includeBotReviewComments": True,
+                "hasActionableComments": False,
+            },
+            "automatedReview": {
+                "enabled": True,
+                "provider": "codex",
+                "freshReviewForHead": True,
+                "requestPending": False,
+            },
+        }
+    )
+
+    assert snapshot.approving_review_required is True
+
+    decision = classify_snapshot(snapshot)
+
+    assert decision.classification == "approving_review_required"
+    assert decision.reason_code == "merge_gate_requires_human_approval"
+    assert decision.action is not ResolverAction.WAIT
+
+
+def test_approving_review_requirement_never_masks_resolver_owned_work() -> None:
+    """Remediation still wins: the approval gate is only the last word."""
+
+    base = {
+        "repository": "g3-qrtr/crash_server_main",
+        "pr": {
+            "number": 831,
+            "state": "OPEN",
+            "headRefOid": "b" * 40,
+            "mergeStateStatus": "BLOCKED",
+            "mergeable": "MERGEABLE",
+            "reviewDecision": "REVIEW_REQUIRED",
+        },
+        "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+        "commentsFetch": {"succeeded": True},
+        "commentsSummary": {
+            "includeBotReviewComments": True,
+            "hasActionableComments": True,
+        },
+        "automatedReview": {
+            "enabled": True,
+            "provider": "codex",
+            "freshReviewForHead": True,
+            "requestPending": False,
+        },
+    }
+
+    decision = classify_snapshot(normalize_portable_snapshot(base))
+
+    assert decision.classification == "actionable_comments"
+    assert decision.action is ResolverAction.RUN_REMEDIATION
+
+
+def test_approved_pull_request_still_reaches_the_merge_gate() -> None:
+    """An approved PR keeps its existing ready_to_merge path."""
+
+    decision = classify_snapshot(
+        normalize_portable_snapshot(
+            {
+                "repository": "g3-qrtr/crash_server_main",
+                "pr": {
+                    "number": 831,
+                    "state": "OPEN",
+                    "headRefOid": "b" * 40,
+                    "mergeStateStatus": "CLEAN",
+                    "mergeable": "MERGEABLE",
+                    "reviewDecision": "APPROVED",
+                },
+                "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+                "commentsFetch": {"succeeded": True},
+                "commentsSummary": {
+                    "includeBotReviewComments": True,
+                    "hasActionableComments": False,
+                },
+                "automatedReview": {
+                    "enabled": True,
+                    "provider": "codex",
+                    "freshReviewForHead": True,
+                    "requestPending": False,
+                },
+            }
+        )
+    )
+
+    assert decision.classification == "ready_to_merge"
+    assert decision.action is ResolverAction.ATTEMPT_MERGE

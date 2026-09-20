@@ -124,6 +124,17 @@ def classify_snapshot(
         return _decision("review_grace", "review_grace", ResolverAction.WAIT)
     if snapshot.checks_signal_available and not snapshot.checks_complete:
         return _decision("ci_running", "ci_running", ResolverAction.WAIT)
+    if snapshot.approving_review_required and snapshot.checks_passing:
+        # Every resolver-owned blocker is clear and the only thing holding the
+        # merge gate closed is an approving review. That is durable, not
+        # transient: waiting cannot produce it. The finish-mode-aware caller
+        # decides what it means -- a clean stop under ``fix_only``, a reportable
+        # blocker when the run carries merge authority.
+        return _decision(
+            "approving_review_required",
+            "merge_gate_requires_human_approval",
+            ResolverAction.STOP_MANUAL_REVIEW,
+        )
     if snapshot.mergeability_unknown:
         return _decision(
             "mergeability_transient", "external_state_transient", ResolverAction.WAIT

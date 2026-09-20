@@ -128,6 +128,11 @@ def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
         return {"action": "blocked", "reason": "codex_review_grace_wait"}
     if decision.classification == "ready_to_merge":
         return {"action": "merge_now", "reason": "ci_complete"}
+    if decision.classification == "approving_review_required":
+        return {
+            "action": "approving_review_required",
+            "reason": decision.reason_code,
+        }
     return {"action": "blocked", "reason": decision.reason_code}
 
 def _run_snapshot(
@@ -419,6 +424,44 @@ def main() -> None:
             )
             print("PR is already merged.")
             sys.exit(EXIT_CODE_MERGED)
+
+        if action == "approving_review_required":
+            if finish_mode == FINISH_MODE_FIX_ONLY:
+                # `fix_only` finishes at a clean review, not at merge
+                # authorization. Nothing resolver-owned is left to address and
+                # this run will never merge, so a missing approving review is
+                # not its blocker.
+                _write_result(
+                    result_path,
+                    snapshot=snapshot,
+                    decision=(
+                        "no comments left to address; merge gate awaits a human "
+                        "approving review and finish mode is fix_only"
+                    ),
+                    merge_outcome="skipped",
+                    status="review_clean",
+                    reason="finish_mode_fix_only",
+                )
+                print(
+                    "No comments left to address (not merging); merge gate "
+                    "awaits a human approving review."
+                )
+                sys.exit(EXIT_CODE_REVIEW_CLEAN)
+            # With merge authority the same state is a durable blocker the
+            # operator must clear, never a transient wait to retry.
+            _write_result(
+                result_path,
+                snapshot=snapshot,
+                decision=(
+                    "every resolver-owned blocker is cleared; the merge gate "
+                    "requires a human approving review"
+                ),
+                merge_outcome="blocked",
+                status="blocked",
+                reason=reason,
+            )
+            print(f"Blocked: {reason}", file=sys.stderr)
+            sys.exit(EXIT_CODE_BLOCKED if args.strict_exit_codes else 0)
 
         if action == "merge_now":
             if finish_mode == FINISH_MODE_FIX_ONLY:
