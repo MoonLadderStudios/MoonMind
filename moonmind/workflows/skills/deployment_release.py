@@ -850,6 +850,24 @@ class ReleaseCohort:
                     client, db_held_leases=db_held_leases
                 )
                 disposition = evaluate_provider_manager_liveness(observations)
+        recoveries: list[dict[str, object]] = []
+        if disposition["blocked"]:
+            # MoonLadderStudios/MoonMind#4363: the wedged manager is still
+            # owned by the *currently routed* worker, which predates the
+            # caller-side recovery in the candidate. Failing closed here would
+            # stop promotion before that code can ever become current, so the
+            # exact upgrade incident this gate exists for would deadlock on the
+            # old manual cutover. Attempt the same bounded, ledger-gated
+            # replacement first, then re-observe once. A refusal still blocks.
+            recoveries = await self._recover_wedged_provider_managers(
+                client, disposition
+            )
+            if any(entry.get("recovered") for entry in recoveries):
+                db_held_leases = await read_db_held_lease_counts()
+                observations = await collect_provider_manager_liveness(
+                    client, db_held_leases=db_held_leases
+                )
+                disposition = evaluate_provider_manager_liveness(observations)
         write_record(
             self.directory / "manager-liveness.json",
             {
@@ -857,6 +875,7 @@ class ReleaseCohort:
                 "dbLedger": (
                     "reconciled" if db_held_leases is not None else "unavailable"
                 ),
+                "recoveries": recoveries,
                 **disposition,
             },
         )
@@ -866,6 +885,50 @@ class ReleaseCohort:
                 f"{describe_liveness_block(disposition)}. "
                 f"{disposition['recoveryHint']}"
             )
+
+    async def _recover_wedged_provider_managers(self, client, disposition):
+        """Replace every wedged singleton the durable ledger allows replacing.
+
+        One attempt per blocked runtime, through the single recovery owner in
+        ``moonmind.provider_profiles.manager_recovery``. A runtime whose ledger
+        still spends capacity is left alone and keeps blocking promotion: the
+        gate reports the refusal instead of promoting past a live consumer.
+        """
+
+        from moonmind.provider_profiles.manager_recovery import (
+            ClientRecoveryAdapter,
+            recover_manager_for_runtime,
+        )
+
+        runtimes: list[str] = []
+        for entry in disposition.get("evidence") or []:
+            if not isinstance(entry, dict):
+                continue
+            runtime_id = str(entry.get("runtime_id") or "").strip()
+            if runtime_id and runtime_id not in runtimes:
+                runtimes.append(runtime_id)
+
+        adapter = ClientRecoveryAdapter(client)
+        results: list[dict[str, object]] = []
+        for runtime_id in runtimes:
+            recovery = await recover_manager_for_runtime(adapter, runtime_id)
+            if recovery is None:
+                results.append(
+                    {"runtime_id": runtime_id, "recovered": False,
+                     "refusal": "recovery_unavailable"}
+                )
+                continue
+            results.append(
+                {
+                    "runtime_id": runtime_id,
+                    "recovered": recovery.recovered,
+                    "refusal": recovery.refusal,
+                    "detail": recovery.detail,
+                    "terminatedRunId": recovery.terminated_run_id,
+                    "nondeterminismFailures": recovery.nondeterminism_failures,
+                }
+            )
+        return results
 
     async def _retained_definition_runner(self, image):
         """Render the retained cohort from the definition its image owns.

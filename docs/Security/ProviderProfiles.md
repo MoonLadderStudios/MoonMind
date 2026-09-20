@@ -1703,11 +1703,25 @@ wedge is treated as a recoverable fault rather than an outage.
 #### Automatic replacement
 
 `moonmind.provider_profiles.manager_recovery` owns the replacement and is the
-only thing that performs it. `ProviderProfileLeaseClient` invokes it when a
-manager Update fails at the RPC level, so the first blocked caller — an HTTP
-credential submission, an admission Activity, an OAuth session — recovers the
-ledger instead of reporting an outage, and then retries its own idempotent
-owner request against the fresh run.
+only thing that performs it. Three callers reach it, because a wedge can be
+discovered three ways:
+
+- `ProviderProfileLeaseClient` invokes it when a manager **Update** fails at
+  the RPC level — an HTTP credential submission, an admission Activity, an
+  OAuth session — then retries its own idempotent owner request against the
+  fresh run.
+- The `provider_profile.manager_state` inspection invokes it for the
+  **signal** path. Managed `AgentRun` admission sends `request_slot` as a
+  signal, and Temporal appends a signal to a still-`RUNNING` execution even
+  while every workflow task fails, so no Update RPC ever fails. A runtime
+  whose only traffic is managed AgentRuns would otherwise wait in
+  `awaiting_provider_capacity` forever.
+- `DeploymentRelease.qualify_provider_managers` invokes it **before failing
+  closed**. The wedged manager is owned by the currently routed worker, which
+  predates the candidate's caller-side recovery, so blocking promotion first
+  would keep the repair from ever becoming current — the exact upgrade
+  incident would deadlock on the manual cutover. A refusal still blocks
+  promotion.
 
 Replacement is deliberately narrow:
 
@@ -1720,9 +1734,19 @@ Replacement is deliberately narrow:
   returned, so a healthy replacement started by a concurrent caller between
   the describe and the terminate is never killed.
 - **Free capacity only.** The durable `provider_profile_slot_leases` ledger —
-  read directly, never through the component being recovered — must report
-  zero `held` rows for the runtime. A held row names a live credential
-  consumer, and replacing the manager would revoke its authority.
+  read directly, never through the component being recovered — must report no
+  row for the runtime outside the `released` tombstone. `held` and
+  `cleanup_requested` rows name a consumer that may still be executing, a
+  legacy `NULL` state is read as held exactly as the `sync_slot_leases` loader
+  reads it, and a state outside the durable contract is unreconciled evidence.
+  Counting only `held` would let a legacy or unknown row read as free and be
+  destroyed by a replacement that cannot restore it.
+- **A restored successor only.** `start_workflow` merely submits the
+  replacement; its `run()` restores profiles and durable leases through
+  Activities while Temporal is already dispatching Update handlers. Recovery
+  waits for the successor's own `startup_restored` flag (exposed on
+  `get_state`) before reporting success, so no request is admitted against
+  empty in-memory state over a restored cleanup obligation.
 - **Evidence, not silence.** An unreadable ledger refuses the replacement; it
   is not evidence of free capacity. Each refusal is returned with what was
   observed, and the original nondeterminism message is preserved in the
@@ -1743,7 +1767,11 @@ A refused replacement surfaces as HTTP 503 with
 condition (`held_lease_present`, `ledger_unreadable`, `no_replay_wedge`,
 `manager_not_running`, `recovery_failed`, or `manager_unreachable` when the
 manager never answered at all). The response repeats the stable
-`retry_idempotency_key` and states that saved credentials are unchanged.
+`retry_idempotency_key` and states that saved credentials are unchanged. A
+`held_lease_present` refusal does not ask the operator to retry later: a
+wedged manager cannot process the holder's `release_slot` signal, so the row
+stays unreleased and every later attempt refuses identically. That response
+directs the operator to verify teardown and reconcile the row below.
 
 #### Operator cutover (refused replacement)
 
@@ -1752,7 +1780,7 @@ capacity may be genuinely spent by a run that is still executing. Confirm
 which it is before acting. `<runtime>` is the runtime family (for example
 `opencode`).
 
-1. Read the ledger. A `held` row means a real consumer, not a manager fault.
+1. Read the ledger. Any row that is not `released` blocks replacement.
 
    ```sql
    SELECT lease_state, count(*)
@@ -1761,10 +1789,13 @@ which it is before acting. `<runtime>` is the runtime family (for example
     GROUP BY lease_state;
    ```
 
-   If the count is genuinely spent, the manager is not the problem: let the
-   run finish and retry. If the holder is confirmed gone, release or
-   reconcile that row first — it is the authority, and the manager only
-   mirrors it.
+   Waiting does not clear this: the holder's release travels to the same
+   wedged run, which completes no workflow task. Verify whether each
+   unreleased row's consumer is actually still running, then reconcile or
+   release the row — it is the authority, and the manager only mirrors it. A
+   `NULL` state is a pre-contract row and counts as held; a state outside the
+   contract is unreconciled and needs an operator decision before anything
+   destructive happens.
 
 2. Confirm the wedge signature on the singleton:
 

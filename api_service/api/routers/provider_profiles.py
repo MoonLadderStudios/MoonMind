@@ -116,12 +116,20 @@ def _credential_manager_unavailable_report(recovery: Any) -> tuple[str, str]:
         return _MANAGER_UNREACHABLE, _GENERIC_MANAGER_UNAVAILABLE_MESSAGE
     if refusal == MANAGER_HELD_LEASE_PRESENT:
         held = getattr(recovery, "held_leases", None)
+        # Waiting does not clear this. The holder's release travels to the
+        # same wedged run, which completes no workflow task, so the durable
+        # row stays unreleased and every later attempt refuses identically.
+        # Send the operator to teardown verification and ledger
+        # reconciliation, not to another retry.
         return refusal, (
             "Credential setup could not start because this runtime's provider "
             "credential manager cannot process requests, and it cannot be "
-            f"replaced while {held if held is not None else 'a'} run(s) still "
-            "hold its capacity. Your saved credentials have not changed. "
-            "Retry once that work finishes."
+            f"replaced while {held if held is not None else 'some'} lease "
+            "row(s) still hold its capacity. Your saved credentials have not "
+            "changed. A wedged manager cannot process a release, so this will "
+            "not clear on its own: verify the holder has stopped and "
+            "reconcile the durable lease row using the wedged-singleton "
+            "recovery runbook in docs/Security/ProviderProfiles.md."
         )
     if refusal == MANAGER_UNREADABLE_LEDGER:
         return refusal, (

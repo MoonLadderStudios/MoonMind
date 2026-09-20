@@ -284,6 +284,15 @@ class ProviderProfileLeaseClient:
             pass
         return workflow_id
 
+    async def ensure_manager(self, runtime_id: str) -> str:
+        """Start this runtime's manager unless it is already running.
+
+        Public because recovery needs a start step and must not own a second
+        definition of how a manager is launched.
+        """
+
+        return await self._ensure_manager(runtime_id)
+
     async def _acquire(
         self,
         *,
@@ -445,12 +454,17 @@ class ProviderProfileLeaseClient:
         The owner request is idempotent, and a fresh manager restores held and
         ``cleanup_requested`` rows from the authoritative ledger, so the
         resubmission admits against the same capacity the wedged run had.
-        A refusal is raised with its evidence instead of being retried: a
-        manager that must not be replaced will not become replaceable by
-        asking again. When no wedge was found at all, nothing was learned that
-        Temporal had not already said, so the original RPC failure is re-raised
-        unchanged rather than reclassified as a manager fault.
+        A refusal that names a real blocker is raised with its evidence instead
+        of being retried: a manager that must not be replaced will not become
+        replaceable by asking again. When no wedge was found at all, the run
+        that rejected this Update is gone or healthy — a clean completion, or
+        another caller's successful cutover — so re-ensure the canonical
+        workflow ID and resubmit the same idempotent payload once rather than
+        failing a caller whose manager has already been repaired. Only if that
+        bounded reattach also fails does Temporal's original error stand.
         """
+
+        from temporalio.service import RPCError
 
         from moonmind.provider_profiles.manager_recovery import (
             ProviderManagerUnavailableError,
@@ -465,13 +479,18 @@ class ProviderProfileLeaseClient:
             runtime_id=runtime_id,
             start_manager=_start_manager,
         )
-        if not recovery.recovered:
-            if recovery.nondeterminism_failures > 0:
-                raise ProviderManagerUnavailableError(recovery) from cause
+        if not recovery.recovered and recovery.nondeterminism_failures > 0:
+            raise ProviderManagerUnavailableError(recovery) from cause
+        try:
+            return await self._update_manager(
+                runtime_id, update_name, payload, allow_recovery=False
+            )
+        except RPCError:
+            if recovery.recovered:
+                raise
+            # No wedge was found and the reattach did not help either, so the
+            # original failure is still the truthful account of this call.
             raise cause
-        return await self._update_manager(
-            runtime_id, update_name, payload, allow_recovery=False
-        )
 
     async def _withdraw_maintenance_waiter(
         self, runtime_id: str, payload: Mapping[str, Any]
