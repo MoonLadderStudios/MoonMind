@@ -244,6 +244,13 @@ describe('dashboard route resolution', () => {
     expect(legacySettingsRedirect('/secrets', '?unknown=1')).toBe('/settings/providers-secrets');
   });
 
+  it('redirects the retired /settings/user-workspace bookmark to /settings/instance dropping stale scope params', () => {
+    expect(legacySettingsRedirect('/settings/user-workspace', '')).toBe('/settings/instance');
+    expect(legacySettingsRedirect('/settings/user-workspace/', '')).toBe('/settings/instance');
+    expect(legacySettingsRedirect('/settings/user-workspace', '?scope=user&q=workflow&section=x')).toBe('/settings/instance');
+    expect(legacySettingsRedirect('/settings/user-workspace', '?runtime=codex')).toBe('/settings/instance');
+  });
+
   it('treats legacy redirects as internal URLs and preserves safe query strings', () => {
     const origin = window.location.origin;
     expect(isDashboardInternalUrl(new URL(`${origin}/secrets?runtime=codex`))).toBe(true);

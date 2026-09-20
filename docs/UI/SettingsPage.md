@@ -21,7 +21,7 @@ Settings is a family of sibling dashboard pages, not one large page with a secon
 
 The central information-architecture decision is:
 
-> **Providers & Secrets**, **User / Workspace**, and **Operations** are separate pages in the Settings dropdown's **Configuration** group. None of those pages repeats the three destinations as tabs, radio buttons, segmented controls, pills, cards, a sidebar, or another local page switcher.
+> **Providers & Secrets**, **Instance**, and **Operations** are separate pages in the Settings dropdown's **Configuration** group. None of those pages repeats the three destinations as tabs, radio buttons, segmented controls, pills, cards, a sidebar, or another local page switcher.
 
 This gives every configuration surface a durable URL, page title, loading boundary, authorization state, and browser-history entry. It also removes redundant navigation and lets each page load only the data it owns.
 
@@ -61,7 +61,7 @@ This is a desired-state contract. The current implementation may still use one S
 
 ### 3.1 One navigation owner
 
-The Settings dropdown owns navigation among configuration pages. A page-local control is valid only when it changes state inside the current page, such as user versus workspace scope, a runtime filter, a category filter, or an operation subview.
+The Settings dropdown owns navigation among configuration pages. A page-local control is valid only when it changes state inside the current page, such as a runtime filter, a category filter, or an operation subview.
 
 ### 3.2 Pathname owns page identity
 
@@ -75,7 +75,7 @@ Provider Profile creation follows the same rule. Runtime, provider, authenticati
 
 ### 3.4 Data-driven rows
 
-The User / Workspace page renders ordinary settings from catalog descriptors. The frontend may branch on descriptor shape such as `type`, `ui`, `constraints`, `options`, `read_only`, and `sensitive`. It should not branch on individual setting keys except for documented transitional exceptions.
+The Instance page renders ordinary settings from catalog descriptors. The frontend may branch on descriptor shape such as `type`, `ui`, `constraints`, `options`, `read_only`, and `sensitive`. It should not branch on individual setting keys except for documented transitional exceptions.
 
 ### 3.5 Explicit specialist surfaces
 
@@ -107,7 +107,7 @@ The Settings dropdown retains its existing grouped structure. The configuration 
 Settings dropdown
   Configuration
     Providers & Secrets
-    User / Workspace
+    Instance
     Operations
 ```
 
@@ -118,7 +118,7 @@ The three entries are sibling dashboard destinations. They are not sections rend
 The dropdown must:
 
 1. render the label `Configuration` once;
-2. place the entries in this order: Providers & Secrets, User / Workspace, Operations;
+2. place the entries in this order: Providers & Secrets, Instance, Operations;
 3. render every entry as a route link;
 4. expose one active entry with `aria-current="page"` or equivalent route semantics;
 5. close after selection;
@@ -138,7 +138,7 @@ Settings
 
 with the Settings icon.
 
-It does not expand to `Providers & Secrets` or `User / Workspace`. The active page is communicated by the active menu item, URL, document title, and page header.
+It does not expand to `Providers & Secrets` or `Instance`. The active page is communicated by the active menu item, URL, document title, and page header.
 
 ### 4.3 No Settings landing page
 
@@ -153,7 +153,7 @@ The dropdown is the configuration index. MoonMind does not need another page tha
 | Destination | Canonical route | Suggested destination key |
 |---|---|---|
 | Providers & Secrets | `/settings/providers-secrets` | `settings-providers-secrets` |
-| User / Workspace | `/settings/user-workspace` | `settings-user-workspace` |
+| Instance | `/settings/instance` | `settings-instance` |
 | Operations | `/settings/operations` | `settings-operations` |
 
 All three destinations belong to the Settings dropdown's Configuration group and use the dashboard's utility-page classification.
@@ -167,7 +167,7 @@ destination the backend authorizes for the current user, evaluated in the
 canonical Configuration order:
 
 1. `/settings/providers-secrets`;
-2. `/settings/user-workspace`; then
+2. `/settings/instance`; then
 3. `/settings/operations`.
 
 Resolution uses replacement history so `/settings` does not become a back-button
@@ -208,6 +208,7 @@ are user-visible URLs rather than an internal routing contract:
 |---|---|
 | `/secrets` | `/settings/providers-secrets` |
 | `/workers` | `/settings/operations` |
+| `/settings/user-workspace` | `/settings/instance` |
 | an unknown older Settings alias | the default entry point in section 5.2 unless an approved specific mapping exists |
 
 These redirects use replacement history, preserve approved page-relevant query
@@ -221,10 +222,15 @@ Page-local filters may use query parameters:
 
 ```text
 /settings/providers-secrets?runtime=codex
-/settings/user-workspace?scope=workspace
-/settings/user-workspace?scope=user&q=workflow
+/settings/instance
 /settings/operations?status=paused
 ```
+
+The Instance page keeps no URL-owned filters: stale human-scope params
+(`scope`, `q`) are dropped on redirect and navigation after the account-free
+cutover (MoonMind#4353). The backend may continue using
+`section=user-workspace` as catalog classification; it no longer represents a
+client-side Settings tab.
 
 Sensitive values never enter paths, query parameters, browser history, page titles, or navigation telemetry.
 
@@ -234,7 +240,7 @@ Recommended document titles are:
 
 ```text
 Providers & Secrets | MoonMind
-User / Workspace | MoonMind
+Instance | MoonMind
 Operations | MoonMind
 ```
 
@@ -265,14 +271,14 @@ Each page header includes:
 - a page-scoped warning when persistence, catalog loading, authorization, or operational state is degraded; and
 - optional diagnostic or audit links where authorized.
 
-Required titles are `Providers & Secrets`, `User / Workspace`, and `Operations`.
+Required titles are `Providers & Secrets`, `Instance`, and `Operations`.
 
 ### 6.2 Page-specific status summaries
 
 | Page | Summary emphasis |
 |---|---|
 | Providers & Secrets | launch readiness, profile validity, secret and OAuth health, blocked profiles |
-| User / Workspace | overrides, pending application, locked settings, validation diagnostics |
+| Instance | overrides, pending application, locked settings, validation diagnostics |
 | Operations | worker state, drain or pause status, queue and runtime health, pending commands |
 
 Do not load all three pages' detailed datasets to reproduce one global health summary on every route. A compact cross-configuration alert may use a dedicated aggregate endpoint.
@@ -357,22 +363,21 @@ The collapsed summary distinguishes a confirmed recommendation, known custom ove
 
 Connection and readiness remain visible independently. `Using recommended settings` does not mean connected or launch ready, and custom settings are not automatically unhealthy. Summaries contain bounded safe labels, not credential references, host paths, command JSON, or secret values. Section 5.3 of [ProviderProfileCreation.md](./ProviderProfileCreation.md) owns comparison, source, warning, and uncertainty semantics.
 
-### 7.2 User / Workspace
+### 7.2 Instance
 
-This page contains descriptor-driven settings for:
-
-- user preferences;
-- personal workflow-creation defaults;
-- personal runtime and Provider Profile defaults;
-- workspace workflow and routing defaults;
-- workspace feature flags;
-- non-secret integration defaults;
-- authorized policy controls; and
-- SecretRef bindings not owned by a Provider Profile.
+This page contains descriptor-driven settings for the single-operator instance,
+including former workspace defaults, feature flags, non-secret integration
+defaults, authorized policy controls, and SecretRef bindings not owned by a
+Provider Profile. The backend may continue using `section=user-workspace` as
+catalog classification and `scope=workspace` as the instance read/write scope;
+retained user-scope overrides migrate under the backend unified surface
+(MoonMind#4350) and are not silently edited from this page.
 
 This is the canonical generated-settings surface. Adding an eligible ordinary setting should require backend catalog metadata and validation, not a new hard-coded React row.
 
-The user versus workspace scope switch is a page-local control. It may update `?scope=` and must guard dirty drafts before changing scope.
+There is no user-versus-workspace scope switch on this page: the Instance page
+reads and writes the backend `workspace` scope, and `scope`/`q` are not
+page-owned URL state.
 
 ### 7.3 Operations
 
@@ -397,7 +402,7 @@ The page title `Operations` is distinct from any broader dropdown group also lab
 | Page | Primary data |
 |---|---|
 | Providers & Secrets | Provider Profiles, Managed Secret metadata, OAuth state, readiness diagnostics, permitted runtime/provider choices, profile creation capabilities and presets |
-| User / Workspace | catalog descriptors, effective values, scoped overrides, diagnostics, audit metadata |
+| Instance | catalog descriptors, effective values, scoped overrides, diagnostics, audit metadata |
 | Operations | worker state, queue and runtime health, operation capabilities, command history |
 
 On route load:
@@ -431,7 +436,7 @@ DELETE /api/v1/settings/user/{key}
 
 ---
 
-## 9. Descriptor-Driven User / Workspace Contract
+## 9. Descriptor-Driven Instance Contract
 
 A descriptor carries enough metadata for the frontend to render and explain a setting without key-specific logic. The backend owns this shape; the fields below are the ones the row contract in this document depends on, and a consumer must not drop a field it renders:
 
@@ -648,13 +653,13 @@ mount managers, panels, or data loaders belonging to a sibling destination, and
 no parent component may select between the three by internal state.
 
 **State ownership.** Page-scoped state lives on the page that owns it: runtime
-filtering on Providers & Secrets, user-versus-workspace scope on User /
-Workspace, and worker command state on Operations. No cross-page selection state
-exists, and browser navigation — not local state — moves between destinations.
+filtering on Providers & Secrets and worker command state on Operations. No
+cross-page selection state exists, and browser navigation — not local state —
+moves between destinations.
 
 **Component ownership.** Provider Profile creation and edit behavior belongs to
 Providers & Secrets and follows `docs/UI/ProviderProfileCreation.md`. The
-generated user and workspace settings surface belongs to User / Workspace and
+generated user and workspace settings surface belongs to Instance and
 follows section 9. Operational commands belong to Operations and are never
 modeled as ordinary boolean preferences.
 
@@ -665,7 +670,7 @@ modeled as ordinary boolean preferences.
 The design is satisfied when:
 
 1. The existing Settings dropdown contains one Configuration group.
-2. It contains route links for Providers & Secrets, User / Workspace, and Operations in that order.
+2. It contains route links for Providers & Secrets, Instance, and Operations in that order.
 3. Each destination has its own canonical `/settings/...` pathname.
 4. `/settings` resolves to the first Configuration destination the current user is authorized to see, and renders the unavailable state when none is accessible.
 5. `?section=` selects nothing: no client route honors it, and no internal caller, test, or document still builds a `?section=` Settings link.
@@ -683,7 +688,7 @@ The design is satisfied when:
 17. Clear environment keys are backend-owned launch-security metadata.
 18. Provider Profile creation uses contextual backend presets or omission rather than global frontend guesses.
 19. A credential-required profile is not silently created enabled without successful setup.
-20. User / Workspace renders ordinary settings from backend descriptors and supports authorized scope switching.
+20. Instance renders ordinary settings from backend descriptors at the backend `workspace` scope without a scope switch.
 21. Operations uses explicit statusful command cards with confirmation and audit context.
 22. Secret-like settings use SecretRefs or Managed Secret flows, never generic plaintext inputs.
 23. Route navigation protects unsaved drafts.
@@ -731,8 +736,8 @@ substitute for the per-page unit tests, which remain in
 ## 16. Decision Summary
 
 - Settings is a configuration namespace and dropdown group, not one page with three tabs.
-- Providers & Secrets, User / Workspace, and Operations are sibling pages.
-- Canonical routes are `/settings/providers-secrets`, `/settings/user-workspace`, and `/settings/operations`.
+- Providers & Secrets, Instance, and Operations are sibling pages.
+- Canonical routes are `/settings/providers-secrets`, `/settings/instance`, and `/settings/operations`.
 - `/settings` resolves to the first authorized Configuration destination rather than assuming Providers & Secrets.
 - The Settings dropdown is the single cross-page navigation owner.
 - The Settings trigger remains stable on all three pages.
