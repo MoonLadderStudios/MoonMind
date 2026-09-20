@@ -602,8 +602,6 @@ The backend validates:
 
 The workflow acquires a lock for the stack.
 
-If another update is running, the request fails with `DEPLOYMENT_LOCKED` or remains queued according to policy.
-
 The default deployment-control worker uses an atomic file lock under the
 allowlisted deployment-state mount, for example:
 
@@ -613,6 +611,18 @@ allowlisted deployment-state mount, for example:
 
 This lock is shared by worker processes that mount the same deployment-state
 directory and is released when the update lifecycle exits.
+
+The same lock is also held by owners that are not updates: the availability
+supervisor sweeps on a short cycle in every deployment worker, and the
+maintenance pass reconciles retained release jobs. Those holds are bounded, so
+an update waits for the lock rather than treating routine observation as a
+deployment that is already running. The wait is bounded by
+`DEPLOYMENT_UPDATE_LOCK_WAIT_SECONDS`, which outlasts the longest bounded
+background hold; only when that budget is spent does the request fail with
+`DEPLOYMENT_LOCKED`.
+
+Background sweeps take the same lock without a wait, so they always yield to a
+running update instead of queueing behind one.
 
 ## 10.3 Capture before state
 
@@ -877,8 +887,15 @@ The existing maintenance schedule retires those temporary pollers only when
 Temporal reports the version drained. Inactive private candidates require a
 terminal release owner, closed canary and server-confirmed inactive status.
 Unknown drainage or ownership keeps the cohort. Candidate pollers may retire
-after the normal fleet verifies the same image. These containers exist only for
-bounded release work and drainage; they add no idle deployment service.
+after the normal fleet verifies the same image. A promoted candidate never
+enters drainage or inactive status, so that verification is the only evidence
+that can release its cohort; maintenance accepts either the primary receipt or
+the attempt receipt of a release whose deployment completed before a later step
+failed, and requires the owner match and the installed-fleet proof in both
+cases. Requiring only the primary receipt kept such a cohort polling the
+deployment task queues indefinitely alongside the installed fleet. These
+containers exist only for bounded release work and drainage; they add no idle
+deployment service.
 
 The primary result is persisted before auxiliary cleanup. Failed cleanup records
 its pending owner for `release.reconcile` without replacing verified deployment
@@ -1254,7 +1271,7 @@ The system fails fast on:
 - invalid input
 - authorization failure
 - policy violation
-- unavailable deployment lock
+- a deployment lock still unavailable after the bounded wait
 - Compose config validation failure
 - image pull failure
 - service recreation failure
@@ -1268,6 +1285,15 @@ silently rolls back. The caller can reattach using the recorded submission ID;
 scheduled maintenance can resume a stopped owned updater. Exhaustion preserves
 receipts and retained worker ownership and reports the exact failure. A new
 release is a distinct audited operation.
+
+Every attempt's error is retained in `last-error.json` under `attempts`, and
+the terminal receipt names the failure that started the release alongside the
+final one. A later attempt that fails for an unrelated reason therefore cannot
+erase the cause from the receipt, the Temporal failure or the operator's
+incident reconstruction. A job already running when that history was
+introduced carries only the record's top-level `attempt` and `error`; its next
+attempt seeds the history from them, so the update that adds the history does
+not erase the failure the history exists to preserve.
 
 ## 15.3 Rollback behavior
 

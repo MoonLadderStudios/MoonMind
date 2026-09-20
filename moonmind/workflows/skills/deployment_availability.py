@@ -299,6 +299,9 @@ async def installed_fleet_inventory(runner):
 
 async def supervise_availability(client, spec, metadata, *, stop=None):
     """Startup and periodic owner; cancellation follows the worker lifecycle."""
+    from moonmind.workflows.skills.deployment_execution import (
+        DEPLOYMENT_AVAILABILITY_SWEEP_TIMEOUT_SECONDS,
+    )
     from moonmind.workflows.skills.deployment_maintenance import reconcile_releases
     from moonmind.workflows.temporal.worker_runtime import (
         _build_deployment_update_executor,
@@ -318,9 +321,12 @@ async def supervise_availability(client, spec, metadata, *, stop=None):
             )
             root = state_root()
             root.mkdir(parents=True, exist_ok=True)
+            # Nonblocking: this sweep runs in every deployment worker on a
+            # short cycle, so it must yield to a running update rather than
+            # queue behind one.
             async with (
                 await executor.lock_manager.acquire("moonmind"),
-                asyncio.timeout(300),
+                asyncio.timeout(DEPLOYMENT_AVAILABILITY_SWEEP_TIMEOUT_SECONDS),
             ):
                 inventory = await installed_fleet_inventory(runner)
                 availability = await reconcile_availability(

@@ -6,6 +6,9 @@ import json
 import time
 from dataclasses import replace
 
+from moonmind.workflows.skills.deployment_execution import (
+    DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS,
+)
 from moonmind.workflows.skills.deployment_release import (
     ReleaseCohort,
     docker,
@@ -66,9 +69,25 @@ async def reconcile_release(directory, runner, client):
     candidate_safe = (
         await version_drained(client, candidate) if current != candidate else False
     )
-    primary_file = directory / "deployment-result.json"
-    if current == candidate and primary_file.exists():
-        primary = json.loads(primary_file.read_text())
+    # A promoted candidate never enters drainage or inactivity, so this is the
+    # only evidence that can retire its qualification cohort. The primary
+    # receipt is the ordinary source; a release whose deployment completed and
+    # whose later step failed finishes through the attempt receipt instead, and
+    # requiring only the primary left that cohort polling forever. Either way
+    # the installed fleet must objectively prove it runs the candidate.
+    receipt_file = next(
+        (
+            path
+            for path in (
+                directory / "deployment-result.json",
+                directory / "attempt-result.json",
+            )
+            if path.exists()
+        ),
+        None,
+    )
+    if current == candidate and receipt_file is not None:
+        primary = json.loads(receipt_file.read_text())
         if primary["owner"] != owner:
             raise ValueError("Deployment receipt owner differs")
         if primary["result"]["status"] == "COMPLETED":
@@ -164,7 +183,12 @@ async def reconcile_releases():
             else 0
         ),
     )
-    async with await executor.lock_manager.acquire("moonmind"), asyncio.timeout(840):
+    # The nonblocking acquire yields to a running update; an update waits this
+    # pass out instead (see DEPLOYMENT_UPDATE_LOCK_WAIT_SECONDS).
+    async with (
+        await executor.lock_manager.acquire("moonmind"),
+        asyncio.timeout(DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS),
+    ):
         for request_file in requests[:20]:
             directory = request_file.parent
             with (directory / "owner.lock").open("a") as lock:

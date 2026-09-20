@@ -191,3 +191,105 @@ async def test_missing_updater_resumes_immutable_request_without_resetting_budge
     await maintenance.reconcile_release(directory, "runner", None)
     launch.assert_not_awaited()
     assert json.loads((directory / "result.json").read_text()) == terminal
+
+
+@pytest.mark.asyncio
+async def test_promoted_candidate_retires_from_an_attempt_receipt(
+    tmp_path, monkeypatch
+):
+    """Retirement follows observable state, not which receipt file was written.
+
+    A release whose deployment completed - routing promoted the candidate and
+    the installed fleet runs it - can still finish through the attempt receipt
+    when a later step fails. Requiring ``deployment-result.json`` wedged those
+    jobs permanently: the candidate is current, so no drainage or inactivity
+    evidence can ever arrive, and its qualification cohort kept polling the
+    deployment task queues alongside the installed fleet.
+    """
+    directory = tmp_path / ("c" * 32)
+    directory.mkdir()
+    release.write_record(
+        directory / "request.json",
+        {"authored": {"owner": "owner"}, "image": "image@sha256:b", "imageId": "b"},
+    )
+    release.write_record(
+        directory / "result.json",
+        {
+            "owner": "owner",
+            "result": {"status": "COMPLETED", "outputs": {"finalError": "boom"}},
+        },
+    )
+    release.write_record(
+        directory / "routing.json",
+        {"candidate": "b", "previous": "fleet.a", "deployment": "fleet"},
+    )
+    release.write_record(
+        directory / "attempt-result.json",
+        {"owner": "owner", "result": {"status": "COMPLETED"}},
+    )
+    removed = []
+    verified = []
+
+    async def inspect(name, owner):
+        return None
+
+    async def snapshot(*args):
+        return "fleet.b"
+
+    async def is_drained(client, version):
+        return False
+
+    async def verify(self, image, **kwargs):
+        verified.append((image, kwargs["expected"]))
+
+    async def cleanup(self):
+        removed.extend(self.names)
+
+    monkeypatch.setattr(maintenance, "inspect_owned", inspect)
+    monkeypatch.setattr(release_routing, "routing_snapshot", snapshot)
+    monkeypatch.setattr(release_routing, "current_version", lambda value: value)
+    monkeypatch.setattr(release_routing, "version_drained", is_drained)
+    monkeypatch.setattr(release.ReleaseCohort, "verify_installed", verify)
+    monkeypatch.setattr(release.ReleaseCohort, "cleanup", cleanup)
+
+    result = await maintenance.reconcile_release(directory, None, None)
+
+    assert verified == [("image@sha256:b", "b")]
+    assert "candidate" in result["retired"]
+    assert "candidate" not in result["pending"]
+    assert len([name for name in removed if "candidate" in name]) == 8
+    assert (directory / "candidate-retired.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_attempt_receipt_owner_must_match_before_retirement(
+    tmp_path, monkeypatch
+):
+    directory = tmp_path / ("d" * 32)
+    directory.mkdir()
+    release.write_record(
+        directory / "request.json",
+        {"authored": {"owner": "owner"}, "image": "image@sha256:b", "imageId": "b"},
+    )
+    release.write_record(directory / "result.json", {"owner": "owner"})
+    release.write_record(
+        directory / "routing.json",
+        {"candidate": "b", "previous": "fleet.a", "deployment": "fleet"},
+    )
+    release.write_record(
+        directory / "attempt-result.json",
+        {"owner": "foreign", "result": {"status": "COMPLETED"}},
+    )
+
+    async def inspect(name, owner):
+        return None
+
+    async def snapshot(*args):
+        return "fleet.b"
+
+    monkeypatch.setattr(maintenance, "inspect_owned", inspect)
+    monkeypatch.setattr(release_routing, "routing_snapshot", snapshot)
+    monkeypatch.setattr(release_routing, "current_version", lambda value: value)
+
+    with pytest.raises(ValueError, match="owner differs"):
+        await maintenance.reconcile_release(directory, None, None)
