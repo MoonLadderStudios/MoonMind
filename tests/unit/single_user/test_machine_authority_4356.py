@@ -173,6 +173,58 @@ def test_workspace_scope_tamper_fails_closed() -> None:
         )
 
 
+def test_lease_window_equals_requested_lifetime() -> None:
+    """A capability lease is bounded: exp equals iat plus the grant."""
+    capability = verify_container_job_session_capability(
+        _mint(lifetime_seconds=300, now=1000), secret=_SECRET, now=1100
+    )
+    assert capability.expires_at == 1300
+
+
+def test_short_lease_expires_while_long_lease_for_same_session_holds() -> None:
+    """Lease scope outlives session identity: same session, distinct bounds."""
+    short_token = _mint(session_id="lease-4356", lifetime_seconds=60, now=100)
+    long_token = _mint(session_id="lease-4356", lifetime_seconds=600, now=100)
+    assert short_token != long_token
+    with pytest.raises(ContainerJobCapabilityError, match="expired"):
+        verify_container_job_session_capability(
+            short_token, secret=_SECRET, now=200
+        )
+    assert (
+        verify_container_job_session_capability(
+            long_token, secret=_SECRET, now=200
+        ).session_id
+        == "lease-4356"
+    )
+
+
+def test_successive_generations_overlap_then_roll_forward() -> None:
+    """Two issuance generations overlap, then only the newer lease survives."""
+    first = _mint(session_id="gen-4356", lifetime_seconds=60, now=100)
+    second = _mint(session_id="gen-4356", lifetime_seconds=60, now=130)
+    assert first != second
+    assert (
+        verify_container_job_session_capability(
+            first, secret=_SECRET, now=140
+        ).expires_at
+        == 160
+    )
+    assert (
+        verify_container_job_session_capability(
+            second, secret=_SECRET, now=140
+        ).expires_at
+        == 190
+    )
+    with pytest.raises(ContainerJobCapabilityError, match="expired"):
+        verify_container_job_session_capability(first, secret=_SECRET, now=170)
+    assert (
+        verify_container_job_session_capability(
+            second, secret=_SECRET, now=170
+        ).session_id
+        == "gen-4356"
+    )
+
+
 def test_independent_worker_sessions_verify_concurrently() -> None:
     """Two workers/tabs hold independent authority without cross-grant.
 

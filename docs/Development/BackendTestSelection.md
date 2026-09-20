@@ -311,7 +311,14 @@ The selector enables `integration_ci=true` for changes under or matching:
   frontend transport (`frontend/src/lib/api/client.ts` alongside the generated
   OpenAPI client), worker binding (`moonmind/workflows/temporal/worker_runtime.py`),
   machine-authority helpers (`moonmind/security/`), and the single-user
-  conformance package (`moonmind/single_user/`, `tests/unit/single_user/`)
+   conformance package (`moonmind/single_user/`, `tests/unit/single_user/`)
+- Single-user integration journeys (MoonLadderStudios/MoonMind#4356):
+  `tests/integration/single_user/` selects `integration_ci=true` through the
+  `tests/integration/` prefix (reliability-owned
+  `tests/integration/reliability/` stays excluded). Required-check
+  aggregation needs no workflow change: the existing `integration-ci` job in
+  `.github/workflows/pytest-unit-tests.yml` already runs whenever
+  `integration_ci=true`, and `ci-required` already aggregates its result.
 
 This suite validates compose-backed local infrastructure seams and must remain free of external-provider credentials.
 Tests under `tests/integration/reliability/` are explicitly excluded because
