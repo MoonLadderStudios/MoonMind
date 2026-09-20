@@ -863,3 +863,271 @@ async def test_r6_scheduled_source_gate_behavior_without_user_service(tmp_path: 
             )
             with pytest.raises(Exception):
                 await temporal.read_scheduled_execution_source(projection)
+
+
+def test_r1b_workflow_run_instance_access_without_owner():
+    """R1: codex run access no longer gates on human ownership.
+
+    The admitted operator inspects any instance run; legacy
+    created_by/requested_by_user_id values persist as provenance.
+    """
+    from fastapi import HTTPException as _HTTPException
+
+    from api_service.api.routers import workflows as workflows_router
+
+    run_id = uuid4()
+    foreign_run = SimpleNamespace(
+        id=run_id, created_by=uuid4(), requested_by_user_id=uuid4()
+    )
+    operator = SimpleNamespace(id=uuid4(), is_superuser=False)
+
+    assert (
+        workflows_router._assert_run_access(foreign_run, run_id, operator)
+        is foreign_run
+    )
+    # Unknown runs still surface not-found.
+    with pytest.raises(_HTTPException):
+        workflows_router._assert_run_access(None, run_id, operator)
+
+
+def test_r1c_execution_instance_visibility_and_principal():
+    """R1: execution list/describe scope is instance-wide; principals fall back."""
+    from api_service.api.routers import executions as executions_router
+
+    operator = SimpleNamespace(id=uuid4(), is_superuser=False)
+
+    # Owner filters pass through as provenance selectors, never 403 gates:
+    # a foreign owner id and a non-user owner type are both accepted.
+    foreign_id = str(uuid4())
+    assert executions_router._effective_execution_owner_scope(
+        user=operator, owner_type="system", owner_id=foreign_id
+    ) == ("system", foreign_id)
+    owner_type, owner_id = executions_router._effective_execution_owner_scope(
+        user=operator, owner_type=None, owner_id=None
+    )
+    assert (owner_type, owner_id) == (None, None)
+
+    # Every record is visible to the admitted operator.
+    foreign_record = SimpleNamespace(owner_type="user", owner_id=str(uuid4()))
+    assert (
+        executions_router._execution_record_visible_to_user(
+            foreign_record, operator
+        )
+        is True
+    )
+
+    # Control-path principals fall back to the stable instance principal
+    # when the operator has no persisted account row.
+    assert executions_router._execution_principal(operator) == str(operator.id)
+    assert (
+        executions_router._execution_principal(SimpleNamespace(id=None))
+        == "system"
+    )
+
+
+@pytest.mark.asyncio
+async def test_r1d_owned_execution_returns_foreign_record():
+    """R1: describe/cancel/retry/intervention paths read any instance record."""
+    from api_service.api.routers import executions as executions_router
+
+    record = SimpleNamespace(workflow_id="mm:4351:foreign", owner_id=str(uuid4()))
+    service = SimpleNamespace(
+        describe_execution=AsyncMock(return_value=record),
+        describe_cancel_target_execution=AsyncMock(return_value=record),
+    )
+    operator = SimpleNamespace(id=uuid4(), is_superuser=False)
+
+    assert (
+        await executions_router._get_owned_execution(
+            service=service, workflow_id="mm:4351:foreign", user=operator
+        )
+        is record
+    )
+    assert (
+        await executions_router._get_owned_execution(
+            service=service,
+            workflow_id="mm:4351:foreign",
+            user=operator,
+            use_cancel_target_fallback=True,
+        )
+        is record
+    )
+
+
+def test_r3b_decoders_preserve_scheduling_identity():
+    """R3: history decoders never rewrite schedule/execution identity fields."""
+    temporal = TemporalExecutionService.__new__(TemporalExecutionService)
+    payload = {
+        "workflow_type": "MoonMind.UserWorkflow",
+        "schedule_id": "mm-schedule:abc",
+        "definitionId": "abc",
+        "cron": "0 6 * * *",
+        "timezone": "UTC",
+        "initial_parameters": {"system": {"recurrence": {"definitionId": "abc"}}},
+        "owner_user_id": str(uuid4()),
+        "mm_owner_type": "user",
+        "mm_owner_id": str(uuid4()),
+    }
+    decoded = temporal.decode_previous_execution_owner(dict(payload))
+    for key in (
+        "workflow_type",
+        "schedule_id",
+        "definitionId",
+        "cron",
+        "timezone",
+        "initial_parameters",
+    ):
+        assert decoded[key] == payload[key]
+
+
+@pytest.mark.asyncio
+async def test_r4b_schedule_reconcile_no_duplicate_or_loss(tmp_path: Path):
+    """R4: reconcile keeps the same schedule id; updates only on real drift."""
+    from moonmind.workflows.temporal.schedule_errors import ScheduleNotFoundError
+    from moonmind.workflows.temporal.schedule_mapping import (
+        make_scheduled_workflow_id_base,
+    )
+
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            service = RecurringWorkflowsService(session, temporal_client_adapter=_adapter())
+            created = await service.create_definition(
+                name="Reconcile guard",
+                description=None,
+                enabled=True,
+                schedule_type="cron",
+                cron="15 9 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=None,
+                target=_target(),
+                policy={},
+            )
+            workflow_type, workflow_input = service._workflow_bundle_for_definition(
+                created
+            )
+            expected_id = make_scheduled_workflow_id_base(created.id)
+
+            calls: dict[str, list] = {"describe": [], "update": [], "create": []}
+
+            async def _describe_match(*, definition_id):
+                assert definition_id == created.id
+                calls["describe"].append(definition_id)
+                return SimpleNamespace(
+                    schedule=SimpleNamespace(
+                        action=SimpleNamespace(
+                            workflow=workflow_type,
+                            id=expected_id,
+                            args=[workflow_input],
+                            task_queue="mm.workflow.user.v2",
+                        )
+                    )
+                )
+
+            async def _update(**kwargs):
+                calls["update"].append(kwargs)
+
+            async def _create(**kwargs):
+                calls["create"].append(kwargs)
+
+            service._adapter = SimpleNamespace(
+                describe_schedule=_describe_match,
+                update_schedule=_update,
+                create_schedule=_create,
+                resolve_workflow_task_queue=MagicMock(
+                    return_value="mm.workflow.user.v2"
+                ),
+            )
+            await service._ensure_schedule_action_current(created)
+            assert calls["update"] == [] and calls["create"] == []
+
+            async def _describe_drift(*, definition_id):
+                calls["describe"].append(definition_id)
+                return SimpleNamespace(
+                    schedule=SimpleNamespace(
+                        action=SimpleNamespace(
+                            workflow="MoonMind.OtherWorkflow",
+                            id=expected_id,
+                            args=[workflow_input],
+                            task_queue="mm.workflow.user.v2",
+                        )
+                    )
+                )
+
+            service._adapter = SimpleNamespace(
+                describe_schedule=_describe_drift,
+                update_schedule=_update,
+                create_schedule=_create,
+                resolve_workflow_task_queue=MagicMock(
+                    return_value="mm.workflow.user.v2"
+                ),
+            )
+            await service._ensure_schedule_action_current(created)
+            assert len(calls["update"]) == 1
+            assert calls["update"][0]["definition_id"] == created.id
+            assert calls["update"][0]["workflow_input"] == workflow_input
+
+            async def _describe_missing(*, definition_id):
+                raise ScheduleNotFoundError("gone")
+
+            service._adapter = SimpleNamespace(
+                describe_schedule=_describe_missing,
+                update_schedule=_update,
+                create_schedule=_create,
+                resolve_workflow_task_queue=MagicMock(
+                    return_value="mm.workflow.user.v2"
+                ),
+            )
+            await service._ensure_schedule_action_current(created)
+            assert len(calls["create"]) == 1
+            assert calls["create"][0]["definition_id"] == created.id
+            assert calls["create"][0]["cron_expression"] == "15 9 * * *"
+
+
+@pytest.mark.asyncio
+async def test_r6b_independent_deployment_claim_without_user_service(tmp_path: Path):
+    """R6: two deployments serialize on one issue via execution owners only."""
+    from api_service.db.models import GitHubIssueClaim
+    from api_service.services import recurring_workflows_service as recurring_module
+    from moonmind.workflows.temporal.issue_claim_store import (
+        IssueClaimStore,
+        claim_owner,
+    )
+
+    # Claim identity derives from durable execution owners, never a user row.
+    owner_a = claim_owner({"execution_owner": "ns-a/mm:deploy-a:1"})
+    owner_b = claim_owner({"execution_owner": "ns-b/mm:deploy-b:1"})
+    assert owner_a == "ns-a/mm:deploy-a:1"
+    assert owner_b == "ns-b/mm:deploy-b:1"
+    with pytest.raises(ValueError):
+        claim_owner({})
+
+    async with recurring_db(tmp_path) as maker:
+        store = IssueClaimStore(session_factory=maker)
+        async with maker() as session:
+            session.add(
+                GitHubIssueClaim(
+                    owner=owner_a,
+                    repository="moonladderstudios/moonmind",
+                    issue_number=4351,
+                    attempt_id="att-a",
+                    actor_id="actor-a",
+                    comment_body="claim a",
+                    comment_id="1",
+                    confirmed=True,
+                    released=False,
+                )
+            )
+            await session.commit()
+        active = await store.active_for_issue(
+            "MoonLadderStudios/MoonMind", 4351
+        )
+        assert active is not None
+        assert active.owner == owner_a
+        # The second deployment observes the live claim instead of sharing
+        # a user-service lookup; ownership stays with the first owner.
+        assert active.owner != owner_b
+        assert "MoonMind.UserWorkflow" in (
+            recurring_module._SUPPORTED_RECURRING_WORKFLOW_TYPES
+        )

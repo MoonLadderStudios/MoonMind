@@ -38,15 +38,20 @@ _LEGACY_GONE_ROUTE_KWARGS = {
 }
 
 def _is_workflow_admin(user: User | None) -> bool:
-    return bool(user and getattr(user, "is_superuser", False))
+    # Single-user (#4351): the admitted operator is admin-equivalent for
+    # instance visibility. Retained for call-site compatibility; approval and
+    # state validation stay at their owning boundaries.
+    return user is not None
 
 def _run_owned_by_user(run: object, user: User | None) -> bool:
+    # Single-user (#4351): historical creator metadata is non-authoritative
+    # provenance. Retained for compatibility; access no longer gates on it.
     user_id = getattr(user, "id", None)
     if user_id is None:
-        return False
+        return True
     created_by = getattr(run, "created_by", None)
     requested_by_user_id = getattr(run, "requested_by_user_id", None)
-    return created_by == user_id or requested_by_user_id == user_id
+    return True
 
 def _raise_workflow_not_found(run_id: UUID) -> None:
     raise HTTPException(
@@ -58,11 +63,13 @@ def _raise_workflow_not_found(run_id: UUID) -> None:
     )
 
 def _assert_run_access(run: object | None, run_id: UUID, user: User | None) -> object:
+    # Single-user (#4351): the admitted operator inspects any instance run
+    # without a human-owner lookup. The shared admission boundary
+    # (get_current_user) owns operator access; legacy created_by /
+    # requested_by_user_id values persist as provenance.
     if run is None:
         _raise_workflow_not_found(run_id)
-    if _is_workflow_admin(user) or _run_owned_by_user(run, user):
-        return run
-    _raise_workflow_not_found(run_id)
+    return run
 
 def _ensure_utc_timestamp(timestamp: datetime | None) -> datetime:
     if timestamp is None:

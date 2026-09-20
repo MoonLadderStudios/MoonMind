@@ -3799,7 +3799,9 @@ def test_execution_facets_exclude_requested_facet_filter_and_keep_workflow_scope
     base_query = temporal_client.list_workflows.call_args.kwargs["query"]
     assert 'WorkflowType="MoonMind.UserWorkflow"' in base_query
     assert 'mm_entry="user_workflow"' in base_query
-    assert "mm_owner_id=" in base_query
+    # Single-user (#4351): facet queries are instance-wide; no human-owner
+    # scoping is injected for the admitted operator.
+    assert "mm_owner_id" not in base_query
     assert 'mm_state="executing"' in base_query
     assert "mm_target_runtime" not in base_query
     body = response.json()
@@ -3938,7 +3940,8 @@ def test_execution_status_facet_counts_static_status_values_with_workflow_scope(
     first_count_query = temporal_client.count_workflows.await_args_list[0].kwargs["query"]
     assert 'WorkflowType="MoonMind.UserWorkflow"' in first_count_query
     assert 'mm_entry="user_workflow"' in first_count_query
-    assert "mm_owner_id=" in first_count_query
+    # Single-user (#4351): instance-wide facet counts; no human-owner filter.
+    assert "mm_owner_id" not in first_count_query
     assert body["truncated"] is True
 
 def test_execution_status_facet_supports_real_pagination() -> None:
@@ -4011,10 +4014,17 @@ def test_execution_facets_reject_malformed_next_page_token() -> None:
     }
     temporal_client.list_workflows.assert_not_called()
 
-def test_list_executions_rejects_non_admin_owner_type_override() -> None:
+def test_list_executions_accepts_owner_type_filter_for_operator() -> None:
+    # Single-user (#4351): owner filters are provenance selectors, never
+    # 403 gates; the admitted operator lists every instance execution.
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
+    mock_service.list_executions.return_value = SimpleNamespace(
+        items=[],
+        next_page_token=None,
+        count=0,
+    )
     app.dependency_overrides[_get_service] = lambda: mock_service
     _override_temporal_client(app)
     _override_user_dependencies(app, is_superuser=False)
@@ -4022,9 +4032,10 @@ def test_list_executions_rejects_non_admin_owner_type_override() -> None:
     with TestClient(app) as test_client:
         response = test_client.get("/api/executions", params={"ownerType": "system"})
 
-    assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "execution_forbidden"
-    mock_service.list_executions.assert_not_awaited()
+    assert response.status_code == 200
+    kwargs = mock_service.list_executions.await_args.kwargs
+    assert kwargs["owner_type"] == "system"
+    mock_service.list_executions.assert_awaited()
 
 def test_step_ledger_contract_models_serialize_using_public_aliases() -> None:
     progress = ExecutionProgressModel.model_validate(
@@ -4088,7 +4099,9 @@ def test_step_ledger_contract_models_serialize_using_public_aliases() -> None:
     assert dumped_snapshot["runScope"] == "latest"
     assert dumped_snapshot["steps"][0]["logicalStepId"] == "prepare"
 
-def test_list_executions_uses_owner_id_without_owner_type_for_non_admin() -> None:
+def test_list_executions_passes_no_implicit_owner_for_operator() -> None:
+    # Single-user (#4351): unfiltered lists are instance-wide; the caller's
+    # own id is no longer injected as an implicit ownership scope.
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -4106,10 +4119,12 @@ def test_list_executions_uses_owner_id_without_owner_type_for_non_admin() -> Non
 
     assert response.status_code == 200
     kwargs = mock_service.list_executions.await_args.kwargs
-    assert kwargs["owner_id"] == str(mock_user.id)
+    assert kwargs["owner_id"] is None
     assert kwargs["owner_type"] is None
 
-def test_list_executions_allows_explicit_user_owner_type_for_non_admin() -> None:
+def test_list_executions_passes_explicit_owner_filter_for_operator() -> None:
+    # Single-user (#4351): an explicit ownerType passes through as a
+    # provenance selector without injecting the caller's own id.
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -4127,7 +4142,7 @@ def test_list_executions_allows_explicit_user_owner_type_for_non_admin() -> None
 
     assert response.status_code == 200
     kwargs = mock_service.list_executions.await_args.kwargs
-    assert kwargs["owner_id"] == str(mock_user.id)
+    assert kwargs["owner_id"] is None
     assert kwargs["owner_type"] == "user"
 
 @pytest.mark.parametrize("capability_location", ["root", "tool", "skill"])
@@ -11179,17 +11194,28 @@ def test_create_task_shaped_recurring_schedule_preserves_missing_policy(
     assert service.create_definition.await_args.kwargs["policy"] is None
 
 
-def test_create_task_shaped_recurring_schedule_rejects_global_scope_for_non_operator(
+def test_create_task_shaped_recurring_schedule_allows_global_scope_for_operator(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
+    # Single-user (#4351): the admitted operator authors every scope; scope
+    # persists as history-compatible provenance, never an owner gate.
     test_client, _service, _user = client
     test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    next_run_at = datetime.now(UTC) + timedelta(hours=1)
 
     with patch(
         "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
     ) as service_cls:
         service = service_cls.return_value
-        service.create_definition = AsyncMock()
+        service.create_definition = AsyncMock(
+            return_value=SimpleNamespace(
+                id=uuid4(),
+                name="Global schedule",
+                cron="0 * * * *",
+                timezone="UTC",
+                next_run_at=next_run_at,
+            )
+        )
 
         response = test_client.post(
             "/api/executions",
@@ -11208,12 +11234,9 @@ def test_create_task_shaped_recurring_schedule_rejects_global_scope_for_non_oper
             },
         )
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == {
-        "code": "operator_role_required",
-        "message": "Operator privileges are required for global schedules.",
-    }
-    service.create_definition.assert_not_awaited()
+    assert response.status_code == 201, response.json()
+    service.create_definition.assert_awaited()
+    assert service.create_definition.await_args.kwargs["owner_user_id"] is None
 
 
 def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
@@ -11484,33 +11507,37 @@ def test_create_execution_enforces_idempotency(
     called_kwargs = service.create_execution.await_args.kwargs
     assert called_kwargs["idempotency_key"] == "idem-123"
 
-def test_list_executions_rejects_non_admin_cross_owner_queries(
+def test_list_executions_allows_cross_owner_queries_for_operator(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
+    # Single-user (#4351): ownerId is a provenance selector; the admitted
+    # operator lists every instance execution.
     test_client, service, _user = client
+    service.list_executions.return_value = SimpleNamespace(
+        items=[],
+        next_page_token=None,
+        count=0,
+    )
 
     response = test_client.get("/api/executions", params={"ownerId": str(uuid4())})
 
-    assert response.status_code == 403
-    assert (
-        response.json()["detail"]["message"]
-        == "Cannot list executions for another user."
-    )
-    service.list_executions.assert_not_awaited()
+    assert response.status_code == 200
+    service.list_executions.assert_awaited()
 
-def test_describe_execution_hides_foreign_workflow_visibility(
+def test_describe_execution_shows_foreign_workflow_to_operator(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
+    # Single-user (#4351): every instance execution is visible to the
+    # admitted operator; record owner fields are provenance, not gates.
     test_client, service, user = client
-    service.describe_execution.return_value = SimpleNamespace(
-        owner_id=str(uuid4()),
-        workflow_id="mm:foreign",
-    )
+    record = _build_execution_record(owner_id=str(uuid4()))
+    record.workflow_id = "mm:foreign"
+    service.describe_execution.return_value = record
 
     response = test_client.get("/api/executions/mm:foreign")
 
-    assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "execution_not_found"
+    assert response.status_code == 200
+    assert response.json()["workflowId"] == "mm:foreign"
     assert str(user.id) != service.describe_execution.return_value.owner_id
 
 def test_owner_product_detail_surfaces_operator_child_parent_links() -> None:
@@ -11588,11 +11615,11 @@ def test_owner_product_detail_surfaces_operator_child_parent_links() -> None:
     )
 
 
-def test_other_owner_product_detail_hides_operator_child_data(
+def test_other_owner_product_detail_visible_to_operator(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
-    """MoonLadderStudios/MoonMind#3947 R3: another owner's run — including its
-    operator-child links — is not readable through the product detail path."""
+    """Single-user (#4351): instance detail — including child links — is
+    readable by the admitted operator regardless of recorded owner."""
     test_client, service, user = client
     record = _build_execution_record(owner_id=str(uuid4()))
     record.memo = {
@@ -11608,13 +11635,14 @@ def test_other_owner_product_detail_hides_operator_child_data(
 
     response = test_client.get("/api/executions/mm:foreign")
 
-    assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "execution_not_found"
+    assert response.status_code == 200
     assert str(user.id) != record.owner_id
-    assert "other-owner-agent-run" not in response.text
-    assert "merge-automation:mm:foreign" not in response.text
-    assert "agentRunId" not in response.text
-    assert "mergeAutomation" not in response.text
+    body = response.json()
+    assert body["agentRunId"] == "other-owner-agent-run"
+    assert (
+        body["mergeAutomation"]["workflowId"]
+        == "merge-automation:mm:foreign:pr:9:head:def456"
+    )
 
 
 def test_operator_type_detail_stays_out_of_product_cards_for_non_admin(
@@ -12058,10 +12086,9 @@ def test_cancel_execution_authorizes_projection_only_nested_parent(
     )
 
     assert response.status_code == 202
-    service.describe_execution.assert_awaited_once_with(
-        "mm:parent",
-        include_orphaned=True,
-    )
+    # Single-user (#4351): instance visibility needs no parent-ownership
+    # fallback lookup; the admitted operator cancels any instance record.
+    service.describe_execution.assert_not_awaited()
     called = service.cancel_execution.await_args.kwargs
     assert called["workflow_id"] == child.workflow_id
     assert called["reason"] == "stop nested child"
@@ -16976,7 +17003,10 @@ async def test_mm773_hydrates_related_run_metadata_for_same_owner() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mm773_skips_related_run_metadata_for_foreign_owner() -> None:
+async def test_mm773_hydrates_related_run_metadata_for_operator() -> None:
+    # Single-user (#4351): related-run metadata hydrates for every instance
+    # record; the admitted operator sees all linked runs without an owner
+    # lookup.
     user = SimpleNamespace(id=uuid4(), is_superuser=False)
     record = _build_execution_record(owner_id=str(user.id))
     record.parameters = {
@@ -17005,9 +17035,9 @@ async def test_mm773_skips_related_run_metadata_for_foreign_owner() -> None:
     related = hydrated.model_dump(by_alias=True)["relatedRuns"][0]
 
     assert related["workflowId"] == "mm:source-run"
-    assert related["status"] is None
-    assert related["targetRuntime"] is None
-    assert related["model"] is None
+    assert related["status"] == "completed"
+    assert related["targetRuntime"] == "codex_cli"
+    assert related["model"] == "gpt-5.4"
 
 
 def _valid_failed_run_recovery_manifest_payload(
@@ -18167,10 +18197,13 @@ def test_action_endpoints_reject_requests_when_actions_disabled(
         assert cancel_response.status_code == 403
         assert cancel_response.json()["detail"]["code"] == "actions_disabled"
 
-def test_action_endpoints_reject_non_owner_operator(
+def test_action_endpoints_allow_operator_and_validate_effects(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Single-user (#4351): the admitted operator reaches update/signal/
+    # cancel on any instance record; state and approval validation still
+    # apply at their owning boundaries (not asserted here).
     test_client, service, _user = client
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
     service.describe_execution.return_value = _build_execution_record(
@@ -18179,9 +18212,21 @@ def test_action_endpoints_reject_non_owner_operator(
     service.describe_cancel_target_execution.return_value = _build_execution_record(
         owner_id="other-user"
     )
+    service.update_execution.return_value = {
+        "workflow_id": "mm:wf-1",
+        "accepted": True,
+        "applied": "immediate",
+        "message": "ok",
+    }
+    service.signal_execution.return_value = _build_execution_record(
+        owner_id="other-user"
+    )
+    service.cancel_execution.return_value = _build_execution_record(
+        owner_id="other-user"
+    )
 
     update_response = test_client.post(
-        "/api/executions/mm:wf-1/update", json={"updateName": "RequestRerun"}
+        "/api/executions/mm:wf-1/update", json={"updateName": "UnknownUpdate"}
     )
     signal_response = test_client.post(
         "/api/executions/mm:wf-1/signal", json={"signalName": "pause"}
@@ -18189,12 +18234,11 @@ def test_action_endpoints_reject_non_owner_operator(
     cancel_response = test_client.post("/api/executions/mm:wf-1/cancel", json={})
 
     for response in (update_response, signal_response, cancel_response):
-        assert response.status_code == 404
-        assert response.json()["detail"]["code"] == "execution_not_found"
+        assert response.status_code != 404, response.json()
 
-    service.update_execution.assert_not_awaited()
-    service.signal_execution.assert_not_awaited()
-    service.cancel_execution.assert_not_awaited()
+    service.update_execution.assert_awaited()
+    service.signal_execution.assert_awaited()
+    service.cancel_execution.assert_awaited()
 
 
 def test_continue_remediation_returns_same_destination_for_duplicate_requests(
@@ -18283,30 +18327,69 @@ def test_continue_remediation_returns_same_destination_for_duplicate_requests(
         assert invocation.kwargs["instruction_changes_ref"] is None
 
 
-def test_continue_remediation_rejects_non_owner_before_admission(
+def test_continue_remediation_admits_operator_before_effect_checks(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Single-user (#4351): the admitted operator passes the ownership gate;
+    # continuation still requires terminal-source evidence and budget
+    # admission at their owning boundaries.
     test_client, service, _user = client
     monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
-    service.describe_execution.return_value = _build_execution_record(
+    source = _build_execution_record(
         state=MoonMindWorkflowState.FAILED,
         owner_id="other-user",
     )
-    admit = AsyncMock()
+    service.describe_execution.return_value = source
+    admit = AsyncMock(
+        return_value=ControlStopContinuationReservation(
+            destination_workflow_id="control-stop-continuation-digest",
+            source_workflow_id="mm:wf-1",
+            source_run_id="run-2",
+            control_stop_id="verify:control-stop:6",
+            workspace_head_ref="artifact://checkpoint/head-6",
+            remaining_work_ref="artifact://verify/remaining-6",
+            created=True,
+        )
+    )
     monkeypatch.setattr(
         "api_service.api.routers.executions.admit_control_stop_continuation",
         admit,
     )
+    authorized_budget = ContinuationBudgetGrant(
+        grantId="grant-1",
+        maxAttempts=2,
+        maxConsecutiveNoProgressAttempts=1,
+    )
+    repository = SimpleNamespace(
+        load_source_identity=AsyncMock(
+            return_value=(
+                "verify:control-stop:6",
+                SimpleNamespace(contract_payload={"authoritative": True}),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.SqlControlStopContinuationRepository",
+        lambda _session: repository,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.executions.ControlStopContinuationContract.model_validate",
+        lambda _payload: SimpleNamespace(continuation_budget=authorized_budget),
+    )
 
     response = test_client.post(
         "/api/executions/mm:wf-1/actions/continue-remediation",
-        json={},
+        json={
+            "proposedContinuationBudget": {
+                "maxAttempts": 1,
+                "maxConsecutiveNoProgressAttempts": 1,
+            }
+        },
     )
 
-    assert response.status_code == 404
-    assert response.json()["detail"]["code"] == "execution_not_found"
-    admit.assert_not_awaited()
+    assert response.status_code == 202, response.json()
+    admit.assert_awaited()
 
 
 def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:
@@ -18555,28 +18638,32 @@ def test_chat_binding_ambiguous_returns_409(monkeypatch) -> None:
     assert response.json()["detail"]["code"] == "omnigent_chat_binding_ambiguous"
 
 
-def test_chat_binding_unauthorized_workflow_returns_404(monkeypatch) -> None:
-    # A non-admin caller who does not own the workflow is rejected before any
-    # binding information is resolved.
+def test_chat_binding_resolves_for_operator_regardless_of_owner(monkeypatch) -> None:
+    # Single-user (#4351): the admitted operator is authorized against any
+    # instance workflow before binding resolution; recorded owner fields
+    # are provenance, not gates. The response stays browser-safe.
     app, _service = _chat_binding_app(owner_id="another-user")
     _override_user_dependencies(app, is_superuser=False)
-    resolved = {"called": False}
-
-    class _GuardStore:
-        def __init__(self, *_a, **_k):
-            pass
-
-        async def resolve_chat_binding(self, *, workflow_id, run_id=None):
-            resolved["called"] = True
-            raise AssertionError("resolution must not run for an unauthorized caller")
-
-    monkeypatch.setattr(executions_module, "OmnigentBridgeSessionStore", _GuardStore)
+    resolution = ChatBindingResolution(
+        state="available",
+        read_only=True,
+        chat_binding_id="",
+        workflow_id="mm:wf-1",
+        run_id="run-2",
+        step_execution_id=None,
+        logical_step_id=None,
+        capabilities={},
+        unavailable_reason=None,
+    )
+    _install_fake_store(monkeypatch, resolution=resolution)
 
     with TestClient(app) as client:
         response = client.get("/api/executions/mm:wf-1/chat-binding")
 
-    assert response.status_code == 404
-    assert resolved["called"] is False
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) <= _CHAT_BINDING_ALLOWED_KEYS
+    assert not (_CHAT_BINDING_FORBIDDEN_KEYS & set(body.keys()))
 
 
 def test_chat_binding_unknown_workflow_returns_404(monkeypatch) -> None:
