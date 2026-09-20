@@ -7,7 +7,7 @@ import {
   OperationsSettingsPage,
   ProvidersSecretsSettingsPage,
   SettingsEntryPage,
-  UserWorkspaceSettingsPage,
+  InstanceSettingsPage,
 } from './settings';
 
 function renderRoute(Page: typeof ProvidersSecretsSettingsPage, payload: BootPayload) {
@@ -27,7 +27,7 @@ function response(body: unknown): Response {
   } as Response;
 }
 
-const userWorkspaceCatalog = {
+const instanceCatalog = {
   section: 'user-workspace',
   scope: 'workspace',
   categories: {
@@ -88,8 +88,7 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
         return Promise.resolve(response({ items: [] }));
       }
       if (url.startsWith('/api/v1/settings/catalog')) {
-        const scope = url.includes('scope=user') ? 'user' : 'workspace';
-        return Promise.resolve(response({ ...userWorkspaceCatalog, scope }));
+        return Promise.resolve(response({ ...instanceCatalog, scope: 'workspace' }));
       }
       if (url === '/api/system/worker-pause') {
         return Promise.resolve(response({ system: { workersPaused: false }, metrics: {}, commands: [] }));
@@ -147,33 +146,34 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
     expect(screen.getByRole('radio', { name: 'Default tier' })).toBeTruthy();
   });
 
-  it('mounts only User / Workspace primary data', async () => {
-    window.history.replaceState({}, '', '/settings/user-workspace?scope=workspace');
-    renderRoute(UserWorkspaceSettingsPage, {
-      page: 'settings-user-workspace',
+  it('mounts only Instance primary data', async () => {
+    window.history.replaceState({}, '', '/settings/instance');
+    renderRoute(InstanceSettingsPage, {
+      page: 'settings-instance',
       apiBase: '/api',
       initialData: { settingsPermissions: ['settings.catalog.read'] },
     } as BootPayload);
 
-    expect(await screen.findByRole('heading', { name: 'User / Workspace' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Instance' })).toBeTruthy();
     await waitFor(() => {
       expect(requestedUrls).toContain(
         '/api/v1/settings/catalog?section=user-workspace&scope=workspace',
       );
     });
-    expect(requestedUrls).toContain('/me');
+    expect(requestedUrls).not.toContain('/me');
     expect(requestedUrls).not.toContain('/api/v1/provider-profiles');
     expect(requestedUrls).not.toContain('/api/v1/secrets');
     expect(requestedUrls).not.toContain('/api/system/worker-pause');
     expect(screen.queryByRole('heading', { name: 'Provider Profiles' })).toBeNull();
     expect(screen.queryByLabelText('Worker Operations')).toBeNull();
+    expect(screen.queryByLabelText('Settings scope')).toBeNull();
     expect(screen.queryByRole('button', { name: /View audit for/ })).toBeNull();
   });
 
-  it('maps settings.audit.read to an on-demand User / Workspace audit request', async () => {
-    window.history.replaceState({}, '', '/settings/user-workspace?scope=workspace');
-    renderRoute(UserWorkspaceSettingsPage, {
-      page: 'settings-user-workspace',
+  it('maps settings.audit.read to an on-demand Instance audit request', async () => {
+    window.history.replaceState({}, '', '/settings/instance');
+    renderRoute(InstanceSettingsPage, {
+      page: 'settings-instance',
       apiBase: '/api',
       initialData: {
         settingsPermissions: ['settings.catalog.read', 'settings.audit.read'],
@@ -301,7 +301,7 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
 
   describe('MoonLadderStudios/MoonMind#3816 retired ?section= page identity', () => {
     it.each([
-      ['?section=providers-secrets', ['settings.catalog.read'], '/settings/user-workspace'],
+      ['?section=providers-secrets', ['settings.catalog.read'], '/settings/instance'],
       ['?section=user-workspace', ['provider_profiles.read'], '/settings/providers-secrets'],
       ['?section=operations', ['provider_profiles.read'], '/settings/providers-secrets'],
       ['?section=unknown-alias', ['operations.read'], '/settings/operations'],
@@ -346,7 +346,7 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
       expect(window.location.search).toBe('?runtime=codex');
     });
 
-    it('keeps User / Workspace scope filters through the Settings entry redirect', async () => {
+    it('drops retired human-scope params through the Settings entry redirect', async () => {
       window.history.replaceState({}, '', '/settings?section=providers-secrets&scope=user&q=workflow');
       renderWithClient(
         <BrowserRouter>
@@ -360,8 +360,8 @@ describe('MoonLadderStudios/MoonMind#3818 route-owned Settings pages', () => {
         </BrowserRouter>,
       );
 
-      await waitFor(() => expect(window.location.pathname).toBe('/settings/user-workspace'));
-      expect(window.location.search).toBe('?scope=user&q=workflow');
+      await waitFor(() => expect(window.location.pathname).toBe('/settings/instance'));
+      expect(window.location.search).toBe('');
     });
   });
 });

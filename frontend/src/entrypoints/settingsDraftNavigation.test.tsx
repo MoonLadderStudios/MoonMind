@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { act, fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
-import { ProvidersSecretsSettingsPage, UserWorkspaceSettingsPage } from './settings';
+import { ProvidersSecretsSettingsPage, InstanceSettingsPage } from './settings';
 
 const generatedDescriptor = {
   key: 'workflow.default_publish_mode',
@@ -13,7 +13,7 @@ const generatedDescriptor = {
   section: 'user-workspace',
   type: 'enum',
   ui: 'select',
-  scopes: ['workspace', 'user'],
+  scopes: ['workspace'],
   default_value: 'pr',
   effective_value: 'pr',
   override_value: null,
@@ -56,11 +56,10 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
   beforeEach(() => {
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input) => {
       const url = String(input);
-      if (url === '/me') return Promise.resolve(ok({ id: 'user-1', email: 'user@example.com' }));
       if (url.startsWith('/api/v1/settings/catalog')) {
         return Promise.resolve(ok({
           section: 'user-workspace',
-          scope: url.includes('scope=user') ? 'user' : 'workspace',
+          scope: 'workspace',
           categories: { Workflow: [generatedDescriptor] },
         }));
       }
@@ -76,12 +75,12 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
   });
 
   it('keeps a generated-settings draft on Stay and discards it before route navigation', async () => {
-    window.history.replaceState({}, '', '/settings/user-workspace?scope=workspace');
+    window.history.replaceState({}, '', '/settings/instance');
     renderWithClient(
       <BrowserRouter>
-        <UserWorkspaceSettingsPage
+        <InstanceSettingsPage
           payload={{
-            page: 'settings-user-workspace',
+            page: 'settings-instance',
             apiBase: '/api',
             initialData: {
               settingsPermissions: ['settings.catalog.read', 'settings.workspace.write'],
@@ -100,7 +99,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
-    expect(window.location.pathname).toBe('/settings/user-workspace');
+    expect(window.location.pathname).toBe('/settings/instance');
     expect((screen.getByLabelText('Default Publish Mode') as HTMLSelectElement).value).toBe('branch');
 
     fireEvent.click(link);
@@ -109,19 +108,18 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     expect((screen.getByLabelText('Default Publish Mode') as HTMLSelectElement).value).toBe('pr');
   });
 
-  it('guards generated-settings scope changes and stores the confirmed scope in history', async () => {
-    window.history.replaceState({}, '', '/settings/user-workspace?scope=workspace');
+  it('renders the Instance catalog without a human-scope switcher or scope history', async () => {
+    window.history.replaceState({}, '', '/settings/instance');
     renderWithClient(
       <BrowserRouter>
-        <UserWorkspaceSettingsPage
+        <InstanceSettingsPage
           payload={{
-            page: 'settings-user-workspace',
+            page: 'settings-instance',
             apiBase: '/api',
             initialData: {
               settingsPermissions: [
                 'settings.catalog.read',
                 'settings.workspace.write',
-                'settings.user.write',
               ],
             },
           } as BootPayload}
@@ -129,17 +127,11 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
       </BrowserRouter>,
     );
 
-    fireEvent.change(await screen.findByLabelText('Default Publish Mode'), {
-      target: { value: 'branch' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'User' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
-    expect(window.location.search).toBe('?scope=workspace');
-
-    fireEvent.click(screen.getByRole('button', { name: 'User' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Discard and leave' }));
-    await waitFor(() => expect(window.location.search).toBe('?scope=user'));
-    expect(await screen.findByRole('heading', { name: 'User scope' })).toBeTruthy();
+    await screen.findByLabelText('Default Publish Mode');
+    expect(screen.queryByLabelText('Settings scope')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'User' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Workspace' })).toBeNull();
+    expect(window.location.search).toBe('');
   });
 
   it('protects a dirty Provider Profile form before changing routes or runtime filters', async () => {
@@ -212,12 +204,12 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
   });
 
   it('keeps the unsaved-changes dialog keyboard-modal and restores focus on Escape', async () => {
-    window.history.replaceState({}, '', '/settings/user-workspace?scope=workspace');
+    window.history.replaceState({}, '', '/settings/instance');
     renderWithClient(
       <BrowserRouter>
-        <UserWorkspaceSettingsPage
+        <InstanceSettingsPage
           payload={{
-            page: 'settings-user-workspace',
+            page: 'settings-instance',
             apiBase: '/api',
             initialData: {
               settingsPermissions: ['settings.catalog.read', 'settings.workspace.write'],
@@ -247,16 +239,16 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     fireEvent.keyDown(dialog, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Unsaved changes' })).toBeNull());
     expect(document.activeElement).toBe(link);
-    expect(window.location.pathname).toBe('/settings/user-workspace');
+    expect(window.location.pathname).toBe('/settings/instance');
   });
 
-  it('restores page-local scope across Back and Forward navigation', async () => {
-    window.history.replaceState({}, '', '/settings/user-workspace?scope=workspace');
+  it('keeps the Instance draft guarded across Back and Forward navigation', async () => {
+    window.history.replaceState({}, '', '/settings/instance');
     renderWithClient(
       <BrowserRouter>
-        <UserWorkspaceSettingsPage
+        <InstanceSettingsPage
           payload={{
-            page: 'settings-user-workspace',
+            page: 'settings-instance',
             apiBase: '/api',
             initialData: { settingsPermissions: ['settings.catalog.read'] },
           } as BootPayload}
@@ -264,24 +256,24 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
       </BrowserRouter>,
     );
 
-    await screen.findByRole('heading', { name: 'Workspace scope' });
-    fireEvent.click(await screen.findByRole('button', { name: 'User' }));
-    expect(await screen.findByRole('heading', { name: 'User scope' })).toBeTruthy();
+    await screen.findByLabelText('Default Publish Mode');
+    expect(screen.queryByLabelText('Settings scope')).toBeNull();
 
     act(() => window.history.back());
-    expect(await screen.findByRole('heading', { name: 'Workspace scope' })).toBeTruthy();
+    expect(window.location.pathname).toBe('/settings/instance');
     act(() => window.history.forward());
-    expect(await screen.findByRole('heading', { name: 'User scope' })).toBeTruthy();
+    expect(window.location.pathname).toBe('/settings/instance');
+    expect(window.location.search).toBe('');
   });
 
   it('guards browser Back navigation and preserves the active draft when the user stays', async () => {
     window.history.replaceState({}, '', '/settings/providers-secrets');
-    window.history.pushState({}, '', '/settings/user-workspace?scope=workspace');
+    window.history.pushState({}, '', '/settings/instance');
     renderWithClient(
       <BrowserRouter>
-        <UserWorkspaceSettingsPage
+        <InstanceSettingsPage
           payload={{
-            page: 'settings-user-workspace',
+            page: 'settings-instance',
             apiBase: '/api',
             initialData: {
               settingsPermissions: ['settings.catalog.read', 'settings.workspace.write'],
@@ -295,11 +287,11 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     fireEvent.change(control, { target: { value: 'branch' } });
     act(() => window.history.back());
     expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
-    expect(window.location.pathname).toBe('/settings/user-workspace');
+    expect(window.location.pathname).toBe('/settings/instance');
 
     fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
     expect(control.value).toBe('branch');
-    expect(window.location.pathname).toBe('/settings/user-workspace');
+    expect(window.location.pathname).toBe('/settings/instance');
 
     act(() => window.history.back());
     expect(await screen.findByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
@@ -307,7 +299,7 @@ describe('MoonLadderStudios/MoonMind#3818 Settings draft departure contract', ()
     await waitFor(() => expect(window.location.pathname).toBe('/settings/providers-secrets'));
 
     act(() => window.history.forward());
-    await waitFor(() => expect(window.location.pathname).toBe('/settings/user-workspace'));
+    await waitFor(() => expect(window.location.pathname).toBe('/settings/instance'));
   });
 
   it('restores the Profile runtime filter across Back and Forward navigation', async () => {

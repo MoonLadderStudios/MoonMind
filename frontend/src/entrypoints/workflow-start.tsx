@@ -3554,8 +3554,15 @@ function canLookupRepositoryBranches(value: string): boolean {
   return isValidRepositoryInput(value);
 }
 
-function scopeLabel(scope: TemplateScope): string {
-  return scope === "personal" ? "Personal" : "Global";
+// MoonLadderStudios/MoonMind#4353: the account-free instance presents one
+// unified preset catalog. Template `scope`/`scopeRef` remain backend-owned
+// routing fields (passed through untouched for detail/expand/delete), but the
+// UI never labels or partitions presets as Personal/Global.
+function presetOptionLabel(item: TemplateOption, items: TemplateOption[]): string {
+  const titleCollides = items.some(
+    (other) => other !== item && other.title === item.title,
+  );
+  return titleCollides ? `${item.title} (${item.slug})` : item.title;
 }
 
 export function preferredTemplate(items: TemplateOption[]): TemplateOption | null {
@@ -7669,6 +7676,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     ],
     enabled: presetCatalogEnabled,
     queryFn: async (): Promise<TemplateCatalogResult> => {
+      // The backend still partitions the preset catalog by scope (sibling
+      // issues own that policy), so both partitions are fetched and merged
+      // into the single unified instance list shown by the UI.
       const scopes: TemplateScope[] = ["global", "personal"];
       const results = await Promise.all(
         scopes.map(async (scope) => {
@@ -9341,7 +9351,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return "Failed to load presets.";
     }
     if (templateItems.length === 0) {
-      return "No presets available for your account.";
+      return "No presets available in this instance.";
     }
     return "";
   }
@@ -10438,6 +10448,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           Accept: "application/json",
         },
         body: JSON.stringify({
+          // Backend-owned catalog scope contract (sibling issues own the
+          // unified-catalog policy); the UI presents the saved preset in the
+          // single instance catalog without a Personal/Global selector.
           scope: "personal",
           title,
           description: title,
@@ -10474,19 +10487,15 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       setTemplateMessage("Enter a preset name to delete.");
       return false;
     }
-    const personalItems = templateItems.filter(
-      (item) => item.scope === "personal",
-    );
     const matchesName = (item: (typeof templateItems)[number]) =>
       item.title.trim().toLowerCase() === normalized ||
       item.slug.trim().toLowerCase() === normalized;
-    const target = personalItems.find(matchesName);
+    // The unified instance catalog deletes whichever listed preset matches;
+    // the preset's own backend scope/scopeRef travels with the request and
+    // the server remains the authorization boundary.
+    const target = templateItems.find(matchesName);
     if (!target) {
-      if (templateItems.some(matchesName)) {
-        setTemplateMessage("Only personal presets can be deleted.");
-      } else {
-        setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
-      }
+      setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
       return false;
     }
 
@@ -14104,7 +14113,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           <option value="">Select preset...</option>
                           {templateItems.map((item) => (
                             <option key={item.key} value={item.key}>
-                              {`${item.title} (${scopeLabel(item.scope)})`}
+                              {presetOptionLabel(item, templateItems)}
                             </option>
                           ))}
                         </select>
@@ -14570,7 +14579,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     className="queue-step-icon-button destructive"
                     aria-label="Delete preset"
                     aria-busy={isDeletingPreset}
-                    title="Delete a personal preset by name"
+                    title="Delete an instance preset by name"
                     disabled={isDeletingPreset}
                     onClick={openPresetDeleteDialog}
                   >
