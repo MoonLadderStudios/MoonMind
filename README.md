@@ -123,17 +123,17 @@ When the fetched tip has no published image yet, the script waits a bounded
 interval for that commit's publish, then uses the newest published ancestor
 automatically.
 The selected image owns application code, migrations, Compose and the release
-controller. Its durable updater qualifies all worker queues and the candidate
-API, promotes Temporal routing, and replaces the normal fleet. Previous workers
-remain available until Temporal confirms their version has drained.
+controller. Its durable updater pulls and verifies the pinned digest, records
+the desired state, recreates the installed fleet in place, and verifies every
+service against that release. There is one fleet at one version: no candidate
+or retained cohort is started, and recreation has a bounded downtime window.
 
 Use this updater for upgrades, including after a direct Compose replacement.
-`docker compose pull` and `docker compose up -d` can install new code while
-Temporal continues sending workflows to retained workers from the previous
-release. Check the current and candidate versions in
-`deploy/state/release-jobs/availability.json`; an available old route does not
-mean the installed fix is active. Resume an interrupted submission with the
-updater's `--resume <submission-id>` option.
+Workers register their own version at startup, so if the outgoing fleet is
+still draining the new one retries the promotion in the background until
+routing moves. Resume an interrupted submission with the updater's
+`--resume <submission-id>` option; an interrupted release is not resumed
+automatically, so re-running the script is the ordinary recovery.
 
 The controller compares installed API bindings, networks and access settings
 with the candidate before replacement, preserving deployment-owned `.env` and

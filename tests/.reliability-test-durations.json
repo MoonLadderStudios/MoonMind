@@ -1,8 +1,4 @@
 {
-  "tests/integration/reliability/test_automatic_release_availability.py::test_background_owner_restores_authoritative_missing_image[release-auto]": 70.0,
-  "tests/integration/reliability/test_automatic_release_availability.py::test_background_owner_restores_authoritative_missing_image[retained-auto]": 70.0,
-  "tests/integration/reliability/test_automatic_release_availability.py::test_background_owner_restores_authoritative_missing_image[serving-None]": 70.0,
-  "tests/integration/reliability/test_automatic_release_availability.py::test_background_owner_restores_authoritative_missing_image[serving-auto]": 70.0,
   "tests/integration/reliability/test_cancel_unserved_worker_version.py::test_cancel_preserves_live_state_until_worker_routing_recovers": 110.0,
   "tests/integration/reliability/test_checkpoint_cold_resume.py::test_managed_codex_checkpoint_cold_resume_uses_only_durable_state": 60.0,
   "tests/integration/reliability/test_escaped_failure_journeys.py::test_abandoned_omnigent_host_cleanup_releases_provider_capacity": 0.29,

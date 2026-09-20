@@ -9,9 +9,11 @@ recorded history wedges the singleton in a workflow-task failure loop
 forever while ``update-moonmind`` reports success, and every waiter parks in
 ``AWAITING SLOT`` / ``awaiting_provider_capacity`` despite free DB capacity.
 
-This module owns the liveness gate the release controller runs before
-promotion (``DeploymentRelease.qualify_provider_managers``), and the definition
-of the wedged signature itself:
+This module owns the definition of the wedged signature itself, consumed by
+:mod:`moonmind.provider_profiles.manager_recovery`. Deployment updates do not
+consult it: gating a release on manager liveness made the deployment
+unfixable exactly when it was broken, because the repair could not become
+current while the fault it repairs blocked promotion. The signature is:
 
 * the manager is not stuck in a repeated workflow-task failure loop,
   especially a nondeterminism loop;
