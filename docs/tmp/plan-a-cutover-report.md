@@ -50,7 +50,53 @@ counts, so a full host count never blocks an agent's own test job.
    to fixed successors, resume dispatch.
 4. Post-cutover: drop the obsolete table in a forward migration.
 
-## Verification that could not run in this environment
+## Verification evidence (MoonLadderStudios/MoonMind#4457)
+
+Candidate: `main` at `928bd43b1` plus the Plan A qualification change
+(`moonmind/workflows/temporal/container_job_backend.py`: admit an already
+slot-holding own container in any started Docker state, treat a retried
+`docker start` refused as already-started idempotent success) with new
+coverage in `tests/unit/workflows/temporal/test_container_job_plan_a_admission.py`
+and `tests/integration/reliability/test_container_job_plan_a_qualification.py`.
+
+Executed via the supported managed path (each command below ran the target
+through `moonmind container python-tests` and succeeded):
+
+- `moonmind container python-tests
+  "tests/unit/workflows/temporal/test_container_job_plan_a_admission.py"` —
+  10 passed. Covers R1 (cross-process filesystem-lock exclusion, created
+  waiters progress), R2 (own restarting/paused/removing admitted, lost start
+  ack idempotent), R3 (agent-host/job counts separate, full-slot refusal),
+  R4 (stock 2 CPU / 4 GiB / 512 pids reach `create` verbatim, no `info`
+  probe; preset route has no pool/ledger/probe owner).
+- `moonmind container python-tests
+  "tests/integration/reliability/test_container_job_plan_a_qualification.py"` —
+  3 passed, 3 skipped (no Docker daemon in that sandbox). The 3 passing legs
+  run the production workflow/Activities: slot wait -> release -> restart,
+  cancel while parked (no start leaks), and reconcile-before-retry with a
+  container finishing between observation and retry (no duplicate create or
+  start, cleanup still removes the consumer).
+- `moonmind container python-tests
+  "tests/unit/workflows/temporal/test_container_job_backend.py"
+  "tests/integration/reliability/test_container_job_authority_journey.py"` —
+  82 passed, preserving the existing hermetic coverage.
+- `moonmind container python-tests
+  "tests/unit/workflows/temporal/test_container_job_workflow.py"
+  "tests/unit/test_container_job_cli.py"
+  "tests/unit/test_container_job_cli_4226.py"` — 53 passed.
+
+Still owned by existing required CI (not run from this sandbox): the three
+real-Docker legs in `test_container_job_plan_a_qualification.py`
+(SIGKILLed lock holder reacquired, overlapping real starts never exceed
+limit 1 with release readmission, stock limits inspected on the daemon).
+They are selected by the existing `reliability_journey` shards — any change
+to `moonmind/workflows/temporal/container_job_backend.py`,
+`moonmind/container_job_cli.py`, or `tests/integration/reliability/` selects
+those shards via `tools/select_test_suites.py` — and they skip with a
+recorded reason where no daemon exists, so a missing environment can never
+be mistaken for a pass.
+
+## Earlier verification that could not run in the original sandbox
 
 No pytest, Docker, PostgreSQL, or Temporal here (offline sandbox), so suites
 were verified by compilation, targeted logic checks (slot parsing/admission,
