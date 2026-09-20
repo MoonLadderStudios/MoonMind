@@ -57,78 +57,68 @@ def test_release_reconciliation_has_only_the_deployment_activity_owner():
     assert route.capability_class == "deployment_control"
 
 
+
 @pytest.mark.asyncio
-async def test_missing_updater_resumes_immutable_request_without_resetting_budget(
+async def test_maintenance_reports_an_unfinished_release_without_relaunching_it(
     tmp_path, monkeypatch
 ):
+    """Maintenance never relaunches a release updater.
+
+    The updater runs from the image its request pinned, so relaunching a job
+    authored before recreate-in-place would execute the removed blue/green
+    controller against the installed fleet. Re-running the update command
+    starts a fresh audited release instead, which cannot resurrect it.
+    """
     from unittest.mock import AsyncMock
     import time
 
     directory = tmp_path / "job"
     directory.mkdir()
-    request = {
-        "authored": {"owner": "exact-owner"},
-        "image": "image@sha256:b",
-        "imageId": "b",
-        "deadline": time.time() + 300,
-        "controller": release.RELEASE_CONTROLLER_GENERATION,
-    }
-    release.write_record(directory / "request.json", request)
-    release.write_record(directory / "deliveries.json", {"count": 2})
-    monkeypatch.setattr(maintenance, "inspect_owned", AsyncMock(return_value=None))
-    launch = AsyncMock()
-    monkeypatch.setattr(maintenance, "launch_updater", launch)
-    result = await maintenance.reconcile_release(directory, "runner", None)
-    assert result["resumed"] is True
-    launch.assert_awaited_once_with("runner", directory, request)
-    assert json.loads((directory / "deliveries.json").read_text())["count"] == 3
-    assert json.loads((directory / "request.json").read_text()) == request
-    launch.reset_mock()
-    result = await maintenance.reconcile_release(directory, "runner", None)
-    assert result["pending"] == ["execution_budget_exhausted"]
-    launch.assert_not_awaited()
-    terminal = {"owner": "exact-owner", "error": "original terminal failure"}
-    release.write_record(directory / "result.json", terminal)
-    await maintenance.reconcile_release(directory, "runner", None)
-    launch.assert_not_awaited()
-    assert json.loads((directory / "result.json").read_text()) == terminal
-
-
-
-
-@pytest.mark.asyncio
-async def test_request_without_a_controller_generation_is_never_relaunched(
-    tmp_path, monkeypatch
-):
-    """A pre-migration request must not run the removed cohort controller.
-
-    Such a job still carries request.json and an open deadline, so the generic
-    resume path would relaunch its own pinned image -- recreating cohorts
-    beside the installed fleet or promoting its older digest over the
-    installed release. It may have stopped before writing routing.json or
-    retained.json, so the request's own generation decides this, not the
-    presence of blue/green records.
-    """
-    from unittest.mock import AsyncMock
-    import time
-
-    directory = tmp_path / "legacy-job"
-    directory.mkdir()
     release.write_record(
         directory / "request.json",
         {
             "authored": {"owner": "exact-owner"},
-            "image": "image@sha256:old",
-            "imageId": "old",
+            "image": "image@sha256:b",
+            "imageId": "b",
             "deadline": time.time() + 300,
         },
     )
     monkeypatch.setattr(maintenance, "inspect_owned", AsyncMock(return_value=None))
-    launch = AsyncMock()
-    monkeypatch.setattr(maintenance, "launch_updater", launch)
+    removed = AsyncMock()
+    monkeypatch.setattr(maintenance, "docker", removed)
 
-    result = await maintenance.reconcile_release(directory, "runner", None)
+    result = await maintenance.reconcile_release(directory)
 
-    launch.assert_not_awaited()
-    assert "legacy_release_not_resumable" in result["pending"]
     assert result["resumed"] is False
+    assert result["pending"] == ["unfinished"]
+    removed.assert_not_awaited()
+    assert not hasattr(maintenance, "launch_updater")
+
+
+@pytest.mark.asyncio
+async def test_leftover_cohort_containers_are_reported_not_deleted(monkeypatch):
+    """Blocking containers are named for an operator, never auto-removed.
+
+    They reuse the deployment's own Compose project and service labels, so
+    they must go before an update can succeed -- but nothing available to a
+    background pass proves one is not the last poller for pinned work.
+    """
+    from unittest.mock import AsyncMock
+
+    listing = AsyncMock(
+        return_value=(
+            "mm-candidate-4f25ac89e639-workflow\n"
+            "mm-retained-162f5ef17681-llm\n"
+            "moonmind-api-1\n"
+        )
+    )
+    monkeypatch.setattr(maintenance, "docker", listing)
+
+    observed = await maintenance.observed_legacy_cohorts()
+
+    assert observed == [
+        "mm-candidate-4f25ac89e639-workflow",
+        "mm-retained-162f5ef17681-llm",
+    ]
+    # One listing call only: reporting must not mutate anything.
+    assert listing.await_count == 1

@@ -935,16 +935,37 @@ next release refused to start.
 | Temporal, Docker, or evidence storage is unreachable | Report unknown evidence and retry within the existing budget. Unknown is never success. |
 | Verification cannot prove the desired state | Fail closed with the recorded command and verification evidence. |
 
-Bounded maintenance passes resume missing updater containers from their original
-request, delivery count, deadline, and owner. The same pass performs a one-time
-removal of `mm-candidate-*` and `mm-retained-*` containers left by a release
-that predates recreate-in-place; removal is owner-checked, so a container owned
-by another job is never touched.
+The maintenance pass reports; it does not relaunch or delete. It records each
+job's state, drops updater containers whose job is terminal, and names any
+leftover `mm-candidate-*` or `mm-retained-*` container from a release that
+predates recreate-in-place.
+
+It does not resume an interrupted release. The updater runs from the image its
+request pinned, so relaunching a job authored before this change would execute
+the removed blue/green controller against the installed fleet. Re-running
+`./tools/update-moonmind.sh` starts a fresh audited release, which is simpler
+and cannot resurrect a deleted controller.
+
+It does not remove the leftover containers either. They must go before an
+update can succeed -- they reuse the deployment's own Compose project and
+service labels, so `docker compose ps -q <service>` returns more than one id
+while they exist -- but no evidence available to a background pass proves one
+is not the last poller for pinned work. The pass names them and the operator
+removes them with `docker rm -f`. Deciding that automatically needs a lattice
+of drainage, route and inactivity proofs whose failure modes are worse than
+the one-line command they replace.
 
 Workers register their own deployment version at startup through
 `bootstrap_version_routing`, which is now the only writer of the current
 version. Movement is forward-only and a worker only ever routes to the version
 it is itself serving, because no other version is running.
+
+When the outgoing fleet is still draining, startup parks rather than
+displacing a live route, and a background task retries the same canary-gated
+promotion until it succeeds or shutdown cancels it. That retry has no budget
+on purpose: a budget converts one outage into a quieter one, where the task
+has ended, the worker still serves, and routing points at a version with no
+pollers with nothing left to fix it.
 
 Accepted cost: recreation has a bounded downtime window. That is the tradeoff
 `docker compose down; pull; up -d` always made, and the reason it was reliable.

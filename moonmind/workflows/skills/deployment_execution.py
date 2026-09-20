@@ -1833,9 +1833,21 @@ class DeploymentUpdateExecutor:
         converged is left running, and substrate that does not converge
         fails the release instead of reporting success on stale definitions.
         """
-        targets = _substrate_reconciliation_targets(
-            before_state=before_state,
-            excluded_services=self.excluded_services,
+        # A gateway aligned before the workers is already on the incoming
+        # release. Selecting it again here would force-recreate it a second
+        # time after the stack verified, bouncing egress underneath workers
+        # that are live and may already be running egress-dependent work.
+        aligned = {
+            service.strip().lower()
+            for service in _attested_gateway_services(before_state)
+        }
+        targets = tuple(
+            service
+            for service in _substrate_reconciliation_targets(
+                before_state=before_state,
+                excluded_services=self.excluded_services,
+            )
+            if service.strip().lower() not in aligned
         )
         if not targets:
             return None

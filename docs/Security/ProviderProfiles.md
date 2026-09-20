@@ -1649,12 +1649,16 @@ comment 4052362810). Detect the cohort before routing: an open
 `provider-profile-manager:<runtime>` history that contains
 `verify_lease_holders` for a validation probe owner or a `sync_slot_leases`
 `release_verified` command but records no
-`provider-profile-manager-orphaned-validation-cleanup-v1` marker takes the
-same controlled cutover as the ambiguous redrive cohort above — keep the
-pre-marker worker until the state-preserving Continue-As-New handoff, then
-route the new run to the patched worker before it starts, or terminate and
-start fresh per 11.9 (the fresh start restores `cleanup_requested` rows from
-the durable ledger).
+`provider-profile-manager-orphaned-validation-cleanup-v1` marker is recovered
+by terminating that run and starting fresh per 11.9. The fresh start restores
+`cleanup_requested` rows from the durable ledger, so held capacity survives.
+
+Do not keep the pre-marker worker alive to carry the history. That means two
+code versions polling one task queue, which is the condition that produced
+MoonLadderStudios/MoonMind#4363; it trades a bounded, recoverable wedge for an
+unbounded one, and the deployment cannot be updated while it lasts. These
+singletons Continue-As-New every two to three hours, so the cohort is
+self-limiting: a history in this shape rolls over on its own within hours.
 `test_unguarded_validation_cleanup_history_needs_migration_cutover` pins both
 directions: the parent behavior replays the cohort, while the patched worker
 refuses it instead of silently skipping its recorded commands.
@@ -1666,15 +1670,26 @@ on replay. Histories without cleanup proceed directly to lease verification at
 that boundary. New executions record the cleanup marker and perform periodic
 cleanup, with failures contained so lease verification and admission can proceed.
 
-Deployment requires replaying every active singleton manager history against the
-candidate worker. Histories that already contain an unmarked `purge_released`
-activity cannot be distinguished from the older generation by its maintenance
-marker. Those histories require a controlled cutover: retain their compatible
-worker until its state-preserving Continue-As-New handoff, then route the new run
-to the patched worker before it starts. The handoff must retain held leases,
-fencing counters, pending slot requests and maintenance queue order. A direct
-worker replacement, termination, or reset is not a safe substitute. Managers
-whose histories contain no purge can upgrade directly after successful replay.
+Deployment replaces the manager's worker directly. It does not retain a second
+worker to carry old histories, and it must not: a retained worker is another
+code version polling the same task queue, which is how
+MoonLadderStudios/MoonMind#4363 wedged this manager in the first place. The
+recorded failure was `Non-deprecated patch marker encountered for change
+provider-profile-manager-lease-tombstone-purge-v1, but there is no
+corresponding change command` -- a marker present in history that the
+*replaying* code did not emit, which happens only when the code is older than
+the history. One version at a time, moving forward only, makes that
+unreachable; the newer code replays an older history through `workflow.patched`
+exactly as Temporal intends.
+
+An earlier revision of this document required a controlled cutover for
+histories containing an unmarked `purge_released` activity, on the grounds that
+only the pre-patch generation could replay them. That shape stopped existing
+when `provider-profile-manager-lease-tombstone-purge-v1` shipped on 2026-09-05:
+these singletons Continue-As-New every two to three hours, so every live
+history has rolled over hundreds of times and carries the marker. The
+requirement outlived the hazard, and the machinery it justified was itself the
+larger risk.
 
 A grant that moved under a recorded history would emit a reservation — and, under
 DB lease persistence, a `provider_profile.sync_slot_leases` activity — where the

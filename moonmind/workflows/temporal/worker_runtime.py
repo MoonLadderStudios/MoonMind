@@ -3307,24 +3307,10 @@ async def main_async() -> None:
                 # a bounded reconciler instead of leaving routing parked on a
                 # version that is going away; nothing else retries now that
                 # the availability supervisor is gone.
-                async def _reconcile_or_go_unready():
-                    resolved = await reconcile_parked_routing(
-                        client, spec, health_state.readiness_metadata
-                    )
-                    if resolved is None:
-                        # Exhausted without promoting. The worker polls, but
-                        # ordinary work still routes to a version whose
-                        # pollers are gone; reporting ready would hide that.
-                        # Going unready lets Compose restart the container and
-                        # begin reconciliation again.
-                        health_state.release_routing_unresolved = True
-                        logger.error(
-                            "Release routing never converged; reporting unready "
-                            "so the deployment restarts reconciliation"
-                        )
-
                 routing_task = asyncio.create_task(
-                    _reconcile_or_go_unready(),
+                    reconcile_parked_routing(
+                        client, spec, health_state.readiness_metadata
+                    ),
                     name="release-routing-reconcile",
                 )
             health_state.pollers_started = True
