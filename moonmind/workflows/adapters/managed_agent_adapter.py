@@ -123,6 +123,12 @@ _PR_RESOLVER_HUMAN_APPROVAL_REASON = "merge_gate_requires_human_approval"
 _PR_RESOLVER_USER_ACTIONABLE_REASONS: frozenset[str] = frozenset(
     {"actionable_comments", _PR_RESOLVER_HUMAN_APPROVAL_REASON}
 )
+def _normalized_pr_resolver_reason(value: object) -> str:
+    """Normalize a resolver reason for comparison across host boundaries."""
+
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
 _PR_RESOLVER_HUMAN_APPROVAL_SUMMARY = (
     "pr-resolver stopped at a merge gate that requires a human approving "
     f"review ({_PR_RESOLVER_HUMAN_APPROVAL_REASON}); next_step=manual_review."
@@ -849,7 +855,7 @@ def _derive_pr_resolver_failure(
         final.get("final_reason"),
         final.get("reason"),
     )
-    normalized_reason = reason.lower().replace("-", "_").replace(" ", "_")
+    normalized_reason = _normalized_pr_resolver_reason(reason)
     if merge_gate_owned and disposition in {"reenter_gate", "request_review"}:
         return None, None
     # The merge-gate parent owns every terminal it can act on. A closed gate
@@ -963,6 +969,11 @@ def _derive_pr_resolver_metadata(
     )
     if disposition:
         metadata["mergeAutomationDisposition"] = disposition
+    if reason:
+        # The terminal-contract boundary and the generic-exit clearing branch
+        # both need the validated reason, not just the disposition.
+        metadata["prResolverFinalReason"] = reason
+    metadata["prResolverMergeGateOwned"] = bool(merge_gate_owned)
     final = _pr_resolver_final_payload(payload)
     head_sha = _first_stripped_text(
         payload.get("headSha"),
@@ -1410,9 +1421,14 @@ class ManagedAgentAdapter:
                     elif (
                         resolver_disposition == "manual_review"
                         and pr_resolver_merge_gate_owned
-                        # Only the human-approval gate reaches here: any other
-                        # manual_review reason still derives a failure class
-                        # above and is applied instead.
+                        # A terminal artifact can carry an explicit disposition
+                        # with no failing status, which derives no failure class
+                        # for any reason. Require the validated approval reason
+                        # rather than assuming this branch means the gate.
+                        and _normalized_pr_resolver_reason(
+                            metadata.get("prResolverFinalReason")
+                        )
+                        == _PR_RESOLVER_HUMAN_APPROVAL_REASON
                         and record.status == "failed"
                         and failure_class in {None, "execution_error"}
                         and _is_generic_process_exit_summary(summary)

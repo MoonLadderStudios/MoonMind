@@ -4101,3 +4101,123 @@ async def test_fetch_result_clears_generic_failed_exit_for_human_approval_gate(
     assert result.failure_class is None
     assert result.metadata["mergeAutomationDisposition"] == "manual_review"
     assert "merge_gate_requires_human_approval" in result.summary
+
+
+async def test_fetch_result_publishes_merge_gate_ownership_for_terminal_evaluation(
+    tmp_path: Path,
+):
+    """The terminal-contract boundary needs the ownership fact in metadata."""
+
+    import json
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "status": "blocked",
+                "mergeAutomationDisposition": "manual_review",
+                "reason": "merge_gate_requires_human_approval",
+                "next_step": "manual_review",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-ownership-marker",
+            agent_id="claude_code",
+            runtime_id="claude_code",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-ownership-marker",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-ownership-marker",
+        pr_resolver_expected=True,
+        pr_resolver_merge_gate_owned=True,
+    )
+
+    assert result.metadata["prResolverMergeGateOwned"] is True
+    assert result.metadata["prResolverFinalReason"] == (
+        "merge_gate_requires_human_approval"
+    )
+
+
+async def test_fetch_result_does_not_clear_unrelated_manual_review_failures(
+    tmp_path: Path,
+):
+    """Only the validated approval reason may clear a generic process exit.
+
+    A terminal artifact can carry an explicit disposition with no failing
+    status, which returns no derived failure class and previously reached the
+    clearing branch on disposition alone.
+    """
+
+    import json
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "mergeAutomationDisposition": "manual_review",
+                "reason": "publish_unavailable",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-unrelated-manual-review",
+            agent_id="claude_code",
+            runtime_id="claude_code",
+            status="failed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+            failure_class="execution_error",
+            error_message="Process exited with code 3",
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-unrelated-manual-review",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-unrelated-manual-review",
+        pr_resolver_expected=True,
+        pr_resolver_merge_gate_owned=True,
+    )
+
+    assert result.failure_class == "execution_error"
