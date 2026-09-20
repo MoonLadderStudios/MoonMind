@@ -533,7 +533,7 @@ def test_store_persist_preserves_omnigent_release(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cohort_migrate_wires_store_runner_and_image(tmp_path, monkeypatch):
+async def test_release_migrate_wires_store_runner_and_image(tmp_path, monkeypatch):
     """The release controller passes its store, runner, and image through."""
     import os
 
@@ -553,16 +553,17 @@ async def test_cohort_migrate_wires_store_runner_and_image(tmp_path, monkeypatch
         seen["has_drivers"] = drivers is not None
         store.read()
         seen["store_path"] = str(getattr(store, "env_file_path", ""))
-        assert runner is cohort.runner
+        assert runner is passed_runner
         return {"status": "aligned", "revision": 0}
 
     monkeypatch.setattr(
         "moonmind.workflows.skills.omnigent_release.migrate_omnigent_release",
         fake_migrate,
     )
-    runner = object()
-    cohort = deployment_release.ReleaseCohort(runner, tmp_path, "owner-1")
-    receipt = await cohort.migrate_omnigent("img@sha256:" + "f" * 64)
+    passed_runner = object()
+    receipt = await deployment_release.migrate_omnigent(
+        passed_runner, "owner-1", "img@sha256:" + "f" * 64
+    )
     assert receipt == {"status": "aligned", "revision": 0}
     assert seen["owner"] == "owner-1"
     assert seen["moonmind_image"] == "img@sha256:" + "f" * 64
@@ -573,12 +574,11 @@ async def test_cohort_migrate_wires_store_runner_and_image(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_cohort_migrate_reports_missing_desired_state(tmp_path, monkeypatch):
+async def test_release_migrate_reports_missing_desired_state(tmp_path, monkeypatch):
     from moonmind.workflows.skills import deployment_release
 
     monkeypatch.delenv("MOONMIND_DEPLOYMENT_DESIRED_STATE_ENV_FILE", raising=False)
-    cohort = deployment_release.ReleaseCohort(object(), tmp_path, "owner-1")
-    receipt = await cohort.migrate_omnigent("img")
+    receipt = await deployment_release.migrate_omnigent(object(), "owner-1", "img")
     assert receipt["status"] == "skipped"
 
 

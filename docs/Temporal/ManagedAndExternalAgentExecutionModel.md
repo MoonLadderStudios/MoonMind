@@ -258,8 +258,11 @@ exercise the same production Docker path. Historical zero-valued documents
 remain decodable for replay, and bootstrap reconciliation migrates only
 bootstrap-owned shared-CPU defaults to the fixed successor — custom limits and
 historical versions keep their authority. New container-job requests must carry
-explicit positive limits; historical requests remain decodable, and unstarted
-legacy jobs are re-planned as successor attempts. Container-job capacity waits
+explicit positive limits; historical requests remain decodable, and an
+already-admitted, unstarted legacy job continues under its own identity
+through the deterministic fixed-resource successor (stock CPUs for a zero
+value, persisted `memoryMiB` as the fixed limit, other explicit fields
+preserved) instead of ending in a replan message. Container-job capacity waits
 use durable timers under the original timeout.
 See [Docker Backend Service](../ManagedAgents/DockerBackendService.md#fixed-limits-and-concurrency)
 for enforcement, prerequisites, and diagnostics.

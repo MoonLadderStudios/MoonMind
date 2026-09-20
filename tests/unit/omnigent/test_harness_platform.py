@@ -12,6 +12,8 @@ from moonmind.omnigent.harness_platform.agent_profile import (
     BundleSource,
     OmnigentAgentProfileV2,
     UpstreamSource,
+    accepted_imported_content_digests,
+    accepted_upstream_snapshot_digests,
     decode_v1_profile_to_v2_inputs,
     validate_agent_profile,
 )
@@ -2165,3 +2167,47 @@ def test_core_catalog_patch_refresh_preserves_contract(harness_id, changed_contr
             assert_catalog_refresh_attests(**kwargs)
     else:
         assert_catalog_refresh_attests(**kwargs)
+
+
+# Agent source identity accepted from both execution-plan compiler generations.
+
+_STABLE = "sha256:" + "a" * 64
+_VERSION = "sha256:" + "b" * 64
+_OTHER = "sha256:" + "c" * 64
+
+
+def test_upstream_source_accepts_both_compiler_generations() -> None:
+    source = {
+        "kind": "upstream",
+        "upstreamId": "agent-1",
+        "upstreamVersion": "174",
+        "upstreamSnapshotDigest": _STABLE,
+    }
+    accepted = accepted_upstream_snapshot_digests(source, _VERSION)
+    # Current compiler pins the document's stable projection digest.
+    assert _STABLE in accepted
+    # Compilers before #4438 pinned the Agent Profile version digest.
+    assert _VERSION in accepted
+    assert _OTHER not in accepted
+
+
+def test_bundle_source_accepts_both_compiler_generations() -> None:
+    source = {
+        "kind": "bundle",
+        "bundleArtifactRef": "artifact:art_1",
+        "bundleDigest": "sha256:" + "d" * 64,
+        "importedContentDigest": _STABLE,
+    }
+    accepted = accepted_imported_content_digests(source, _VERSION)
+    assert _STABLE in accepted
+    assert _VERSION in accepted
+    assert _OTHER not in accepted
+
+
+def test_accepted_digests_fall_back_to_the_version_digest() -> None:
+    # A document with no stable source digest leaves the version digest as the
+    # only identity either compiler generation could have pinned.
+    assert accepted_upstream_snapshot_digests({"upstreamId": "a"}, _VERSION) == (
+        _VERSION,
+    )
+    assert accepted_imported_content_digests({}, _VERSION) == (_VERSION,)

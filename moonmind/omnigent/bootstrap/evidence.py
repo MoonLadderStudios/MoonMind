@@ -16,10 +16,7 @@ from moonmind.omnigent.deployment_evidence import (
     sign_deployment_evidence,
     validate_deployment_evidence,
 )
-from moonmind.omnigent.harness_platform.support import (
-    SupportKeyPayload,
-    compute_deployment_qualification_key,
-)
+from moonmind.omnigent.harness_platform.support import SupportKeyPayload
 
 
 def build_deployment_evidence(
@@ -82,13 +79,17 @@ def build_deployment_evidence(
 def write_deployment_evidence(
     evidence: dict[str, Any], path: Path | None = None
 ) -> Path:
-    """Upsert one signed qualification without discarding other materializers.
+    """Upsert one signed qualification without discarding any other.
 
     A deployment can expose multiple launch-ready credential classes for the
-    same harness. Each class requires exact materializer evidence, while the
-    evidence file remains one deployment-owned publication. Preserve valid
-    entries for other deployment qualification keys and replace only the
-    incoming key.
+    same harness, and one qualification class can hold several exact support
+    combinations at once. Each is independently signed evidence that this
+    publish did not supersede, and dropping it destroys the only document some
+    reader — a retained or rolled-back worker generation, or an execution
+    pinned to another agent source — can still match. Replace the exact
+    support combination being requalified and retain every other valid entry;
+    validation already drops expired and unverifiable history, which bounds
+    the file to the evidence TTL.
     """
 
     dest = path or Path(
@@ -98,7 +99,7 @@ def write_deployment_evidence(
         )
     )
     incoming = validate_deployment_evidence(evidence)
-    incoming_key = compute_deployment_qualification_key(incoming.support_identity)
+    incoming_key = incoming.support_combination_key
     retained: list[dict[str, Any]] = []
     try:
         existing = json.loads(dest.read_text(encoding="utf-8"))
@@ -114,10 +115,7 @@ def write_deployment_evidence(
                 parsed = validate_deployment_evidence(candidate)
             except ValueError:
                 continue
-            if (
-                compute_deployment_qualification_key(parsed.support_identity)
-                == incoming_key
-            ):
+            if parsed.support_combination_key == incoming_key:
                 continue
             retained.append(parsed.model_dump(mode="json", by_alias=True))
 

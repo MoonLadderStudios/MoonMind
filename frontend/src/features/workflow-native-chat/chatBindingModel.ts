@@ -202,7 +202,7 @@ export function nativeChatStateCopy(
     case 'notFound':
       return {
         title: 'Workflow not found',
-        description: 'This workflow could not be found for your account.',
+        description: 'This workflow could not be found in this instance.',
         role: 'alert',
         canRetry: false,
       };

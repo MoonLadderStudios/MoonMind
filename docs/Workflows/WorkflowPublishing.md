@@ -4,7 +4,7 @@
 **Viewpoint:** Module Contract Specification  
 **Status:** Draft  
 **Owners:** MoonMind Engineering  
-**Updated:** 2026-09-06  
+**Updated:** 2026-09-19  
 **Audience:** Workflow, runtime, API, and dashboard contributors and operators  
 **Authority:** Authored workflow/batch publication intent, context and branch roles, compiled effect ownership, and publication outcome semantics. The provider-neutral evidence schema is owned by Lore VCS Integration Design section 3.13.  
 **Owning Surface:** Workflow admission/compiler, publication orchestration, and repository publisher consumers  
@@ -248,6 +248,8 @@ Dependabot's cross-run identity remains based on repository, PR, and head SHA. A
 `MoonMind.UserWorkflow` owns compiled policy, authorization requirements, orchestration, and evidence-derived product outcome. Trusted publisher Activities/adapters own managed remote mechanics. Portable Skills own their declared Skill publication semantics.
 
 The compiler derives `repositoryOperation` and required capabilities for each execution role. A batch coordinator does not receive repository-write credentials simply because descendants produce PRs. Nor can a read-only step remove the whole workflow's publication intent. Descendant write authority is admitted at the relevant child boundary.
+
+A plan in which **every** authored step declares `repositoryOperation: read` is the one exception, because it declares no repository mutation authority at all. Publication is bound to step outputs, so `branch`, `pr`, and agent-owned `auto` can never produce publish evidence for such a plan: the run would execute and then fail finalization with an unknown publish outcome or `auto_publish_evidence_missing`. The declaration is read from a step's tool or skill binding inputs as well as its top level, matching what the compiler compiles. Per PUBLISH-004 that combination is rejected at admission with the authored step that would have to change, not admitted and failed late. The invariant is enforced both on the task-shaped submission path and at the shared execution-creation boundary that rerun, continuation, checkpoint branching, and deployment routes converge on, and before a recurring schedule is created so it cannot repeat the failure on every tick.
 
 One policy does not require one final push. A supported composition can include staged candidate publication, verification, an early PR handoff, and later tracker updates. Each effect has one declared owner and stable target. Arbitrary mixed publication owners, unrelated repositories, or incompatible outputs require a compatible declared composition or separate workflows, not user-authored per-step overrides.
 
