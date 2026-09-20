@@ -71,6 +71,7 @@ async def test_missing_updater_resumes_immutable_request_without_resetting_budge
         "image": "image@sha256:b",
         "imageId": "b",
         "deadline": time.time() + 300,
+        "controller": release.RELEASE_CONTROLLER_GENERATION,
     }
     release.write_record(directory / "request.json", request)
     release.write_record(directory / "deliveries.json", {"count": 2})
@@ -93,3 +94,41 @@ async def test_missing_updater_resumes_immutable_request_without_resetting_budge
     assert json.loads((directory / "result.json").read_text()) == terminal
 
 
+
+
+@pytest.mark.asyncio
+async def test_request_without_a_controller_generation_is_never_relaunched(
+    tmp_path, monkeypatch
+):
+    """A pre-migration request must not run the removed cohort controller.
+
+    Such a job still carries request.json and an open deadline, so the generic
+    resume path would relaunch its own pinned image -- recreating cohorts
+    beside the installed fleet or promoting its older digest over the
+    installed release. It may have stopped before writing routing.json or
+    retained.json, so the request's own generation decides this, not the
+    presence of blue/green records.
+    """
+    from unittest.mock import AsyncMock
+    import time
+
+    directory = tmp_path / "legacy-job"
+    directory.mkdir()
+    release.write_record(
+        directory / "request.json",
+        {
+            "authored": {"owner": "exact-owner"},
+            "image": "image@sha256:old",
+            "imageId": "old",
+            "deadline": time.time() + 300,
+        },
+    )
+    monkeypatch.setattr(maintenance, "inspect_owned", AsyncMock(return_value=None))
+    launch = AsyncMock()
+    monkeypatch.setattr(maintenance, "launch_updater", launch)
+
+    result = await maintenance.reconcile_release(directory, "runner", None)
+
+    launch.assert_not_awaited()
+    assert "legacy_release_not_resumable" in result["pending"]
+    assert result["resumed"] is False

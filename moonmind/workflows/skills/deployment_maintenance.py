@@ -10,6 +10,7 @@ from moonmind.workflows.skills.deployment_execution import (
     DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS,
 )
 from moonmind.workflows.skills.deployment_release import (
+    RELEASE_CONTROLLER_GENERATION,
     _ensure_command_succeeded,
     docker,
     inspect_owned,
@@ -114,6 +115,7 @@ async def retire_legacy_cohorts(directory, runner, client, owner, pending):
     from moonmind.release_identity import installed_release
     from moonmind.workflows.temporal.release_routing import (
         current_version,
+        qualification_closed_without_activation,
         routing_snapshot,
         version_drained,
     )
@@ -137,15 +139,31 @@ async def retire_legacy_cohorts(directory, runner, client, owner, pending):
         os.environ.get("TEMPORAL_WORKER_DEPLOYMENT_NAME") or "moonmind-workflow-fleet"
     )
     current = current_version(await routing_snapshot(client, deployment))
+    # The installed-fleet check proves the installed digest is ready, not that
+    # routing names it. Only bypass drainage when the current route is the
+    # version formed from that verified digest; otherwise an older retained
+    # cohort that is still Temporal's current route would look retirable while
+    # a newer fleet starts.
+    installed_version = f"{deployment}.{release['digest']}"
     retired = []
     for kind in kinds:
         version = _legacy_cohort_version(directory, kind, deployment)
-        # Unknown drainage never releases authority: only Temporal's terminal
-        # evidence, or the installed fleet already holding that same route,
-        # permits removal.
-        if version != current and not await version_drained(client, version):
-            pending.append(f"{kind}_awaiting_drainage")
-            continue
+        # Unknown drainage never releases authority. Three proofs can release
+        # it: the route has moved to the verified installed fleet, Temporal
+        # reports the version drained, or the version never took traffic at
+        # all -- a legacy candidate whose qualification failed never enters
+        # the drainage state machine and would otherwise block updates forever.
+        if not (version == current == installed_version):
+            drained = await version_drained(client, version)
+            if not drained and kind == "candidate":
+                drained = await qualification_closed_without_activation(
+                    client,
+                    version=version,
+                    canary_id=f"mm-release-canary-{directory.name}",
+                )
+            if not drained:
+                pending.append(f"{kind}_awaiting_drainage")
+                continue
         await retire_legacy_cohort(directory, owner, kind)
         write_record(
             directory / f"{kind}-retired.json",
@@ -189,15 +207,17 @@ async def reconcile_release(directory, runner, client):
     observed = await inspect_owned(updater, owner)
     if observed and observed["Image"] != request["imageId"]:
         raise ValueError("Release updater image differs from its durable owner")
-    # A job authored before recreate-in-place is identified by the blue/green
-    # records only that controller wrote. Relaunching it would run the deleted
+    # A job authored before recreate-in-place would run the deleted
     # ReleaseCohort algorithm from its own pinned image: it could recreate a
     # candidate or retained cohort beside the installed fleet and promote its
     # older digest over the release that is now installed. Such a job is never
     # resumed; it is retired below and its budget is reported as closed.
-    legacy = any(
-        (directory / marker).exists() for marker in ("routing.json", "retained.json")
-    )
+    #
+    # The request's own controller generation decides this, not the blue/green
+    # records. A pre-migration job that stopped after persisting request.json
+    # but before writing routing.json or retained.json carries neither record,
+    # and keying off those records classified it as current and relaunched it.
+    legacy = request.get("controller") != RELEASE_CONTROLLER_GENERATION
     if legacy and not (directory / "result.json").exists():
         result["pending"].append("legacy_release_not_resumable")
     if not legacy and not (directory / "result.json").exists():

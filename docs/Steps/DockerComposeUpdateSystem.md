@@ -657,9 +657,9 @@ still reject self-replacement; production release jobs use the detached owner.
 
 ## 10.5 Persist desired image
 
-After candidate qualification and routing promotion, the tool writes the desired
-image reference into the allowlisted deployment env file before normal service
-recreation. Candidate startup alone never changes desired state. Compose loads
+The tool writes the desired image reference into the allowlisted deployment env
+file after the image digest is verified and before service recreation. Pulling
+an image alone never changes desired state. Compose loads
 the operator's `.env` before the image-only desired-state overlay and retains
 the deployment-owned override. Explicit image selection wins for this job.
 
@@ -718,7 +718,8 @@ the same digests:
 
 Every step is convergent, so resuming an interrupted update completes pending
 work instead of duplicating it. A step failure blocks the primary receipt like
-a fleet verification failure: the retained fleet owns recovery. Deployments
+a fleet verification failure, and the release reports that failure rather than
+a receipt. Deployments
 without a durable desired-state file skip this phase with an explicit receipt
 reason and keep the previous tag-driven behavior. The major.minor dispatch
 gate is unchanged and now only fires on genuine out-of-band drift.
@@ -835,7 +836,7 @@ stack changes and job ownership; PID age cannot transfer authority across
 container namespaces. The updater has a two-hour cumulative deadline and at
 most three attempts, preserved across restarts.
 
-Promotion recreates every worker fleet, including the one running the Activity
+Recreation replaces every worker fleet, including the one running the Activity
 that submitted the release, so the updater routinely outlives its own
 supervisor. The supervising Activity is therefore budgeted from the same
 two-hour deadline rather than from a single attempt: its schedule-to-close
@@ -850,52 +851,52 @@ to the running job by its durable identity and never launches a second
 updater; the job's own deadline, never the supervisor's, decides when a
 release stops. Terminal release failures remain terminal and are not retried.
 
-Candidate workers first register all workflow and Activity queues. A stable,
-pinned canary verifies their image identity through each queue. The controller
-also qualifies a candidate API's health, dashboard, assets and read-only API.
-Temporal's compare-and-set routing update promotes only that candidate. A lost
-response reuses the same canary run and verifies the server's current decision.
+Workers register all workflow and Activity queues at startup and a stable,
+pinned canary verifies their image identity through each queue before that
+version becomes Temporal's current route. There is one fleet, so promotion is
+forward-only: a worker only ever routes to the version it is itself serving.
 
-A plain restart onto a never-promoted release with no live route left to
-preserve must still converge: when the recorded current version has no live
-pollers on any of its queues, the starting workflow fleet runs the same
-pinned canary and compare-and-set promotion itself instead of waiting for an
-update owner, qualified across every queue the current version served. This
-is the disjoint complement of the row above: whenever the current version
-still serves any traffic, startup preserves the route and leaves
-qualification and promotion to the authorized release controller. Local
-presence alone grants nothing; only the canary identity proof, the
-compare-and-set, and the proven absence of any serving capability authorize
-the handoff. A live route is never displaced whatever image backs it, so
-deliberate moves of a serving route stay on the managed update path.
+A restart onto a never-promoted release must still converge. When the recorded
+current version has no live pollers on any of its queues, the starting fleet
+runs that pinned canary and the compare-and-set promotion itself, qualified
+across every queue the current version served. Whenever the current version
+still serves traffic, startup preserves the route and parks: the outgoing fleet
+may drain for its full `stop_grace_period`, which outlasts the route-death
+wait, so a bounded reconciler retries the same canary-gated promotion until the
+old pollers are gone. If that budget is exhausted without promoting, the worker
+reports unready rather than serving while ordinary work routes to a version
+with no pollers. Local presence alone grants nothing; only the canary identity
+proof and the compare-and-set authorize the handoff.
 
-Before promotion, the controller retains pollers from the exact previous image.
-Those pollers attest deployment-owned singleton infrastructure before they
-report ready, so the controller first repairs an unhealthy or absent
-restricted-egress gateway from the previous release's own definition; a
-gateway broken out of band must not make the deployment un-updatable. A
-recreate that does not take is retried within that repair window, each attempt
-keeping a cooldown to converge on its own, so a gateway needing more than one
-recreate is repaired inside the current release attempt instead of failing
-retention and waiting for the job to retry the whole update. When
-retention still does not converge, the recorded failure names the fleet, the
-observed gateway health and the retained container's redacted log tail, and
-the bound that keeps that record small preserves both ends of the diagnosis
-so the exception line naming the cause survives to every operator surface.
-Pinned work remains owned by that version after normal Compose services change.
-The existing maintenance schedule retires those temporary pollers only when
-Temporal reports the version drained. Inactive private candidates require a
-terminal release owner, closed canary and server-confirmed inactive status.
-Unknown drainage or ownership keeps the cohort. Candidate pollers may retire
-after the normal fleet verifies the same image. A promoted candidate never
-enters drainage or inactive status, so that verification is the only evidence
-that can release its cohort; maintenance accepts either the primary receipt or
-the attempt receipt of a release whose deployment completed before a later step
-failed, and requires the owner match and the installed-fleet proof in both
-cases. Requiring only the primary receipt kept such a cohort polling the
-deployment task queues indefinitely alongside the installed fleet. These
-containers exist only for bounded release work and drainage; they add no idle
-deployment service.
+Workers attest deployment-owned singleton infrastructure before they report
+ready, so the restricted-egress gateway is recreated on the incoming release
+*before* the workers that attest it. The gateway is selected from the
+configured services rather than the exclusion list -- the documented default
+excludes only the deployment-control runner -- and is then held out of the main
+recreation so it is not restarted underneath those workers. Compose compares
+the gateway against the incoming configuration and leaves it untouched when it
+already matches, so no separate convergence check is kept here. A gateway that
+cannot come up on the incoming release fails the update at that point, rather
+than after workers fail an attestation against it.
+
+Releases authored before recreate-in-place are never resumed. A request records
+the controller generation it was authored for, and a request without it would
+execute the removed cohort controller from its own pinned image -- recreating
+cohorts beside the installed fleet or promoting its older digest over the
+installed release. Maintenance retires such a job instead.
+
+Retiring a cohort left by one of those releases requires two independent
+proofs: the installed fleet is observed uniquely serving the verified installed
+digest, and Temporal agrees the cohort's version is finished. Cohort containers
+reuse the deployment's own Compose project and service labels, so the installed
+check excludes cohort-named containers -- counting both would fail exactly while
+a leftover exists. Temporal's agreement is the current route being the version
+formed from that verified digest, the version reporting drained, or, for a
+candidate that failed qualification without ever being promoted, a terminal
+owner with a closed canary and server-confirmed inactive status. Inactive
+versions never enter the drainage state machine, so without that last proof
+those containers would survive indefinitely and keep blocking updates. Unknown
+drainage or ownership keeps the cohort.
 
 The primary result is persisted before auxiliary cleanup. Failed cleanup records
 its pending owner for `release.reconcile` without replacing verified deployment
