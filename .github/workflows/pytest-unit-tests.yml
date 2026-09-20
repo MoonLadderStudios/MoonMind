@@ -232,7 +232,11 @@ jobs:
     # and bounded cleanup (always() compose down wrapped in timeout 100s).
     # The PR ceiling stays above the heaviest duration-balanced partition
     # load (~500s) plus collection/shutdown overhead.
-    # Fast rows keep the pre-existing --timeout 600. Each row writes a
+    # Fast lanes (MoonLadderStudios/MoonMind#4369): unit-fast uses a 60s
+    # per-test timeout, API/component and Temporal use 120s, each under an
+    # explicit 7-minute native test-step bound. Per-test exceptions for a
+    # justified slow case use the installed pytest-timeout per-test marker,
+    # never a raised global default. Each row writes a
     # uniquely named junit report and attempted cancellation diagnostics.
     needs: select-test-suites
     if: >-
@@ -241,22 +245,35 @@ jobs:
       needs.select-test-suites.outputs.temporal_boundary == 'true' ||
       needs.select-test-suites.outputs.reliability_journey == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Per-row job bounds (MoonLadderStudios/MoonMind#4369): fast rows get a
+    # 15-minute job budget covering setup (~2-3 minutes), the 7-minute test
+    # step, and bounded reporting (2-minute caps that typically finish in
+    # seconds); reliability rows keep a 20-minute budget covering
+    # setup, the 12-minute test step, and bounded diagnostics/cleanup. The
+    # blanket 30-minute ceiling is replaced, not raised.
+    timeout-minutes: ${{ matrix.job_minutes }}
     strategy:
       fail-fast: ${{ github.event_name != 'schedule' }}
       matrix:
         include:
           - suite: unit-fast
+            job_minutes: 15
           - suite: api-component
+            job_minutes: 15
           - suite: temporal-boundary
+            job_minutes: 15
           - suite: reliability-shard-1
             shard: "1"
+            job_minutes: 20
           - suite: reliability-shard-2
             shard: "2"
+            job_minutes: 20
           - suite: reliability-shard-3
             shard: "3"
+            job_minutes: 20
           - suite: reliability-shard-4
             shard: "4"
+            job_minutes: 20
     steps:
       - name: Check out code
         uses: actions/checkout@v7
@@ -339,12 +356,23 @@ jobs:
       - name: Run selected unit suite
         id: run-unit
         if: matrix.suite == 'unit-fast' && needs.select-test-suites.outputs.unit_fast == 'true'
+        # Fast-lane hard bound (MoonLadderStudios/MoonMind#4369): 7-minute
+        # native test-step ceiling over the 60s per-test pytest timeout.
+        timeout-minutes: 7
         env:
           MOONMIND_FAULTLAB_DIAGNOSTICS_DIR: artifacts/faultlab-generated
           PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
           mkdir -p artifacts
+          # Ordinary validation stops the owning invocation promptly with
+          # --maxfail=1; schedules omit it to keep collecting diagnostics
+          # within the same bounds (MoonLadderStudios/MoonMind#4369).
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            maxfail_args=()
+          else
+            maxfail_args=(--maxfail=1)
+          fi
           test_start=$SECONDS
           set +e
           python -m pytest tests/unit \
@@ -352,7 +380,8 @@ jobs:
             --ignore=tests/unit/api \
             --ignore=tests/unit/api_service \
             -m "unit_fast and not provider_verification and not requires_credentials" \
-            -v --tb=short -n auto --dist loadfile --durations=25 --timeout 600 \
+            -v --tb=short -n auto --dist loadfile --durations=25 --timeout 60 \
+            "${maxfail_args[@]}" \
             --junitxml=artifacts/pytest-backend-unit-fast.xml 2>&1 | tee artifacts/pytest-backend-unit-fast.log
           status=${PIPESTATUS[0]}
           echo $((SECONDS - test_start)) > /tmp/backend-unit-fast-test-seconds.txt || true
@@ -360,16 +389,28 @@ jobs:
       - name: Run API/component suite
         id: run-api
         if: matrix.suite == 'api-component' && needs.select-test-suites.outputs.api_component == 'true'
+        # Fast-lane hard bound (MoonLadderStudios/MoonMind#4369): 7-minute
+        # native test-step ceiling over the 120s per-test pytest timeout.
+        timeout-minutes: 7
         env:
           PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
           mkdir -p artifacts
+          # Ordinary validation stops the owning invocation promptly with
+          # --maxfail=1; schedules omit it to keep collecting diagnostics
+          # within the same bounds (MoonLadderStudios/MoonMind#4369).
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            maxfail_args=()
+          else
+            maxfail_args=(--maxfail=1)
+          fi
           test_start=$SECONDS
           set +e
           python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
             -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-            -v --tb=short -n auto --dist load --durations=25 --timeout 600 \
+            -v --tb=short -n auto --dist load --durations=25 --timeout 120 \
+            "${maxfail_args[@]}" \
             --junitxml=artifacts/pytest-backend-api-component.xml 2>&1 | tee artifacts/pytest-backend-api-component.log
           status=${PIPESTATUS[0]}
           echo $((SECONDS - test_start)) > /tmp/backend-api-component-test-seconds.txt || true
@@ -377,16 +418,28 @@ jobs:
       - name: Run Temporal boundary suite
         id: run-temporal
         if: matrix.suite == 'temporal-boundary' && needs.select-test-suites.outputs.temporal_boundary == 'true'
+        # Fast-lane hard bound (MoonLadderStudios/MoonMind#4369): 7-minute
+        # native test-step ceiling over the 120s per-test pytest timeout.
+        timeout-minutes: 7
         env:
           PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
           mkdir -p artifacts
+          # Ordinary validation stops the owning invocation promptly with
+          # --maxfail=1; schedules omit it to keep collecting diagnostics
+          # within the same bounds (MoonLadderStudios/MoonMind#4369).
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            maxfail_args=()
+          else
+            maxfail_args=(--maxfail=1)
+          fi
           test_start=$SECONDS
           set +e
           python -m pytest tests/unit/workflows/temporal \
             -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-            -v --tb=short -n auto --dist loadfile --durations=25 --timeout 600 \
+            -v --tb=short -n auto --dist loadfile --durations=25 --timeout 120 \
+            "${maxfail_args[@]}" \
             --junitxml=artifacts/pytest-backend-temporal-boundary.xml 2>&1 | tee artifacts/pytest-backend-temporal-boundary.log
           status=${PIPESTATUS[0]}
           echo $((SECONDS - test_start)) > /tmp/backend-temporal-boundary-test-seconds.txt || true
@@ -446,13 +499,17 @@ jobs:
           # (MoonLadderStudios/MoonMind#4369, #4384): PRs fail fast with a 150s
           # per-test timeout and a 10-min step ceiling; schedules keep
           # collecting diagnostics with a 300s per-test timeout under the
-          # 12-min step ceiling above.
+          # 12-min step ceiling above. Ordinary runs also stop the owning
+          # pytest invocation promptly with --maxfail=1; schedules omit it
+          # to keep collecting diagnostics within the same bounds.
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
             pytest_timeout=300
             step_budget=660
+            maxfail_args=()
           else
             pytest_timeout=150
             step_budget=600
+            maxfail_args=(--maxfail=1)
           fi
           test_start=$SECONDS
           set +e
@@ -462,6 +519,7 @@ jobs:
             --splitting-algorithm least_duration \
             $DURATIONS_ARGS \
             -vv --tb=short --durations=25 --timeout "$pytest_timeout" \
+            "${maxfail_args[@]}" \
             --junitxml=artifacts/pytest-backend-${{ matrix.suite }}.xml 2>&1 | tee artifacts/pytest-backend-${{ matrix.suite }}.log
           status=${PIPESTATUS[0]}
           echo $((SECONDS - test_start)) > "/tmp/backend-${{ matrix.suite }}-test-seconds.txt" || true
@@ -478,30 +536,30 @@ jobs:
               selected="${{ needs.select-test-suites.outputs.unit_fast }}"
               outcome="${{ steps.run-unit.outcome }}"
               seconds_file="/tmp/backend-unit-fast-test-seconds.txt"
-              effective_command="python -m pytest tests/unit -m unit_fast -v --tb=short -n auto --dist loadfile --durations=25 --timeout 600"
-              pytest_timeout="600s per-test"
-              step_budget="30-min job" ;;
+              effective_command="python -m pytest tests/unit -m unit_fast -v --tb=short -n auto --dist loadfile --durations=25 --timeout 60 --maxfail=1 (ordinary; omitted on schedule)"
+              pytest_timeout="60s per-test"
+              step_budget="7-min test step within 15-min job" ;;
             api-component)
               selected="${{ needs.select-test-suites.outputs.api_component }}"
               outcome="${{ steps.run-api.outcome }}"
               seconds_file="/tmp/backend-api-component-test-seconds.txt"
-              effective_command="python -m pytest tests/unit/api tests/unit/api_service tests/component/api -m component -v --tb=short -n auto --dist load --durations=25 --timeout 600"
-              pytest_timeout="600s per-test"
-              step_budget="30-min job" ;;
+              effective_command="python -m pytest tests/unit/api tests/unit/api_service tests/component/api -m component -v --tb=short -n auto --dist load --durations=25 --timeout 120 --maxfail=1 (ordinary; omitted on schedule)"
+              pytest_timeout="120s per-test"
+              step_budget="7-min test step within 15-min job" ;;
             temporal-boundary)
               selected="${{ needs.select-test-suites.outputs.temporal_boundary }}"
               outcome="${{ steps.run-temporal.outcome }}"
               seconds_file="/tmp/backend-temporal-boundary-test-seconds.txt"
-              effective_command="python -m pytest tests/unit/workflows/temporal -m temporal_boundary -v --tb=short -n auto --dist loadfile --durations=25 --timeout 600"
-              pytest_timeout="600s per-test"
-              step_budget="30-min job" ;;
+              effective_command="python -m pytest tests/unit/workflows/temporal -m temporal_boundary -v --tb=short -n auto --dist loadfile --durations=25 --timeout 120 --maxfail=1 (ordinary; omitted on schedule)"
+              pytest_timeout="120s per-test"
+              step_budget="7-min test step within 15-min job" ;;
             reliability-*)
               selected="${{ needs.select-test-suites.outputs.reliability_journey }}"
               outcome="${{ steps.run-reliability.outcome }}"
               seconds_file="/tmp/backend-${{ matrix.suite }}-test-seconds.txt"
-              effective_command="python -m pytest tests/integration/reliability -m reliability_journey --splits 4 --group <N> --splitting-algorithm least_duration -vv --tb=short --durations=25 --timeout 150s PR / 300s schedule"
+              effective_command="python -m pytest tests/integration/reliability -m reliability_journey --splits 4 --group <N> --splitting-algorithm least_duration -vv --tb=short --durations=25 --timeout 150s PR / 300s schedule --maxfail=1 (ordinary; omitted on schedule)"
               pytest_timeout="150s PR / 300s schedule per-test"
-              step_budget="600s PR step / 12-min schedule step within 30-min job" ;;
+              step_budget="600s PR step / 12-min schedule step within 20-min job" ;;
             *) selected="false"; outcome="skipped"; seconds_file=""; effective_command=""; pytest_timeout=""; step_budget="" ;;
           esac
           if [[ "$selected" != "true" ]]; then
