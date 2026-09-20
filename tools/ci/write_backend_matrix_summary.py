@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Per-job pytest evidence summary for the backend matrix.
 
-MoonLadderStudios/MoonMind#4370: each backend-matrix row streams its pytest
+MoonLadderStudios/MoonMind#4370, #4371: each backend-matrix row streams its pytest
 output through ``tee`` to a text log, keeps its JUnit report, and then calls
 this small reporting hook to derive the slowest-test report, a per-shard
 duration-hints snapshot, and a ``$GITHUB_STEP_SUMMARY`` section from standard
@@ -179,6 +179,11 @@ def render_summary(
     durations_available: bool,
     test_seconds: float | None,
     error: str | None,
+    effective_command: str = "",
+    pytest_timeout: str = "",
+    step_budget: str = "",
+    secondary_note: str | None = None,
+    overhead_note: str | None = None,
 ) -> str:
     """Render the per-job markdown appended to $GITHUB_STEP_SUMMARY."""
     identity = suite if not shard else f"{suite} (shard {shard})"
@@ -190,6 +195,24 @@ def render_summary(
         f"- Tested revision: `{revision or 'unavailable'}`",
         f"- Run/attempt: `{run_id or 'unavailable'}` / `{attempt or 'unavailable'}`",
         f"- Outcome: `{outcome}` (test step outcome: `{test_outcome or 'unavailable'}`)",
+        "",
+        "### Effective command and budgets",
+        "",
+    ]
+    if effective_command:
+        lines.append(f"- Effective pytest command: `{effective_command}`")
+    else:
+        lines.append("- Effective pytest command: unavailable (not recorded for this row).")
+    budgets = []
+    if pytest_timeout:
+        budgets.append(f"per-test timeout `{pytest_timeout}`")
+    if step_budget:
+        budgets.append(f"step budget `{step_budget}`")
+    if budgets:
+        lines.append(f"- Budgets: {', '.join(budgets)} (measured).")
+    else:
+        lines.append("- Budgets: unavailable (not recorded for this row).")
+    lines += [
         "",
         "### Counts (from JUnit testsuite attributes, never from progress %)",
         "",
@@ -220,7 +243,9 @@ def render_summary(
         lines.append(f"- JUnit suite time: `{junit.time:.2f}s` (available).")
     else:
         lines.append("- JUnit suite time: unavailable (no final JUnit report).")
-    lines.append("- Setup/collection/cleanup: unavailable as separate measurements in this row; see job logs.")
+    lines.append("- Setup: unavailable as a separate measurement in this row (included in wall time; see job logs).")
+    lines.append("- Collection: unavailable as a separate measurement in this row (included in wall time; see job logs).")
+    lines.append("- Cleanup: unavailable as a separate measurement in this row (runs as a separate always() step; see job logs).")
     lines += ["", "### Slowest cases", ""]
     if junit is not None and junit.cases:
         for case in junit.cases[:SUMMARY_SLOWEST_SHOWN]:
@@ -258,6 +283,15 @@ def render_summary(
         "> Runner disappearance or a hard job kill may prevent final uploads. "
         + "Live Actions output (streamed via `tee`) remains the primary record in that case.",
     ]
+    if overhead_note:
+        lines += ["", "### Reporting overhead", "", overhead_note]
+    if secondary_note:
+        lines += [
+            "",
+            "### Secondary diagnostics/teardown (does not change the primary outcome)",
+            "",
+            secondary_note,
+        ]
     if error:
         lines += ["", f"> Evidence hook note: `{error}` (test outcome unchanged)."]
     return "\n".join(lines) + "\n"
@@ -272,8 +306,52 @@ def _read_test_seconds(path: str | None) -> float | None:
         return None
 
 
+def _read_collection_note(path: str | None) -> str | None:
+    """Surface secondary diagnostics/teardown failures distinctly.
+
+    Returns a markdown note when the collection-status file records a
+    failed/timed-out/missing collection operation, else None. The primary
+    pytest outcome is never altered here; this only makes secondary
+    failures visible in the summary.
+    """
+    if not path:
+        return None
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    lowered = text.lower()
+    markers = ("failed", "timed out", "timed-out", "timeout", "missing", "unavailable")
+    if not any(marker in lowered for marker in markers):
+        return None
+    # Keep the note compact: first few non-empty lines only.
+    excerpt_lines = [line.strip() for line in text.splitlines() if line.strip()][:8]
+    excerpt = "; ".join(excerpt_lines)[:800]
+    return (
+        f"- Secondary collection/teardown reported an issue (primary pytest "
+        f"outcome unchanged): `{excerpt}`."
+    )
+
+
+def _evidence_bytes(*paths: str) -> int | None:
+    total = 0
+    seen_any = False
+    for raw in paths:
+        if not raw:
+            continue
+        try:
+            total += Path(raw).stat().st_size
+            seen_any = True
+        except OSError:
+            continue
+    return total if seen_any else None
+
+
 def build_evidence(args: argparse.Namespace) -> tuple[str, str | None]:
     """Parse JUnit, write slowest/durations files, return (markdown, error)."""
+    import time
+
+    hook_start = time.monotonic()
     junit: JUnitSummary | None = None
     error: str | None = None
     junit_path = Path(args.junit)
@@ -307,6 +385,27 @@ def build_evidence(args: argparse.Namespace) -> tuple[str, str | None]:
         except OSError as exc:
             note = f"durations-snapshot write failed: {exc}"
             error = f"{error}; {note}" if error else note
+    import time as _time
+
+    hook_seconds = _time.monotonic() - hook_start
+    evidence_total = _evidence_bytes(
+        args.log if log_available else "",
+        args.junit if (junit_available and junit is not None) else "",
+        args.slowest if slowest_available else "",
+        args.durations_snapshot if durations_available else "",
+    )
+    if evidence_total is not None:
+        overhead_note = (
+            f"- Reporting overhead: hook `{hook_seconds:.2f}s`, "
+            f"retained evidence `{evidence_total}` bytes "
+            f"(log/JUnit/slowest/snapshot only; rich bundles stay failure-gated)."
+        )
+    else:
+        overhead_note = (
+            f"- Reporting overhead: hook `{hook_seconds:.2f}s`, "
+            f"no retained evidence files (interrupted before pytest wrote them)."
+        )
+    secondary_note = _read_collection_note(getattr(args, "collection_status", ""))
     markdown = render_summary(
         suite=args.suite,
         shard=args.shard or "",
@@ -327,6 +426,11 @@ def build_evidence(args: argparse.Namespace) -> tuple[str, str | None]:
         durations_available=durations_available,
         test_seconds=_read_test_seconds(args.test_seconds_file),
         error=error,
+        effective_command=getattr(args, "effective_command", "") or "",
+        pytest_timeout=getattr(args, "pytest_timeout", "") or "",
+        step_budget=getattr(args, "step_budget", "") or "",
+        secondary_note=secondary_note,
+        overhead_note=overhead_note,
     )
     return markdown, error
 
@@ -346,6 +450,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--selected", default="true", choices=["true", "false"])
     parser.add_argument("--test-outcome", default="unknown")
     parser.add_argument("--test-seconds-file", default="")
+    parser.add_argument("--effective-command", default="")
+    parser.add_argument("--pytest-timeout", default="")
+    parser.add_argument("--step-budget", default="")
+    parser.add_argument("--collection-status", default="")
     args = parser.parse_args(argv)
     # A diagnostic/timing parsing problem must never hide an unsuccessful
     # job or alter test selection: always exit 0 and record the note.
