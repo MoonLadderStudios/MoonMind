@@ -1029,6 +1029,12 @@ class MoonMindProviderProfileManagerWorkflow:
         self._has_new_events: bool = False
         self._profile_refresh_requested: bool = False
         self._has_db_profile_snapshot: bool = False
+        # True once startup finished restoring profiles and durable leases from
+        # the authoritative ledger. Read through get_state so a caller that
+        # replaced a wedged run can wait for the successor to own real state
+        # before admitting against it. This is query-only: it records no
+        # command and cannot affect replay.
+        self._startup_restored: bool = False
         self._purpose_aware_leases: bool = False
         self._purpose_aware_capacity_ledger: bool = False
         # MoonLadderStudios/MoonMind#3879 durability state.
@@ -2587,6 +2593,10 @@ class MoonMindProviderProfileManagerWorkflow:
         """Return current manager state for observability."""
         return {
             "runtime_id": self._runtime_id,
+            # Whether startup finished restoring the authoritative ledger. A
+            # caller that replaced a wedged run waits for this before
+            # resubmitting, so no admission is decided against empty state.
+            "startup_restored": self._startup_restored,
             "profiles": {pid: p.to_dict() for pid, p in self._profiles.items()},
             "pending_requests": [
                 {
@@ -2704,6 +2714,10 @@ class MoonMindProviderProfileManagerWorkflow:
         # after older startup patch markers to preserve replay order.
         if self._profiles and workflow.patched(REFRESH_RESTORED_PROFILES_PATCH):
             await self._load_profiles_from_db()
+
+        # Startup restoration is complete: profiles and durable leases now
+        # reflect the authoritative ledger rather than empty in-memory state.
+        self._startup_restored = True
 
         # Main event loop: process signals, drain queue, clear cooldowns.
         while not self._shutdown_requested:

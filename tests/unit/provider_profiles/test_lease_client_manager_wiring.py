@@ -20,12 +20,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, ClassVar
 from unittest.mock import patch as mock_patch
 
 import pytest
 from temporalio import exceptions
 from temporalio.client import WorkflowUpdateFailedError
+from temporalio.service import RPCError, RPCStatusCode
 
 from moonmind.provider_profiles.lease_client import (
     MANAGER_ROLLOVER_ERROR_TYPE,
@@ -34,6 +36,10 @@ from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
     ProviderProfileLeaseClient,
     deterministic_lease_owner_id,
+)
+from moonmind.provider_profiles.manager_recovery import (
+    MANAGER_HELD_LEASE_PRESENT,
+    ProviderManagerUnavailableError,
 )
 from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     MoonMindProviderProfileManagerWorkflow,
@@ -545,3 +551,176 @@ async def test_the_client_reads_stable_cleanup_claims_from_the_manager() -> None
     assert claims[0]["claim_id"] == f"{lease.lease_id}:{lease.fencing_generation}"
     assert claims[0]["runId"] == "run-admitted-0"
     assert claims[0]["evidenceIdentity"] == "evidence-admitted-0"
+
+
+class _WedgedManagerAdapter:
+    """A manager whose Update RPC fails the way a replay wedge fails.
+
+    Temporal keeps a wedged singleton ``RUNNING`` while its workflow task
+    retries, so ``UpdateWorkflowExecution`` returns ``FAILED_PRECONDITION``
+    rather than a workflow-level Update failure. This double reproduces that
+    exact seam, including the describe and history evidence recovery reads.
+    """
+
+    def __init__(
+        self,
+        *,
+        heal_after: int | None = 1,
+        nondeterminism: int = 3,
+    ) -> None:
+        #: ``None`` never heals, so a reattach cannot mask the original error.
+        self.heal_after = heal_after
+        self.nondeterminism = nondeterminism
+        self.update_calls = 0
+        self.describe_calls = 0
+        self.terminated: list[str] = []
+        self.started: list[str] = []
+        self.healed = False
+
+    async def get_client(self):
+        return self
+
+    async def start_workflow(self, _name, _payload, *, id, task_queue):
+        del task_queue
+        self.started.append(id)
+        return self
+
+    async def update_workflow(self, workflow_id, update_name, payload):
+        del workflow_id, update_name, payload
+        self.update_calls += 1
+        if self.healed:
+            return {"profile_id": PROFILE_ID, "lease_id": "lease-after-recovery"}
+        if self.heal_after is not None and self.update_calls >= self.heal_after + 1:
+            return {"profile_id": PROFILE_ID, "lease_id": "lease-after-recovery"}
+        raise RPCError(
+            "Unable to perform workflow execution update",
+            RPCStatusCode.FAILED_PRECONDITION,
+            b"",
+        )
+
+    async def describe_workflow(self, workflow_id, **_kwargs):
+        del workflow_id
+        self.describe_calls += 1
+        return SimpleNamespace(
+            status=SimpleNamespace(name="RUNNING"), run_id="wedged-run"
+        )
+
+    async def get_workflow_handle(self, workflow_id, *, run_id=None):
+        del workflow_id, run_id
+        outer = self
+
+        class _Handle:
+            async def fetch_history_events(self, **_kwargs):
+                for _ in range(outer.nondeterminism):
+                    yield _wedge_event()
+
+            async def query(self, name):
+                assert name == "get_state"
+                # The replacement reports it finished restoring the ledger, so
+                # the resubmission admits against real state.
+                return {"startup_restored": True}
+
+        return _Handle()
+
+    async def terminate_workflow(self, workflow_id, *, reason, run_id=None):
+        del reason, run_id
+        self.terminated.append(workflow_id)
+        self.healed = True
+
+
+def _wedge_event():
+    """A WorkflowTaskFailed event naming a nondeterminism cause."""
+
+    class _Event:
+        def __init__(self) -> None:
+            self.workflow_task_failed_event_attributes = SimpleNamespace(
+                cause=SimpleNamespace(
+                    name="WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR"
+                ),
+                failure=SimpleNamespace(message="[TMPRL1100] Nondeterminism error"),
+            )
+
+        def HasField(self, name: str) -> bool:
+            return name == "workflow_task_failed_event_attributes"
+
+    return _Event()
+
+
+async def _free_ledger(_runtime_id: str) -> int:
+    """A ledger with nothing left spending capacity."""
+
+    return 0
+
+
+@pytest.mark.asyncio
+async def test_a_wedged_manager_is_replaced_and_the_update_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blocked caller recovers the ledger instead of reporting an outage."""
+
+    monkeypatch.setattr(
+        "moonmind.provider_profiles.manager_recovery.count_unreleased_provider_leases",
+        _free_ledger,
+    )
+    adapter = _WedgedManagerAdapter()
+    client = ProviderProfileLeaseClient(adapter)
+
+    result = await client._update_manager(RUNTIME_ID, "AcquireSlotV2", {"a": 1})
+
+    assert result["lease_id"] == "lease-after-recovery"
+    assert adapter.terminated == [workflow_id_for_runtime(RUNTIME_ID)]
+    # One failed Update, one recovery, one retry. Recovery is not a loop.
+    assert adapter.update_calls == 2
+    assert adapter.describe_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_wedge_that_cannot_be_recovered_reports_why(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A held lease keeps the manager; the caller learns that, not a timeout."""
+
+    async def _held(_runtime: str) -> int:
+        return 1
+
+    monkeypatch.setattr(
+        "moonmind.provider_profiles.manager_recovery.count_unreleased_provider_leases",
+        _held,
+    )
+    adapter = _WedgedManagerAdapter()
+    client = ProviderProfileLeaseClient(adapter)
+
+    with pytest.raises(ProviderManagerUnavailableError) as excinfo:
+        await client._update_manager(RUNTIME_ID, "AcquireSlotV2", {"a": 1})
+
+    assert excinfo.value.recovery.refusal == MANAGER_HELD_LEASE_PRESENT
+    assert excinfo.value.recovery.held_leases == 1
+    assert adapter.terminated == []
+    # The original RPC failure is preserved as the cause.
+    assert isinstance(excinfo.value.__cause__, RPCError)
+
+
+@pytest.mark.asyncio
+async def test_a_manager_rpc_failure_that_is_not_a_wedge_reports_temporals_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without nondeterminism evidence, nothing is terminated or reclassified.
+
+    Looking for a wedge and not finding one teaches the caller nothing Temporal
+    had not already said, so the original RPC failure reaches it unchanged.
+    """
+
+    monkeypatch.setattr(
+        "moonmind.provider_profiles.manager_recovery.count_unreleased_provider_leases",
+        _free_ledger,
+    )
+    adapter = _WedgedManagerAdapter(nondeterminism=0, heal_after=None)
+    client = ProviderProfileLeaseClient(adapter)
+
+    with pytest.raises(RPCError) as excinfo:
+        await client._update_manager(RUNTIME_ID, "AcquireSlotV2", {"a": 1})
+
+    assert excinfo.value.status == RPCStatusCode.FAILED_PRECONDITION
+    assert adapter.terminated == []
+    # One bounded reattach was attempted before the original error stood.
+    assert adapter.update_calls == 2
