@@ -36,7 +36,7 @@ import { DashboardApp } from './dashboard-app';
 import {
   OperationsSettingsPage,
   ProvidersSecretsSettingsPage,
-  UserWorkspaceSettingsPage,
+  InstanceSettingsPage,
 } from './settings';
 
 vi.mock('lucide-animated', async () => {
@@ -68,10 +68,10 @@ const CANONICAL_SETTINGS_ROUTES = [
     menuItem: 'Providers & Secrets',
   },
   {
-    path: '/settings/user-workspace',
-    heading: 'User / Workspace',
-    title: 'User / Workspace | MoonMind',
-    menuItem: 'User / Workspace',
+    path: '/settings/instance',
+    heading: 'Instance',
+    title: 'Instance | MoonMind',
+    menuItem: 'Instance',
   },
   {
     path: '/settings/operations',
@@ -101,7 +101,7 @@ const userWorkspaceDescriptor = {
   section: 'user-workspace',
   type: 'enum',
   ui: 'select',
-  scopes: ['workspace', 'user'],
+  scopes: ['workspace'],
   default_value: 'pr',
   effective_value: 'pr',
   override_value: null,
@@ -153,7 +153,7 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
       skills: true,
       manifests: true,
       settingsProvidersSecrets: true,
-      settingsUserWorkspace: true,
+      settingsInstance: true,
       settingsOperations: true,
     },
     limits: {},
@@ -172,11 +172,10 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
 function settingsFetch(url: string): Response | null {
   if (url === '/api/v1/provider-profiles') return ok([]);
   if (url === '/api/v1/secrets') return ok({ items: [] });
-  if (url === '/me') return ok({ id: 'user-1', email: 'user@example.com' });
   if (url.startsWith('/api/v1/settings/catalog')) {
     return ok({
       section: 'user-workspace',
-      scope: url.includes('scope=user') ? 'user' : 'workspace',
+      scope: 'workspace',
       categories: { Workflow: [userWorkspaceDescriptor] },
     });
   }
@@ -342,13 +341,13 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
   });
 
   describe('dirty-draft departure after save outcomes', () => {
-    function renderUserWorkspace() {
-      window.history.replaceState({}, '', '/settings/user-workspace?scope=workspace');
+    function renderInstance() {
+      window.history.replaceState({}, '', '/settings/instance');
       renderWithClient(
         <BrowserRouter>
-          <UserWorkspaceSettingsPage
+          <InstanceSettingsPage
             payload={{
-              page: 'settings-user-workspace',
+              page: 'settings-instance',
               apiBase: '/api',
               initialData: {
                 settingsPermissions: ['settings.catalog.read', 'settings.workspace.write'],
@@ -382,7 +381,7 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
         return Promise.resolve(settingsFetch(url) ?? notFound());
       });
 
-      renderUserWorkspace();
+      renderInstance();
       const control = (await screen.findByLabelText('Default Publish Mode')) as HTMLSelectElement;
       fireEvent.change(control, { target: { value: 'branch' } });
 
@@ -399,7 +398,7 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
       expect(fireEvent.click(link)).toBe(false);
       expect(screen.getByRole('dialog', { name: 'Unsaved changes' })).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'Stay' }));
-      expect(window.location.pathname).toBe('/settings/user-workspace');
+      expect(window.location.pathname).toBe('/settings/instance');
       expect(control.value).toBe('branch');
 
       fireEvent.click(link);
@@ -416,7 +415,7 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
         return Promise.resolve(settingsFetch(url) ?? notFound());
       });
 
-      renderUserWorkspace();
+      renderInstance();
       const control = (await screen.findByLabelText('Default Publish Mode')) as HTMLSelectElement;
       fireEvent.change(control, { target: { value: 'branch' } });
 
@@ -437,7 +436,7 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
   describe('architecture guards', () => {
     it.each([
       ['Providers & Secrets', ProvidersSecretsSettingsPage, 'settings-providers-secrets'],
-      ['User / Workspace', UserWorkspaceSettingsPage, 'settings-user-workspace'],
+      ['Instance', InstanceSettingsPage, 'settings-instance'],
       ['Operations', OperationsSettingsPage, 'settings-operations'],
     ])(
       'never re-exposes the three destinations as local tabs or radios on %s',
@@ -470,7 +469,7 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
         );
         expect(destinationLabels).toEqual([
           'Providers & Secrets',
-          'User / Workspace',
+          'Instance',
           'Operations',
         ]);
 
@@ -545,7 +544,7 @@ describe('MoonLadderStudios/MoonMind#3822 Settings redesign conformance', () => 
       // The generated-settings catalog request legitimately carries a backend
       // `section` query parameter; Settings *destination* links must not.
       const settingsDestinationLink =
-        /\/settings(\/(providers-secrets|user-workspace|operations))?\?[^\s'"`]*section=/g;
+        /\/settings(\/(providers-secrets|instance|operations))?\?[^\s'"`]*section=/g;
       const offenders: string[] = [];
       for (const file of frontendSourceFiles(join(process.cwd(), 'frontend', 'src'))) {
         const source = readFileSync(file, 'utf8');

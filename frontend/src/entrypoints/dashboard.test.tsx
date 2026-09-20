@@ -288,7 +288,7 @@ vi.mock('./settings', () => {
     SettingsEntryPage: MockSettingsPage,
     OperationsSettingsPage: MockSettingsPage,
     ProvidersSecretsSettingsPage: MockSettingsPage,
-    UserWorkspaceSettingsPage: MockSettingsPage,
+    InstanceSettingsPage: MockSettingsPage,
   };
 });
 
@@ -305,7 +305,7 @@ function uiInfo(overrides: Record<string, unknown> = {}) {
       schedules: true,
       skills: true,
       settingsProvidersSecrets: true,
-      settingsUserWorkspace: true,
+      settingsInstance: true,
       settingsOperations: true,
       remediationCollection: false,
       omnigentAgents: false,
@@ -438,7 +438,7 @@ describe('Dashboard shared entry', () => {
     const configuration = screen.getByText('Configuration').closest('.dashboard-system-menu-section');
     expect(configuration).not.toBeNull();
     expect(within(configuration as HTMLElement).getAllByRole('menuitem').map((item) => item.textContent?.trim())).toEqual([
-      'Providers & Secrets', 'User / Workspace', 'Operations',
+      'Providers & Secrets', 'Instance', 'Operations',
     ]);
     expect(screen.getAllByText('Configuration')).toHaveLength(1);
     expect(screen.queryByRole('menuitem', { name: 'Remediation' })).toBeNull();
@@ -501,7 +501,7 @@ describe('Dashboard shared entry', () => {
     ['/observability/example', 'Artifacts'],
     ['/remediations/example', 'Remediation'],
     ['/settings/providers-secrets', 'Settings'],
-    ['/settings/user-workspace', 'Settings'],
+    ['/settings/instance', 'Settings'],
     ['/settings/operations', 'Settings'],
     ['/schedules', 'Recurring'],
     ['/schedules/nightly-build', 'Recurring'],
@@ -532,8 +532,8 @@ describe('Dashboard shared entry', () => {
       const activeLink = screen.getByRole('menuitem', {
         name: path.endsWith('providers-secrets')
           ? 'Providers & Secrets'
-          : path.endsWith('user-workspace')
-            ? 'User / Workspace'
+          : path.endsWith('instance')
+            ? 'Instance'
             : 'Operations',
       });
       expect(activeLink.getAttribute('aria-current')).toBe('page');
@@ -593,8 +593,8 @@ describe('Dashboard shared entry', () => {
     );
     const trigger = screen.getByRole('button', { name: 'System' });
     fireEvent.click(trigger);
-    fireEvent.click(screen.getByRole('menuitem', { name: 'User / Workspace' }));
-    expect(screen.getByRole('status', { name: 'Current path' }).textContent).toBe('/settings/user-workspace');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Instance' }));
+    expect(screen.getByRole('status', { name: 'Current path' }).textContent).toBe('/settings/instance');
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
 
     fireEvent.click(trigger);
@@ -616,7 +616,7 @@ describe('Dashboard shared entry', () => {
     const configuration = within(inline).getByText('Configuration').closest('.dashboard-system-menu-section');
     expect(configuration).not.toBeNull();
     expect(within(configuration as HTMLElement).getAllByRole('link').map((link) => link.textContent?.trim())).toEqual([
-      'Providers & Secrets', 'User / Workspace', 'Operations',
+      'Providers & Secrets', 'Instance', 'Operations',
     ]);
     expect(within(configuration as HTMLElement).getByRole('link', { name: 'Operations' }).getAttribute('aria-current')).toBe('page');
     // Recurring and Skills render as normal inline links, not a nested popover.
@@ -631,7 +631,7 @@ describe('Dashboard shared entry', () => {
     delete features.settingsProvidersSecrets;
     delete features.settingsOperations;
     renderWithClient(
-      <MemoryRouter initialEntries={['/settings/user-workspace']}>
+      <MemoryRouter initialEntries={['/settings/instance']}>
         <DashboardSystemMenu uiInfo={uiInfo({ features })} mobileDrawerOpen={false} />
       </MemoryRouter>,
     );
@@ -639,14 +639,14 @@ describe('Dashboard shared entry', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     expect(screen.getAllByText('Configuration')).toHaveLength(1);
     expect(screen.queryByRole('menuitem', { name: 'Providers & Secrets' })).toBeNull();
-    expect(screen.getByRole('menuitem', { name: 'User / Workspace' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Instance' })).toBeTruthy();
     expect(screen.queryByRole('menuitem', { name: 'Operations' })).toBeNull();
   });
 
   it('MoonLadderStudios/MoonMind#3817 omits an unexposed group and disables intentionally unavailable children', () => {
     const hiddenFeatures: Record<string, boolean> = { ...uiInfo().features };
     delete hiddenFeatures.settingsProvidersSecrets;
-    delete hiddenFeatures.settingsUserWorkspace;
+    delete hiddenFeatures.settingsInstance;
     delete hiddenFeatures.settingsOperations;
     const { unmount } = renderWithClient(
       <MemoryRouter initialEntries={['/workflows']}>
@@ -869,7 +869,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
+      if (url === '/api/recurring-workflows' || url.startsWith('/api/recurring-workflows?')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -951,7 +951,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
+      if (url === '/api/recurring-workflows' || url.startsWith('/api/recurring-workflows?')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1001,7 +1001,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/recurring-workflows/stale-schedule') {
         return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
       }
-      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
+      if (url === '/api/recurring-workflows' || url.startsWith('/api/recurring-workflows?')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1252,7 +1252,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
+      if (url === '/api/recurring-workflows' || url.startsWith('/api/recurring-workflows?')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1323,7 +1323,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
+      if (url === '/api/recurring-workflows' || url.startsWith('/api/recurring-workflows?')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -1448,7 +1448,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
+      if (url === '/api/recurring-workflows' || url.startsWith('/api/recurring-workflows?')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
@@ -1483,7 +1483,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
+      if (url === '/api/recurring-workflows' || url.startsWith('/api/recurring-workflows?')) {
         // A different first-visible row proves the remembered ID was preferred.
         return Promise.resolve({
           ok: true,
@@ -1532,7 +1532,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/recurring-workflows/stale-schedule') {
         return Promise.resolve({ ok: false, status: 404, statusText: 'Not Found' } as Response);
       }
-      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
+      if (url === '/api/recurring-workflows' || url.startsWith('/api/recurring-workflows?')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
@@ -1575,7 +1575,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
+      if (url === '/api/recurring-workflows' || url.startsWith('/api/recurring-workflows?')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
@@ -1618,7 +1618,7 @@ describe('Dashboard shared entry', () => {
       if (url === '/api/ui/info') {
         return Promise.resolve({ ok: true, json: async () => uiInfo() } as Response);
       }
-      if (url.startsWith('/api/recurring-workflows?scope=personal')) {
+      if (url === '/api/recurring-workflows' || url.startsWith('/api/recurring-workflows?')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({ items: [recurringScheduleRow('schedule-one', 'Daily recurring scan')] }),
@@ -1671,7 +1671,7 @@ describe('Dashboard shared entry', () => {
   it.each([
     '/settings/',
     '/settings/providers-secrets/',
-    '/settings/user-workspace/',
+    '/settings/instance/',
     '/settings/operations/',
   ])(
     'MoonLadderStudios/MoonMind#3816 mounts the route-owned Settings page for the trailing-slash direct load %s',
