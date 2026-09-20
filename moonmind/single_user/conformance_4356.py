@@ -7,9 +7,15 @@ infrastructure without adding a test framework or requiring paid providers,
 live IdPs, or production credentials.
 
 Fixture/selector work owned by this issue (#4356) can proceed immediately.
-Full journey evidence for the cohort-owned rows consumes the integrated
+Hermetic subsets of the journey rows are proven in-process against the real
+admission/capability boundaries (see tests/unit/single_user/test_*_4356.py);
+full journey evidence for the cohort-owned rows consumes the integrated
 #4346-4355 candidate (only #4349 is merged at the time of writing); those
 rows report ``pending_cohort`` honestly rather than claiming coverage.
+Cohort-future integration suites are listed under the row's
+``planned_tests`` field -- never under ``new_tests``, whose refs must
+resolve to files that exist so a referenced suite cannot silently be
+skipped.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ CONFORMANCE_ROWS: tuple[dict, ...] = (
         ),
         "new_tests": (
             "tests/unit/single_user/test_structural_simplification_4356.py",
+            "tests/unit/single_user/test_first_run_4356.py",
         ),
     },
     {
@@ -71,6 +78,9 @@ CONFORMANCE_ROWS: tuple[dict, ...] = (
             "tests/unit/security/test_container_job_capabilities.py",
         ),
         "new_tests": (
+            "tests/unit/single_user/test_protected_ingress_4356.py",
+        ),
+        "planned_tests": (
             "tests/integration/single_user/test_blocked_conversion_4356.py",
         ),
     },
@@ -88,6 +98,9 @@ CONFORMANCE_ROWS: tuple[dict, ...] = (
             "tests/unit/workflows/temporal/test_run_replayer.py",
         ),
         "new_tests": (
+            "tests/unit/single_user/test_machine_authority_4356.py",
+        ),
+        "planned_tests": (
             "tests/integration/single_user/test_stale_eligibility_4356.py",
         ),
     },
@@ -106,6 +119,7 @@ CONFORMANCE_ROWS: tuple[dict, ...] = (
         ),
         "new_tests": (
             "tests/unit/single_user/test_structural_simplification_4356.py",
+            "tests/unit/single_user/test_protected_ingress_4356.py",
         ),
     },
     {
@@ -124,6 +138,7 @@ CONFORMANCE_ROWS: tuple[dict, ...] = (
         ),
         "new_tests": (
             "tests/unit/single_user/test_selector_4356.py",
+            "tests/unit/single_user/test_protected_ingress_4356.py",
         ),
     },
     {
@@ -141,6 +156,7 @@ CONFORMANCE_ROWS: tuple[dict, ...] = (
         ),
         "new_tests": (
             "tests/unit/single_user/test_selector_4356.py",
+            "tests/unit/single_user/test_machine_authority_4356.py",
         ),
     },
     {
@@ -157,6 +173,9 @@ CONFORMANCE_ROWS: tuple[dict, ...] = (
             "tools/run_omnigent_concurrency_qualification.py",
         ),
         "new_tests": (
+            "tests/unit/single_user/test_machine_authority_4356.py",
+        ),
+        "planned_tests": (
             "tests/integration/single_user/test_concurrency_restart_4356.py",
         ),
     },
@@ -173,7 +192,7 @@ CONFORMANCE_ROWS: tuple[dict, ...] = (
         "existing_tests": (
             "tests/unit/workflows/temporal/test_run_replayer.py",
         ),
-        "new_tests": (
+        "planned_tests": (
             "tests/integration/single_user/test_history_replay_4356.py",
         ),
     },

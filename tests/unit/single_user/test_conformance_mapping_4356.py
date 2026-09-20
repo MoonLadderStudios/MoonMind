@@ -63,11 +63,28 @@ def test_existing_test_refs_resolve_to_repo_paths() -> None:
             assert (REPO_ROOT / path_part).exists(), (row["id"], ref)
 
 
+def test_new_test_refs_resolve_to_repo_paths() -> None:
+    from moonmind.single_user import conformance_4356 as mapping
+
+    for row in mapping.CONFORMANCE_ROWS:
+        for ref in row.get("new_tests", ()):
+            # Same "path[:node]" convention as existing_tests: a new_tests
+            # ref must point at a file that exists, so a referenced suite
+            # cannot silently be skipped. Cohort-future suites belong in
+            # the row's planned_tests field, not in new_tests.
+            path_part = ref.split("::")[0]
+            assert (REPO_ROOT / path_part).exists(), (row["id"], ref)
+
+
 def test_mapping_uses_no_second_framework_or_live_credentials() -> None:
     from moonmind.single_user import conformance_4356 as mapping
 
     for row in mapping.CONFORMANCE_ROWS:
-        for ref in (*row.get("existing_tests", ()), *row.get("new_tests", ())):
+        for ref in (
+            *row.get("existing_tests", ()),
+            *row.get("new_tests", ()),
+            *row.get("planned_tests", ()),
+        ):
             lowered = ref.lower()
             assert "provider_verification" not in lowered, (row["id"], ref)
             assert "requires_credentials" not in lowered, (row["id"], ref)
