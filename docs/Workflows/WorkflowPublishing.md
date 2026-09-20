@@ -367,7 +367,7 @@ Post-merge GitHub finalization validates the merge owner's tracked PR against a 
 
 Publication eligibility uses the latest structured verification verdict and the run-owned accepted unified repository-publication artifact.
 
-`FULLY_IMPLEMENTED` with valid subject/scope-bound objective evidence permits the policy's candidate publication. Issue completion additionally requires evidence on the intended completion target; each downstream side effect retains its own authority and postconditions. `ADDITIONAL_WORK_NEEDED` continues bounded remediation while budget remains. After exhaustion, a PR-authorized workflow may publish the prescribed draft handoff with remaining-work verdict/report, then fail with `attention_required: true` and skip promotion/trusted handoffs. A pushed branch or draft PR is not `no_commit` and does not make an incomplete objective successful.
+`FULLY_IMPLEMENTED` with valid subject/scope-bound objective evidence permits the policy's candidate publication. Issue completion additionally requires evidence on the intended completion target; each downstream side effect retains its own authority and postconditions. `ADDITIONAL_WORK_NEEDED` continues bounded remediation while budget remains. After exhaustion, a PR-authorized workflow publishes the prescribed draft handoff with remaining-work verdict/report, then completes with `attention_required: true` and skips promotion/trusted handoffs. A pushed branch or draft PR is not `no_commit` and does not make an incomplete objective successful.
 
 A read-only verification step has no accepted publication evidence of its own. Inconclusive evidence at the stopping step defers to the atomic run-owned reference to validated `moonmind.publish.repository.v1` evidence and its exact candidate/target. Raw `pushStatus`, `branch`, or `headSha` from step metadata is not that evidence. A definitive authorization, contamination, or no-candidate refusal is not overridden by another projection.
 
@@ -377,7 +377,7 @@ The draft target is that same accepted published revision and, where applicable,
 
 A blocked gate records `publicationBlockedBy: "moonspec_verify"`, report refs, and `failureSummary.type = "moonspec_verification_gate"` in `reports/run_summary.json`, and skips downstream publication/Jira handoffs.
 
-The existing environment-class draft option `workflow.moonspec_environment_blocked_publish_action` / `WORKFLOW_MOONSPEC_ENVIRONMENT_BLOCKED_PUBLISH_ACTION` defaults to `fail`. Its `draft_pr` setting can permit an annotated attention-required draft for the declared environment-class `BLOCKED` or malformed/degraded `NO_DETERMINATION` result. Verifier-declared `NO_DETERMINATION` and `FAILED_UNRECOVERABLE` remain fail-closed. This gate option can narrow or implement an already authorized PR policy; it cannot turn explicit None or Branch into a PR grant or enable merging after incomplete verification.
+A declared environment-class `BLOCKED` or malformed/degraded `NO_DETERMINATION` result publishes an annotated attention-required draft for the same accepted revision. Verifier-declared `NO_DETERMINATION` and `FAILED_UNRECOVERABLE` remain fail-closed. Draft publication never turns explicit None or Branch into a PR grant and never enables merging after incomplete verification.
 
 ## 11. Runtime Instructions and Provider Boundaries
 

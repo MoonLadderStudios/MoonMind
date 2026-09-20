@@ -4525,6 +4525,7 @@ class TemporalArtifactActivities:
                 "state": item.state,
                 "closeStatus": item.close_status,
                 "workflowType": item.workflow_type,
+                "attentionRequired": bool(item.attention_required),
             }
             for workflow_id, item in snapshot.items()
         }
@@ -4555,6 +4556,7 @@ class TemporalArtifactActivities:
                     error_category=model.error_category,
                     finish_outcome_code=model.finish_outcome_code,
                     finish_summary=model.finish_summary,
+                    attention_required=model.attention_required,
                 )
             except TemporalExecutionNotFoundError:
                 # Internally-started child workflows can reach terminal state
