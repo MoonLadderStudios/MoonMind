@@ -217,7 +217,7 @@ def test_dashboard_destination_registry_matches_registered_spa_routes() -> None:
         "/schedules",
         "/skills",
         "/settings/providers-secrets",
-        "/settings/user-workspace",
+        "/settings/instance",
         "/settings/operations",
         "/omnigent/agents",
         "/omnigent/policies",
@@ -344,7 +344,7 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     assert "manifests" not in payload["features"]
     assert {
         "settingsProvidersSecrets",
-        "settingsUserWorkspace",
+        "settingsInstance",
         "settingsOperations",
     }.isdisjoint(payload["features"])
     assert payload["destinations"] == [
@@ -358,7 +358,7 @@ def test_dashboard_ui_info_endpoint_exposes_spa_boundary(client: TestClient) -> 
     ]
     assert [item["key"] for item in configuration_destinations] == [
         "settings-providers-secrets",
-        "settings-user-workspace",
+        "settings-instance",
         "settings-operations",
     ]
     skills_destination = next(
@@ -447,7 +447,7 @@ def test_dashboard_ui_info_scopes_configuration_destinations_to_permissions() ->
     assert response.status_code == 200
     features = response.json()["features"]
     assert "settingsProvidersSecrets" not in features
-    assert features["settingsUserWorkspace"] is True
+    assert features["settingsInstance"] is True
     assert features["settingsOperations"] is True
 
 
@@ -464,7 +464,7 @@ def test_dashboard_ui_info_marks_mutation_only_configuration_destinations_unavai
     assert response.status_code == 200
     features = response.json()["features"]
     assert features["settingsProvidersSecrets"] is False
-    assert features["settingsUserWorkspace"] is False
+    assert features["settingsInstance"] is False
     assert features["settingsOperations"] is False
 
 
@@ -504,7 +504,7 @@ def test_schedules_runtime_config_exposes_documented_templates(
     schedules = response.json()["dashboardConfig"]["sources"]["schedules"]
 
     assert schedules == {
-        "list": "/api/recurring-workflows?scope=personal",
+        "list": "/api/recurring-workflows",
         "create": "/api/recurring-workflows",
         "detail": "/api/recurring-workflows/{definitionId}",
         "update": "/api/recurring-workflows/{definitionId}",
@@ -719,9 +719,9 @@ def test_legacy_settings_subroutes_fall_back_to_first_authorized_destination() -
         secrets = client.get("/secrets", follow_redirects=False)
 
     assert workers.status_code == 307
-    assert workers.headers["location"] == "/settings/user-workspace"
+    assert workers.headers["location"] == "/settings/instance"
     assert secrets.status_code == 307
-    assert secrets.headers["location"] == "/settings/user-workspace"
+    assert secrets.headers["location"] == "/settings/instance"
 
 
 def test_legacy_settings_subroutes_fall_back_to_bare_entry_without_permissions() -> None:
@@ -743,7 +743,7 @@ def test_canonical_settings_routes_tolerate_a_trailing_slash(
     for path in (
         "/settings/",
         "/settings/providers-secrets/",
-        "/settings/user-workspace/",
+        "/settings/instance/",
         "/settings/operations/",
     ):
         response = client.get(path, follow_redirects=False)
@@ -757,6 +757,24 @@ def test_canonical_settings_routes_tolerate_a_trailing_slash(
         response = client.get(path, follow_redirects=False)
         assert response.status_code == 404, path
         assert "moonmind-ui-boot" not in response.text
+
+
+def test_retired_user_workspace_route_redirects_to_instance() -> None:
+    """MoonMind#4353: the retired `/settings/user-workspace` bookmark redirects
+    to the `/settings/instance` replacement with stale scope params dropped."""
+    with _client_with_mock_service(
+        user_settings_permissions={"settings.catalog.read"}
+    ) as (client, _mock_service):
+        response = client.get("/settings/user-workspace", follow_redirects=False)
+        assert response.status_code == 307
+        assert response.headers["location"] == "/settings/instance"
+
+        scoped = client.get(
+            "/settings/user-workspace?scope=user&q=workflow&section=x",
+            follow_redirects=False,
+        )
+        assert scoped.status_code == 307
+        assert scoped.headers["location"] == "/settings/instance"
 
 
 def test_settings_entry_serves_the_spa_shell_without_honoring_section(

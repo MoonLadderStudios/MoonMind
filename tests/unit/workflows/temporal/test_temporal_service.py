@@ -8757,3 +8757,46 @@ async def test_get_drain_metrics_defaults_to_fleet_scope(
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
         await service.get_drain_metrics()
     mock_client_adapter.get_drain_metrics.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_read_only_plan_with_managed_publish(
+    tmp_path, mock_client_adapter
+):
+    """Rerun, continuation, and every other launch route converge here.
+
+    The router check only guards the task-shaped submission path, so a plan
+    that cannot satisfy its publish mode could still be admitted through the
+    shared boundary and fail late the same way.
+    """
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        with pytest.raises(
+            TemporalExecutionValidationError, match="repositoryOperation"
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=uuid4(),
+                title="Resolve target pull request",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "publishMode": "branch",
+                    "workflow": {
+                        "instructions": "Resolve the target pull request.",
+                        "publish": {"mode": "branch"},
+                        "steps": [
+                            {
+                                "id": "tpl:pr-review-resolve:01",
+                                "title": "Resolve target pull request",
+                                "repositoryOperation": "read",
+                            }
+                        ],
+                    },
+                },
+                idempotency_key=None,
+            )

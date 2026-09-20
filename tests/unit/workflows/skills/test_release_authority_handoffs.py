@@ -389,8 +389,6 @@ async def test_verified_primary_resume_does_not_repeat_operator_admission(
     )
     preflight = AsyncMock(side_effect=RuntimeError("operator route now unavailable"))
     monkeypatch.setattr(release, "prepare_operator_access", preflight)
-    cleanup = AsyncMock()
-    monkeypatch.setattr(release.ReleaseCohort, "cleanup", cleanup)
     request = tmp_path / "request.json"
     request.write_text(
         json.dumps(
@@ -415,7 +413,6 @@ async def test_verified_primary_resume_does_not_repeat_operator_admission(
     (tmp_path / "deployment-result.json").write_text(json.dumps(primary))
     await release._run_job_body(request)
     preflight.assert_not_awaited()
-    cleanup.assert_awaited_once()
     # The terminal result carries the verified source revision alongside the
     # readiness evidence even when resuming from a pre-stamp primary.
     expected = {

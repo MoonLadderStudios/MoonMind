@@ -256,9 +256,31 @@ function scheduleSources(payload: BootPayload): ScheduleSources | undefined {
   return bootData?.dashboardConfig?.sources?.schedules || bootData?.sources?.schedules;
 }
 
+/**
+ * Account-free cutover (MoonLadderStudios/MoonMind#4353): schedule queries
+ * are instance resources and must not be partitioned by user identity.
+ * Stale account-era boot payloads may still carry `scope`, so it is dropped
+ * at the use site instead of being reused.
+ */
+export function stripLegacyAccountScopeParam(endpoint: string): string {
+  const [base, hash = ''] = endpoint.split('#', 2);
+  const [path, query = ''] = (base || '').split('?', 2);
+  if (!query) {
+    return endpoint;
+  }
+  const params = new URLSearchParams(query);
+  if (!params.has('scope')) {
+    return endpoint;
+  }
+  params.delete('scope');
+  const serialized = params.toString();
+  return `${path}${serialized ? `?${serialized}` : ''}${hash ? `#${hash}` : ''}`;
+}
+
 function scheduleListEndpoint(payload: BootPayload): string {
   const schedules = scheduleSources(payload);
-  return schedules?.list || `${payload.apiBase || '/api'}/recurring-workflows?scope=personal`;
+  const raw = schedules?.list || `${payload.apiBase || '/api'}/recurring-workflows`;
+  return stripLegacyAccountScopeParam(raw);
 }
 
 function safeRecurringSearchParams(): URLSearchParams {

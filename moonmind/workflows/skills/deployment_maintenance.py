@@ -1,33 +1,88 @@
-"""Reconcile release ownership using the existing deployment maintenance fleet."""
+"""Report release-job state using the existing deployment maintenance fleet."""
 
 from __future__ import annotations
 
 import json
-import time
-from dataclasses import replace
+import logging
 
 from moonmind.workflows.skills.deployment_execution import (
     DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS,
 )
 from moonmind.workflows.skills.deployment_release import (
-    ReleaseCohort,
     docker,
     inspect_owned,
-    launch_updater,
     state_root,
     write_record,
 )
 
+logger = logging.getLogger(__name__)
 
-async def reconcile_release(directory, runner, client):
-    from moonmind.workflows.temporal.release_routing import (
-        current_version,
-        qualification_closed_without_activation,
-        routing_snapshot,
-        version_drained,
+
+def _deployment_project():
+    """The Compose project this deployment owns.
+
+    Deployment services are configured with MOONMIND_DEPLOYMENT_PROJECT_NAME,
+    which the host updater also passes; COMPOSE_PROJECT_NAME is not set here.
+    Reading the wrong variable silently fell back to "moonmind", so a
+    deployment installed under a custom --compose-project would have ignored
+    its own containers and reported another deployment's instead.
+    """
+    import os
+
+    return os.environ.get("MOONMIND_DEPLOYMENT_PROJECT_NAME") or "moonmind"
+
+# Containers a pre-recreate-in-place release or availability owner created
+# beside the installed fleet. They reuse the deployment's own Compose project
+# and service labels, so `docker compose ps -q <service>` returns more than one
+# id while any of them exist, which blocks later updates.
+_LEGACY_COHORT_PREFIXES = ("mm-candidate-", "mm-retained-")
+
+
+async def observed_legacy_cohorts(project="moonmind"):
+    """Names of this deployment's leftover blue/green cohort containers.
+
+    Recreate-in-place never creates these. A deployment upgrading across that
+    change can still be carrying some, and they are worth surfacing because
+    they run an older image against the same Temporal task queue -- the
+    mixed-version condition behind MoonLadderStudios/MoonMind#4363.
+
+    They do not block an update. They are `compose run` one-offs, and
+    `docker compose ps -q <service>` excludes one-offs, so installed-fleet
+    verification never counts them. This is reported as retained-work
+    evidence, not as a blocker, and nothing here removes them: a cohort may
+    still hold the only poller for pinned or in-flight work, and no proof
+    available to this pass distinguishes that safely.
+
+    Scoped to this deployment's Compose project. One host can run several
+    independent MoonMind deployments, and a daemon-wide listing would name
+    another deployment's cohorts as blocking this one -- sending the operator
+    to force-remove containers that may be its last pollers.
+    """
+    listed = await docker(
+        "ps",
+        "-a",
+        "--filter",
+        f"label=com.docker.compose.project={project}",
+        "--format",
+        "{{.Names}}",
     )
-    from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
+    return [
+        name
+        for name in (line.strip() for line in listed.splitlines())
+        if name.startswith(_LEGACY_COHORT_PREFIXES)
+    ]
 
+
+async def reconcile_release(directory):
+    """Report one release job and drop its finished updater container.
+
+    Interrupted releases are not relaunched from here. The updater runs from
+    the image its request pinned, so relaunching a job authored before
+    recreate-in-place would execute the removed blue/green controller against
+    the installed fleet. Re-running `./tools/update-moonmind.sh` starts a
+    fresh, audited release instead, which is both simpler and the only path
+    that cannot resurrect a deleted controller.
+    """
     request = json.loads((directory / "request.json").read_text())
     owner = request["authored"]["owner"]
     result = {"job": directory.name, "resumed": False, "retired": [], "pending": []}
@@ -35,169 +90,69 @@ async def reconcile_release(directory, runner, client):
     observed = await inspect_owned(updater, owner)
     if observed and observed["Image"] != request["imageId"]:
         raise ValueError("Release updater image differs from its durable owner")
-    if not (directory / "result.json").exists():
-        if observed and observed["State"]["Running"]:
-            result["pending"].append("running")
-            return result
-        delivery_file = directory / "deliveries.json"
-        deliveries = (
-            json.loads(delivery_file.read_text())["count"]
-            if delivery_file.exists()
-            else 1
+    terminal = (directory / "result.json").exists()
+    if not terminal:
+        result["pending"].append(
+            "running" if observed and observed["State"]["Running"] else "unfinished"
         )
-        if deliveries < 3 and time.time() < request["deadline"]:
-            write_record(delivery_file, {"count": deliveries + 1})
-            if observed is None:
-                await launch_updater(runner, directory, request)
-            else:
-                await docker("start", updater)
-            result["resumed"] = True
-            return result
-        result["pending"].append("execution_budget_exhausted")
-
-    routing_file = directory / "routing.json"
-    if not routing_file.exists():
-        return result
-    routing = json.loads(routing_file.read_text())
-    deployment = routing["deployment"]
-    candidate = f"{deployment}.{routing['candidate']}"
-    current = current_version(await routing_snapshot(client, deployment))
-    cohort = ReleaseCohort(runner, directory, owner)
-    # Active routing can release temporary candidate pollers only after the
-    # installed fleet has objectively assumed that exact release. Older routing
-    # can release them only when Temporal certifies it has drained.
-    candidate_safe = (
-        await version_drained(client, candidate) if current != candidate else False
-    )
-    # A promoted candidate never enters drainage or inactivity, so this is the
-    # only evidence that can retire its qualification cohort. The primary
-    # receipt is the ordinary source; a release whose deployment completed and
-    # whose later step failed finishes through the attempt receipt instead, and
-    # requiring only the primary left that cohort polling forever. Either way
-    # the installed fleet must objectively prove it runs the candidate.
-    receipt_file = next(
-        (
-            path
-            for path in (
-                directory / "deployment-result.json",
-                directory / "attempt-result.json",
-            )
-            if path.exists()
-        ),
-        None,
-    )
-    if current == candidate and receipt_file is not None:
-        primary = json.loads(receipt_file.read_text())
-        if primary["owner"] != owner:
-            raise ValueError("Deployment receipt owner differs")
-        if primary["result"]["status"] == "COMPLETED":
-            await cohort.verify_installed(
-                request["image"], expected=routing["candidate"], attempts=1
-            )
-            candidate_safe = True
-    unused = False
-    if (
-        not candidate_safe
-        and current != candidate
-        and (directory / "result.json").exists()
-    ):
-        unused = await qualification_closed_without_activation(
-            client, version=candidate, canary_id=f"mm-release-canary-{directory.name}"
-        )
-        candidate_safe = unused
-    groups = [("candidate", candidate_safe)]
-    retained_file = directory / "retained.json"
-    if retained_file.exists():
-        retained = json.loads(retained_file.read_text())
-        if retained["owner"] != owner:
-            raise ValueError("Retained release owner differs")
-        retained_safe = await version_drained(client, retained["version"])
-        if not retained_safe and unused and current == retained["version"]:
-            await cohort.verify_installed(
-                retained["image"],
-                expected=current.removeprefix(deployment + "."),
-                attempts=1,
-            )
-            retained_safe = True
-        groups.append(("retained", retained_safe))
-    for kind, safe in groups:
-        receipt = directory / f"{kind}-retired.json"
-        if receipt.exists():
-            continue
-        if not safe:
-            result["pending"].append(kind)
-            continue
-        cohort.names = [
-            f"mm-{kind}-{directory.name[:16]}-{fleet.replace('_', '-')}"
-            for fleet in _FLEET_SERVICE_NAMES
-        ]
-        if kind == "candidate":
-            cohort.names.append(f"mm-candidate-{directory.name[:16]}-api")
-        await cohort.cleanup()
-        write_record(receipt, {"owner": owner, "status": "verified_removed"})
-        result["retired"].append(kind)
-    if (
-        observed
-        and not observed["State"]["Running"]
-        and (directory / "result.json").exists()
-    ):
+    if observed and not observed["State"]["Running"] and terminal:
         await docker("rm", updater)
     return result
 
 
 async def reconcile_releases():
-    """A bounded maintenance pass; unknown drainage never releases authority."""
+    """A bounded maintenance pass that reports; it never relaunches or deletes.
+
+    Recreate-in-place has no routing to reconcile and no cohort to retire, so
+    this pass needs neither Temporal nor the Compose runner. It records each
+    job's state, drops updater containers whose job is terminal, and reports
+    any leftover blue/green cohort containers for an operator to remove.
+    """
     import asyncio
     import fcntl
 
-    from moonmind.config.settings import settings
     from moonmind.utils.logging import redact_sensitive_text
-    from moonmind.workflows.temporal.client import get_temporal_client
-    from moonmind.workflows.temporal.worker_runtime import (
-        _build_deployment_update_executor,
-    )
 
     root = state_root()
     if not root.exists():
-        return {"jobs": [], "errors": []}
-    executor = _build_deployment_update_executor()
-    if executor is None:
-        raise ValueError(
-            "Deployment reconciliation requires its configured execution substrate"
+        return {"jobs": [], "errors": [], "legacyCohorts": []}
+    result = {"jobs": [], "errors": [], "legacyCohorts": []}
+    # Auxiliary reporting must not erase the pass. An unreachable daemon here
+    # raised before any job was visited, so a transient Docker outage returned
+    # no maintenance result at all even though every job record stayed
+    # readable.
+    try:
+        result["legacyCohorts"] = await observed_legacy_cohorts(
+            _deployment_project()
         )
-    runner = replace(
-        executor.runner,
-        compose_file=executor.runner.compose_file or "/app/release/docker-compose.yaml",
-    )
-    client = await get_temporal_client(
-        settings.temporal.address, settings.temporal.namespace
-    )
-    result = {"jobs": [], "errors": []}
-    # Visit least-recently reconciled jobs first so retained versions cannot
-    # starve later jobs. Each pass and each deployment's execution are bounded.
+    except Exception as exc:
+        from moonmind.utils.logging import redact_sensitive_text
+
+        result["errors"].append(
+            {
+                "job": "legacy-cohort-discovery",
+                "error": redact_sensitive_text(str(exc))[:500],
+            }
+        )
+    # Visit least-recently reconciled jobs first so one job cannot starve the
+    # rest. Each pass is bounded.
     requests = sorted(
-        root.glob("*/request.json"),
-        key=lambda path: (
-            (path.parent / "maintenance.json").stat().st_mtime
-            if (path.parent / "maintenance.json").exists()
+        (path.parent for path in root.glob("*/request.json")),
+        key=lambda directory: (
+            (directory / "maintenance.json").stat().st_mtime
+            if (directory / "maintenance.json").exists()
             else 0
         ),
     )
-    # The nonblocking acquire yields to a running update; an update waits this
-    # pass out instead (see DEPLOYMENT_UPDATE_LOCK_WAIT_SECONDS).
-    async with (
-        await executor.lock_manager.acquire("moonmind"),
-        asyncio.timeout(DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS),
-    ):
-        for request_file in requests[:20]:
-            directory = request_file.parent
+    async with asyncio.timeout(DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS):
+        for directory in requests[:20]:
             with (directory / "owner.lock").open("a") as lock:
                 try:
                     fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     continue
                 try:
-                    outcome = await reconcile_release(directory, runner, client)
+                    outcome = await reconcile_release(directory)
                     result["jobs"].append(outcome)
                     write_record(directory / "maintenance.json", outcome)
                 except Exception as exc:
@@ -207,4 +162,12 @@ async def reconcile_releases():
                     }
                     result["errors"].append(error)
                     write_record(directory / "maintenance.json", error)
+    if result["legacyCohorts"]:
+        logger.info(
+            "Leftover blue/green cohort containers are still running an older "
+            "image against this deployment's task queues. They do not block "
+            "updates; remove one only when its version is known to hold no "
+            "pinned or in-flight work: %s",
+            ", ".join(result["legacyCohorts"]),
+        )
     return result

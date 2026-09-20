@@ -1,6 +1,6 @@
 ---
 name: update-moonmind
-description: Qualify and promote one immutable MoonMind release through a durable updater, preserving in-flight work and operator access.
+description: Install one immutable MoonMind release through a durable updater that recreates the fleet in place, preserving deployment authority and operator access.
 metadata:
   required-capabilities:
     - git
@@ -28,23 +28,23 @@ Skill directory: `bash "$UPDATE_MOONMIND_SKILL_DIR/scripts/run-update-moonmind.s
 
 ## Release authority and completion
 
-The entrypoint fetches the selected branch without checking out or resetting local files. It walks the branch first-parent history (up to 20 commits) to the newest commit with a published `sha-<commit>` image, verifies that image's source-revision label, and pins the repository digest. A tip commit with no published image yet (for example a just-merged commit whose publish workflow is still running) is skipped with a printed notice naming the selected ancestor; only when no ancestor has a published image is the unavailable release actionable. Never substitute `latest` or rebuild a different source under that identity.
+The entrypoint fetches the selected branch without checking out or resetting local files. It selects the newest published `sha-<commit>` image on the branch's first-parent history (up to 20 commits), verifies that image's source-revision label, and pins the repository digest. The fetched tip is preferred: when its image is not published yet (for example a just-merged commit whose publish workflow is still running) the entrypoint waits a bounded interval for that exact commit, then falls back to the newest published ancestor with a printed notice naming it. Only when no ancestor has a published image is the unavailable release actionable. Never substitute `latest` or rebuild a different source under that identity.
 
 The selected image supplies the canonical Compose definition, application code, migrations, portable Skills and release controller. Deployment-owned `.env`, interfaces, authentication and explicit configuration retain their existing authority. The image-owned controller is the portable semantic entrypoint for both this Skill and MoonMind's deployment tool. Docker, durable state storage and Temporal supply the execution substrate.
 
-The controller records an immutable submission, starts one named updater with durable ownership, qualifies every affected worker queue with a pinned canary, promotes routing with a compare-and-set operation, reconciles the installed fleet, migrates the singular Omnigent release (server/host digests, launch policy versions, recurring schedule admissions) to the resolved digests, and drains temporary workers. The updater can replace the deployment-control service that launched it. A terminal release receipt and verified installed readiness establish completion. An image pull, process exit, or successful container start alone does not.
+The controller records an immutable submission, starts one named updater with durable ownership, pulls and verifies the pinned digest, persists the desired state, recreates the installed fleet in place, verifies readiness for every affected service, and migrates the singular Omnigent release (server/host digests, launch policy versions, recurring schedule admissions) to the resolved digests. No parallel candidate or retained fleet is started, so nothing is drained afterwards and recreation has a bounded downtime window. The updater can replace the deployment-control service that launched it. A terminal release receipt and verified installed readiness establish completion. An image pull, process exit, or successful container start alone does not.
 
 ## Terminal outcomes
 
 Completion requires a terminal release receipt naming the exact source SHA,
-the pinned repository digest of the promoted image, and the verified installed
+the pinned repository digest of the installed image, and the verified installed
 readiness for every affected service. The serialized terminal result carries
 the verified `sourceRevision` in its outputs alongside `resolvedDigest` and
 `releaseReadinessArtifactRef`; receipt recovery validates that bound
 `sourceRevision` together with the digest before granting image authority, so
 the receipt is self-sufficient and never depends on an unbound second record.
 Report the unfinished phase and its recorded recovery owner when bounded
-recovery exhausts; preserve primary deployment success when only cleanup remains.
+recovery exhausts; preserve primary deployment success when only reporting remains.
 
 - Verify readiness against the declared operator addresses from the immutable
   submission (`--operator-url` plus any configured base URL). An image pull,

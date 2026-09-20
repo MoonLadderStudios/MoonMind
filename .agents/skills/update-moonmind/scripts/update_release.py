@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -20,10 +21,25 @@ _MAX_DIAGNOSTIC_CHARS = 4000
 _MAX_COMMAND_CHARS = 1000
 _MAX_PUBLISHED_ANCESTOR_SEARCH = 20
 
+# Bounded wait for the fetched tip's in-flight image publish, tried before
+# selection falls back to a published ancestor so the exact requested commit
+# still wins when its publish is merely late. ~10 minutes covers normal
+# publish latency.
+_PULL_RETRY_INTERVAL_SECONDS = 30
+_PULL_RETRY_MAX_ATTEMPTS = 20
+
 _URL_USERINFO_RE = re.compile(r"(://)[^/\s:]+:[^/\s@]+@")
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)(password|passwd|token|secret|authorization|cookie)(\s*[:=]\s*)(\S+)"
 )
+
+
+class DockerPullError(RuntimeError):
+    """A `docker pull` failure with a classified cause for retry decisions."""
+
+    def __init__(self, message, category):
+        super().__init__(message)
+        self.category = category
 
 
 def _redact_diagnostics(text):
@@ -32,16 +48,17 @@ def _redact_diagnostics(text):
     return _SECRET_ASSIGNMENT_RE.sub(r"\1\2***", redacted)
 
 
-def _docker_pull_hint(combined_lower):
+def _sleep(seconds):
+    time.sleep(seconds)
+
+
+def _classify_pull_failure(combined_lower):
     if (
         "cannot connect to the docker daemon" in combined_lower
         or "is the docker daemon running" in combined_lower
         or "permission denied while trying to connect" in combined_lower
     ):
-        return (
-            "Hint: the Docker daemon is unreachable; start Docker Desktop "
-            "(or check DOCKER_HOST and socket permissions) and retry."
-        )
+        return "daemon"
     if (
         "unauthorized" in combined_lower
         or "authentication required" in combined_lower
@@ -51,10 +68,7 @@ def _docker_pull_hint(combined_lower):
         or "denied: denied" in combined_lower
         or "access denied" in combined_lower
     ):
-        return (
-            "Hint: registry authentication failed; run `docker login ghcr.io` "
-            "with an account that can read the release repository and retry."
-        )
+        return "auth"
     if (
         "manifest unknown" in combined_lower
         or "manifest for" in combined_lower
@@ -62,13 +76,30 @@ def _docker_pull_hint(combined_lower):
         or "no such image" in combined_lower
         or "not found" in combined_lower
     ):
-        return (
-            "Hint: the fetched commit has no published image yet; check the "
-            "image publish workflow for that SHA, wait for it to publish, then "
-            "retry. Never substitute `latest` for the pinned sha-<commit> image; "
-            "for local development use --local-build instead."
-        )
-    return ""
+        return "unpublished"
+    return "unknown"
+
+
+_PULL_HINTS = {
+    "daemon": (
+        "Hint: the Docker daemon is unreachable; start Docker Desktop "
+        "(or check DOCKER_HOST and socket permissions) and retry."
+    ),
+    "auth": (
+        "Hint: registry authentication failed; run `docker login ghcr.io` "
+        "with an account that can read the release repository and retry."
+    ),
+    "unpublished": (
+        "Hint: the fetched commit has no published image yet; check the "
+        "image publish workflow for that SHA, wait for it to publish, then "
+        "retry. Never substitute `latest` for the pinned sha-<commit> image; "
+        "for local development use --local-build instead."
+    ),
+}
+
+
+def _docker_pull_hint(combined_lower):
+    return _PULL_HINTS.get(_classify_pull_failure(combined_lower), "")
 
 
 def run(args, *, cwd, env=None):
@@ -100,8 +131,72 @@ def run(args, *, cwd, env=None):
             message += f"\n{hint}"
         # Docker/Git diagnostics can contain registry or remote credentials,
         # so only the redacted form above is reported.
+        if len(args) > 1 and args[0] == "docker" and args[1] == "pull":
+            raise DockerPullError(
+                message, _classify_pull_failure(combined.lower())
+            ) from None
         raise RuntimeError(message)
     return (getattr(result, "stdout", "") or "").strip()
+
+
+def _select_release_image(*, repo, branch, tip_revision, image_repository):
+    """Select the newest published image on the fetched branch history.
+
+    The fetched tip is preferred: an unpublished pull failure means its publish
+    workflow is still running, so the tip is retried for a bounded interval
+    before selection falls back to its newest published first-parent ancestor.
+    Commits are immutable, so waiting cannot change which artifact a candidate
+    names. Auth, daemon and unknown failures propagate immediately instead of
+    masking a broken registry as an unpublished release.
+
+    Returns the selected ``(revision, image, skipped_unpublished)``.
+    """
+    try:
+        candidates = run(
+            [
+                "git",
+                "rev-list",
+                "--first-parent",
+                "-n",
+                str(_MAX_PUBLISHED_ANCESTOR_SEARCH),
+                tip_revision,
+            ],
+            cwd=repo,
+        ).split()
+    except RuntimeError:
+        candidates = []
+    if tip_revision not in candidates:
+        candidates = [tip_revision, *candidates]
+    skipped = []
+    last_error = None
+    for candidate in candidates:
+        image = f"{image_repository}:sha-{candidate}"
+        # Only the tip can still be publishing; older ancestors have settled.
+        attempts = _PULL_RETRY_MAX_ATTEMPTS if candidate == tip_revision else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                run(["docker", "pull", image], cwd=repo)
+                return candidate, image, skipped
+            except DockerPullError as exc:
+                if exc.category != "unpublished":
+                    raise
+                last_error = exc
+            if attempt < attempts:
+                print(
+                    f"Published image {image} not yet available "
+                    f"(attempt {attempt}/{attempts}); waiting "
+                    f"{_PULL_RETRY_INTERVAL_SECONDS}s for the image publish "
+                    "workflow...",
+                    flush=True,
+                )
+                _sleep(_PULL_RETRY_INTERVAL_SECONDS)
+        skipped.append(candidate)
+    raise RuntimeError(
+        f"Published image {image_repository}:sha-{tip_revision} for "
+        f"origin/{branch} revision {tip_revision} is unavailable; checked "
+        f"{len(candidates)} commit(s) ({', '.join(skipped)}) with no published "
+        f"image; {last_error}"
+    ) from last_error
 
 
 def main(argv=None):
@@ -174,52 +269,12 @@ def main(argv=None):
         tip_revision = run(
             ["git", "rev-parse", "--verify", "FETCH_HEAD^{commit}"], cwd=repo
         )
-        try:
-            candidates = run(
-                [
-                    "git",
-                    "rev-list",
-                    "--first-parent",
-                    "-n",
-                    str(_MAX_PUBLISHED_ANCESTOR_SEARCH),
-                    "FETCH_HEAD^{commit}",
-                ],
-                cwd=repo,
-            ).split()
-        except RuntimeError:
-            candidates = []
-        if tip_revision not in candidates:
-            candidates = [tip_revision, *candidates]
-        if not candidates:
-            candidates = [tip_revision]
-        revision = None
-        image = None
-        skipped_unpublished = []
-        last_missing_error = None
-        for candidate in candidates:
-            candidate_image = f"{args.image_repository}:sha-{candidate}"
-            try:
-                run(["docker", "pull", candidate_image], cwd=repo)
-            except RuntimeError as exc:
-                if "has no published image yet" in str(exc):
-                    skipped_unpublished.append(candidate)
-                    last_missing_error = exc
-                    continue
-                raise RuntimeError(
-                    f"Published image {candidate_image} for origin/{args.branch} revision "
-                    f"{candidate} is unavailable; {exc}"
-                ) from exc
-            revision = candidate
-            image = candidate_image
-            break
-        if revision is None:
-            tip_image = f"{args.image_repository}:sha-{tip_revision}"
-            checked = ", ".join(skipped_unpublished) if skipped_unpublished else tip_revision
-            raise RuntimeError(
-                f"Published image {tip_image} for origin/{args.branch} revision "
-                f"{tip_revision} is unavailable; checked {len(candidates)} commit(s) "
-                f"({checked}) with no published image; {last_missing_error}"
-            ) from last_missing_error
+        revision, image, skipped_unpublished = _select_release_image(
+            repo=repo,
+            branch=args.branch,
+            tip_revision=tip_revision,
+            image_repository=args.image_repository,
+        )
         if revision != tip_revision:
             print(
                 f"Tip revision {tip_revision[:12]} has no published image yet; "

@@ -7430,3 +7430,110 @@ async def test_terminal_evidence_activity_does_not_trust_rejected_failure_metada
     assert result.failure_class == "execution_error"
     assert result.provider_error_code == "INVALID_TERMINAL_EVIDENCE"
     assert result.metadata["failureCode"] == "INVALID_TERMINAL_EVIDENCE"
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_keeps_merge_gate_human_approval_non_failing(
+    tmp_path: Path,
+) -> None:
+    """The adapter exemption must survive the terminal-contract boundary.
+
+    Every `manual_review` maps to PR_RESOLVER_MANUAL_REVIEW, which restores
+    failure_class="execution_error". That silently undid the adapter's
+    ownership exemption, so the child still failed and the merge-automation
+    parent still took its exception path instead of routing the verdict.
+    """
+
+    workspace = tmp_path / "repo"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                **_RECORDED_BLOCKED_RESOLVER_RESULT,
+                "reason": "merge_gate_requires_human_approval",
+                "final_reason": "merge_gate_requires_human_approval",
+                "next_step": "manual_review",
+            }
+        ),
+        encoding="utf-8",
+    )
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "terminalContract": _recorded_resolver_contract(),
+            "result": {
+                "summary": "Runtime completed",
+                "metadata": {"prResolverMergeGateOwned": True},
+            },
+        }
+    )
+
+    assert result.failure_class is None
+    assert "merge_gate_requires_human_approval" in result.summary
+    assert result.metadata["prResolverReason"] == (
+        "merge_gate_requires_human_approval"
+    )
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_still_fails_human_approval_without_a_gate_owner(
+    tmp_path: Path,
+) -> None:
+    """A standalone resolver asked to merge has not done its job."""
+
+    workspace = tmp_path / "repo"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                **_RECORDED_BLOCKED_RESOLVER_RESULT,
+                "reason": "merge_gate_requires_human_approval",
+                "final_reason": "merge_gate_requires_human_approval",
+                "next_step": "manual_review",
+            }
+        ),
+        encoding="utf-8",
+    )
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "terminalContract": _recorded_resolver_contract(),
+            "result": {"summary": "Runtime completed"},
+        }
+    )
+
+    assert result.failure_class == "execution_error"
+
+
+@pytest.mark.asyncio
+async def test_terminal_evidence_still_fails_other_manual_review_reasons(
+    tmp_path: Path,
+) -> None:
+    """The exemption is scoped to the approval gate, not to manual_review."""
+
+    workspace = tmp_path / "repo"
+    result_path = workspace / "var" / "pr_resolver" / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(_RECORDED_BLOCKED_RESOLVER_RESULT), encoding="utf-8"
+    )
+    activities = TemporalAgentRuntimeActivities()
+
+    result = await activities.agent_runtime_evaluate_terminal_evidence(
+        {
+            "workspacePath": str(workspace),
+            "terminalContract": _recorded_resolver_contract(),
+            "result": {
+                "summary": "Runtime completed",
+                "metadata": {"prResolverMergeGateOwned": True},
+            },
+        }
+    )
+
+    assert result.failure_class == "execution_error"

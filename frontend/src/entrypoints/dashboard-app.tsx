@@ -87,8 +87,8 @@ const PAGE_IMPORTS = {
   'settings-providers-secrets': async () => ({
     default: (await import('./settings')).ProvidersSecretsSettingsPage,
   }),
-  'settings-user-workspace': async () => ({
-    default: (await import('./settings')).UserWorkspaceSettingsPage,
+  'settings-instance': async () => ({
+    default: (await import('./settings')).InstanceSettingsPage,
   }),
   skills: () => import('./skills'),
   'workflow-start': () => import('./workflow-start'),
@@ -255,7 +255,7 @@ async function firstVisibleWorkflowId(apiBase: string, search: URLSearchParams):
 }
 
 async function firstVisibleRecurringDefinitionId(apiBase: string): Promise<string | null> {
-  const response = await fetch(`${apiBase}/recurring-workflows?scope=personal`, { credentials: 'include' });
+  const response = await fetch(`${apiBase}/recurring-workflows`, { credentials: 'include' });
   if (!response.ok) {
     throw new Error(`Recurring schedule list request failed: ${response.status}`);
   }

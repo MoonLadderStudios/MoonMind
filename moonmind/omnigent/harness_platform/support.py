@@ -63,22 +63,30 @@ def compute_support_combination_key(payload: SupportKeyPayload | dict[str, Any])
     return "omnigent-support:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
-# Model, effort, normalized model options, and Required Capabilities are per-run
-# selections, not deployment substrate identity. Class admission rejects
-# unsupported capabilities before the support key exists, and launch preflight
-# validates the selected model against the exact host/provider catalog. Keeping
-# either digest in the local deployment-qualification key would make every
-# otherwise valid default-profile variation require manual requalification.
-# Protected support evidence remains bound to the complete exact support key.
+# Model, effort, normalized model options, Required Capabilities, and the agent
+# source are per-run selections, not deployment substrate identity. Class
+# admission rejects unsupported capabilities before the support key exists,
+# launch preflight validates the selected model against the exact host/provider
+# catalog, and launch-time plan verification recomputes the pinned agent source
+# from the presented Agent Profile artifact and rejects a different one.
+#
+# The agent source belongs to that launch boundary, not to this one. A
+# deployment qualifies one harness, host, image, realizer, and credential
+# class; it cannot separately qualify every Agent Profile snapshot a durable
+# schedule, checkpoint, or in-flight execution still pins, because the
+# bootstrap only ever requalifies the active profile. Pinning it here means
+# any change to which Agent Profile digest the compiler records — as in
+# MoonLadderStudios/MoonMind#4438 — permanently strands those plans behind
+# evidence that can never be republished.
 DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS = frozenset(
-    {"modelConfigDigest", "requiredCapabilitiesDigest"}
+    {"modelConfigDigest", "requiredCapabilitiesDigest", "agentSourceRef"}
 )
 
 # none@1 fast-path: credentialless runs mount no secret (target kind none,
-# cleanup none). Build digests, harness implementation, vendor runtime, and
-# agent source churn on every release/upgrade but are already gated elsewhere
-# (catalog sync, trust record, launch preflight). For none@1 only, deployment
-# qualification keeps the isolation-relevant triple — credential class,
+# cleanup none). Build digests, harness implementation, and vendor runtime
+# churn on every release/upgrade but are already gated elsewhere (catalog
+# sync, trust record, launch preflight). For none@1 only, deployment
+# qualification keeps the isolation-relevant set — credential class,
 # image/host/launch policy, provider route, realizer — and ignores the
 # volatile build fields so routine upgrades don't force manual requalification.
 # Auth-bearing materializers stay exact: a secret mount must never silently
@@ -89,7 +97,6 @@ NONE_DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS = frozenset(
         "omnigentHostBuildRef",
         "harnessImplementationRef",
         "vendorRuntimeRefs",
-        "agentSourceRef",
     }
 )
 
@@ -131,14 +138,15 @@ def compute_deployment_qualification_key(
 
     Deployment qualification proves this deployment can run one exact harness,
     host, image, realizer, and credential class. It deliberately excludes
-    per-run model/options and capability variance so ordinary default-profile
-    workflows are admissible without manual requalification.
+    per-run model/options, capability variance, and the agent source so
+    ordinary default-profile workflows — and durable plans still pinned to an
+    earlier Agent Profile snapshot — are admissible without manual
+    requalification.
 
     For the credentialless none@1 fast-path it additionally ignores volatile
-    build digests (server/host builds, harness impl, vendor runtime, agent
-    source); those are covered by catalog/trust/preflight and otherwise force
-    manual requalification on every upgrade. Auth-bearing identities stay
-    exact.
+    build digests (server/host builds, harness impl, vendor runtime); those are
+    covered by catalog/trust/preflight and otherwise force manual
+    requalification on every upgrade. Auth-bearing identities stay exact.
     """
 
     if isinstance(payload, SupportKeyPayload):
