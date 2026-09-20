@@ -937,3 +937,88 @@ async def startup_guard_decision(
         collision_resolutions=collision_resolutions,
         deployment_owned_tables=deployment_owned_tables,
     )
+
+
+async def profile_secrets_transform(
+    session: AsyncSession, eligible_ids: list[str]
+) -> dict[str, Any]:
+    """Real ``profile_secrets`` subsystem transform (#4346 via #4349).
+
+    Runs inside :func:`apply_conversion` after attribution is proven, so
+    eligibility enforcement is bypassed here (the owning guarded migration
+    already resolved it). Converts eligible legacy ``UserProfile``-held
+    secrets into managed-secret references without publishing plaintext.
+    ``eligible_ids`` is accepted for the shared transform signature and
+    ignored beyond attribution already proven by the entrypoint.
+    """
+    from api_service.services.profile_secret_migration import (
+        migrate_legacy_profile_secrets,
+    )
+
+    summary = await migrate_legacy_profile_secrets(
+        session, commit=False, enforce_eligibility=False
+    )
+    return {
+        "migrated": int(summary.get("migrated", 0)),
+        "created": int(summary.get("created", 0)),
+        "reused": int(summary.get("reused", 0)),
+        "items": [
+            {
+                k: v
+                for k, v in (item.items() if isinstance(item, dict) else [])
+                if "secret" not in k.lower()
+                and "token" not in k.lower()
+                and "value" not in k.lower()
+            }
+            for item in summary.get("items", [])
+            if isinstance(item, dict)
+        ],
+    }
+
+
+#: Production subsystem transforms registered into the shared entrypoint.
+#: ``profile_secrets`` is the concrete #4349 conversion. Settings, presets,
+#: schedules, artifacts, temporal, and workflow transforms are owned by
+#: subsystem child issues; until they register here, an eligible source
+#: holding those subsystems refuses with ``missing_transform_coverage``
+#: rather than exposing a partially converted result.
+DEFAULT_SUBSYSTEM_TRANSFORMS: dict[str, TransformFn] = {
+    "profile_secrets": profile_secrets_transform,
+}
+
+
+async def run_guarded_upgrade(
+    session: AsyncSession,
+    *,
+    operator_authorized: bool,
+    alias_groups=None,
+    collision_resolutions=None,
+    deployment_owned_tables=None,
+    transforms: dict[str, TransformFn] | None = None,
+) -> ApplyResult:
+    """Shared transaction/cutover entrypoint for every upgrade/startup route.
+
+    This is the only supported way to publish a conversion candidate:
+    capture a consistent preflight, then apply it with real subsystem
+    transforms through versioned migration 386 + ledger idempotency.
+    Alembic revision 386 creates only the ledger table and never applies a
+    destructive conversion as a schema-upgrade side effect; CLI, worker, and
+    HTTP startup routes must call this entrypoint instead of invoking
+    subsystem conversions directly. Refusals perform no conversion-side
+    writes; stale sources raise :class:`StaleAttributionError`.
+    """
+    selected = (
+        dict(DEFAULT_SUBSYSTEM_TRANSFORMS) if transforms is None else dict(transforms)
+    )
+    bound = await preflight(
+        session,
+        alias_groups=alias_groups,
+        collision_resolutions=collision_resolutions,
+        deployment_owned_tables=deployment_owned_tables,
+    )
+    return await apply_conversion(
+        session,
+        bound,
+        operator_authorized=operator_authorized,
+        transforms=selected,
+    )

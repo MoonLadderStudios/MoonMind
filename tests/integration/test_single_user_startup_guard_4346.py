@@ -77,3 +77,57 @@ async def test_startup_preserves_refused_multi_person_source(
             .all()
         )
         assert legacy == []
+
+
+@pytest.mark.asyncio
+async def test_refused_release_workflows_and_operator_access_still_function(
+    disabled_env_keys, tmp_path
+):
+    """Release-level refusal: old workflows readable, guard reports redacted."""
+    from api_service.db.models import TemporalArtifact, WorkflowRun
+
+    await _seed_db(tmp_path, "release-refused.db")
+    async with db_base.async_session_maker() as session:
+        u1 = User(id=uuid.uuid4(), email="rel-a@example.com")
+        u2 = User(id=uuid.uuid4(), email="rel-b@example.com")
+        session.add_all([u1, u2])
+        await session.flush()
+        session.add(UserProfile(user_id=u1.id))
+        session.add(UserProfile(user_id=u2.id))
+        session.add(WorkflowRun(feature_key="rel-feat", requested_by_user_id=u1.id))
+        session.add(
+            TemporalArtifact(
+                artifact_id="rel-art-1",
+                storage_key="rel-key-1",
+                created_by_principal=str(u2.id),
+            )
+        )
+        await session.commit()
+
+    with (patch("api_service.main._initialize_oidc_provider"),):
+        await startup_event()
+
+    async with db_base.async_session_maker() as session:
+        from api_service.services.single_user_conversion import (
+            startup_guard_decision,
+        )
+
+        # Old-release workflows still function: rows preserved, no mutation.
+        runs = (await session.execute(select(WorkflowRun))).scalars().all()
+        assert len(runs) == 1
+        assert runs[0].feature_key == "rel-feat"
+        artifacts = (await session.execute(select(TemporalArtifact))).scalars().all()
+        assert len(artifacts) == 1
+        users = (await session.execute(select(User))).scalars().all()
+        assert len(users) == 2
+        assert (await session.execute(select(ManagedSecret))).scalars().all() == []
+        # Operator access path: guard remains readable and reports refusal
+        # with redacted evidence only. Startup's own admitted work (preset
+        # seed catalog) may add unowned seed rows, so any refusal disposition
+        # is a valid blocked outcome here.
+        decision = await startup_guard_decision(session)
+        assert decision.eligible is False
+        assert decision.disposition in {"multi_person_refusal", "unresolved_refusal"}
+        blob = str(decision.to_sanitized_dict())
+        assert "rel-a@example.com" not in blob
+        assert "rel-b@example.com" not in blob
