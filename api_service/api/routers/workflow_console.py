@@ -30,7 +30,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -258,14 +258,14 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
         page="settings",
     ),
     DashboardDestination(
-        key="settings-user-workspace",
-        label="User / Workspace",
+        key="settings-instance",
+        label="Instance",
         icon_key="settings",
-        canonical_path="/settings/user-workspace",
-        path_patterns=("/settings/user-workspace",),
+        canonical_path="/settings/instance",
+        path_patterns=("/settings/instance",),
         navigation_group="system",
         page_classification="utility",
-        capability_key="settingsUserWorkspace",
+        capability_key="settingsInstance",
         endpoint_key="settings",
         menu_group_key="configuration",
         page="settings",
@@ -633,8 +633,8 @@ _SETTINGS_DESTINATION_PERMISSIONS: dict[
             }
         ),
     ),
-    "settings-user-workspace": (
-        "settingsUserWorkspace",
+    "settings-instance": (
+        "settingsInstance",
         frozenset({"settings.catalog.read"}),
         frozenset(
             {
@@ -692,17 +692,19 @@ def _settings_redirect_url(request: Request, user: User, preferred_destination_k
     Unknown legacy aliases fall back to the first authorized destination.
     """
     canonical = _settings_redirect_path(user, preferred_destination_key)
-    # Preserve safe filters (runtime, scope, q, status, etc.) but drop `section`
+    # Preserve safe filters (runtime, status, etc.) but drop `section`
     # which is retired as page identity (SettingsPage.md 5.3).
     if not request.query_params:
         return canonical
     preserved = [(k, v) for k, v in request.query_params.multi_items() if k != "section"]
     # Filter to page-relevant keys per target to avoid leaking irrelevant filters.
-    # Providers & Secrets owns `runtime`; User/Workspace owns `scope`+`q`; Operations owns `status`.
+    # Providers & Secrets owns `runtime`; Operations owns `status`. The Instance
+    # page keeps no URL-owned filters: stale human-scope params (scope, q) are
+    # dropped rather than reused after the account-free cutover (MoonMind#4353).
     if preserved:
         allow_by_target = {
             "/settings/providers-secrets": {"runtime"},
-            "/settings/user-workspace": {"scope", "q"},
+            "/settings/instance": set(),
             "/settings/operations": {"status"},
             "/settings": set(),
         }
@@ -1480,13 +1482,23 @@ async def settings_spa_fallback_route(
     dashboard_path: str,
     session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
+) -> Response:
     """Serve the settings SPA shell for extensionless settings sub-routes.
 
     An empty sub-path is the trailing-slash form of the bare `/settings` entry
     point. The client normalizes it the same way, so a direct load must resolve
     to the same page and boot payload rather than 404.
     """
+    normalized = (dashboard_path or "").strip("/")
+    # Retired account-scoped route (MoonMind#4353): existing
+    # `/settings/user-workspace` bookmarks redirect to the Instance
+    # replacement with stale human-scope params filtered. Permission-aware
+    # fallback applies when the operator cannot inspect Instance.
+    if normalized == "user-workspace" or normalized.startswith("user-workspace/"):
+        return RedirectResponse(
+            url=_settings_redirect_url(request, _user, "settings-instance"),
+            status_code=307,
+        )
     if dashboard_path and not _is_extensionless_dashboard_path(dashboard_path):
         _raise_dashboard_route_not_found()
     return await task_settings_route(request, session=session, _user=_user)

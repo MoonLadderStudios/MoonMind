@@ -135,7 +135,7 @@ function mockScheduleDetailFetch(fetchSpy: MockInstance, overrides: Record<strin
         json: async () => detailRuns,
       } as Response;
     }
-    if (url.startsWith("/console/schedules?scope=personal")) {
+    if (url === "/console/schedules" || url.startsWith("/console/schedules?")) {
       return {
         ok: true,
         json: async () => ({ items: [schedule] }),
@@ -583,8 +583,15 @@ describe("SchedulesPage", () => {
     });
     expect(mutationCalls).toEqual([]);
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).startsWith("/api/recurring-workflows?scope=personal")),
+      fetchSpy.mock.calls.some(
+        ([url]) => String(url) === "/api/recurring-workflows" || String(url).startsWith("/api/recurring-workflows?"),
+      ),
     ).toBe(true);
+    // The account-era scope partition is never sent, even though the schedule
+    // rows still carry provenance scope fields.
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes("scope=personal")),
+    ).toBe(false);
   });
 
   it("shows an empty state without adding local create controls", async () => {
@@ -628,8 +635,9 @@ describe("SchedulesPage", () => {
     expect(screen.queryByText("No recurring schedules yet. Create one from the workflow page.")).toBeNull();
     expect(screen.getByRole("button", { name: "Refresh" })).not.toBeNull();
     expect(screen.getByRole("link", { name: "Create recurring schedule" })).not.toBeNull();
+    // Stale account-era scope partitions are dropped while real filters survive.
     expect(fetchSpy.mock.calls[0]?.[0]).toBe(
-      "/console/schedules?scope=personal&state=paused",
+      "/console/schedules?state=paused",
     );
   });
 
@@ -660,7 +668,7 @@ describe("SchedulesPage", () => {
     expect(await screen.findByText("No recurring schedules match the current filters.")).not.toBeNull();
     expect(screen.queryByText("No recurring schedules yet. Create one from the workflow page.")).toBeNull();
     expect(fetchSpy.mock.calls[0]?.[0]).toBe(
-      "/console/schedules?scope=personal&last_scheduled_for=2026-07-09",
+      "/console/schedules?last_scheduled_for=2026-07-09",
     );
   });
 
@@ -708,7 +716,7 @@ describe("SchedulesPage", () => {
     );
 
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal&limit=50&sort=updatedAt&sortDir=desc");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?limit=50&sort=updatedAt&sortDir=desc");
   });
 
   it("uses apiBase for the default schedule list endpoint", async () => {
@@ -728,7 +736,7 @@ describe("SchedulesPage", () => {
     );
 
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/tenant/api/recurring-workflows?scope=personal&limit=50&sort=updatedAt&sortDir=desc");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/tenant/api/recurring-workflows?limit=50&sort=updatedAt&sortDir=desc");
   });
 
   it("renders recurring filters, chips, safe URL state, and resets pagination on filter changes", async () => {
@@ -881,7 +889,9 @@ describe("SchedulesPage", () => {
     expect(screen.queryByRole("heading", { name: "Logs" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Diagnostics" })).toBeNull();
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith("/console/schedules?scope=personal"))).toBe(true);
+    expect(fetchSpy.mock.calls.some(
+      ([url]) => String(url) === "/console/schedules" || String(url).startsWith("/console/schedules?"),
+    )).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha")).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha/runs?limit=200")).toBe(true);
     expect(screen.getByRole("complementary", { name: "Recurring schedule navigation" })).not.toBeNull();
@@ -920,7 +930,7 @@ describe("SchedulesPage", () => {
       if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
         return { ok: true, json: async () => detailRuns } as Response;
       }
-      if (url.startsWith("/console/schedules?scope=personal")) {
+      if (url === "/console/schedules" || url.startsWith("/console/schedules?")) {
         return { ok: true, json: async () => ({ items: [] }) } as Response;
       }
       if (url === "/console/schedules/schedule-alpha") {
@@ -1122,7 +1132,7 @@ describe("SchedulesPage", () => {
     );
 
     expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
-    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal&limit=50&sort=updatedAt&sortDir=desc");
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?limit=50&sort=updatedAt&sortDir=desc");
   });
 
   it("keeps update requests keyed by the route definition id", async () => {

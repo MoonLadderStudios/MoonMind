@@ -522,7 +522,11 @@ function repositoryOptionValue(
   );
 }
 
-type TemplateScope = "global" | "personal";
+type TemplateScope = "global" | "personal"; // Backend-owned catalog partition
+// (MoonLadderStudios/MoonMind#4353 presents one unified instance list; the
+// scope/scopeRef routing contract is owned by #4350. Removal condition:
+// when the backend exposes a unified preset list/detail/save surface without
+// scope partitioning, delete this type and the scope plumbing below).
 type ScheduleMode = "immediate" | "once" | "deferred_minutes" | "recurring";
 
 interface DashboardConfig {
@@ -3554,8 +3558,15 @@ function canLookupRepositoryBranches(value: string): boolean {
   return isValidRepositoryInput(value);
 }
 
-function scopeLabel(scope: TemplateScope): string {
-  return scope === "personal" ? "Personal" : "Global";
+// MoonLadderStudios/MoonMind#4353: the account-free instance presents one
+// unified preset catalog. Template `scope`/`scopeRef` remain backend-owned
+// routing fields (passed through untouched for detail/expand/delete), but the
+// UI never labels or partitions presets as Personal/Global.
+function presetOptionLabel(item: TemplateOption, items: TemplateOption[]): string {
+  const titleCollides = items.some(
+    (other) => other !== item && other.title === item.title,
+  );
+  return titleCollides ? `${item.title} (${item.slug})` : item.title;
 }
 
 export function preferredTemplate(items: TemplateOption[]): TemplateOption | null {
@@ -7669,6 +7680,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     ],
     enabled: presetCatalogEnabled,
     queryFn: async (): Promise<TemplateCatalogResult> => {
+      // Backend-owned scope contract (MoonLadderStudios/MoonMind#4350 owns the
+      // unified-catalog policy): GET /api/presets defaults to scope=personal
+      // and has no unified list surface, so both partitions are fetched and
+      // merged into the single unified instance list shown by the UI.
+      // Removal condition: replace with one scope-free fetch when #4350 lands.
       const scopes: TemplateScope[] = ["global", "personal"];
       const results = await Promise.all(
         scopes.map(async (scope) => {
@@ -9341,7 +9357,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return "Failed to load presets.";
     }
     if (templateItems.length === 0) {
-      return "No presets available for your account.";
+      return "No presets available in this instance.";
     }
     return "";
   }
@@ -10438,6 +10454,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           Accept: "application/json",
         },
         body: JSON.stringify({
+          // Backend-owned save contract (MoonLadderStudios/MoonMind#4350):
+          // PresetSaveFromWorkflowRequestSchema requires scope "personal".
+          // The UI presents the saved preset in the single instance catalog
+          // without a Personal/Global selector. Removal condition: drop this
+          // field when #4350 accepts a scope-free save.
           scope: "personal",
           title,
           description: title,
@@ -10474,19 +10495,48 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       setTemplateMessage("Enter a preset name to delete.");
       return false;
     }
-    const personalItems = templateItems.filter(
-      (item) => item.scope === "personal",
-    );
     const matchesName = (item: (typeof templateItems)[number]) =>
       item.title.trim().toLowerCase() === normalized ||
       item.slug.trim().toLowerCase() === normalized;
-    const target = personalItems.find(matchesName);
+    // The unified instance catalog deletes whichever listed preset matches;
+    // the preset's own backend scope/scopeRef travels with the request and
+    // the server remains the authorization boundary (detail/delete/expand
+    // require scope as Query(...); owned by #4350 with the same removal
+    // condition as the list/save contract above). A colliding title/slug
+    // across scopes must not silently pick the first sorted match: require
+    // an unambiguous exact slug instead of issuing a destructive request.
+    const matches = templateItems.filter(matchesName);
+    if (matches.length === 0) {
+      setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
+      return false;
+    }
+    let target = matches.find(
+      (item) => item.slug.trim().toLowerCase() === normalized,
+    );
     if (!target) {
-      if (templateItems.some(matchesName)) {
-        setTemplateMessage("Only personal presets can be deleted.");
-      } else {
-        setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
+      if (matches.length > 1) {
+        const options = matches.map((item) => `'${item.slug}'`).join(', ');
+        setTemplateMessage(
+          `Multiple presets match '${nameOverride.trim()}'. Enter the exact slug: ${options}.`,
+        );
+        return false;
       }
+      target = matches[0];
+    } else if (matches.length > 1) {
+      const exactSlugMatches = matches.filter(
+        (item) => item.slug.trim().toLowerCase() === normalized,
+      );
+      if (exactSlugMatches.length !== 1) {
+        const options = matches.map((item) => `'${item.slug}'`).join(', ');
+        setTemplateMessage(
+          `Multiple presets match '${nameOverride.trim()}'. Enter the exact slug: ${options}.`,
+        );
+        return false;
+      }
+      target = exactSlugMatches[0];
+    }
+    if (!target) {
+      setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
       return false;
     }
 
@@ -14104,7 +14154,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           <option value="">Select preset...</option>
                           {templateItems.map((item) => (
                             <option key={item.key} value={item.key}>
-                              {`${item.title} (${scopeLabel(item.scope)})`}
+                              {presetOptionLabel(item, templateItems)}
                             </option>
                           ))}
                         </select>
@@ -14570,7 +14620,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     className="queue-step-icon-button destructive"
                     aria-label="Delete preset"
                     aria-busy={isDeletingPreset}
-                    title="Delete a personal preset by name"
+                    title="Delete an instance preset by name"
                     disabled={isDeletingPreset}
                     onClick={openPresetDeleteDialog}
                   >
