@@ -1686,9 +1686,8 @@ suspending, so it recorded no commands to replay.
 
 ### 11.9 Wedged-singleton recovery runbook (#4363)
 
-When `update-moonmind` blocks on `provider_manager_liveness_blocked`, or when
-`AgentRun` waiters park in `AWAITING SLOT` / `awaiting_provider_capacity` while
-the ledger shows free capacity and the wait reason names
+When `AgentRun` waiters park in `AWAITING SLOT` / `awaiting_provider_capacity`
+while the ledger shows free capacity and the wait reason names
 `manager_unqueryable`, the `provider-profile-manager:<runtime>` singleton is
 wedged (running, history not advancing, `get_state` query failing — typically
 `Unable to query workflow due to Workflow Task in failed state` after a
@@ -1696,6 +1695,12 @@ nondeterminism loop). Automatic code deliberately never terminates the
 singleton itself: killing the run while a credential consumer is live would
 revoke authority out from under it. An operator performs the cutover below.
 `<runtime>` is the runtime family (for example `opencode`).
+
+A wedged singleton no longer blocks a deployment update. It once did, and that
+made the deployment unfixable exactly when it was broken — an operator
+frequently needs to update in order to ship the code that resolves the wedge.
+Updates recreate the installed fleet in place and do not gate on manager
+liveness; see [Docker Compose Deployment Update System](../Steps/DockerComposeUpdateSystem.md).
 
 1. Verify the DB lease ledger first. Terminating is only safe when no live
    consumer holds a slot; a held row means a real run is executing.

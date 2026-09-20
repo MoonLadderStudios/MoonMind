@@ -2109,9 +2109,6 @@ class DeploymentUpdateExecutor:
                         one_shot_result,
                     )
 
-                cohort = context.get("release_cohort")
-                if cohort is not None:
-                    command_log["releaseRouting"] = await cohort.qualify(execution_image)
                 await self.desired_state_store.persist(desired_payload)
 
                 _add_progress(

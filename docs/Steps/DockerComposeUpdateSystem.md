@@ -910,111 +910,43 @@ The Operations UI must not normally ask the operator to choose the runner image 
 
 ## 11.4 Execution availability and automatic recovery
 
-The release controller reconciles the recorded deployment intent, immutable
-installed images, Temporal routing, live queue/version pollers, and retained
-in-flight execution capability. Startup, normal updates, interrupted updates,
-and out-of-band replacement converge through this same owner. Detection does
-not confer permission to promote an arbitrary image or rewrite admitted work.
+Updates recreate the installed fleet in place. There is one fleet serving one
+image version at a time, so there is no parallel cohort to preserve, qualify,
+promote, or retire, and no route to restore. A fleet that is down is started by
+Compose.
 
-The existing deployment-control service supplies a bounded supervisor that can
-reach Temporal's administrative API and the deployment-owned Docker Backend
-without first dispatching an application workflow. It invokes the portable
-release controller and resumes its durable record; it does not implement a
-second promotion algorithm. Its normal container restart policy restores this
-supervisor after process loss. Durable ownership, fencing and cumulative retry
-budgets survive restart. No additional permanently running container is needed.
+This replaced a blue/green release controller that ran a candidate fleet and a
+retained fleet alongside the installed one, all polling the same Temporal task
+queue under the same worker-deployment name while the controller moved the
+current version. Long-lived `AutoUpgrade` singletons therefore replayed their
+history across code versions mid-execution, which wedged
+`provider-profile-manager:opencode` in a nondeterminism failure loop
+(MoonLadderStudios/MoonMind#4363). Failed releases also leaked cohort
+containers that carried the installed fleet's own Compose project and service
+labels, so `docker compose ps -q <service>` returned more than one id and the
+next release refused to start.
 
 | Observed condition | Required disposition |
 | --- | --- |
-| A qualified update is interrupted | Resume its exact digest, expected prior route, canary identities, budget, and installation record. |
-| The current version loses its workers | Restore its recorded compatible cohort, or finish an already authorized, qualified replacement through the same controller. |
-| An installed candidate has no release receipt | Record drift and qualify under deployment-owned update policy. Local presence, `latest`, and timestamps cannot grant promotion authority. Restore the last verified capability when candidate promotion is not authorized. |
-| A pinned execution needs an older version | Retain or restore that exact cohort until Temporal confirms drainage. |
-| Temporal, Docker, or evidence storage is unreachable | Keep working pollers and records; report unknown evidence and retry within the existing budget. Unknown is never drained. |
-| Another release wins ownership/promotion | Observe and re-evaluate the winner; never overwrite its route or clean up its workers. |
-| Qualification or history compatibility fails | Preserve the last compatible serving capability and histories; expose the exact failure and recovery owner. |
+| A release is interrupted | Resume its exact digest, budget, and installation record through the same durable job. |
+| The fleet is down | Compose restarts it. Readiness is asserted against the installed fleet only. |
+| An installed image has no release receipt | Record drift and qualify under deployment-owned update policy. Local presence, `latest`, and timestamps cannot grant promotion authority. |
+| Temporal, Docker, or evidence storage is unreachable | Report unknown evidence and retry within the existing budget. Unknown is never success. |
+| Verification cannot prove the desired state | Fail closed with the recorded command and verification evidence. |
 
-The deployment-control worker starts the portable `deployment_availability`
-supervisor outside Activity dispatch. It observes routing every 30 seconds;
-bounded maintenance passes resume missing updater containers from their original
-request, delivery count, deadline, and owner. Qualification containers do not
-start another supervisor. Version recovery uses an owner lock and at most five
-restoration attempts within a five-minute incident budget; restarts retain that
-budget. A healthy observation closes the incident.
+Bounded maintenance passes resume missing updater containers from their original
+request, delivery count, deadline, and owner. The same pass performs a one-time
+removal of `mm-candidate-*` and `mm-retained-*` containers left by a release
+that predates recreate-in-place; removal is owner-checked, so a container owned
+by another job is never touched.
 
-An exact successful deployment receipt binds the retained image ID, immutable
-image reference, source revision, and release manifest. Restoration can use the
-recorded local content-addressed image without a registry round trip. Missing
-images are retrieved only through their recorded immutable reference. Docker
-inventory disproves stale Temporal pollers from removed containers; an unreadable
-daemon remains unknown. Per-version observation failures are isolated. Ordinary
-unpinned canaries qualify every registered workflow queue, including merge
-automation, and every Activity queue before recovery or promotion reports
-availability. Retained recovery workers retire only after installed workers take
-over that same version or Temporal certifies drainage.
+Workers register their own deployment version at startup through
+`bootstrap_version_routing`, which is now the only writer of the current
+version. Movement is forward-only and a worker only ever routes to the version
+it is itself serving, because no other version is running.
 
-Current and ramping versions are read from Temporal's typed routing fields as
-well as its retained string representation. An older installation may have no
-successful release receipt of its own: the first updater's `retained.json`,
-bound to that job's owner and previous routing version, also authorizes recovery
-of its exact content-addressed image after manifest verification. Undrained
-versions in those records remain in the recovery set after promotion. Invalid
-unrelated records are reported separately and cannot suppress a valid cohort.
-
-The availability owner also records the current serving image during healthy
-operation. It verifies ordinary traffic and a coherent installed worker cohort,
-then saves the same `retained.json` image receipt used by update recovery under
-the deterministic per-version owner directory. This applies to an ordinary
-Compose installation without an update job or deployment receipt. Recording
-adds no containers and never promotes a candidate. The receipt remains valid
-when mutable availability observations expire, retries exhaust, or the process
-restarts; image identity and the release manifest are revalidated on restoration.
-Capture precedes worker loss, so recovery does not depend on discovering an
-image from containers that have already been removed.
-
-`release-jobs/*/availability.json` records the current phase, attempts, original
-deadline, affected queues, pending age, next attempt, and ordinary-traffic proof.
-Observation errors preserve these records. The worker readiness projection
-refreshes `releaseAvailability`; process readiness alone grants no routing or
-cleanup authority.
-
-The root `release-jobs/availability.json` also carries `routing`, with the
-current Temporal version, installed candidate version, and promotion status.
-When they differ, it names the `update-moonmind` recovery Skill and the existing
-release submission/resume path; the supervisor logs the mismatch on observation
-changes. An available retained cohort means ordinary work can still execute the
-older release. It does not establish that fixes in newly installed containers
-are active. This diagnostic never promotes an image or stops working pollers.
-
-The supervisor assembles route and fleet observations before publishing either
-the durable report or its readiness projection. While inventory is in progress,
-readers retain the previous complete observation; they never receive an
-available-route report with its promotion evidence still missing.
-
-Availability recovery is active for omitted/default inputs and explicit `auto`.
-The default objective is to detect lost routability within 60 seconds and
-restore an available, already authorized compatible cohort within five minutes.
-Attempts and escalation are bounded and observable. Exhaustion leaves a visible
-degraded state and resumable record. Actual authorization or compatibility
-ambiguity retains its boundary; a time objective cannot override it.
-
-Liveness, candidate readiness, and product availability are separate facts.
-Candidates can execute pinned qualification before promotion without creating
-a readiness deadlock. Product availability uses fresh routing/poller evidence,
-queued-task age, last successful ordinary synthetic, and recovery ownership.
-Cached startup `awaiting_promotion` metadata cannot remain authoritative after
-routing changes. A healthy candidate is not crash-looped because it has not
-yet received ordinary traffic.
-
-Recovery resumes queued work under its existing identity. Skipped schedule
-ticks are not replayed as an unbounded burst. Control operations use Temporal's
-service boundary when workflow tasks cannot run; stale projections and
-secondary session cleanup cannot prevent forced termination.
-
-The rationale is preservation of service at the authority handoff: a correct
-new worker receiving no tasks is unavailable, and a repair that needs that
-same route cannot recover it. Disabling identity checks or changing runtime
-intent would hide the missing recovery owner instead of containing the fault.
+Accepted cost: recreation has a bounded downtime window. That is the tradeoff
+`docker compose down; pull; up -d` always made, and the reason it was reliable.
 
 ---
 
@@ -1128,7 +1060,7 @@ Execution availability checks are also required:
   workflow, Activity, artifact, and projection boundaries;
 - progress or safe retention of a representative prior-release execution,
   cancellation while dispatch is unavailable, and database/schema compatibility
-  for the retained cohort and candidate;
+  between the installed release and the requested one;
 - recovery after updater restart, lost acknowledgement, and concurrent delivery.
 
 Qualification uses bounded synthetic work and isolated representative histories

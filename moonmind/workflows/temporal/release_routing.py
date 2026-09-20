@@ -46,14 +46,6 @@ def current_version(snapshot) -> str:
     return f"{current.deployment_name}.{current.build_id}" if current.build_id else ""
 
 
-def ramping_version(snapshot) -> str:
-    routing = snapshot.worker_deployment_info.routing_config
-    if routing.ramping_version:
-        return routing.ramping_version
-    ramping = routing.ramping_deployment_version
-    return f"{ramping.deployment_name}.{ramping.build_id}" if ramping.build_id else ""
-
-
 async def version_availability(
     client, version: str, *, live_container_ids=None
 ) -> dict:
@@ -119,64 +111,6 @@ async def version_availability(
         "available": bool(queues) and all(item["livePollers"] for item in queues),
         "queues": queues,
     }
-
-
-async def version_drained(client, version: str) -> bool:
-    """Only Temporal's terminal drainage evidence releases old pollers."""
-    from temporalio.api.enums.v1 import VersionDrainageStatus
-
-    try:
-        response = await client.workflow_service.describe_worker_deployment_version(
-            DescribeWorkerDeploymentVersionRequest(
-                namespace=client.namespace, version=version
-            )
-        )
-    except RPCError as exc:
-        if exc.status == RPCStatusCode.NOT_FOUND:
-            return False
-        raise
-    return (
-        response.worker_deployment_version_info.drainage_info.status
-        == VersionDrainageStatus.VERSION_DRAINAGE_STATUS_DRAINED
-    )
-
-
-async def qualification_closed_without_activation(
-    client, *, version: str, canary_id: str
-) -> bool:
-    """A private candidate's only admitted workflow is its named canary.
-
-    Inactive versions never enter Temporal's drainage state machine. They can
-    retire after the release owner is terminal, its canary is closed (or was
-    never started), and the service confirms this version never took traffic.
-    """
-    from temporalio.api.enums.v1 import WorkerDeploymentVersionStatus
-    from temporalio.client import WorkflowExecutionStatus
-
-    try:
-        response = await client.workflow_service.describe_worker_deployment_version(
-            DescribeWorkerDeploymentVersionRequest(
-                namespace=client.namespace, version=version
-            )
-        )
-        if (
-            response.worker_deployment_version_info.status
-            != WorkerDeploymentVersionStatus.WORKER_DEPLOYMENT_VERSION_STATUS_INACTIVE
-        ):
-            return False
-    except RPCError as exc:
-        if exc.status != RPCStatusCode.NOT_FOUND:
-            raise
-    try:
-        execution = await client.get_workflow_handle(canary_id).describe()
-        return execution.status not in {
-            WorkflowExecutionStatus.RUNNING,
-            WorkflowExecutionStatus.CONTINUED_AS_NEW,
-        }
-    except RPCError as exc:
-        if exc.status != RPCStatusCode.NOT_FOUND:
-            raise
-        return True
 
 
 async def await_registered_queues(

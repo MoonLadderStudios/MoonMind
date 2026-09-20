@@ -10,7 +10,6 @@ from moonmind.workflows.skills.deployment_execution import (
     DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS,
 )
 from moonmind.workflows.skills.deployment_release import (
-    ReleaseCohort,
     docker,
     inspect_owned,
     launch_updater,
@@ -19,15 +18,39 @@ from moonmind.workflows.skills.deployment_release import (
 )
 
 
-async def reconcile_release(directory, runner, client):
-    from moonmind.workflows.temporal.release_routing import (
-        current_version,
-        qualification_closed_without_activation,
-        routing_snapshot,
-        version_drained,
-    )
+async def retire_legacy_cohort(directory, owner, kind):
+    """Remove containers a pre-recreate-in-place release left behind.
+
+    Blue/green promotion is gone, so nothing routes to a ``mm-candidate-*`` or
+    ``mm-retained-*`` container any more and none are created. Deployments that
+    upgrade across that change can still be carrying a cohort from an earlier
+    release, so retire it once and record the receipt. Removal is bounded and
+    owner-checked; a container owned by another job is never touched.
+    """
     from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
 
+    names = [
+        f"mm-{kind}-{directory.name[:16]}-{fleet.replace('_', '-')}"
+        for fleet in _FLEET_SERVICE_NAMES
+    ]
+    if kind == "candidate":
+        names.append(f"mm-candidate-{directory.name[:16]}-api")
+    for name in names:
+        existing = await inspect_owned(name, owner)
+        if not existing:
+            continue
+        if existing["State"]["Running"]:
+            await docker("stop", "--time", "60", name)
+        await docker("rm", name)
+
+
+async def reconcile_release(directory, runner, client):
+    """Resume an unfinished release updater and retire its leftovers.
+
+    Recreate-in-place has no routing to reconcile: the installed fleet is the
+    only fleet. What remains is durable delivery of the release job itself,
+    plus a one-time sweep of cohorts left by earlier blue/green releases.
+    """
     request = json.loads((directory / "request.json").read_text())
     owner = request["authored"]["owner"]
     result = {"job": directory.name, "resumed": False, "retired": [], "pending": []}
@@ -55,87 +78,16 @@ async def reconcile_release(directory, runner, client):
             return result
         result["pending"].append("execution_budget_exhausted")
 
-    routing_file = directory / "routing.json"
-    if not routing_file.exists():
-        return result
-    routing = json.loads(routing_file.read_text())
-    deployment = routing["deployment"]
-    candidate = f"{deployment}.{routing['candidate']}"
-    current = current_version(await routing_snapshot(client, deployment))
-    cohort = ReleaseCohort(runner, directory, owner)
-    # Active routing can release temporary candidate pollers only after the
-    # installed fleet has objectively assumed that exact release. Older routing
-    # can release them only when Temporal certifies it has drained.
-    candidate_safe = (
-        await version_drained(client, candidate) if current != candidate else False
-    )
-    # A promoted candidate never enters drainage or inactivity, so this is the
-    # only evidence that can retire its qualification cohort. The primary
-    # receipt is the ordinary source; a release whose deployment completed and
-    # whose later step failed finishes through the attempt receipt instead, and
-    # requiring only the primary left that cohort polling forever. Either way
-    # the installed fleet must objectively prove it runs the candidate.
-    receipt_file = next(
-        (
-            path
-            for path in (
-                directory / "deployment-result.json",
-                directory / "attempt-result.json",
-            )
-            if path.exists()
-        ),
-        None,
-    )
-    if current == candidate and receipt_file is not None:
-        primary = json.loads(receipt_file.read_text())
-        if primary["owner"] != owner:
-            raise ValueError("Deployment receipt owner differs")
-        if primary["result"]["status"] == "COMPLETED":
-            await cohort.verify_installed(
-                request["image"], expected=routing["candidate"], attempts=1
-            )
-            candidate_safe = True
-    unused = False
-    if (
-        not candidate_safe
-        and current != candidate
-        and (directory / "result.json").exists()
-    ):
-        unused = await qualification_closed_without_activation(
-            client, version=candidate, canary_id=f"mm-release-canary-{directory.name}"
-        )
-        candidate_safe = unused
-    groups = [("candidate", candidate_safe)]
-    retained_file = directory / "retained.json"
-    if retained_file.exists():
-        retained = json.loads(retained_file.read_text())
-        if retained["owner"] != owner:
-            raise ValueError("Retained release owner differs")
-        retained_safe = await version_drained(client, retained["version"])
-        if not retained_safe and unused and current == retained["version"]:
-            await cohort.verify_installed(
-                retained["image"],
-                expected=current.removeprefix(deployment + "."),
-                attempts=1,
-            )
-            retained_safe = True
-        groups.append(("retained", retained_safe))
-    for kind, safe in groups:
+    for kind, marker in (("candidate", "routing.json"), ("retained", "retained.json")):
+        if not (directory / marker).exists():
+            continue
         receipt = directory / f"{kind}-retired.json"
         if receipt.exists():
             continue
-        if not safe:
-            result["pending"].append(kind)
-            continue
-        cohort.names = [
-            f"mm-{kind}-{directory.name[:16]}-{fleet.replace('_', '-')}"
-            for fleet in _FLEET_SERVICE_NAMES
-        ]
-        if kind == "candidate":
-            cohort.names.append(f"mm-candidate-{directory.name[:16]}-api")
-        await cohort.cleanup()
+        await retire_legacy_cohort(directory, owner, kind)
         write_record(receipt, {"owner": owner, "status": "verified_removed"})
         result["retired"].append(kind)
+
     if (
         observed
         and not observed["State"]["Running"]
@@ -143,6 +95,8 @@ async def reconcile_release(directory, runner, client):
     ):
         await docker("rm", updater)
     return result
+
+
 
 
 async def reconcile_releases():

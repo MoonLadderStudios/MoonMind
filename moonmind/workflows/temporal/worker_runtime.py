@@ -3299,30 +3299,14 @@ async def main_async() -> None:
                 "Worker ready, polling task queues: %s",
                 ", ".join(topology.task_queues),
             )
-        recovery_task = None
-        if (
-            topology.fleet == DEPLOYMENT_FLEET
-            and spec.versioning_enabled
-            and os.environ.get("MOONMIND_RELEASE_QUALIFICATION") != "1"
-        ):
-            from moonmind.workflows.skills.deployment_availability import (
-                supervise_availability,
-            )
-
-            recovery_task = asyncio.create_task(
-                supervise_availability(client, spec, health_state.readiness_metadata),
-                name="deployment-availability",
-            )
-        try:
-            await serve_workers(
-                workers,
-                ready=mark_ready,
-                stopping=lambda: setattr(health_state, "pollers_started", False),
-            )
-        finally:
-            if recovery_task is not None:
-                recovery_task.cancel()
-                await asyncio.gather(recovery_task, return_exceptions=True)
+        # Recreate-in-place serves one fleet at one version, so there is no
+        # retained cohort to relaunch and no route to restore. A fleet that is
+        # down is started by Compose, not by a background supervisor.
+        await serve_workers(
+            workers,
+            ready=mark_ready,
+            stopping=lambda: setattr(health_state, "pollers_started", False),
+        )
     except Exception as exc:
         health_state.startup_error = exc.__class__.__name__
         raise
