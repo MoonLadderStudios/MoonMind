@@ -1959,11 +1959,28 @@ class DockerContainerJobBackend:
             # synthetic ref here makes the workflow treat the container as a
             # reconciled prior attempt and skip the authoritative create step.
             return ContainerJobActivityResult(running=False)
-        code, stdout, _ = await self._runner(
+        code, stdout, stderr = await self._runner(
             ("inspect", "--format", "{{.State.Running}}", name)
         )
         if code:
-            return ContainerJobActivityResult()
+            detail = stderr.decode(errors="replace").strip()
+            lowered = detail.lower()
+            if not any(marker in lowered for marker in _DOCKER_NOT_FOUND_MARKERS):
+                # Only a confirmed not-found answer is absence. An unreachable
+                # daemon, a timeout, or any other ``inspect`` failure proves
+                # nothing about the container, so it fails closed (and is
+                # retried by the platform) instead of sending the workflow to
+                # recreate a container that already exists.
+                logger.warning(
+                    "Container-job state is unavailable during reconcile: %s",
+                    redact_sensitive_text(detail[:500]),
+                )
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.INFRASTRUCTURE,
+                    "container state could not be read from the container "
+                    "backend",
+                )
+            return ContainerJobActivityResult(running=False)
         # A reconciled container skips the authoritative create step, so its
         # durable launch-attestation reference would otherwise be lost and both
         # the runtime diagnostics and post-cleanup lifecycle artifacts would
@@ -2345,6 +2362,35 @@ class DockerContainerJobBackend:
             gpuObservation=resolved_gpu,
         )
 
+    async def _read_pre_start_state(self, container_name: str) -> str:
+        """Classify the owned container immediately before ``docker start``.
+
+        Returns ``"running"`` when the daemon already reports the container
+        running, ``"finished"`` when it ran before and has since stopped, and
+        ``"unknown"`` for a never-started container or an unreadable answer.
+        The caller reconciles the first two instead of repeating the side
+        effect; ``"unknown"`` keeps today's ``docker start`` behavior so its
+        own failure still surfaces fail-closed.
+        """
+
+        code, stdout, _ = await self._runner(
+            ("inspect", "--format", "{{json .State}}", container_name)
+        )
+        if code:
+            return "unknown"
+        try:
+            state = json.loads(stdout.decode(errors="replace").strip())
+        except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+            return "unknown"
+        if not isinstance(state, dict):
+            return "unknown"
+        if state.get("Running"):
+            return "running"
+        started, _, _ = _parse_container_timing(state)
+        if started is not None:
+            return "finished"
+        return "unknown"
+
     async def start_container(self, request: ContainerJobActivityRequest):
         container_name = request.container_ref or self._name(request)
         requested_gpu = request.request.spec.resources.gpu
@@ -2360,6 +2406,25 @@ class DockerContainerJobBackend:
                 return ContainerJobActivityResult(capacityWait=str(exc)[:2048])
             if request.resolved_resources is None:
                 request.resolved_resources = request.request.spec.resources.model_copy()
+            # Reconcile-before-start (MoonLadderStudios/MoonMind#4457): a retry
+            # after a lost start acknowledgment or a worker death must reuse
+            # the existing container. Starting an already-running container
+            # fails, and starting a finished one would execute the workload a
+            # second time; both are reported as-is so the observe loop records
+            # the original outcome instead.
+            pre_start = await self._read_pre_start_state(container_name)
+            if pre_start in {"running", "finished"}:
+                return ContainerJobActivityResult(
+                    containerRef=container_name,
+                    running=pre_start == "running",
+                    resolvedResources=request.resolved_resources,
+                    diagnosticsRef=request.egress_attestation_ref,
+                    gpuObservation=gpu_observation(
+                        requested_gpu,
+                        backend_supported=True,
+                        launched=pre_start == "running",
+                    ),
+                )
             code, _, start_stderr = await self._runner(("start", container_name))
             if code:
                 # The daemon resolves a device request when the container
