@@ -590,7 +590,6 @@ def test_profile_authoring_changes_run_renderer_and_admission_replay(path):
 @pytest.mark.parametrize(
     "path",
     [
-        "moonmind/workflows/skills/deployment_availability.py",
         "moonmind/workflows/skills/deployment_release.py",
         "moonmind/workflows/temporal/worker_runtime.py",
         "api_service/services/recurring_workflows_service.py",

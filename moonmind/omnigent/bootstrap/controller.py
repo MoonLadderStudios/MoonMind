@@ -27,10 +27,6 @@ from moonmind.omnigent.bootstrap.store import (
     load_bootstrap_record,
     save_bootstrap_record,
 )
-from moonmind.omnigent.harness_platform.agent_profile import (
-    stable_imported_content_digest,
-    stable_upstream_snapshot_digest,
-)
 from moonmind.omnigent.harness_platform.harness_registry import harness_registration
 from moonmind.omnigent.harness_platform.support import compute_support_combination_key
 
@@ -58,68 +54,6 @@ def _resolve_profile_model_effort(profile: Any) -> tuple[str, str]:
         else validate_effort(raw_effort)
     )
     return model, effort
-
-
-def _expected_stable_agent_source_ref(
-    document: Any, *, snapshot_digest: str = "", upstream_snapshot: Any = None
-) -> str:
-    """Compute the stable agentSourceRef admission will compile.
-
-    Shares ``stable_upstream_snapshot_digest`` /
-    ``stable_imported_content_digest`` with the plan compiler and with
-    launch-time plan verification, so qualification here cannot drift from the
-    identity those two pin.
-    """
-    import hashlib as _hashlib
-    import json as _json
-
-    if not isinstance(document, dict):
-        return ""
-    source = document.get("source")
-    if not isinstance(source, dict):
-        return ""
-    if source.get("upstreamId"):
-        stable = stable_upstream_snapshot_digest(source, snapshot_digest)
-        if not stable.startswith("sha256:"):
-            return ""
-        payload = {
-            "kind": "upstream",
-            "upstreamId": str(source.get("upstreamId") or ""),
-            "upstreamVersion": str(source.get("upstreamVersion") or "0.0.0"),
-            "upstreamSnapshotDigest": stable,
-        }
-    else:
-        bundle_ref = str(source.get("bundleArtifactRef") or "").strip()
-        bundle_digest = str(source.get("bundleDigest") or "").strip()
-        import_receipt = ""
-        if isinstance(upstream_snapshot, dict):
-            import_receipt = str(
-                upstream_snapshot.get("importReceiptRef") or ""
-            ).strip()
-        if not bundle_ref or not bundle_digest or not import_receipt:
-            return ""
-        stable_content = stable_imported_content_digest(source, snapshot_digest)
-        if not stable_content.startswith("sha256:"):
-            return ""
-        payload = {
-            "kind": "bundle",
-            "bundleArtifactRef": bundle_ref,
-            "bundleDigest": bundle_digest,
-            "importReceiptRef": import_receipt,
-            "importedAgentId": str(
-                source.get("importedAgentId")
-                or (upstream_snapshot.get("agentId") if isinstance(upstream_snapshot, dict) else "")
-                or ""
-            ).strip(),
-            "importedAgentVersion": str(
-                source.get("importedAgentVersion")
-                or (upstream_snapshot.get("version") if isinstance(upstream_snapshot, dict) else "")
-                or ""
-            ).strip(),
-            "importedContentDigest": stable_content,
-        }
-    canonical = _json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return "agent-source:sha256:" + _hashlib.sha256(canonical.encode()).hexdigest()
 
 
 class BootstrapController:
@@ -483,57 +417,6 @@ class BootstrapController:
                     drift.append("evidence_model")
                 if evidence.model.get("effort") != current_effort:
                     drift.append("evidence_effort")
-            # The deployment qualification key excludes per-run model, but the
-            # agent source itself must stay exact for auth-bearing runs. After
-            # the stable-source fix, a model-only profile version bump no
-            # longer changes the agent source; however, stale evidence
-            # published with the old volatile (version-digest) source, or a
-            # genuine upstream/bundle content change, still leaves admission
-            # failing with "agentSourceRef differs". Detect that here so
-            # startup reconciliation requalifies instead of stranding the
-            # default launch behind a manual retry.
-            if active_version is not None:
-                try:
-                    _doc = getattr(active_version, "document", None)
-                    _snap_digest = str(
-                        getattr(active_version, "digest", "") or ""
-                    ).strip()
-                    _upstream_snap = getattr(
-                        active_version, "upstream_snapshot", None
-                    )
-                    # SQLAlchemy rows expose upstream_snapshot; test doubles
-                    # may carry it as upstreamSnapshot.
-                    if _upstream_snap is None:
-                        _upstream_snap = getattr(
-                            active_version, "upstreamSnapshot", None
-                        )
-                    expected_agent_ref = _expected_stable_agent_source_ref(
-                        _doc,
-                        snapshot_digest=_snap_digest,
-                        upstream_snapshot=_upstream_snap,
-                    )
-                    attested_agent_ref = ""
-                    try:
-                        attested_agent_ref = str(
-                            evidence.support_identity.agentSourceRef or ""
-                        ).strip()
-                    except Exception:
-                        raw_identity = evidence.support_identity
-                        if isinstance(raw_identity, dict):
-                            attested_agent_ref = str(
-                                raw_identity.get("agentSourceRef") or ""
-                            ).strip()
-                        else:
-                            attested_agent_ref = str(
-                                getattr(raw_identity, "agentSourceRef", "") or ""
-                            ).strip()
-                    if expected_agent_ref and attested_agent_ref:
-                        if attested_agent_ref != expected_agent_ref:
-                            drift.append("evidence_agent_source")
-                except Exception:
-                    # Drift detection is best-effort; admission still fails
-                    # closed with the exact mismatch when evidence is stale.
-                    pass
 
         # Materializer qualification is independent of whether the default
         # bootstrap record remains current. In particular, a launch-ready Zen
@@ -626,66 +509,6 @@ class BootstrapController:
             )
         except ValueError:
             primary_evidence = None
-
-        # Migration guard: evidence published with the old volatile
-        # (version-digest) agent source must not pin the shared identity for
-        # new qualifications. When the current active Agent Profile expects a
-        # different stable agent source, drop the old reference so every
-        # launch-ready materializer requalifies against the stable identity
-        # admission will actually compile. For credentialless none@1 the
-        # deployment key already ignores the agent source, so the refreshed
-        # entry simply replaces the old one.
-        try:
-            from api_service.db.models import (
-                OmnigentAgentProfile,
-                OmnigentAgentProfileVersion,
-            )
-
-            async with self._session_factory() as _agent_session:
-                _agent_profile = await _agent_session.get(
-                    OmnigentAgentProfile, "omnigent-opencode-default"
-                )
-                _active = None
-                if (
-                    _agent_profile is not None
-                    and _agent_profile.active_version is not None
-                ):
-                    _active = await _agent_session.scalar(
-                        select(OmnigentAgentProfileVersion).where(
-                            OmnigentAgentProfileVersion.profile_id
-                            == _agent_profile.profile_id,
-                            OmnigentAgentProfileVersion.version
-                            == _agent_profile.active_version,
-                        )
-                    )
-                if _active is not None and primary_evidence is not None:
-                    _expected = _expected_stable_agent_source_ref(
-                        getattr(_active, "document", None),
-                        snapshot_digest=str(getattr(_active, "digest", "") or ""),
-                        upstream_snapshot=getattr(
-                            _active, "upstream_snapshot", None
-                        )
-                        or getattr(_active, "upstreamSnapshot", None),
-                    )
-                    _attested = ""
-                    try:
-                        _attested = str(
-                            primary_evidence.support_identity.agentSourceRef or ""
-                        ).strip()
-                    except Exception:
-                        _attested = ""
-                    if _expected and _attested and _attested != _expected:
-                        logger.info(
-                            "Dropping stale primary deployment evidence after "
-                            "agent source stabilization: attested=%s expected=%s",
-                            _attested[:32],
-                            _expected[:32],
-                        )
-                        primary_evidence = None
-        except Exception:
-            # Best-effort migration guard; qualification still fails closed
-            # with the exact mismatch when evidence is stale.
-            pass
 
         async with self._session_factory() as session:
             result = await session.execute(

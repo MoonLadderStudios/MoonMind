@@ -67,17 +67,18 @@ def test_duration_hints_cover_the_expensive_parameterizations() -> None:
     (not whole files) carry per-node hints so least_duration can spread them
     across shards instead of pinning one file to one shard."""
     payload = json.loads(DURATIONS_PATH.read_text(encoding="utf-8"))
-    availability = sorted(
+    routing = sorted(
         nodeid
         for nodeid in payload
         if nodeid.startswith(
-            "tests/integration/reliability/test_automatic_release_availability.py::"
+            "tests/integration/reliability/test_release_routing_journey.py::"
+            "test_candidate_canary_compare_and_set_and_inflight_upgrade["
         )
     )
-    # The four record_source/versioning parameterizations from run #14404.
-    assert len(availability) >= 4, availability
-    assert any("[release-auto]" in nodeid for nodeid in availability)
-    assert any("[serving-auto]" in nodeid for nodeid in availability)
+    # The pinned/unpinned in-flight upgrade parameterizations from run #14404.
+    assert len(routing) >= 2, routing
+    assert any("[True]" in nodeid for nodeid in routing)
+    assert any("[False]" in nodeid for nodeid in routing)
 
 
 def test_weight_distribution_spreads_files_across_nodes() -> None:
