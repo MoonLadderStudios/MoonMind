@@ -52,24 +52,27 @@ counts, so a full host count never blocks an agent's own test job.
 
 ## Verification evidence (MoonLadderStudios/MoonMind#4457)
 
-Tested content: `e820f21cda1e9118e99b2fdf65aa79ea8cb77ecb` (own-slot
-admission fix + qualification journey, committed) plus the working-tree
-extension to
-`tests/integration/reliability/test_container_job_plan_a_qualification_journey.py`
-(Docker-gated two-process real-Docker race and lost-ack reconcile,
-production-workflow release/proceed/restart and host-full subordinate
-journeys, Batch PR Resolver preset-route-to-host test). No production-code
-change in the remediation pass: the new boundary tests confirm the existing
-daemon/lock mechanism, so it is retained. Preserved hermetic suites untouched.
+Tested content: `8769ddaea32939d1f0162a553d7379daadc97c55` (qualification
+journey + handoff, committed) plus the working-tree remediation to
+`tests/integration/reliability/test_container_job_plan_a_qualification_journey.py`:
+import the production `LABEL_CONTAINER_JOB` used by both Docker-gated
+pre-creates (previously a `NameError` at runtime in Docker-backed CI) and
+a new hermetic OS-level worker-death test
+(`test_worker_sigkill_before_start_frees_lock_for_survivor`: a real worker
+process holds the backend capacity-lock key, dies by SIGKILL with no
+userspace cleanup, the survivor admits and starts with exactly one side
+effect). 20 test defs. No production-code change in the remediation pass:
+the new boundary tests confirm the existing daemon/lock mechanism, so it
+is retained. Preserved hermetic suites untouched.
 
 Executed via the managed container path (`moonmind container python-tests`,
 per AGENTS.md), all green:
 
 - `moonmind container python-tests
   tests/integration/reliability/test_container_job_plan_a_qualification_journey.py
-  --timeout-seconds 900` → **16 passed, 3 skipped**
-  (`container-job:cbfa6ffbaa9242fe916bc21161d770dd`, logsRef
-  `art_01M3083D9ZPF5PFRTVNW8VP99G`). The skips are the three Docker-gated
+  --timeout-seconds 900` → **17 passed, 3 skipped**
+  (`container-job:eb6a946172a242d5937e32bdbbfd2118`, logsRef
+  `art_01M3093PTWJ5PZS0DWJ3TEXPPP`). The skips are the three Docker-gated
   cases (`test_real_docker_inspect_shows_stock_fixed_limits`,
   `test_real_docker_two_workers_race_final_slot`,
   `test_real_docker_lost_start_ack_reconciles_before_retry`): no reachable
@@ -80,13 +83,13 @@ per AGENTS.md), all green:
   tests/unit/test_container_job_cli.py
   tests/unit/omnigent/test_resolver_verification_capability.py
   --timeout-seconds 600` → **112 passed**
-  (`container-job:aa6ed007c65341159dadcbdf42214ed3`, logsRef
-  `art_01M3084CB4RK9TFPB351JAK0AJ`).
+  (`container-job:8002f266945e4b8992bc2bfed4a4c197`, logsRef
+  `art_01M3094K8GA25QXX4TPAVBFS6D`).
 - `moonmind container python-tests
   tests/integration/reliability/test_container_job_authority_journey.py
   --timeout-seconds 900` → **1 passed**
-  (`container-job:17dab888cbec4f2c86c45db30baa7b0f`, logsRef
-  `art_01M3084YTW3ZYZFC3HDTJA79R9`).
+  (`container-job:755b1e794b684f2b9d0809e5d35d2832`, logsRef
+  `art_01M30953ZFG59130H7PH7PEWPQ`).
 - `printf '<journey + handoff>' | python3 tools/select_test_suites.py`
   selects `reliability_journey=true`, so the existing required CI workflow
   (`.github/workflows/pytest-unit-tests.yml`, `tests/integration/reliability
@@ -103,13 +106,19 @@ untouched):
   loser parks, proceeds after the winner stops).
 - R2: lost start acknowledgment reconciles with one real side effect; worker
   death before the start leaves no side effect and the next worker proceeds;
+  a real worker process killed by SIGKILL while holding the backend
+  capacity-lock key frees the OS-held flock, and the survivor admits and
+  starts with exactly one side effect (no fd-close simulation);
   worker death releases the shared lock; container finishing between
   observation and retry frees its slot; own paused-holder retry keeps its
   slot (covers the `_admit_job_slot` fix admitting any slot-holding own
   state, not just running; `created` exclusion preserved). A Docker-gated
   variant injects the lost ack on the real `docker start` path, reconciles
   via `docker inspect`/`_slot_holders`, asserts no duplicate container, and
-  proves a stopped container frees its slot for the next waiter.
+  proves a stopped container frees its slot for the next waiter. The
+  Docker-gated pre-creates label real containers with the production
+  `LABEL_CONTAINER_JOB` (imported, not a test-local string) so the
+  daemon-ledger `ps` filter observes them.
 - R3: wait/release/restart, non-waitable refusal class, and agent-host vs
   job-ledger separation at the backend boundary; a production
   `MoonMindContainerJobWorkflow` wait/cancel journey (parks in
