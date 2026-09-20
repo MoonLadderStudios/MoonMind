@@ -5735,3 +5735,101 @@ async def test_fetch_result_maps_outcome_merged_pr_resolver_artifact_metadata(
         result.metadata["headSha"]
         == "1abd16796a984860ca922cd1d6d22c42db34be6b"
     )
+
+
+async def test_fetch_result_treats_merge_gate_human_approval_as_parent_terminal(
+    tmp_path: Path,
+) -> None:
+    """Codex hosts must classify the human-approval gate like managed hosts.
+
+    Same verdict as resolver:pr:831:...:5 — every resolver-owned blocker clear,
+    gate closed only on a required approving review — must not surface as an
+    agent-runtime failure when a merge-gate parent owns the terminal.
+    """
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "blocked",\n'
+            '  "mergeAutomationDisposition": "manual_review",\n'
+            '  "reason": "merge_gate_requires_human_approval",\n'
+            '  "final_reason": "merge_gate_requires_human_approval",\n'
+            '  "next_step": "manual_review",\n'
+            '  "finish_mode": "fix_only"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    run_id = "run-result-pr-human-approval"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId=run_id,
+            agentId="codex_cli",
+            runtimeId="codex_cli",
+            status="failed",
+            startedAt=datetime.now(tz=UTC),
+            workspacePath=str(workspace_path),
+            failureClass="execution_error",
+            errorMessage="Process exited with code 3",
+        )
+    )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-human-approval",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_async_noop,
+        launch_session=_async_noop,
+        session_status=_async_noop,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_async_noop,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_async_noop,
+        publish_remote_artifacts=_async_noop,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    adapter._save_run_state(
+        run_id=run_id,
+        agent_id="codex_cli",
+        locator={
+            "sessionId": "sess:wf-task-human-approval:codex_cli",
+            "sessionEpoch": 1,
+            "containerId": "container-1",
+            "threadId": "thread-1",
+        },
+        active_turn_id=None,
+        result={
+            "summary": "Process exited with code 3",
+            "metadata": {},
+            "failureClass": "execution_error",
+        },
+        status="failed",
+        started_at=datetime.now(tz=UTC),
+    )
+
+    result = await adapter.fetch_result(
+        run_id,
+        pr_resolver_expected=True,
+        pr_resolver_merge_gate_owned=True,
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "manual_review"
+    assert "merge_gate_requires_human_approval" in result.summary
