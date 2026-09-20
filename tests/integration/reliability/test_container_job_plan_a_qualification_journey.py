@@ -5,18 +5,27 @@ Focused integration coverage for the fixed-request launch path owned by
 
 * R1: two worker-side backends sharing the supported filesystem lock mount
   race for the final slot at limit 1; overlapping running containers never
-  exceed the cap and created-only waiters make forward progress.
+  exceed the cap and created-only waiters make forward progress. A
+  Docker-gated variant below races two worker *processes* on real
+  containers and observes the overlap through the daemon (Docker-backed
+  CI; skips without a daemon).
 * R2: lost start acknowledgments and worker death before/during/after start
   reconcile the existing container before retry (no duplicate start side
   effect, no abandoned live consumer, no premature slot reuse), including a
-  container finishing between observation and retry.
+  container finishing between observation and retry. A Docker-gated
+  variant injects the lost ack on the real ``docker start`` path and
+  reconciles through the daemon ledger.
 * R3: slot waiting, release, cancellation refusal, and restart through the
   production ``start_container`` boundary, plus agent-host/job-ledger
-  separation.
+  separation -- and wait/release/proceed/restart plus host-full
+  subordinate execution through the production workflow with its registered
+  Activities.
 * R4: the normal CLI-to-container route carries the stock 2 CPU / 4 GiB /
   PID bound to Docker verbatim with no pool probe or resource helper; a
-  real-Docker inspect case (skipped without a CLI) checks the created
-  container config.
+  real-Docker inspect case (skipped without a daemon) checks the created
+  container config; and the Batch PR Resolver preset route (resolver run
+  request, scoped capability, canonical submission) reaches host execution
+  with isolated fixtures.
 
 Unlike ``test_container_job_authority_journey.py`` (hermetic ``ps``-empty
 doubles, sequential runs), these tests use separate backend/lock instances
@@ -35,7 +44,7 @@ import multiprocessing
 import os
 import shutil
 import uuid
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +58,16 @@ from moonmind.config.container_backend_settings import (
 )
 from moonmind.config.settings import settings
 from moonmind.container_job_cli import python_test_submission
+from moonmind.omnigent.harness_platform.host_classes import get_launch_policy
+from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.host_capacity import evaluate_generic_host_capacity
+from moonmind.omnigent.host_services.runtime_environment import (
+    OmnigentRuntimeEnvironmentService,
+)
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.security.container_job_capabilities import (
+    verify_container_job_session_capability,
+)
 from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobActivityResult,
@@ -67,6 +85,14 @@ from moonmind.workflows.temporal.container_job_backend import (
 )
 from moonmind.workflows.temporal.workflows.container_job import (
     MoonMindContainerJobWorkflow,
+)
+from moonmind.workflows.temporal.workflows.merge_gate import (
+    build_resolver_run_request,
+)
+from tests.unit.omnigent.test_generic_plane_production_boundary_concurrency import (
+    _catalog,
+    _compile_kwargs,
+    _ready_opencode_image_pair,  # noqa: F401 - autouse image-pair fixture
 )
 
 pytestmark = [
@@ -94,6 +120,7 @@ def _request(
     *,
     wait_for_capacity: bool = True,
     resources: dict[str, Any] | None = None,
+    container_ref: str | None = None,
 ) -> ContainerJobActivityRequest:
     payload = {
         "jobId": job_id,
@@ -114,6 +141,8 @@ def _request(
         "resolvedImageRef": "sha256:" + "a" * 64,
         "waitForCapacity": wait_for_capacity,
     }
+    if container_ref is not None:
+        payload["containerRef"] = container_ref
     return ContainerJobActivityRequest.model_validate(payload)
 
 
@@ -655,22 +684,35 @@ _OPERATIONS = (
 
 
 class _PlanAWorkflowDaemon:
-    """Full-lifecycle hermetic daemon with one pre-seeded running holder.
+    """Full-lifecycle hermetic daemon with an optional pre-seeded holder.
 
     Unlike the start-path fake above, this daemon answers the whole
     production lifecycle (workspace/image acquisition, create, start, stop,
-    inspect, logs) so the workflow journey below drives the real registered
-    Activities instead of calling the backend directly. The pre-seeded
-    holder occupies the only slot at limit 1, so the workflow must park in
-    ``WAITING_FOR_CAPACITY`` until it is cancelled.
+    inspect, logs) so the workflow journeys below drive the real registered
+    Activities instead of calling the backend directly. With a pre-seeded
+    holder occupying the only slot at limit 1, the workflow parks in
+    ``WAITING_FOR_CAPACITY`` until the holder is released or the workflow
+    is cancelled. Without a holder the slot is free and the workflow runs
+    to ``succeeded`` once its container finishes. ``max_overlap`` tracks
+    the peak number of concurrently running containers (the R1 cap signal)
+    across the whole driven lifecycle.
     """
 
-    def __init__(self, *, holder_name: str, ownership_token: str) -> None:
+    def __init__(
+        self, *, holder_name: str | None, ownership_token: str
+    ) -> None:
         self.images = {"alpine:3.20"}
         self.commands: list[tuple[str, ...]] = []
-        self.states: dict[str, str] = {holder_name: "running"}
+        self.states: dict[str, str] = (
+            {holder_name: "running"} if holder_name is not None else {}
+        )
         self.created: dict[str, str] = {}
         self.holder_token = ownership_token
+        self.max_overlap = 0
+
+    def _record_running(self) -> None:
+        running = sum(1 for state in self.states.values() if state == "running")
+        self.max_overlap = max(self.max_overlap, running)
 
     async def run(self, raw: Any) -> tuple[int, bytes, bytes]:
         command = tuple(str(item) for item in raw)
@@ -717,13 +759,16 @@ class _PlanAWorkflowDaemon:
             return 0, name.encode(), b""
         if command[0] == "start":
             self.states[command[1]] = "running"
+            self._record_running()
             return 0, command[1].encode(), b""
         if command[0] == "stop":
             self.states[command[-1]] = "exited"
+            self._record_running()
             return 0, b"", b""
         if command[0] == "rm":
             self.states.pop(command[-1], None)
             self.created.pop(command[-1], None)
+            self._record_running()
             return 0, b"", b""
         if command[0] == "logs":
             return 0, b"journey-complete\n", b""
@@ -871,3 +916,671 @@ async def test_capacity_wait_cancel_through_production_workflow(
         "cancellation must stop the created container"
     )
     assert not any(command[0] == "info" for command in daemon.commands)
+
+
+# ------------------------------------------------- real-Docker R1/R2 journeys
+#
+# The tests below qualify the same admission owners against a reachable
+# Docker daemon: two worker processes sharing the supported lock mount race
+# on real containers, and a lost start acknowledgment reconciles the
+# daemon-observed container before retry. They skip without a reachable
+# daemon (local and daemon-less managed runs) and run in Docker-backed
+# required CI. No new subsystem is introduced: the backends under test use
+# the production ``docker`` command path with disposable ``moonmind-test-*``
+# containers and isolated fixtures.
+
+_REAL_TEST_IMAGE = "alpine:3.20"
+
+
+def _require_real_docker_image() -> None:
+    """Skip unless the Docker CLI, a reachable daemon, and the fixture image exist."""
+    import subprocess
+
+    if shutil.which("docker") is None:
+        pytest.skip("requires the Docker CLI")
+    probing = subprocess.run(
+        ["docker", "info", "--format", "{{.ServerVersion}}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if probing.returncode != 0:
+        pytest.skip(
+            "requires a reachable Docker daemon: "
+            f"{probing.stderr.strip()[:200]}"
+        )
+    pulled = subprocess.run(
+        ["docker", "pull", _REAL_TEST_IMAGE],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if pulled.returncode != 0:
+        pytest.skip(
+            f"requires fixture image {_REAL_TEST_IMAGE}: "
+            f"{pulled.stderr.strip()[:200]}"
+        )
+
+
+async def _real_docker_run(raw: Any) -> tuple[int, bytes, bytes]:
+    """Production-shaped Docker CLI runner: bare ``docker`` like the backend."""
+    proc = await asyncio.create_subprocess_exec(
+        "docker",
+        *(str(item) for item in raw),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    return proc.returncode or 0, stdout, stderr
+
+
+async def _real_container_status(name: str) -> str:
+    code, stdout, _ = await _real_docker_run(
+        ("inspect", "--format", "{{.State.Status}}", name)
+    )
+    return stdout.decode(errors="replace").strip() if code == 0 else ""
+
+
+def _real_backend(
+    tmp_path: Path, lock_root: Path, runner: Any
+) -> DockerContainerJobBackend:
+    return DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        capacity_lock=FilesystemCapacityAdmissionLock(lock_root),
+        settings=resolve_container_backend_settings(
+            {"MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_JOBS": "1"}
+        ),
+    )
+
+
+def _real_docker_race_worker(
+    lock_root: str, workspace_root: str, payload: dict[str, Any], queue: Any
+) -> None:
+    """Start one pre-created real container in a separate worker process.
+
+    Top-level so ``spawn``-context workers can import it. Each worker
+    builds its own backend over the shared lock root -- the supported
+    cross-worker mount shape -- and talks to the real daemon through the
+    production ``docker`` command path.
+    """
+
+    import asyncio
+
+    from moonmind.config.container_backend_settings import (
+        resolve_container_backend_settings,
+    )
+    from moonmind.schemas.container_job_models import (
+        ContainerJobActivityRequest,
+    )
+    from moonmind.workflows.temporal.container_job_backend import (
+        DockerContainerJobBackend,
+        FilesystemCapacityAdmissionLock,
+    )
+    from tests.integration.reliability.test_container_job_plan_a_qualification_journey import (
+        _real_docker_run,
+    )
+
+    async def _main() -> None:
+        backend = DockerContainerJobBackend(
+            workspace_root=workspace_root,
+            command_runner=_real_docker_run,
+            capacity_lock=FilesystemCapacityAdmissionLock(lock_root),
+            settings=resolve_container_backend_settings(
+                {"MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_JOBS": "1"}
+            ),
+        )
+        request = ContainerJobActivityRequest.model_validate(payload)
+        try:
+            result = await backend.start_container(request)
+            queue.put(
+                {
+                    "job_id": request.job_id,
+                    "running": bool(result.running),
+                    "parked": result.capacity_wait is not None,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - reported to the parent
+            queue.put({"job_id": request.job_id, "error": repr(exc)})
+
+    asyncio.run(_main())
+
+
+async def test_real_docker_two_workers_race_final_slot(tmp_path: Path) -> None:
+    """R1: two worker processes race for the final slot on real Docker.
+
+    Both containers are pre-created (``created`` claims no slot) and both
+    workers share the supported lock mount at limit 1. Daemon-observed
+    overlapping running containers never exceed the cap, exactly one worker
+    starts, the loser parks, and it proceeds once the winner's slot is
+    released. Docker-backed required CI only; skips without a daemon.
+    """
+    import subprocess
+
+    _require_real_docker_image()
+    lock_root = tmp_path / "capacity-locks"
+    lock_root.mkdir(parents=True, exist_ok=True)
+    names = [f"moonmind-test-plan-a-{uuid.uuid4().hex[:12]}" for _ in range(2)]
+    requests = [
+        _request(tmp_path, _job_id(), container_ref=name) for name in names
+    ]
+    for name, job in zip(names, requests):
+        created = subprocess.run(
+            [
+                "docker",
+                "create",
+                "--name",
+                name,
+                "--label",
+                f"{LABEL_CONTAINER_JOB}={job.job_id}",
+                _REAL_TEST_IMAGE,
+                "sleep",
+                "120",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert created.returncode == 0, created.stderr
+    try:
+        ctx = _process_context()
+        queue = ctx.Queue()
+        processes = [
+            ctx.Process(
+                target=_real_docker_race_worker,
+                args=(
+                    str(lock_root),
+                    str(tmp_path),
+                    request.model_dump(mode="json", by_alias=True),
+                    queue,
+                ),
+            )
+            for request in requests
+        ]
+        for process in processes:
+            process.start()
+        try:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 120
+            max_overlap = 0
+            while any(process.is_alive() for process in processes):
+                if loop.time() > deadline:
+                    break
+                running = 0
+                for name in names:
+                    # Daemon-observed overlap: count actually running
+                    # containers while both workers race.
+                    if await _real_container_status(name) == "running":
+                        running += 1
+                max_overlap = max(max_overlap, running)
+                await asyncio.sleep(0.05)
+        finally:
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+            for process in processes:
+                await asyncio.to_thread(process.join, 30)
+        assert all(process.exitcode == 0 for process in processes), (
+            "both worker processes must exit cleanly"
+        )
+        outcomes = [await asyncio.to_thread(queue.get, True, 60) for _ in processes]
+        assert not [o for o in outcomes if "error" in o], outcomes
+        started = [o for o in outcomes if o["running"]]
+        parked = [o for o in outcomes if o["parked"]]
+        assert len(started) == 1, f"exactly one worker must win: {outcomes}"
+        assert len(parked) == 1, f"the loser must park: {outcomes}"
+        assert max_overlap <= 1, (
+            f"daemon-observed overlap exceeded the cap: {max_overlap}"
+        )
+        # Created-waiter progress on real Docker: stopping the winner frees
+        # its slot and the parked loser proceeds without deadlock.
+        winner = next(o["job_id"] for o in started)
+        loser = next(o["job_id"] for o in parked)
+        subprocess.run(
+            ["docker", "stop", names[[o["job_id"] for o in outcomes].index(winner)]],
+            capture_output=True,
+            timeout=120,
+        )
+        parent = _real_backend(tmp_path, lock_root, _real_docker_run)
+        retry = await parent.start_container(
+            next(r for r in requests if r.job_id == loser)
+        )
+        assert retry.running is True
+        assert await _real_container_status(
+            names[[r.job_id for r in requests].index(loser)]
+        ) == "running"
+    finally:
+        for name in names:
+            subprocess.run(
+                ["docker", "rm", "--force", name],
+                capture_output=True,
+                timeout=120,
+            )
+
+
+async def test_real_docker_lost_start_ack_reconciles_before_retry(
+    tmp_path: Path,
+) -> None:
+    """R2: a lost start ack reconciles the real container before retry.
+
+    The daemon applies the start but the acknowledgment never reaches the
+    worker; the retry must observe the daemon-ledger slot holder first, so
+    no duplicate container is launched and no live consumer is abandoned.
+    A container finishing between observation and retry then frees its slot
+    for the next job on real Docker. Docker-backed required CI only.
+    """
+    import subprocess
+
+    _require_real_docker_image()
+    lock_root = tmp_path / "capacity-locks"
+    lock_root.mkdir(parents=True, exist_ok=True)
+    first_name = f"moonmind-test-plan-a-{uuid.uuid4().hex[:12]}"
+    second_name = f"moonmind-test-plan-a-{uuid.uuid4().hex[:12]}"
+    first = _request(tmp_path, _job_id(), container_ref=first_name)
+    second = _request(tmp_path, _job_id(), container_ref=second_name)
+    for name, job in ((first_name, first), (second_name, second)):
+        created = subprocess.run(
+            [
+                "docker",
+                "create",
+                "--name",
+                name,
+                "--label",
+                f"{LABEL_CONTAINER_JOB}={job.job_id}",
+                _REAL_TEST_IMAGE,
+                "sleep",
+                "120",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert created.returncode == 0, created.stderr
+    try:
+        calls: list[tuple[str, ...]] = []
+        dropped = False
+
+        async def flaky(raw: Any) -> tuple[int, bytes, bytes]:
+            nonlocal dropped
+            command = tuple(str(item) for item in raw)
+            calls.append(command)
+            if command[:2] == ("start", first_name) and not dropped:
+                dropped = True
+                # The daemon applies the start; only the ack is lost.
+                await _real_docker_run(command)
+                raise RuntimeError("injected lost start acknowledgment")
+            return await _real_docker_run(raw)
+
+        victim = _real_backend(tmp_path, lock_root, flaky)
+        with pytest.raises(RuntimeError, match="lost start acknowledgment"):
+            await victim.start_container(first)
+        assert dropped, "the fault injection must have fired"
+        # Daemon-observed reconcile evidence: the container is provably
+        # running and still holds its slot despite the lost ack.
+        assert await _real_container_status(first_name) == "running"
+        survivor = _real_backend(tmp_path, lock_root, _real_docker_run)
+        holders = await survivor._slot_holders()
+        assert holders.get(first_name) == "running"
+
+        retry = await survivor.start_container(first)
+        assert retry.running is True
+        listed = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "--all",
+                "--filter",
+                f"name={first_name}",
+                "--format",
+                "{{.Names}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert [n.strip() for n in listed.stdout.splitlines() if n.strip()] == [
+            first_name
+        ], "retry must not launch a duplicate container"
+
+        # The container finishes between observation and retry: stopping it
+        # releases its slot and the next created waiter proceeds.
+        stopped = subprocess.run(
+            ["docker", "stop", first_name],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert stopped.returncode == 0, stopped.stderr
+        holders = await survivor._slot_holders()
+        assert first_name not in holders, "a stopped container frees its slot"
+        proceeded = await survivor.start_container(second)
+        assert proceeded.running is True
+        assert await _real_container_status(second_name) == "running"
+        assert not any(command[0] == "info" for command in calls), (
+            "Plan A performs no machine-budget probe"
+        )
+    finally:
+        for name in (first_name, second_name):
+            subprocess.run(
+                ["docker", "rm", "--force", name],
+                capture_output=True,
+                timeout=120,
+            )
+
+
+# ------------------------------------------- production-workflow R3 journeys
+
+
+@asynccontextmanager
+async def _production_workflow_harness(tmp_path: Path, *, daemon: _PlanAWorkflowDaemon):
+    """Share one backend/daemon across sequential production-workflow runs.
+
+    Yields ``(client, workflow_queue, workspace, daemon, published,
+    projected)`` so each journey drives the production
+    ``MoonMindContainerJobWorkflow`` with its registered Activities through
+    the same limit-1 backend the cancel journey uses.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(exist_ok=True)
+    (workspace / "result.txt").write_text("passed\n", encoding="utf-8")
+    published: list[tuple[str, str, bytes]] = []
+    projected: list[tuple[str, str]] = []
+
+    async def publish(request: Any, name: str, payload: bytes) -> str:
+        published.append((request.job_id, name, payload))
+        return f"artifact:{len(published)}"
+
+    async def project(request: Any) -> None:
+        state = request.state or request.terminal_state
+        projected.append((request.job_id, getattr(state, "value", state)))
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        backend_ref="system-proxy",
+        docker_host="tcp://dockerproxy:2375",
+        command_runner=daemon.run,
+        evidence_publisher=publish,
+        projection_writer=project,
+        image_lock_root=tmp_path / "image-locks",
+        workspace_volume_name="agent_workspaces",
+        settings=resolve_container_backend_settings(
+            {"MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_JOBS": "1"}
+        ),
+    )
+    runtime = TemporalAgentRuntimeActivities(container_job_backend=backend)
+    workflow_queue = f"container-job-plan-a-{uuid.uuid4()}"
+    activity_queue = settings.temporal.activity_agent_runtime_task_queue
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(
+                Worker(
+                    env.client,
+                    task_queue=workflow_queue,
+                    workflows=[MoonMindContainerJobWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                )
+            )
+            await stack.enter_async_context(
+                Worker(
+                    env.client,
+                    task_queue=activity_queue,
+                    activities=_registered_activities(runtime),
+                )
+            )
+            yield (env.client, workflow_queue, workspace, daemon, published, projected)
+
+
+async def _await_workflow_success(
+    handle: Any, daemon: _PlanAWorkflowDaemon, *, holder_name: str | None
+) -> dict[str, Any]:
+    """Let running job containers finish, then await the terminal result.
+
+    The hermetic daemon never finishes a container on its own; the journey
+    marks every running non-holder container exited (the observable
+    completion the workflow polls for) until the workflow terminates. The
+    holder, if any, is owned by the journey, never auto-finished.
+    """
+    result_task = asyncio.create_task(handle.result())
+    for _ in range(600):
+        if result_task.done():
+            break
+        for name, state in list(daemon.states.items()):
+            if name != holder_name and state == "running":
+                daemon.states[name] = "exited"
+        await asyncio.sleep(0.05)
+    if not result_task.done():
+        result_task.cancel()
+        pytest.fail("production workflow did not reach a terminal state")
+    return await result_task
+
+
+async def test_capacity_release_proceeds_and_restarts_through_production_workflow(
+    tmp_path: Path,
+) -> None:
+    """R3: slot release, proceed, and restart through the real workflow.
+
+    The production ``MoonMindContainerJobWorkflow`` parks in
+    ``WAITING_FOR_CAPACITY`` behind a running holder, proceeds once the
+    holder is released, and runs to ``succeeded``; a second workflow then
+    restarts on the freed slot through the same Activities. Overlapping
+    running containers never exceed the cap and no pool probe runs.
+    """
+    holder = "moonmind-container-job-holder"
+    daemon = _PlanAWorkflowDaemon(
+        holder_name=holder,
+        ownership_token="container-job:holder:v1",
+    )
+    async with _production_workflow_harness(tmp_path, daemon=daemon) as (
+        client,
+        workflow_queue,
+        workspace,
+        _,
+        _published,
+        projected,
+    ):
+        first_id = "container-job:" + "7" * 32
+        first = await client.start_workflow(
+            MoonMindContainerJobWorkflow.run,
+            _workflow_input(first_id, workspace),
+            id=f"container-job-plan-a-{uuid.uuid4()}",
+            task_queue=workflow_queue,
+        )
+        for _ in range(200):
+            status = await first.query("status")
+            if "waiting_for_capacity" in str(status.get("state")).lower():
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("workflow never parked in WAITING_FOR_CAPACITY")
+        # Slot release through the production path: the holder finishes and
+        # the parked waiter must proceed instead of waiting forever.
+        daemon.states[holder] = "exited"
+        result = await _await_workflow_success(first, daemon, holder_name=holder)
+        assert result["state"] == "succeeded"
+
+        # Restart through the production path: the next job reuses the
+        # freed slot through the same workflow and Activities.
+        second_id = "container-job:" + "8" * 32
+        second = await client.start_workflow(
+            MoonMindContainerJobWorkflow.run,
+            _workflow_input(second_id, workspace),
+            id=f"container-job-plan-a-{uuid.uuid4()}",
+            task_queue=workflow_queue,
+        )
+        second_result = await _await_workflow_success(
+            second, daemon, holder_name=holder
+        )
+        assert second_result["state"] == "succeeded"
+
+    assert daemon.max_overlap <= 1, (
+        f"overlapping running containers exceeded the cap: {daemon.max_overlap}"
+    )
+    assert not any(command[0] == "info" for command in daemon.commands)
+    states = {state for _, state in projected}
+    assert "waiting_for_capacity" in states
+    assert "succeeded" in states
+
+
+async def test_subordinate_test_job_runs_while_hosts_full_through_workflow(
+    tmp_path: Path,
+) -> None:
+    """R3: a full host ledger never blocks a subordinate test job workflow.
+
+    All 8 generic hosts are occupied, yet the production
+    ``MoonMindContainerJobWorkflow`` still runs its subordinate test job to
+    ``succeeded``: agent-host leases and the container-job slot ledger are
+    counted separately through the production Activities.
+    """
+    hosts_full = evaluate_generic_host_capacity(
+        active_hosts=8,
+        recent_cold_launches=0,
+        host_capacity=8,
+        cold_launch_burst=2,
+        cold_launch_window_seconds=30,
+    )
+    assert hosts_full.admitted is False
+    daemon = _PlanAWorkflowDaemon(
+        holder_name=None,
+        ownership_token="container-job:holder:v1",
+    )
+    async with _production_workflow_harness(tmp_path, daemon=daemon) as (
+        client,
+        workflow_queue,
+        workspace,
+        _,
+        _published,
+        _projected,
+    ):
+        job_id = "container-job:" + "6" * 32
+        handle = await client.start_workflow(
+            MoonMindContainerJobWorkflow.run,
+            _workflow_input(job_id, workspace),
+            id=f"container-job-plan-a-{uuid.uuid4()}",
+            task_queue=workflow_queue,
+        )
+        result = await _await_workflow_success(handle, daemon, holder_name=None)
+
+    assert result["state"] == "succeeded", (
+        "an agent holding the last host slot can still run its test job"
+    )
+    assert daemon.max_overlap <= 1
+    assert any(command[0] == "start" for command in daemon.commands), (
+        "the subordinate job must reach docker start"
+    )
+    assert not any(command[0] == "info" for command in daemon.commands)
+
+
+# ------------------------------------------------------- preset-route R4 journey
+
+
+async def test_batch_pr_resolver_preset_route_reaches_host_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R4: the resolver preset route reaches host execution with stock limits.
+
+    The normal Batch PR Resolver child route -- resolver run request with an
+    omnigent target runtime, scoped capability environment, canonical
+    ``python_test_submission`` -- carries the stock 2 CPU / 4 GiB / PID
+    bound to the production create/start boundary with no CPU-pool probe or
+    resource helper. Provider/GitHub effects stay isolated: the PR ref is a
+    fixture and no network call runs. The hermetic complement to the
+    Docker-gated inspect case above.
+    """
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CODEX_QUALIFIED", "1")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_CLAUDE_QUALIFIED", "1")
+    plan = compile_execution_plan(**_compile_kwargs(_catalog(), "1"))
+    assert plan.payload.harnessId == "opencode-native"
+    assert plan.payload.executionRealizerRef == "generic-omnigent-host@1"
+    selected_profile = plan.payload.credentialBindings[
+        "primary-model"
+    ].providerProfileRef
+    child = build_resolver_run_request(
+        parent_workflow_id="merge-owner",
+        pull_request={
+            "repo": "example/repo",
+            "number": 1,
+            "url": "https://github.com/example/repo/pull/1",
+            "headSha": "a" * 40,
+            "headBranch": "candidate",
+            "baseBranch": "main",
+        },
+        jira_issue_key=None,
+        merge_method="squash",
+        resolver_template={
+            "targetRuntime": "omnigent",
+            "executionProfileRef": selected_profile,
+        },
+    )
+    request = AgentExecutionRequest.model_validate(
+        {
+            "agentKind": "external",
+            "agentId": "omnigent",
+            "correlationId": "resolver-child",
+            "idempotencyKey": "resolver-step",
+            "parameters": child["initial_parameters"],
+            "workspaceSpec": {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": "resolver-workspace",
+                    "relativePath": "repo",
+                }
+            },
+            "stepExecution": {
+                "workflowId": "resolver-child",
+                "runId": "child-run",
+                "logicalStepId": "node-1",
+                "executionOrdinal": 1,
+                "stepExecutionId": "resolver-child:child-run:node-1:execution:1",
+                "runtimeContextPolicy": "fresh_agent_run",
+            },
+        }
+    )
+    environment = OmnigentRuntimeEnvironmentService(
+        moonmind_url="http://api:8000", signing_secret="test-secret"
+    ).build(
+        request=request,
+        plan=plan,
+        host_lease_ref="resolver-lease",
+        launch_policy=get_launch_policy(plan.payload.launchPolicyRef),
+        workspace_attachment={"accessMode": "read-write"},
+    )
+    capability = verify_container_job_session_capability(
+        environment["MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"], secret="test-secret"
+    )
+    assert capability.runtime_id == "opencode-native"
+    assert capability.workflow_id == "resolver-child"
+    assert capability.workspace_id == "resolver-workspace"
+    submission = python_test_submission(["tests/unit/example.py"], env=environment)
+    resources = submission["spec"]["resources"]
+    assert resources["cpuMillis"] == 2000
+    assert resources["memoryMiB"] == 4096
+    assert resources["pids"] == 512
+    assert "pool" not in json.dumps(submission).lower()
+
+    # Host-execution leg: the preset-route submission runs through the
+    # production create/start boundary with the stock limits verbatim.
+    daemon = _FakeDockerDaemon()
+    (backend,) = _backends(tmp_path, daemon, count=1)
+    job = _request(
+        tmp_path,
+        _job_id(),
+        resources={
+            "cpuMillis": resources["cpuMillis"],
+            "memoryMiB": resources["memoryMiB"],
+            "pids": resources["pids"],
+        },
+    )
+    created = await backend.create_container(job)
+    assert created.container_ref == DockerContainerJobBackend._name(job)
+    started = await backend.start_container(job)
+    assert started.running is True
+    creates = [c for c in daemon.commands if c[0] == "create"]
+    assert len(creates) == 1
+    command = " ".join(creates[0])
+    assert "--cpus 2.0" in command
+    assert "--memory 4096m" in command
+    assert "--pids-limit 512" in command
+    assert "pool" not in command.lower()
+    assert daemon.info_count() == 0, "Plan A performs no machine-budget probe"
+
