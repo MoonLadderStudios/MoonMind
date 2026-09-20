@@ -30,7 +30,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -1482,7 +1482,7 @@ async def settings_spa_fallback_route(
     dashboard_path: str,
     session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
-) -> HTMLResponse | RedirectResponse:
+) -> Response:
     """Serve the settings SPA shell for extensionless settings sub-routes.
 
     An empty sub-path is the trailing-slash form of the bare `/settings` entry
