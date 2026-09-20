@@ -428,23 +428,118 @@ def _decode_review_response(
         return None, None, "reviewer_malformed"
 
 
+_TRUTHY_PRODUCER_FLAG_STRINGS = frozenset({"true", "1", "yes", "y", "t", "on"})
+
+
+def _is_producer_negative_flag(value: Any) -> bool:
+    """Conservatively detect an explicit producer-invalid/degraded flag.
+
+    The canonical parser rejects non-boolean flags as malformed, but the
+    repair gate sees the raw decoded payload. Recognizable truthy values
+    (``1``, ``"true"``, ...) must still block a repaired ``FULLY_IMPLEMENTED``
+    so report formatting repair cannot erase an explicit producer-invalid
+    result.
+    """
+    if value is True:
+        return True
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        try:
+            return bool(value)
+        except Exception:
+            return False
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUTHY_PRODUCER_FLAG_STRINGS
+    return False
+
+
+def _normalize_stop_action(value: Any) -> str | None:
+    """Normalize an explicit stop action despite casing/whitespace errors."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized in ("blocked", "needs_human"):
+        return normalized
+    return None
+
+
+def _explicit_recoverable_flag(payload: Mapping[str, Any] | None) -> bool | None:
+    """Return the explicit boolean recovery flag, or None when absent/non-bool."""
+    if not isinstance(payload, Mapping):
+        return None
+    for key in ("recoverableInCurrentRuntime", "recoverable_in_current_runtime"):
+        if key in payload:
+            value = payload[key]
+            if isinstance(value, bool):
+                return value
+            return None
+    return None
+
+
+def _carry_forward_repair_findings(
+    original: Mapping[str, Any] | None, result_payload: dict[str, Any]
+) -> None:
+    """Retain bounded original diagnostics when a repaired report omits them.
+
+    A malformed non-passing response can carry valid feedback/issues that a
+    formatting repair drops. Preserve the bounded originals so remediation
+    keeps the evidence it was meant to address. Never overwrites repaired
+    findings and never exceeds the bounded ceilings.
+    """
+    if not isinstance(original, Mapping):
+        return
+    try:
+        if not result_payload.get("feedback"):
+            raw_feedback = original.get("feedback")
+            if isinstance(raw_feedback, str) and raw_feedback.strip():
+                result_payload["feedback"] = raw_feedback.strip()[:FEEDBACK_MAX_CHARS]
+        if not result_payload.get("issues"):
+            raw_issues = original.get("issues")
+            if isinstance(raw_issues, list) and raw_issues:
+                carried: list[dict[str, Any]] = []
+                for issue in raw_issues[:ISSUES_MAX_COUNT]:
+                    if not isinstance(issue, Mapping):
+                        continue
+                    entry = dict(issue)
+                    for key in ("description", "evidence"):
+                        text = entry.get(key)
+                        if isinstance(text, str) and len(text) > ISSUE_DESCRIPTION_MAX_CHARS:
+                            entry[key] = text[:ISSUE_DESCRIPTION_MAX_CHARS]
+                    carried.append(entry)
+                if carried:
+                    result_payload["issues"] = carried
+    except Exception:
+        pass
+
+
 def _repair_preserves_decision(
     original: Mapping[str, Any] | None, repaired: StepGateResult | None,
 ) -> bool:
     """A formatting repair cannot overturn a declared non-pass or stop."""
     if original is None or repaired is None:
         return repaired is not None
-    if (original.get("invalid") is True or original.get("degraded") is True) and (
-        repaired.verdict == "FULLY_IMPLEMENTED"
-    ):
+    if (
+        _is_producer_negative_flag(original.get("invalid"))
+        or _is_producer_negative_flag(original.get("degraded"))
+    ) and (repaired.verdict == "FULLY_IMPLEMENTED"):
         return False
     declared = parse_step_gate_result({"verdict": original.get("verdict")})
     if (not declared.invalid and declared.verdict != "FULLY_IMPLEMENTED"
             and repaired.verdict != declared.verdict):
         return False
-    action = original.get("recommendedNextAction", original.get("recommended_next_action"))
-    if action in ("blocked", "needs_human"):
+    raw_action = original.get("recommendedNextAction")
+    if raw_action is None:
+        raw_action = original.get("recommended_next_action")
+    action = _normalize_stop_action(raw_action)
+    if action is not None:
         return repaired.recommended_next_action == action
+    raw_verdict = str(original.get("verdict") or "").strip().upper()
+    if raw_verdict in ("NO_DETERMINATION", "INCONCLUSIVE", ""):
+        if _explicit_recoverable_flag(original) is False and (
+            getattr(repaired, "recoverable_in_current_runtime", False) is True
+        ):
+            return False
     return True
 
 
@@ -642,12 +737,26 @@ async def step_review_activity(
                     provenance=provenance,
                 )
         result_payload = gate.to_payload()
+        # Retain actionable diagnostics across report-only repair: when the
+        # repaired report omits bounded original feedback/issues, carry them
+        # forward so remediation keeps its evidence. Only applies after a
+        # successful repair; a valid first response already owns its fields.
+        if isinstance(provenance, dict) and isinstance(
+            provenance.get("reportRepair"), dict
+        ):
+            _carry_forward_repair_findings(decoded, result_payload)
         # Do not change historical parser defaults in the workflow sandbox.
         # Fresh activity results always carry an explicit continuation decision.
         if gate.verdict == "NO_DETERMINATION" and not gate.recommended_next_action:
+            effective_recoverable = gate.recoverable_in_current_runtime
+            # A report-only repair cannot overturn an explicit unrecoverable
+            # determination: preserve an explicit false recovery decision from
+            # the initial report before deriving the continuation action.
+            if _explicit_recoverable_flag(decoded) is False:
+                effective_recoverable = False
             result_payload["recommendedNextAction"] = (
                 "reattempt_current_step"
-                if gate.recoverable_in_current_runtime else "blocked"
+                if effective_recoverable else "blocked"
             )
         result_payload["reviewProvenance"] = provenance
         # Commit the completed verified decision before acknowledging
