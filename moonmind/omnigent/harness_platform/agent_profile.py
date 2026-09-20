@@ -69,6 +69,39 @@ def stable_imported_content_digest(
     )
 
 
+def accepted_upstream_snapshot_digests(
+    source: Mapping[str, Any], snapshot_digest: str = ""
+) -> tuple[str, ...]:
+    """Digests a compiled plan may legitimately pin for this upstream source.
+
+    The current compiler pins the stable projection digest. Compilers before
+    MoonLadderStudios/MoonMind#4438 pinned the Agent Profile version digest
+    instead, even when the document already carried a distinct stable digest.
+    Workers upgrade under running schedules and durable executions, so those
+    historical plans must keep admitting. Both values are derived from the
+    same presented Agent Profile artifact, so a different artifact still
+    matches neither.
+    """
+
+    accepted = [stable_upstream_snapshot_digest(source, snapshot_digest)]
+    legacy = str(snapshot_digest or "").strip()
+    if legacy and legacy not in accepted:
+        accepted.append(legacy)
+    return tuple(value for value in accepted if value)
+
+
+def accepted_imported_content_digests(
+    source: Mapping[str, Any], snapshot_digest: str = ""
+) -> tuple[str, ...]:
+    """Digests a compiled plan may legitimately pin for this bundle source."""
+
+    accepted = [stable_imported_content_digest(source, snapshot_digest)]
+    legacy = str(snapshot_digest or "").strip()
+    if legacy and legacy not in accepted:
+        accepted.append(legacy)
+    return tuple(value for value in accepted if value)
+
+
 class UpstreamSource(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
