@@ -522,7 +522,11 @@ function repositoryOptionValue(
   );
 }
 
-type TemplateScope = "global" | "personal";
+type TemplateScope = "global" | "personal"; // Backend-owned catalog partition
+// (MoonLadderStudios/MoonMind#4353 presents one unified instance list; the
+// scope/scopeRef routing contract is owned by #4350. Removal condition:
+// when the backend exposes a unified preset list/detail/save surface without
+// scope partitioning, delete this type and the scope plumbing below).
 type ScheduleMode = "immediate" | "once" | "deferred_minutes" | "recurring";
 
 interface DashboardConfig {
@@ -7676,9 +7680,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     ],
     enabled: presetCatalogEnabled,
     queryFn: async (): Promise<TemplateCatalogResult> => {
-      // The backend still partitions the preset catalog by scope (sibling
-      // issues own that policy), so both partitions are fetched and merged
-      // into the single unified instance list shown by the UI.
+      // Backend-owned scope contract (MoonLadderStudios/MoonMind#4350 owns the
+      // unified-catalog policy): GET /api/presets defaults to scope=personal
+      // and has no unified list surface, so both partitions are fetched and
+      // merged into the single unified instance list shown by the UI.
+      // Removal condition: replace with one scope-free fetch when #4350 lands.
       const scopes: TemplateScope[] = ["global", "personal"];
       const results = await Promise.all(
         scopes.map(async (scope) => {
@@ -10448,9 +10454,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           Accept: "application/json",
         },
         body: JSON.stringify({
-          // Backend-owned catalog scope contract (sibling issues own the
-          // unified-catalog policy); the UI presents the saved preset in the
-          // single instance catalog without a Personal/Global selector.
+          // Backend-owned save contract (MoonLadderStudios/MoonMind#4350):
+          // PresetSaveFromWorkflowRequestSchema requires scope "personal".
+          // The UI presents the saved preset in the single instance catalog
+          // without a Personal/Global selector. Removal condition: drop this
+          // field when #4350 accepts a scope-free save.
           scope: "personal",
           title,
           description: title,
@@ -10492,7 +10500,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       item.slug.trim().toLowerCase() === normalized;
     // The unified instance catalog deletes whichever listed preset matches;
     // the preset's own backend scope/scopeRef travels with the request and
-    // the server remains the authorization boundary.
+    // the server remains the authorization boundary (detail/delete/expand
+    // require scope as Query(...); owned by #4350 with the same removal
+    // condition as the list/save contract above).
     const target = templateItems.find(matchesName);
     if (!target) {
       setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
