@@ -583,7 +583,6 @@ jobs:
           fi
           timeout 60s bash -c "find . -type f \( -name 'workspace-manifest*.json' -o -name 'provider-transcript*.jsonl' -o -name 'temporal-diagnostics*.json' -o -name 'replay-manifest*.json' \) -exec cp --parents '{}' /tmp/pytest-${{ matrix.suite }}/ \; 2>/dev/null" \
             || echo "scoped manifest copy failed or timed out (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
-          python3 tools/ci/redact_diagnostics.py --diagnostics-dir /tmp/pytest-${{ matrix.suite }} --status-file /tmp/pytest-${{ matrix.suite }}/collection-status.txt || echo "redaction failed (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
           echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > /tmp/pytest-${{ matrix.suite }}/cancellation-context.txt
           # Explicit last-active-case extraction (MoonLadderStudios/MoonMind#4371
           # R4/A3): the trailing live node IDs from the known streamed tee log,
@@ -598,6 +597,18 @@ jobs:
               || echo "last-active-case extraction failed (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
           else
             echo "last-active-case: unavailable (no streamed log retained)" >> /tmp/pytest-${{ matrix.suite }}/cancellation-context.txt
+          fi
+          # Fail closed (P1): redact after all /tmp diagnostics exist so
+          # cancellation-context.txt is covered too; on redaction failure
+          # remove everything except the status file so the always() upload
+          # cannot publish unsanitized logs, manifests, or transcripts.
+          if python3 tools/ci/redact_diagnostics.py --diagnostics-dir /tmp/pytest-${{ matrix.suite }} --status-file /tmp/pytest-${{ matrix.suite }}/collection-status.txt; then
+            echo "redaction verified ok" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
+          else
+            rc=$?
+            echo "redaction failed (exit=$rc); removing unredacted diagnostics before upload" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
+            find /tmp/pytest-${{ matrix.suite }} -type f ! -name 'collection-status.txt' -delete 2>/dev/null || true
+            echo "unredacted diagnostics removed (fail-closed; only collection-status.txt retained)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
           fi
       - name: Upload reliability shard diagnostics
         timeout-minutes: 2

@@ -23,7 +23,7 @@ PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)(bearer\s+)[A-Za-z0-9\-._~+/=]{8,}"), r"\1***REDACTED***"),
     (
         re.compile(
-            r"(?i)(api[_-]?key|secret|token|password|private[_-]?key)\s*[:=]\s*"
+            r"(?i)[\"']?(api[_-]?key|secret|token|password|private[_-]?key)[\"']?\s*[:=]\s*"
             r"(['\"]?)([A-Za-z0-9\-._~+/=]{8,})\2"
         ),
         r"\1=***REDACTED***",
