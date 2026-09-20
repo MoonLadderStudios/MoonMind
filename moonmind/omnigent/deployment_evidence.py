@@ -20,12 +20,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.omnigent.conformance import assert_secret_free
 from moonmind.omnigent.harness_platform.support import (
-    DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS,
     SupportKeyPayload,
     compute_deployment_qualification_key,
     compute_support_combination_key,
     deployment_excluded_fields_for,
-    is_none_materializer_identity,
 )
 
 DEPLOYMENT_EVIDENCE_VERSION = "moonmind.omnigent-deployment-execution-evidence/v1"
@@ -203,20 +201,52 @@ def sign_deployment_evidence(payload: Mapping[str, Any]) -> dict[str, Any]:
     return signed
 
 
+class DeploymentEvidenceUnusable(ValueError):
+    """One published document cannot back an admission, and why.
+
+    ``reason`` is always one of this module's own fixed strings. A candidate is
+    untrusted until its schema, secret scan, and HMAC all pass, and a parser
+    error quotes the values it rejected, so no candidate-derived text may ever
+    reach a diagnostic. Keeping the vocabulary here gives the reader one safe
+    thing to report instead of choosing between silence and leaking evidence.
+    """
+
+    def __init__(self, message: str, *, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+#: The complete bounded vocabulary of :class:`DeploymentEvidenceUnusable`.
+UNUSABLE_UNVERIFIED = "failed structural or signature verification"
+UNUSABLE_FUTURE_DATED = "is future-dated"
+UNUSABLE_EXPIRED = "is expired or past the maximum evidence age"
+UNUSABLE_GENERATION = "targets a different compatibility generation"
+
+
 def validate_deployment_evidence(
     evidence: Mapping[str, Any],
     *,
     now: datetime | None = None,
 ) -> DeploymentExecutionEvidence:
-    parsed = DeploymentExecutionEvidence.model_validate(evidence)
+    try:
+        parsed = DeploymentExecutionEvidence.model_validate(evidence)
+    except Exception as exc:
+        raise DeploymentEvidenceUnusable(
+            "deployment evidence failed structural or signature verification",
+            reason=UNUSABLE_UNVERIFIED,
+        ) from exc
     observed_at = now or datetime.now(UTC)
     if parsed.generated_at > observed_at:
-        raise ValueError("deployment evidence is future-dated")
+        raise DeploymentEvidenceUnusable(
+            "deployment evidence is future-dated", reason=UNUSABLE_FUTURE_DATED
+        )
     if (
         observed_at - parsed.generated_at > MAX_DEPLOYMENT_EVIDENCE_AGE
         or parsed.expires_at <= observed_at
     ):
-        raise ValueError("deployment evidence is stale or expired")
+        raise DeploymentEvidenceUnusable(
+            "deployment evidence is stale or expired", reason=UNUSABLE_EXPIRED
+        )
     # Enforce compatibility generations at validation time so stale-generation evidence
     # is rejected even before plan comparison (admission must be generation-aware).
     from moonmind.omnigent.session_supervisor_rollback import (
@@ -228,19 +258,22 @@ def validate_deployment_evidence(
     )
 
     if parsed.feature_generation != OMNIGENT_SESSION_FEATURE_GENERATION:
-        raise ValueError(
+        raise DeploymentEvidenceUnusable(
             f"deployment evidence featureGeneration {parsed.feature_generation!r} "
-            f"does not match current {OMNIGENT_SESSION_FEATURE_GENERATION!r}"
+            f"does not match current {OMNIGENT_SESSION_FEATURE_GENERATION!r}",
+            reason=UNUSABLE_GENERATION,
         )
     if parsed.replay_compatibility_version != OMNIGENT_SESSION_COMPATIBILITY_VERSION:
-        raise ValueError(
+        raise DeploymentEvidenceUnusable(
             f"deployment evidence replayCompatibilityVersion {parsed.replay_compatibility_version!r} "
-            f"does not match current {OMNIGENT_SESSION_COMPATIBILITY_VERSION!r}"
+            f"does not match current {OMNIGENT_SESSION_COMPATIBILITY_VERSION!r}",
+            reason=UNUSABLE_GENERATION,
         )
     if parsed.rollback_policy_version != SUPERVISOR_ROLLBACK_POLICY_VERSION:
-        raise ValueError(
+        raise DeploymentEvidenceUnusable(
             f"deployment evidence rollbackPolicyVersion {parsed.rollback_policy_version!r} "
-            f"does not match current {SUPERVISOR_ROLLBACK_POLICY_VERSION!r}"
+            f"does not match current {SUPERVISOR_ROLLBACK_POLICY_VERSION!r}",
+            reason=UNUSABLE_GENERATION,
         )
     return parsed
 
@@ -249,6 +282,21 @@ def assert_deployment_evidence_matches_plan(
     evidence: DeploymentExecutionEvidence,
     plan_payload: Any,
 ) -> None:
+    """Verify one qualification document answers this exact plan.
+
+    ``compute_deployment_qualification_key`` is the single owner of which
+    identity fields a deployment qualifies, so comparing that key is the whole
+    identity comparison. Re-projecting the identity here would be a second
+    owner of the same rule, free to disagree with the key that admission and
+    publication already select on — which is how a plan and its evidence drift
+    apart in the first place.
+
+    Everything outside that key is either per-run variance the qualification
+    deliberately ignores (model, effort, required capabilities) or a
+    deployment fact recorded beside the identity. The host image is the one
+    such fact: it is substrate, not variance, so it is compared exactly.
+    """
+
     support_identity = getattr(plan_payload, "supportIdentity", None)
     if support_identity is None:
         raise ValueError("execution plan lacks exact support identity")
@@ -276,53 +324,18 @@ def assert_deployment_evidence_matches_plan(
             f"deployment evidence rollbackPolicyVersion {evidence.rollback_policy_version!r} "
             f"does not match current {SUPERVISOR_ROLLBACK_POLICY_VERSION!r}"
         )
-    # For deployment evidence, we only require exact match on the core support
-    # combination, not on per-run policy snapshots which may vary across workflow
-    # compilations. The policy digests are intentionally excluded for deployment
-    # qualification, which proves the deployment can run the combination, not a
-    # single historical policy snapshot. For the credentialless none@1
-    # fast-path, volatile build digests are likewise excluded (same projection
-    # as compute_deployment_qualification_key); auth-bearing identities stay
-    # exact. materializerRefs itself is never excluded.
-    excluded = deployment_excluded_fields_for(support_identity)
-    if not (
-        is_none_materializer_identity(support_identity)
-        and is_none_materializer_identity(evidence.support_identity)
-    ):
-        # Auth-bearing comparison stays exact: only per-run model/capabilities
-        # are excluded. deployment_excluded_fields_for already returns base
-        # for auth; this keeps the narrowing from leaking across classes.
-        excluded = DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS
-
-    def _qualified_identity(identity: SupportKeyPayload) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in identity.model_dump(mode="json", by_alias=True).items()
-            if key not in excluded
-        }
-
-    expected = {
-        "deploymentQualificationKey": compute_deployment_qualification_key(
-            support_identity
-        ),
-        "supportIdentity": _qualified_identity(support_identity),
-        "hostImageRef": plan_payload.hostImageRef,
-        "featureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
-        "replayCompatibilityVersion": OMNIGENT_SESSION_COMPATIBILITY_VERSION,
-        "rollbackPolicyVersion": SUPERVISOR_ROLLBACK_POLICY_VERSION,
-    }
-    actual = {
-        "deploymentQualificationKey": compute_deployment_qualification_key(
-            evidence.support_identity
-        ),
-        "supportIdentity": _qualified_identity(evidence.support_identity),
-        "hostImageRef": evidence.host_image_ref,
-        "featureGeneration": evidence.feature_generation,
-        "replayCompatibilityVersion": evidence.replay_compatibility_version,
-        "rollbackPolicyVersion": evidence.rollback_policy_version,
-    }
-    if actual != expected:
-        raise ValueError("deployment evidence conflicts with the execution plan")
+    if compute_deployment_qualification_key(
+        evidence.support_identity
+    ) != compute_deployment_qualification_key(support_identity):
+        raise ValueError(
+            "deployment evidence conflicts with the execution plan: it "
+            "qualifies a different execution combination"
+        )
+    if evidence.host_image_ref != plan_payload.hostImageRef:
+        raise ValueError(
+            "deployment evidence conflicts with the execution plan: it "
+            "qualifies a different host image"
+        )
 
 
 def _candidate_qualification_key(candidate: Mapping[str, Any]) -> str | None:
@@ -507,16 +520,22 @@ def find_deployment_evidence_entry(
         candidates = _load_deployment_evidence_candidates(path)
     except ValueError:
         return None
+    matching: list[DeploymentExecutionEvidence] = []
     for candidate in candidates:
         if not isinstance(candidate, Mapping):
             continue
         if _candidate_qualification_key(candidate) != expected:
             continue
         try:
-            return DeploymentExecutionEvidence.model_validate(candidate)
+            matching.append(DeploymentExecutionEvidence.model_validate(candidate))
         except Exception:
             continue
-    return None
+    if not matching:
+        return None
+    # One class can hold several published documents, so the probe has to
+    # select the one admission would. Reporting an older document's freshness
+    # would let a rollout gate call a class expired that the loader admits.
+    return max(matching, key=lambda entry: entry.generated_at)
 
 
 def load_deployment_evidence(
@@ -525,6 +544,17 @@ def load_deployment_evidence(
     path: str | Path | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    """Admit the current qualification this deployment published for one class.
+
+    The publisher appends one signed document per qualification run and
+    replaces only entries sharing the *current* projection, so a projection
+    change leaves several documents describing one deployment class. That is
+    publication history, not ambiguity: every candidate is schema-checked,
+    secret-scanned, HMAC-verified, and freshness-checked, and the admitted one
+    must still match the plan. Admission therefore takes the most recently
+    generated admissible document and still fails closed when none is.
+    """
+
     candidates = _load_deployment_evidence_candidates(path)
     requested_qualification_key = compute_deployment_qualification_key(
         plan_payload.supportIdentity
@@ -535,11 +565,42 @@ def load_deployment_evidence(
         if isinstance(value, Mapping)
         and _candidate_qualification_key(value) == requested_qualification_key
     ]
-    if len(matching) != 1:
+    admissible: list[DeploymentExecutionEvidence] = []
+    conflict: ValueError | None = None
+    unusable: list[str] = []
+    for candidate in matching:
+        try:
+            parsed = validate_deployment_evidence(candidate, now=now)
+        except DeploymentEvidenceUnusable as exc:
+            # Invalid history never blocks a current document, but if nothing
+            # current remains the operator needs the real reason: routine
+            # expiry and evidence corruption are different problems.
+            if exc.reason not in unusable:
+                unusable.append(exc.reason)
+            continue
+        try:
+            assert_deployment_evidence_matches_plan(parsed, plan_payload)
+        except ValueError as exc:
+            # A verified document for this class that the plan contradicts is
+            # the actionable failure; keep it rather than reporting the class
+            # as simply unqualified.
+            conflict = conflict or exc
+            continue
+        admissible.append(parsed)
+    if not admissible:
+        if conflict is not None:
+            raise conflict
+        if unusable:
+            raise ValueError(
+                "this deployment published a qualification for the requested "
+                f"execution combination {plan_payload.supportCombinationKey}, "
+                "but no published document is usable: "
+                + "; ".join(f"evidence {reason}" for reason in sorted(unusable))
+                + ". Requalify this combination to publish current evidence."
+            )
         raise ValueError(_unqualified_combination_message(plan_payload, candidates))
-    parsed = validate_deployment_evidence(matching[0], now=now)
-    assert_deployment_evidence_matches_plan(parsed, plan_payload)
-    return parsed.model_dump(mode="json", by_alias=True)
+    current = max(admissible, key=lambda entry: entry.generated_at)
+    return current.model_dump(mode="json", by_alias=True)
 
 
 __all__ = [
@@ -548,6 +609,7 @@ __all__ = [
     "DEPLOYMENT_EVIDENCE_KEY_ID",
     "DEPLOYMENT_EVIDENCE_VERSION",
     "DeploymentEvidenceSignature",
+    "DeploymentEvidenceUnusable",
     "DeploymentExecutionEvidence",
     "assert_deployment_evidence_matches_plan",
     "find_deployment_evidence_entry",
