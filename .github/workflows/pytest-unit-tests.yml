@@ -352,7 +352,7 @@ jobs:
             --ignore=tests/unit/api \
             --ignore=tests/unit/api_service \
             -m "unit_fast and not provider_verification and not requires_credentials" \
-            -q -n auto --dist loadfile --durations=25 --timeout 600 \
+            -v --tb=short -n auto --dist loadfile --durations=25 --timeout 600 \
             --junitxml=artifacts/pytest-backend-unit-fast.xml 2>&1 | tee artifacts/pytest-backend-unit-fast.log
           status=${PIPESTATUS[0]}
           echo $((SECONDS - test_start)) > /tmp/backend-unit-fast-test-seconds.txt || true
@@ -369,7 +369,7 @@ jobs:
           set +e
           python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
             -m "component and not temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-            -q -n auto --dist load --durations=25 --timeout 600 \
+            -v --tb=short -n auto --dist load --durations=25 --timeout 600 \
             --junitxml=artifacts/pytest-backend-api-component.xml 2>&1 | tee artifacts/pytest-backend-api-component.log
           status=${PIPESTATUS[0]}
           echo $((SECONDS - test_start)) > /tmp/backend-api-component-test-seconds.txt || true
@@ -386,7 +386,7 @@ jobs:
           set +e
           python -m pytest tests/unit/workflows/temporal \
             -m "temporal_boundary and not slow and not provider_verification and not requires_credentials" \
-            -q -n auto --dist loadfile --durations=25 --timeout 600 \
+            -v --tb=short -n auto --dist loadfile --durations=25 --timeout 600 \
             --junitxml=artifacts/pytest-backend-temporal-boundary.xml 2>&1 | tee artifacts/pytest-backend-temporal-boundary.log
           status=${PIPESTATUS[0]}
           echo $((SECONDS - test_start)) > /tmp/backend-temporal-boundary-test-seconds.txt || true
@@ -478,21 +478,21 @@ jobs:
               selected="${{ needs.select-test-suites.outputs.unit_fast }}"
               outcome="${{ steps.run-unit.outcome }}"
               seconds_file="/tmp/backend-unit-fast-test-seconds.txt"
-              effective_command="python -m pytest tests/unit -m unit_fast -q -n auto --dist loadfile --durations=25 --timeout 600"
+              effective_command="python -m pytest tests/unit -m unit_fast -v --tb=short -n auto --dist loadfile --durations=25 --timeout 600"
               pytest_timeout="600s per-test"
               step_budget="30-min job" ;;
             api-component)
               selected="${{ needs.select-test-suites.outputs.api_component }}"
               outcome="${{ steps.run-api.outcome }}"
               seconds_file="/tmp/backend-api-component-test-seconds.txt"
-              effective_command="python -m pytest tests/unit/api tests/unit/api_service tests/component/api -m component -q -n auto --dist load --durations=25 --timeout 600"
+              effective_command="python -m pytest tests/unit/api tests/unit/api_service tests/component/api -m component -v --tb=short -n auto --dist load --durations=25 --timeout 600"
               pytest_timeout="600s per-test"
               step_budget="30-min job" ;;
             temporal-boundary)
               selected="${{ needs.select-test-suites.outputs.temporal_boundary }}"
               outcome="${{ steps.run-temporal.outcome }}"
               seconds_file="/tmp/backend-temporal-boundary-test-seconds.txt"
-              effective_command="python -m pytest tests/unit/workflows/temporal -m temporal_boundary -q -n auto --dist loadfile --durations=25 --timeout 600"
+              effective_command="python -m pytest tests/unit/workflows/temporal -m temporal_boundary -v --tb=short -n auto --dist loadfile --durations=25 --timeout 600"
               pytest_timeout="600s per-test"
               step_budget="30-min job" ;;
             reliability-*)
@@ -585,6 +585,20 @@ jobs:
             || echo "scoped manifest copy failed or timed out (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
           python3 tools/ci/redact_diagnostics.py --diagnostics-dir /tmp/pytest-${{ matrix.suite }} --status-file /tmp/pytest-${{ matrix.suite }}/collection-status.txt || echo "redaction failed (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
           echo "suite=${{ matrix.suite }} event=${{ github.event_name }} run=${{ github.run_id }} attempt=${{ github.run_attempt }}" > /tmp/pytest-${{ matrix.suite }}/cancellation-context.txt
+          # Explicit last-active-case extraction (MoonLadderStudios/MoonMind#4371
+          # R4/A3): the trailing live node IDs from the known streamed tee log,
+          # bounded to one file with grep+tail so a kill before JUnit still
+          # leaves an explicit pointer. Best-effort; never fails collection.
+          streamed_log="artifacts/pytest-backend-${{ matrix.suite }}.log"
+          if [[ -f "$streamed_log" ]]; then
+            {
+              echo "last-active-case (trailing live nodes in streamed log):"
+              grep -a '::' "$streamed_log" | tail -10 || echo "no test node IDs in streamed log"
+            } >> /tmp/pytest-${{ matrix.suite }}/cancellation-context.txt 2>&1 \
+              || echo "last-active-case extraction failed (exit=$?)" >> /tmp/pytest-${{ matrix.suite }}/collection-status.txt
+          else
+            echo "last-active-case: unavailable (no streamed log retained)" >> /tmp/pytest-${{ matrix.suite }}/cancellation-context.txt
+          fi
       - name: Upload reliability shard diagnostics
         timeout-minutes: 2
         if: always() && startsWith(matrix.suite, 'reliability-') && needs.select-test-suites.outputs.reliability_journey == 'true'
@@ -610,6 +624,17 @@ jobs:
             echo "reliability_journey=${{ needs.select-test-suites.outputs.reliability_journey }}"
           } > /tmp/backend-matrix-${{ matrix.suite }}/attempted-cancellation.txt
           ls artifacts/pytest-backend-${{ matrix.suite }}.xml >> /tmp/backend-matrix-${{ matrix.suite }}/attempted-cancellation.txt 2>&1 || echo "no junit report (cancelled before tests wrote one)" >> /tmp/backend-matrix-${{ matrix.suite }}/attempted-cancellation.txt
+          # Explicit last-active-case pointer (MoonLadderStudios/MoonMind#4371
+          # R4/A3): trailing live node IDs from the known streamed tee log so
+          # matrix cancellation still names the interrupted case. Best-effort.
+          if [[ -f "artifacts/pytest-backend-${{ matrix.suite }}.log" ]]; then
+            {
+              echo "last-active-case (trailing live nodes in streamed log):"
+              grep -a '::' "artifacts/pytest-backend-${{ matrix.suite }}.log" | tail -10 || echo "no test node IDs in streamed log"
+            } >> /tmp/backend-matrix-${{ matrix.suite }}/attempted-cancellation.txt 2>&1 || true
+          else
+            echo "last-active-case: unavailable (no streamed log retained)" >> /tmp/backend-matrix-${{ matrix.suite }}/attempted-cancellation.txt
+          fi
       - name: Upload backend-matrix cancellation diagnostics
         timeout-minutes: 2
         if: (failure() || cancelled())

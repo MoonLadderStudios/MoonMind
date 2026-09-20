@@ -51,6 +51,25 @@ class JUnitSummary:
     cases: tuple[CaseTiming, ...]
 
 
+@dataclass(frozen=True)
+class LastActiveCase:
+    """Explicit trailing live-test evidence derived from the streamed tee log.
+
+    Only lines containing a pytest node ID (``::``) are surfaced, so secret
+    material without a node ID never enters the step summary. The full
+    streamed text log remains the primary record in the uploaded artifact.
+    """
+
+    last_case: str
+    recent_cases: tuple[str, ...]
+    total_lines: int
+
+
+LAST_ACTIVE_SHOWN = 5
+LAST_ACTIVE_SCAN_TAIL = 2000
+LAST_ACTIVE_LINE_CAP = 300
+
+
 def parse_junit(path: Path) -> JUnitSummary:
     """Parse a JUnit XML file produced by pytest --junitxml.
 
@@ -134,6 +153,29 @@ def write_durations_snapshot(suite: str, summary: JUnitSummary, path: Path) -> N
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def extract_last_active_case(log_path: Path, limit: int = LAST_ACTIVE_SHOWN) -> LastActiveCase | None:
+    """Derive the trailing live-test node from the streamed pytest log.
+
+    Scans only the tail of the known streamed log for lines carrying a
+    pytest node ID (``::``) and returns the most recent ones. Returns None
+    when the log is absent or holds no node-ID lines. Each surfaced line is
+    capped so an unusually long line cannot bloat the step summary.
+    """
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    total_lines = len(lines)
+    if total_lines > LAST_ACTIVE_SCAN_TAIL:
+        lines = lines[-LAST_ACTIVE_SCAN_TAIL:]
+    node_lines = [line.strip()[:LAST_ACTIVE_LINE_CAP] for line in lines if "::" in line and line.strip()]
+    if not node_lines:
+        return None
+    recent = tuple(node_lines[-limit:])
+    return LastActiveCase(last_case=recent[-1], recent_cases=recent, total_lines=total_lines)
+
+
 def classify_outcome(selected: bool, junit_exists: bool, test_outcome: str) -> str:
     """Map the row state to a human-readable outcome label."""
     normalized = (test_outcome or "unknown").strip().lower()
@@ -184,6 +226,7 @@ def render_summary(
     step_budget: str = "",
     secondary_note: str | None = None,
     overhead_note: str | None = None,
+    last_active: LastActiveCase | None = None,
 ) -> str:
     """Render the per-job markdown appended to $GITHUB_STEP_SUMMARY."""
     identity = suite if not shard else f"{suite} (shard {shard})"
@@ -254,6 +297,30 @@ def render_summary(
         lines.append("- Slowest cases: intentionally unselected.")
     else:
         lines.append("- Slowest cases: unavailable (no JUnit timings).")
+    lines += ["", "### Last active case", ""]
+    if not selected:
+        lines.append("- Last active case: intentionally unselected.")
+    elif not log_available:
+        lines.append(
+            "- Last active case: unavailable (no streamed log retained; "
+            "live Actions output is the primary record)."
+        )
+    elif last_active is None:
+        lines.append(
+            "- Last active case: unavailable (no test node IDs in streamed log; "
+            "see full text log)."
+        )
+    else:
+        if junit is None:
+            lines.append(
+                "- Last active case (interrupted -- no final JUnit report; "
+                "streamed log is the primary record):"
+            )
+        else:
+            lines.append("- Last active case (trailing live node in streamed log):")
+        lines.append(f"  - last: `{last_active.last_case}`")
+        for case in last_active.recent_cases[:-1]:
+            lines.append(f"  - recent: `{case}`")
     lines += ["", "### Retained evidence", ""]
     if log_available:
         size = f"`{log_bytes}` bytes" if log_bytes is not None else "available"
@@ -406,6 +473,7 @@ def build_evidence(args: argparse.Namespace) -> tuple[str, str | None]:
             f"no retained evidence files (interrupted before pytest wrote them)."
         )
     secondary_note = _read_collection_note(getattr(args, "collection_status", ""))
+    last_active = extract_last_active_case(log_path) if log_available else None
     markdown = render_summary(
         suite=args.suite,
         shard=args.shard or "",
@@ -431,6 +499,7 @@ def build_evidence(args: argparse.Namespace) -> tuple[str, str | None]:
         step_budget=getattr(args, "step_budget", "") or "",
         secondary_note=secondary_note,
         overhead_note=overhead_note,
+        last_active=last_active,
     )
     return markdown, error
 
