@@ -1958,17 +1958,11 @@ class DeploymentUpdateExecutor:
             wait=bool(parsed["wait"]),
             runner_mode=command_plan.runner_mode,
         )
-        pull_command = (*gateway_plan.pull_args, *targets)
-        pull_result = await self.runner.pull(
-            stack=stack, command=pull_command, requested_image=execution_image
-        )
-        command_log["attestedSubstratePull"] = {
-            "command": list(pull_command),
-            "result": dict(pull_result)
-            if isinstance(pull_result, Mapping)
-            else pull_result,
-        }
-        _ensure_command_succeeded("egress-gateway-pull", pull_result)
+        # No separate pull. The main pull targets the requested repository,
+        # and the gateway may be pinned to a different one -- the
+        # deployment-update-infrastructure-reconciliation replay records
+        # exactly that shape. This recreates the gateway the same way the main
+        # up always did, only earlier, and Compose fetches a missing image.
         up_command = (*gateway_plan.up_args, "--no-deps", *targets)
         up_result = await self.runner.up(
             stack=stack, command=up_command, requested_image=execution_image
@@ -2095,17 +2089,18 @@ class DeploymentUpdateExecutor:
                     excluded_services=self.excluded_services,
                 )
                 one_shot_services = _one_shot_services_from_plan(command_plan)
-                # The egress gateway is recreated ahead of the workers that
-                # attest it, so the main recreation must not restart it under
-                # them. `--no-deps` on the main plan means dependency ordering
-                # would not provide that handoff either.
-                gateway_services = {
-                    service.strip().lower()
-                    for service in _attested_gateway_services(before_state)
-                }
+                # The egress gateway is aligned ahead of the workers that
+                # attest it, but it stays in the main recreation. The
+                # deployment-update-infrastructure-reconciliation replay
+                # records the incident that holding it out causes: the
+                # restricted-egress network the gateway defines was then
+                # absent and the agent-runtime worker restarted with exit
+                # code 1. Compose leaves the already-aligned gateway alone
+                # here, so including it costs nothing and preserves that
+                # invariant.
                 service_command_plan = _command_plan_without_services(
                     command_plan,
-                    excluded_services={*one_shot_services, *gateway_services},
+                    excluded_services=one_shot_services,
                 )
                 command_log["pull"]["command"] = list(command_plan.pull_args)
                 command_log["up"]["command"] = list(service_command_plan.up_args)
