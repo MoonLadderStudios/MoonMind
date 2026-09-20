@@ -116,8 +116,22 @@ _PR_RESOLVER_RESULT_PATH_LIST = ", ".join(
     str(path) for path in _PR_RESOLVER_RESULT_PATHS
 )
 _PR_RESOLVER_CONTRACT_ID = "pr-resolver.v1"
+# A merge gate that stays closed only on a required human approving review is
+# the operator's action, not an engine fault: the resolver has already cleared
+# every blocker it owns and no automated action can produce an approval.
+_PR_RESOLVER_HUMAN_APPROVAL_REASON = "merge_gate_requires_human_approval"
 _PR_RESOLVER_USER_ACTIONABLE_REASONS: frozenset[str] = frozenset(
-    {"actionable_comments"}
+    {"actionable_comments", _PR_RESOLVER_HUMAN_APPROVAL_REASON}
+)
+def _normalized_pr_resolver_reason(value: object) -> str:
+    """Normalize a resolver reason for comparison across host boundaries."""
+
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+_PR_RESOLVER_HUMAN_APPROVAL_SUMMARY = (
+    "pr-resolver stopped at a merge gate that requires a human approving "
+    f"review ({_PR_RESOLVER_HUMAN_APPROVAL_REASON}); next_step=manual_review."
 )
 _AUTO_PUBLISH_SCHEMA_VERSION = "moonmind.publish.auto.v1"
 _AUTO_PUBLISH_ALLOWED_STATUSES = frozenset(
@@ -598,9 +612,12 @@ def build_managed_profile_launch_context(
 
     profile_id = str(profile.get("profile_id") or "").strip()
     profile_runtime = str(runtime_for_profile or "").strip()
-    owner_user_id = str(
-        profile.get("owner_user_id") or profile.get("ownerUserId") or ""
-    ).strip() or None
+    # Single-user (#4349): launch/materialization consumers resolve
+    # credentials from the explicit profile + managed-secret reference.
+    # Profile ``owner_user_id``/``ownerUserId`` is legacy provenance, never
+    # launch authority, so it is not threaded into execution context,
+    # container ownership, or Temporal payloads.
+    owner_user_id: str | None = None
 
     runtime_env_overrides = profile.get("runtime_env_overrides") or {}
     if isinstance(runtime_env_overrides, dict):
@@ -831,11 +848,6 @@ def _derive_pr_resolver_failure(
         payload,
         merge_gate_owned=merge_gate_owned,
     )
-    if merge_gate_owned and disposition in {"reenter_gate", "request_review"}:
-        return None, None
-    if status not in _PR_RESOLVER_FAILURE_STATUSES:
-        return None, None
-
     final = _pr_resolver_final_payload(payload)
     reason = _first_stripped_text(
         payload.get("final_reason"),
@@ -843,8 +855,23 @@ def _derive_pr_resolver_failure(
         final.get("final_reason"),
         final.get("reason"),
     )
+    normalized_reason = _normalized_pr_resolver_reason(reason)
+    if merge_gate_owned and disposition in {"reenter_gate", "request_review"}:
+        return None, None
+    # The merge-gate parent owns every terminal it can act on. A closed gate
+    # awaiting a required human approving review is one of those: the resolver
+    # finished its own work and cannot supply an approval, so failing the child
+    # here hides a complete result behind an agent-runtime error.
+    if (
+        merge_gate_owned
+        and disposition == "manual_review"
+        and normalized_reason == _PR_RESOLVER_HUMAN_APPROVAL_REASON
+    ):
+        return None, None
+    if status not in _PR_RESOLVER_FAILURE_STATUSES:
+        return None, None
+
     next_step = _pr_resolver_next_step(payload)
-    normalized_reason = reason.lower().replace("-", "_").replace(" ", "_")
     # User fault is intentionally allow-listed and can only come from a terminal
     # artifact that passed identity, freshness, and terminal-shape validation.
     failure_class = "user_error" if (
@@ -942,6 +969,11 @@ def _derive_pr_resolver_metadata(
     )
     if disposition:
         metadata["mergeAutomationDisposition"] = disposition
+    if reason:
+        # The terminal-contract boundary and the generic-exit clearing branch
+        # both need the validated reason, not just the disposition.
+        metadata["prResolverFinalReason"] = reason
+    metadata["prResolverMergeGateOwned"] = bool(merge_gate_owned)
     final = _pr_resolver_final_payload(payload)
     head_sha = _first_stripped_text(
         payload.get("headSha"),
@@ -1386,6 +1418,23 @@ class ManagedAgentAdapter:
                     ):
                         failure_class = None
                         summary = "pr-resolver requested merge automation re-entry."
+                    elif (
+                        resolver_disposition == "manual_review"
+                        and pr_resolver_merge_gate_owned
+                        # A terminal artifact can carry an explicit disposition
+                        # with no failing status, which derives no failure class
+                        # for any reason. Require the validated approval reason
+                        # rather than assuming this branch means the gate.
+                        and _normalized_pr_resolver_reason(
+                            metadata.get("prResolverFinalReason")
+                        )
+                        == _PR_RESOLVER_HUMAN_APPROVAL_REASON
+                        and record.status == "failed"
+                        and failure_class in {None, "execution_error"}
+                        and _is_generic_process_exit_summary(summary)
+                    ):
+                        failure_class = None
+                        summary = _PR_RESOLVER_HUMAN_APPROVAL_SUMMARY
                 return AgentRunResult(
                     summary=summary,
                     output_refs=output_refs,

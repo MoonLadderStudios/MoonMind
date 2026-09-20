@@ -9,20 +9,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from moonmind.security.egress import (
-    CONTROL_PLANE_NETWORK_REF,
-    DEFAULT_EGRESS_PROFILE,
-    EGRESS_CONFIG_DIGEST,
-    EGRESS_NETWORK_REF,
-    EGRESS_PROFILE_SET_DIGEST,
-    ENFORCER_IMPLEMENTATION,
-    OMNIGENT_EGRESS_NETWORK_REF,
-    PROXY_URL,
-)
-from moonmind.security.egress_conformance_evidence import (
-    parse_and_verify_conformance_evidence,
-    verify_evidence_digest,
-)
 from moonmind.config.container_backend_settings import (
     CACHE_SOURCES_ENV_KEY,
     ContainerBackendReadinessError,
@@ -33,6 +19,19 @@ from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobBackendError,
     ContainerJobFailureClass,
+)
+from moonmind.security.egress import (
+    CONTROL_PLANE_NETWORK_REF,
+    DEFAULT_EGRESS_PROFILE,
+    EGRESS_FILE_DIGESTS,
+    EGRESS_NETWORK_REF,
+    ENFORCER_IMPLEMENTATION,
+    OMNIGENT_EGRESS_NETWORK_REF,
+    PROXY_URL,
+)
+from moonmind.security.egress_conformance_evidence import (
+    parse_and_verify_conformance_evidence,
+    verify_evidence_digest,
 )
 from moonmind.workflows.temporal.container_job_backend import (
     LABEL_BACKEND_REF,
@@ -53,7 +52,12 @@ JOB_ID = "container-job:0123456789abcdef0123456789abcdef"
 def _expected_applied_rule_digest() -> str:
     applied = {
         "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
-        "configDigest": EGRESS_CONFIG_DIGEST,
+        "configDigest": "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                EGRESS_FILE_DIGESTS, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest(),
         "gatewayImageDigest": "sha256:gateway-image",
         "internal": True,
         "ipv6": False,
@@ -68,9 +72,12 @@ def _expected_applied_rule_digest() -> str:
         ),
         "enforcer": ENFORCER_IMPLEMENTATION,
     }
-    return "sha256:" + hashlib.sha256(
-        json.dumps(applied, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    return (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(applied, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
 
 
 def _request(tmp_path, **spec_overrides) -> ContainerJobActivityRequest:
@@ -266,9 +273,7 @@ async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
         if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
             payload = {
                 "labels": {
-                    "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
                     "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
-                    "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
                 },
                 "networks": {
                     EGRESS_NETWORK_REF: {},
@@ -283,17 +288,21 @@ async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
         if args[:2] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref):
             if args[2] == "tail":
                 return 0, b"", b""
-            return 0, (
-                EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
-                + "  /etc/squid/squid.conf\n"
-            ).encode(), b""
+            if args[2] == "sha256sum":
+                return (
+                    0,
+                    "".join(
+                        f"{EGRESS_FILE_DIGESTS[p.rsplit('/', 1)[-1]].removeprefix('sha256:')}  {p}\n"
+                        for p in args[3:]
+                    ).encode(),
+                    b"",
+                )
+            return 0, b"", b""
         if args[:3] == ("image", "inspect", "--format"):
             return 0, b'"amd64"', b""
         return await _recording_runner(commands)(args)
 
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=runner
-    )
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
     await backend.create_container(_request(tmp_path, networkMode="bridge"))
 
     create = next(command for command in commands if command[0] == "create")
@@ -328,9 +337,7 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
         if args[0] == "inspect" and args[-1] == DEFAULT_EGRESS_PROFILE.gateway_ref:
             payload = {
                 "labels": {
-                    "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
                     "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
-                    "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
                 },
                 "networks": {
                     EGRESS_NETWORK_REF: {},
@@ -347,10 +354,14 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
             DEFAULT_EGRESS_PROFILE.gateway_ref,
             "sha256sum",
         ):
-            return 0, (
-                EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
-                + "  /etc/squid/squid.conf\n"
-            ).encode(), b""
+            return (
+                0,
+                "".join(
+                    f"{EGRESS_FILE_DIGESTS[p.rsplit('/', 1)[-1]].removeprefix('sha256:')}  {p}\n"
+                    for p in args[3:]
+                ).encode(),
+                b"",
+            )
         if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "cat"):
             return 0, b"", b""
         if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
@@ -435,9 +446,7 @@ async def test_bridge_launch_fails_before_create_when_network_is_not_internal(
             return 0, b'{"Internal":false,"EnableIPv6":false}', b""
         return 0, b"", b""
 
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=runner
-    )
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
     with pytest.raises(RuntimeError, match="not internal"):
         await backend.create_container(_request(tmp_path, networkMode="bridge"))
     assert not any(command[0] == "create" for command in commands)
@@ -453,15 +462,17 @@ async def test_runtime_egress_evidence_collects_scoped_denials(tmp_path) -> None
         if args[:3] == ("inspect", "--format", "{{json .NetworkSettings.Networks}}"):
             return 0, _sole_network_inspect(), b""
         if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "cat"):
-            return 0, (
-                b"1 2 172.31.0.7 TCP_DENIED/403 0 CONNECT "
-                b"169.254.169.254:443/ - HIER_NONE/- text/html\n"
-            ), b""
+            return (
+                0,
+                (
+                    b"1 2 172.31.0.7 TCP_DENIED/403 0 CONNECT "
+                    b"169.254.169.254:443/ - HIER_NONE/- text/html\n"
+                ),
+                b"",
+            )
         raise AssertionError(args)
 
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=runner
-    )
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
     request = _request(tmp_path, networkMode="bridge")
     request.container_ref = "owned-workload"
 
@@ -487,9 +498,7 @@ async def test_runtime_egress_evidence_rejects_secondary_network(tmp_path) -> No
             return 0, json.dumps(payload).encode(), b""
         raise AssertionError(args)
 
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=runner
-    )
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
     request = _request(tmp_path, networkMode="bridge")
     request.container_ref = "owned-workload"
 
@@ -534,9 +543,7 @@ async def test_runtime_egress_evidence_scopes_and_counts_beyond_cap(tmp_path) ->
             return 0, access_log, b""
         raise AssertionError(args)
 
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=runner
-    )
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
     request = _request(tmp_path, networkMode="bridge")
     request.container_ref = "owned-workload"
     request.started_at = start
@@ -802,9 +809,7 @@ async def test_an_unreachable_daemon_is_not_a_vanished_container(
             )
         return 0, b"", b""
 
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=runner
-    )
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
 
     with pytest.raises(ContainerJobBackendError) as raised:
         await getattr(backend, operation)(_request(tmp_path))
@@ -1039,9 +1044,7 @@ async def test_capacity_lock_is_mutually_exclusive_across_workers(
 ) -> None:
     first = FilesystemCapacityAdmissionLock(tmp_path / "capacity")
     second = FilesystemCapacityAdmissionLock(tmp_path / "capacity")
-    first_lease = await first.acquire(
-        "system", wait_seconds=0.5, poll_seconds=0.01
-    )
+    first_lease = await first.acquire("system", wait_seconds=0.5, poll_seconds=0.01)
 
     second_acquire = asyncio.create_task(
         second.acquire("system", wait_seconds=0.5, poll_seconds=0.01)
@@ -1122,8 +1125,7 @@ async def test_start_refuses_a_full_slot_without_wait_when_not_waitable(
         await backend.start_container(request)
 
     assert (
-        raised.value.failure_class
-        is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+        raised.value.failure_class is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
     )
     assert "container-job slot" in str(raised.value)
 
@@ -1295,9 +1297,7 @@ async def test_create_mounts_deployment_authorized_cache_refs(tmp_path) -> None:
     result = await backend.create_container(request)
 
     create = next(command for command in commands if command[0] == "create")
-    cache_mounts = [
-        item for item in create if item.startswith("type=volume,src=")
-    ]
+    cache_mounts = [item for item in create if item.startswith("type=volume,src=")]
     assert len(cache_mounts) == 2
     assert any(
         item.startswith(f"type=volume,src={PRIMARY_CACHE_VOLUME}-")
@@ -1582,9 +1582,7 @@ async def test_create_failure_does_not_expose_resolved_workspace(tmp_path) -> No
             return 1, b"", f"invalid bind src={workspace}".encode()
         return 0, b"", b""
 
-    backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=runner
-    )
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
     with pytest.raises(RuntimeError) as excinfo:
         await backend.create_container(_request(tmp_path))
     assert str(workspace) not in str(excinfo.value)
@@ -1740,9 +1738,7 @@ async def test_reconcile_recovers_launch_attestation_for_bridge(tmp_path):
         if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
             payload = {
                 "labels": {
-                    "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
                     "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
-                    "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
                 },
                 "networks": {
                     EGRESS_NETWORK_REF: {},
@@ -1757,10 +1753,16 @@ async def test_reconcile_recovers_launch_attestation_for_bridge(tmp_path):
         if args[:2] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref):
             if args[2] == "tail":
                 return 0, b"", b""
-            return 0, (
-                EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
-                + "  /etc/squid/squid.conf\n"
-            ).encode(), b""
+            if args[2] == "sha256sum":
+                return (
+                    0,
+                    "".join(
+                        f"{EGRESS_FILE_DIGESTS[p.rsplit('/', 1)[-1]].removeprefix('sha256:')}  {p}\n"
+                        for p in args[3:]
+                    ).encode(),
+                    b"",
+                )
+            return 0, b"", b""
         if args[:3] == ("image", "inspect", "--format"):
             return 0, b'"amd64"', b""
         return 0, b"", b""
@@ -1772,9 +1774,7 @@ async def test_reconcile_recovers_launch_attestation_for_bridge(tmp_path):
     backend = DockerContainerJobBackend(
         workspace_root=tmp_path, command_runner=runner, evidence_publisher=publish
     )
-    result = await backend.reconcile_container(
-        _request(tmp_path, networkMode="bridge")
-    )
+    result = await backend.reconcile_container(_request(tmp_path, networkMode="bridge"))
 
     # A reconciled bridge container republishes launch attestation evidence so its
     # durable reference is not lost when the create step is skipped.
@@ -1848,8 +1848,7 @@ async def test_create_rejects_a_zero_cpu_request_for_new_jobs(tmp_path):
             _request(tmp_path, resources={"cpuMillis": 0, "memoryMiB": 4096}),
         )
     assert (
-        raised.value.failure_class
-        is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+        raised.value.failure_class is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
     )
 
 
@@ -1873,8 +1872,7 @@ async def test_create_rejects_a_memory_range_for_new_jobs(tmp_path):
             ),
         )
     assert (
-        raised.value.failure_class
-        is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+        raised.value.failure_class is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
     )
 
 

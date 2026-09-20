@@ -19,7 +19,7 @@ from moonmind.deployment_access import DeploymentAccessError, check_compose_acce
 
 from .deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
-    DEPLOYMENT_UPDATE_TOOL_VERSION,
+    RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS,
 )
 from .tool_plan_contracts import ToolFailure, ToolResult
 
@@ -30,6 +30,7 @@ DEPLOYMENT_UPDATE_MODES = frozenset({"changed_services", "force_recreate"})
 DEPLOYMENT_UPDATE_STACKS = frozenset({"moonmind"})
 DEPLOYMENT_FINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "PARTIALLY_VERIFIED"})
 DEPLOYMENT_ONE_SHOT_SERVICES = frozenset({"init-db"})
+DEPLOYMENT_CONTROL_SERVICE = "temporal-worker-deployment-control"
 _REDACTED = "[REDACTED]"
 _STACK_PATH_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _DOCKER_DESKTOP_HOST_MOUNT_ROOT = PurePosixPath("/run/desktop/mnt/host")
@@ -122,31 +123,59 @@ class ComposeRunner(Protocol):
         """Verify the requested desired state is running."""
 
 
+# Bounded holds taken on the stack lock by owners that are not updates. The
+# availability supervisor sweeps every deployment worker on a short cycle and
+# the maintenance pass reconciles retained release jobs; both share the lock
+# that serializes updates. An update must outlast the longer of them, because
+# reporting "already running" for a routine observation sweep fails a release
+# while nothing is being deployed.
+DEPLOYMENT_AVAILABILITY_SWEEP_TIMEOUT_SECONDS = 300
+DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS = 840
+DEPLOYMENT_UPDATE_LOCK_WAIT_SECONDS = (
+    max(
+        DEPLOYMENT_AVAILABILITY_SWEEP_TIMEOUT_SECONDS,
+        DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS,
+    )
+    + 60
+)
+_DEPLOYMENT_LOCK_POLL_SECONDS = 0.5
+
+
+def _lock_unavailable(stack: str, *, retryable: bool) -> ToolFailure:
+    return ToolFailure(
+        error_code="DEPLOYMENT_LOCKED",
+        message=f"Deployment update for stack '{stack}' is already running.",
+        retryable=retryable,
+        details={"stack": stack, "failureClass": "deployment_lock_unavailable"},
+    )
+
+
 class DeploymentUpdateLockManager:
-    """Nonblocking per-stack lock manager for deployment updates."""
+    """Per-stack lock manager for deployment updates.
+
+    ``wait_seconds`` is the caller's budget for waiting out the current owner.
+    It defaults to zero so background sweeps keep yielding to a running update
+    immediately instead of queueing behind it.
+    """
 
     def __init__(self) -> None:
         self._guard = asyncio.Lock()
         self._held: set[str] = set()
 
-    async def acquire(self, stack: str) -> "DeploymentUpdateLockLease":
+    async def acquire(
+        self, stack: str, *, wait_seconds: float = 0.0
+    ) -> "DeploymentUpdateLockLease":
         normalized = _required_string(stack, "stack")
-        async with self._guard:
-            if normalized in self._held:
-                raise ToolFailure(
-                    error_code="DEPLOYMENT_LOCKED",
-                    message=(
-                        "Deployment update for stack "
-                        f"'{normalized}' is already running."
-                    ),
-                    retryable=False,
-                    details={
-                        "stack": normalized,
-                        "failureClass": "deployment_lock_unavailable",
-                    },
-                )
-            self._held.add(normalized)
-        return DeploymentUpdateLockLease(self, normalized)
+        deadline = asyncio.get_running_loop().time() + max(0.0, wait_seconds)
+        while True:
+            async with self._guard:
+                if normalized not in self._held:
+                    self._held.add(normalized)
+                    return DeploymentUpdateLockLease(self, normalized)
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise _lock_unavailable(normalized, retryable=False)
+            await asyncio.sleep(min(_DEPLOYMENT_LOCK_POLL_SECONDS, remaining))
 
     async def _release(self, stack: str) -> None:
         async with self._guard:
@@ -182,22 +211,29 @@ class FileDeploymentUpdateLockManager:
 
     lock_dir: str
 
-    async def acquire(self, stack: str) -> "FileDeploymentUpdateLockLease":
+    async def acquire(
+        self, stack: str, *, wait_seconds: float = 0.0
+    ) -> "FileDeploymentUpdateLockLease":
         import fcntl
         normalized = _validate_stack_path_component(stack)
         lock_path = Path(self.lock_dir).expanduser() / f"{normalized}.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = lock_path.open("a+")
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            handle.close()
-            raise ToolFailure(
-                error_code="DEPLOYMENT_LOCKED",
-                message=f"Deployment update for stack '{normalized}' is already running.",
-                retryable=True,
-                details={"stack": normalized, "failureClass": "deployment_lock_unavailable"},
-            ) from exc
+        # Contention with a bounded background owner is routine, not a running
+        # update. A caller that declares a wait budget waits that owner out;
+        # the default keeps the nonblocking acquire background sweeps need.
+        deadline = asyncio.get_running_loop().time() + max(0.0, wait_seconds)
+        while True:
+            handle = lock_path.open("a+")
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                handle.close()
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise _lock_unavailable(normalized, retryable=True) from exc
+                await asyncio.sleep(min(_DEPLOYMENT_LOCK_POLL_SECONDS, remaining))
+                continue
+            break
         handle.seek(0)
         previous = handle.read()
         if previous:
@@ -503,6 +539,213 @@ def _is_wsl_distro_path(path: str) -> bool:
     )
 
 
+def _read_self_container_id() -> str | None:
+    """Return the container id of the running worker, if it is containerized."""
+
+    identity = os.environ.get("HOSTNAME") or os.environ.get("CONTAINER_ID")
+    if identity and identity.strip():
+        return identity.strip()
+    try:
+        return Path("/etc/hostname").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def _normalized_bind_path(path: str) -> str:
+    """Compare host paths by what they address, not by their spelling."""
+
+    text = str(path or "").strip().replace("\\", "/")
+    while "//" in text:
+        text = text.replace("//", "/")
+    return text.rstrip("/") or "/"
+
+
+def _docker_output(
+    args: Sequence[str], *, attempts: int = 1, backoff_seconds: float = 0.0
+) -> str | None:
+    """Run a read-only Docker query and return its stdout, or None."""
+
+    import subprocess  # local import — only needed when evidence is consulted.
+    import time
+
+    for attempt in range(max(1, attempts)):
+        try:
+            result = subprocess.run(
+                list(args),
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+        except (
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            OSError,
+        ):
+            if attempt + 1 < max(1, attempts):
+                time.sleep(backoff_seconds * (attempt + 1))
+            continue
+        return result.stdout
+    return None
+
+
+def _docker_json_lines(
+    args: Sequence[str], *, attempts: int = 1, backoff_seconds: float = 0.0
+) -> list[Any]:
+    """Decode a Docker query that answers with one JSON document per line."""
+
+    output = _docker_output(args, attempts=attempts, backoff_seconds=backoff_seconds)
+    decoded: list[Any] = []
+    for line in (output or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            decoded.append(json.loads(line))
+        except ValueError:
+            continue
+    return decoded
+
+
+def _mount_sources(mounts: Any, local_mount: str) -> list[str]:
+    """Host sources a container's mount table records for ``local_mount``."""
+
+    target = _normalized_bind_path(local_mount)
+    found: list[str] = []
+    for mount in mounts if isinstance(mounts, list) else []:
+        if not isinstance(mount, Mapping):
+            continue
+        if _normalized_bind_path(str(mount.get("Destination") or "")) != target:
+            continue
+        source = str(mount.get("Source") or "").strip()
+        if source:
+            found.append(source)
+    return found
+
+
+def daemon_bind_source(
+    local_mount: str,
+    *,
+    attempts: int = 1,
+    backoff_seconds: float = 0.0,
+) -> str | None:
+    """Return the daemon-recorded host source of our own ``local_mount``.
+
+    The worker reads the deployment checkout and its durable state through bind
+    mounts the same daemon created, so that daemon's mount table is evidence of
+    which host path resolves to them. Reusing the recorded source keeps new
+    Compose containers on a path the daemon has already resolved, instead of
+    inferring a Desktop/WSL namespace from the path's shape: the namespace that
+    serves a checkout differs between Docker Desktop backends and versions, and
+    a wrong guess mounts empty directories rather than failing.
+
+    Retries with linear backoff so a transient ``docker inspect`` failure (for
+    example the deployment socket proxy still starting) does not permanently
+    discard the evidence. Returns ``None`` when the container identity or the
+    daemon stays unreadable, leaving the caller's configured path in place.
+    """
+
+    container_id = _read_self_container_id()
+    if not container_id:
+        return None
+    for mounts in _docker_json_lines(
+        ["docker", "inspect", "--format", "{{json .Mounts}}", container_id],
+        attempts=attempts,
+        backoff_seconds=backoff_seconds,
+    ):
+        sources = _mount_sources(mounts, local_mount)
+        if sources:
+            return sources[0]
+    return None
+
+
+def installed_bind_sources(local_mount: str, *, project_name: str) -> tuple[str, ...]:
+    """Return host sources this deployment's own containers use, common first.
+
+    Docker Desktop records more than one host path for the same WSL checkout —
+    the ``/mnt/<drive>`` path and a managed ``docker-desktop-bind-mounts``
+    share — depending on which client created the container. Both resolve, but
+    Compose hashes the bind source *string* into each container's config, so
+    switching spelling mid-life recreates every service, including the socket
+    proxy the updater itself talks to. The installed containers therefore
+    decide: their source is proven resolvable and keeps Compose idempotent.
+    """
+
+    identifiers = (
+        _docker_output(
+            [
+                "docker",
+                "ps",
+                "-q",
+                "--filter",
+                f"label=com.docker.compose.project={project_name}",
+                # One-off containers (`compose run`, release cohorts) are
+                # transient; only the installed services define the deployment.
+                "--filter",
+                "label=com.docker.compose.oneoff=False",
+            ]
+        )
+        or ""
+    ).split()
+    if not identifiers:
+        return ()
+    counted: dict[str, int] = {}
+    for mounts in _docker_json_lines(
+        ["docker", "inspect", "--format", "{{json .Mounts}}", *identifiers]
+    ):
+        for source in _mount_sources(mounts, local_mount):
+            counted[source] = counted.get(source, 0) + 1
+    return tuple(sorted(counted, key=lambda source: (-counted[source], source)))
+
+
+_host_dir_evidence_cache: dict[tuple[str, str, str], str | None] = {}
+
+
+async def _resolve_host_dir_evidence(
+    *, local_mount: str, project_name: str, configured: str
+) -> str | None:
+    """Decide, once per daemon and project, which host path Compose receives."""
+
+    key = (
+        os.environ.get("DOCKER_HOST", ""),
+        _normalized_bind_path(local_mount),
+        project_name,
+    )
+    if key not in _host_dir_evidence_cache:
+        _host_dir_evidence_cache[key] = await asyncio.to_thread(
+            _host_dir_evidence, local_mount, project_name, configured
+        )
+    return _host_dir_evidence_cache[key]
+
+
+def _host_dir_evidence(
+    local_mount: str, project_name: str, configured: str
+) -> str | None:
+    installed = installed_bind_sources(local_mount, project_name=project_name)
+    if installed:
+        # The configured path wins whenever the deployment proves it works, so
+        # an operator's declared value is never quietly replaced by an
+        # equivalent spelling.
+        for source in installed:
+            if _normalized_bind_path(source) == _normalized_bind_path(configured):
+                return source
+        return installed[0]
+    return daemon_bind_source(local_mount)
+
+
+def _observed_host_dir_evidence(local_mount: str, project_name: str) -> str | None:
+    """Read an already-resolved decision without blocking on the daemon."""
+
+    return _host_dir_evidence_cache.get(
+        (
+            os.environ.get("DOCKER_HOST", ""),
+            _normalized_bind_path(local_mount),
+            project_name,
+        )
+    )
+
+
 _desktop_daemon_probe_cache: dict[str, bool | None] = {}
 
 
@@ -629,7 +872,9 @@ class HostDockerComposeRunner:
     project_dir: str
     compose_file: str | None = None
     project_name: str = "moonmind"
-    command_timeout_seconds: int = 900
+    # The release supervision window is sized from this same number, so the
+    # Activity watching a release can never be shorter than one command.
+    command_timeout_seconds: int = RELEASE_RUNNER_COMMAND_TIMEOUT_SECONDS
     local_project_dir: str | None = None
     env_file: str | None = None
     excluded_services: tuple[str, ...] = ()
@@ -672,6 +917,7 @@ class HostDockerComposeRunner:
     ) -> Mapping[str, Any]:
         # Validate at the side-effect owner, before any Compose recreation.
         # Config rendering uses worker-visible paths; it never creates mounts.
+        await self._record_daemon_host_dir()
         try:
             await asyncio.to_thread(
                 check_compose_access,
@@ -788,7 +1034,27 @@ class HostDockerComposeRunner:
     def _local_dir(self) -> Path:
         return Path(self.local_project_dir or self.project_dir).expanduser()
 
+    async def _record_daemon_host_dir(self) -> str | None:
+        """Resolve, once per daemon, the host path serving this checkout."""
+
+        if not self.local_project_dir:
+            return None
+        return await _resolve_host_dir_evidence(
+            local_mount=str(self._local_dir()),
+            project_name=self.project_name,
+            configured=str(self.project_dir),
+        )
+
     def _host_dir(self) -> Path:
+        # A host path this deployment demonstrably resolves outranks one
+        # inferred from the configured path's shape.
+        observed = (
+            _observed_host_dir_evidence(str(self._local_dir()), self.project_name)
+            if self.local_project_dir
+            else None
+        )
+        if observed:
+            return Path(observed)
         return Path(self.project_dir).expanduser()
 
     def _compose_file_path(self) -> Path:
@@ -924,19 +1190,51 @@ class HostDockerComposeRunner:
     async def _use_desktop_host_rewrite(self) -> bool:
         """Decide whether daemon-bound Compose input needs the host rewrite.
 
+        The daemon's recorded source for this worker's own checkout bind
+        settles the question without guessing whenever it is readable. Only
+        when that evidence is unavailable does the path's shape decide:
         Windows drive-letter paths are unambiguous Desktop signals. A bare
         ``/mnt/<drive>`` shape may instead be a native Linux mount, so it is
         rewritten only when the reachable daemon confirms Docker Desktop (or
         when the platform cannot be established, where rewritten binds still
         fail loudly instead of mounting empty directories). A confirmed
         non-Desktop daemon keeps the POSIX namespace untouched.
+
+        A Windows drive-letter host directory is never usable as a Linux
+        Compose ``--project-directory``: the client treats ``D:\\...`` as a
+        relative path, resolving binds to
+        ``/workspace/host_project/D:\\...`` and failing with ``too many
+        colons``. Even when the daemon previously resolved that spelling,
+        the Linux worker must render through its local checkout and map
+        binds into the daemon's ``/run/desktop/mnt/host`` namespace.
         """
-        if not (self._requires_desktop_host_rewrite() and self.local_project_dir):
+        if not self.local_project_dir:
             return False
-        if _is_wsl_distro_path(str(self.project_dir)):
+        observed = await self._record_daemon_host_dir()
+        effective = str(self._host_dir())
+        if len(effective.strip()) >= 2 and effective.strip()[1] == ":" and effective.strip()[0].isalpha():
+            # Windows effective host: Linux Compose cannot use it directly.
+            return True
+        if _is_wsl_distro_path(effective):
+            if observed is not None:
+                # The deployment proves this WSL spelling resolves (both
+                # spellings resolve on Desktop, and Compose hashes the source
+                # string). Keep it to avoid recreating every service,
+                # including the socket proxy this updater talks to.
+                return False
             if await _probe_docker_desktop_daemon() is False:
                 return False
-        return True
+            return True
+        if self._requires_desktop_host_rewrite():
+            # Configured Windows/WSL with an already daemon-visible POSIX
+            # effective (e.g. installed Desktop namespace): keep installed.
+            if observed is not None:
+                return False
+            if _is_wsl_distro_path(str(self.project_dir)):
+                if await _probe_docker_desktop_daemon() is False:
+                    return False
+            return True
+        return False
 
     def _host_bind_source_for_local_path(self, local_source: str) -> str:
         local_dir = str(self._local_dir()).replace("\\", "/").rstrip("/")
@@ -947,9 +1245,16 @@ class HostDockerComposeRunner:
             suffix = normalized[len(local_dir) + 1 :]
         else:
             return local_source
-        host_dir = (
-            _docker_desktop_host_path(str(self.project_dir)) or str(self.project_dir)
-        ).rstrip("\\/")
+        # Prefer the daemon-proven host directory when available so the
+        # rewritten source keeps the deployment's existing spelling family
+        # (same drive/tail); fall back to the configured path for the
+        # no-evidence guess. Both Windows and WSL spellings translate to
+        # the same Desktop namespace for the same checkout.
+        try:
+            effective = str(self._host_dir())
+        except Exception:
+            effective = str(self.project_dir)
+        host_dir = (_docker_desktop_host_path(effective) or effective).rstrip("\\/")
         if not suffix:
             return host_dir
         separator = "/" if "/" in host_dir else "\\"
@@ -1159,6 +1464,7 @@ class HostDockerComposeRunner:
         max_stdout_chars: int | None = 512,
         max_stderr_chars: int | None = 512,
     ) -> Mapping[str, Any]:
+        await self._record_daemon_host_dir()
         self._ensure_host_project_read_alias()
         env = os.environ.copy()
         if requested_image:
@@ -1349,6 +1655,10 @@ class DeploymentUpdateExecutor:
     evidence_writer: EvidenceWriter
     runner: ComposeRunner
     excluded_services: tuple[str, ...] = ()
+    # How long an update waits for the stack lock before reporting contention.
+    # The lock is shared with bounded background owners, so a zero wait makes a
+    # routine sweep fail an operator's release.
+    lock_wait_seconds: float = DEPLOYMENT_UPDATE_LOCK_WAIT_SECONDS
     # Stale-code recovery (MoonLadderStudios/MoonMind#4224): after services are
     # recreated, bind-mounted workers that were not recreated may still run
     # stale modules. The checker reports stale workers
@@ -1502,6 +1812,103 @@ class DeploymentUpdateExecutor:
             )
         return recovery_ref
 
+    async def _reconcile_excluded_substrate(
+        self,
+        *,
+        stack: str,
+        parsed: Mapping[str, Any],
+        command_plan: ComposeCommandPlan,
+        before_state: Mapping[str, Any],
+        execution_image: str,
+        progress_events: list[dict[str, str]],
+        command_log: dict[str, Any],
+        verified: bool,
+    ) -> dict[str, Any] | None:
+        """Reconcile release-owned substrate excluded from the main update.
+
+        Returns the substrate evidence report, or None when the main update
+        excluded nothing the selected release configures. The staged pass
+        runs only after the main stack verifies, so the controller never
+        recreates its own transport mid-update; substrate that is already
+        converged is left running, and substrate that does not converge
+        fails the release instead of reporting success on stale definitions.
+        """
+        targets = _substrate_reconciliation_targets(
+            before_state=before_state,
+            excluded_services=self.excluded_services,
+        )
+        if not targets:
+            return None
+        configured_images = before_state.get("configuredServiceImages")
+        expected_images = (
+            configured_images if isinstance(configured_images, Mapping) else {}
+        )
+        pending = _substrate_service_mismatches(
+            state=before_state,
+            targets=targets,
+            expected_images=expected_images,
+        )
+        pending_services = [str(item["service"]) for item in pending]
+        report: dict[str, Any] = {
+            "targets": list(targets),
+            "pendingBefore": list(pending_services),
+            "reconciled": [],
+            "remaining": [],
+        }
+        if not pending_services or not verified:
+            command_log["substrate"] = report
+            return report
+        _add_progress(
+            progress_events,
+            "RECONCILING_SUBSTRATE",
+            "Reconciling excluded release substrate.",
+        )
+        substrate_plan = build_compose_command_plan(
+            mode=str(parsed["mode"]),
+            remove_orphans=bool(parsed["removeOrphans"]),
+            wait=bool(parsed["wait"]),
+            runner_mode=command_plan.runner_mode,
+        )
+        pull_command = (*substrate_plan.pull_args, *pending_services)
+        pull_result = await self.runner.pull(
+            stack=stack,
+            command=pull_command,
+            requested_image=execution_image,
+        )
+        command_log["substratePull"] = {
+            "command": list(pull_command),
+            "result": dict(pull_result) if isinstance(pull_result, Mapping) else pull_result,
+        }
+        _ensure_command_succeeded("substrate-pull", pull_result)
+        up_command = (*substrate_plan.up_args, "--no-deps", *pending_services)
+        up_result = await self.runner.up(
+            stack=stack,
+            command=up_command,
+            requested_image=execution_image,
+        )
+        command_log["substrateUp"] = {
+            "command": list(up_command),
+            "result": dict(up_result) if isinstance(up_result, Mapping) else up_result,
+        }
+        _ensure_command_succeeded("substrate-up", up_result)
+        substrate_state = await self.runner.capture_state(
+            stack=stack, phase="substrate"
+        )
+        remaining = _substrate_service_mismatches(
+            state=substrate_state,
+            targets=tuple(pending_services),
+            expected_images=expected_images,
+        )
+        remaining_services = {str(item["service"]) for item in remaining}
+        report["reconciled"] = [
+            service
+            for service in pending_services
+            if service not in remaining_services
+        ]
+        report["remaining"] = remaining
+        command_log["substrate"] = report
+        return report
+
     async def execute(
         self,
         inputs: Mapping[str, Any],
@@ -1595,7 +2002,9 @@ class DeploymentUpdateExecutor:
         _add_progress(
             progress_events, "LOCK_WAITING", "Waiting for deployment update lock."
         )
-        async with await self.lock_manager.acquire(parsed["stack"]):
+        async with await self.lock_manager.acquire(
+            parsed["stack"], wait_seconds=self.lock_wait_seconds
+        ):
             try:
                 _add_progress(
                     progress_events,
@@ -1741,15 +2150,43 @@ class DeploymentUpdateExecutor:
                 final_status = _verification_final_status(verification)
                 if final_status != "SUCCEEDED":
                     failure_reason = _verification_failure_reason(verification)
+                substrate_report = await self._reconcile_excluded_substrate(
+                    stack=parsed["stack"],
+                    parsed=parsed,
+                    command_plan=command_plan,
+                    before_state=before_state,
+                    execution_image=execution_image,
+                    progress_events=progress_events,
+                    command_log=command_log,
+                    verified=final_status == "SUCCEEDED",
+                )
+                if substrate_report is not None:
+                    # The substrate stage mutated command_log after the
+                    # earlier command-log write: rewrite it so the artifact
+                    # carries the staged handoff alongside the main plan.
+                    command_ref = await write_evidence("command-log", command_log)
+                    remaining = substrate_report.get("remaining") or []
+                    if remaining:
+                        final_status = "FAILED"
+                        failure_reason = (
+                            "Excluded release substrate did not converge: "
+                            + ", ".join(
+                                str(item.get("service") or "unknown")
+                                for item in remaining
+                                if isinstance(item, Mapping)
+                            )
+                        )
+                verification_payload: dict[str, Any] = {
+                    "succeeded": verification.succeeded,
+                    "status": final_status,
+                    "details": dict(verification.details),
+                    "requestedImage": requested_image,
+                    "resolvedDigest": resolved_digest,
+                }
+                if substrate_report is not None:
+                    verification_payload["substrate"] = substrate_report
                 verification_ref = await write_evidence(
-                    "verification",
-                    {
-                        "succeeded": verification.succeeded,
-                        "status": final_status,
-                        "details": dict(verification.details),
-                        "requestedImage": requested_image,
-                        "resolvedDigest": resolved_digest,
-                    },
+                    "verification", verification_payload
                 )
             except Exception as exc:
                 final_status = "FAILED"
@@ -2254,6 +2691,142 @@ def _command_plan_targeting_stack_services(
             *reconciliation_services,
         ),
     )
+
+
+def _substrate_reconciliation_targets(
+    *,
+    before_state: Mapping[str, Any],
+    excluded_services: Sequence[str],
+) -> tuple[str, ...]:
+    """Excluded services the staged substrate pass still reconciles.
+
+    The main update excludes substrate (docker-proxy, sandbox-egress-proxy,
+    postgres, ...) so the controller never recreates its own transport
+    mid-update. Those services are still release-owned: when the selected
+    release configures them, a final staged pass reconciles them after the
+    main stack verifies instead of reporting success on stale substrate.
+    The deployment-control runner itself and one-shot services are never
+    substrate targets.
+    """
+    excluded = _normalized_service_names(excluded_services)
+    if not excluded:
+        return ()
+    protected = _normalized_service_names(
+        (DEPLOYMENT_CONTROL_SERVICE, *DEPLOYMENT_ONE_SHOT_SERVICES)
+    )
+    targets: list[str] = []
+    for service_name in _configured_service_names_from_state(before_state):
+        normalized = str(service_name or "").strip().lower()
+        if not normalized or normalized in protected:
+            continue
+        if _service_is_excluded(service_name, excluded):
+            targets.append(str(service_name).strip())
+    return tuple(targets)
+
+
+def _normalize_configured_image(value: Any) -> str:
+    """Normalize a configured service image for convergence comparison."""
+    text = str(value or "").strip()
+    if "@" in text:
+        text = text.split("@", 1)[0].strip()
+    return text
+
+
+def _running_service_images(
+    state: Mapping[str, Any], service_name: str
+) -> tuple[str, ...]:
+    """Candidate image references for one running Compose service."""
+    services = state.get("services")
+    images = state.get("images")
+    candidates: list[str] = []
+    containers: list[str] = []
+    if isinstance(services, Sequence) and not isinstance(services, (str, bytes)):
+        for entry in services:
+            if not isinstance(entry, Mapping):
+                continue
+            if str(entry.get("State") or "").strip().lower() != "running":
+                continue
+            if not _service_name_matches(
+                entry.get("Service") or entry.get("Name") or "",
+                str(service_name or "").strip().lower(),
+            ):
+                continue
+            image = _normalize_configured_image(entry.get("Image"))
+            if image:
+                candidates.append(image)
+            for key in ("Name", "ID"):
+                value = str(entry.get(key) or "").strip()
+                if value:
+                    containers.append(value)
+    if isinstance(images, Sequence) and not isinstance(images, (str, bytes)):
+        for image in images:
+            if not isinstance(image, Mapping):
+                continue
+            if containers and str(image.get("ContainerName") or "").strip() not in containers:
+                continue
+            repository = str(
+                image.get("Repository") or image.get("repository") or ""
+            ).strip()
+            tag = str(image.get("Tag") or image.get("tag") or "").strip()
+            if repository and tag:
+                candidates.append(f"{repository}:{tag}")
+            elif repository:
+                candidates.append(repository)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for candidate in candidates:
+        if candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+    return tuple(ordered)
+
+
+def _substrate_service_mismatches(
+    *,
+    state: Mapping[str, Any],
+    targets: Sequence[str],
+    expected_images: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Prove each staged substrate service runs its release configuration.
+
+    A target is converged when a running container resolves to the image the
+    selected release configures for it; anything else (stopped, missing, or
+    a previous image) is a mismatch the release must not report as success.
+    """
+    mismatches: list[dict[str, Any]] = []
+    for target in targets:
+        service = str(target or "").strip()
+        if not service:
+            continue
+        running = _running_service_images(state, service)
+        expected = None
+        if isinstance(expected_images, Mapping):
+            for key in (service, service.lower()):
+                if key in expected_images:
+                    expected = _normalize_configured_image(expected_images[key])
+                    break
+        if not running:
+            mismatches.append(
+                {
+                    "service": service,
+                    "expectedImage": expected,
+                    "actualImages": [],
+                    "reason": "substrate service is not running",
+                }
+            )
+            continue
+        if expected and expected not in running:
+            mismatches.append(
+                {
+                    "service": service,
+                    "expectedImage": expected,
+                    "actualImages": list(running),
+                    "reason": (
+                        "substrate service is not running the release image"
+                    ),
+                }
+            )
+    return mismatches
 
 
 def _one_shot_services_from_plan(command_plan: ComposeCommandPlan) -> tuple[str, ...]:

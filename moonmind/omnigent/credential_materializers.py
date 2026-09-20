@@ -112,13 +112,24 @@ class LocalDockerCommandBackend:
         *,
         input_bytes: bytes | None = None,
         timeout_seconds: float = 60.0,
+        output_limit_bytes: int | None = None,
     ) -> tuple[int, bytes, bytes]:
-        return await run_runtime_command(
+        limit = 16_384 if output_limit_bytes is None else output_limit_bytes + 1
+        result = await run_runtime_command(
             argv,
             input_bytes=input_bytes,
             timeout_seconds=timeout_seconds,
-            output_limit_bytes=16_384,
+            output_limit_bytes=limit,
         )
+        if output_limit_bytes is not None and any(
+            len(payload) > output_limit_bytes for payload in result[1:]
+        ):
+            raise HarnessPlatformError(
+                f"runtime command output exceeded {output_limit_bytes} bytes; "
+                "complete output is required",
+                code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+            )
+        return result
 
 
 class _DockerMaterializerBackendMixin:
@@ -205,9 +216,7 @@ class _DockerMaterializerBackendMixin:
                     code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
                 ) from exc
             if pull_code != 0:
-                detail = (pull_err or pull_out).decode("utf-8", errors="replace")[
-                    :512
-                ]
+                detail = (pull_err or pull_out).decode("utf-8", errors="replace")[:512]
                 raise HarnessPlatformError(
                     f"digest-pinned writer image pull failed for {ref}: {detail}; "
                     "pull the selected Host Class image instead of substituting "
@@ -474,7 +483,7 @@ class DockerOpencodeAuthJsonMaterializer(_DockerMaterializerBackendMixin):
                     'test "$(stat -c %a /credential/auth.json)" = 600; ',
                     'test "$(cat /credential/.moonmind-generation)" = "$1"; ',
                     'python3 -c \'import json,sys; d=json.load(open("/credential/auth.json")); '
-                    'assert list(d)==[sys.argv[1]]; v=d[sys.argv[1]]; '
+                    "assert list(d)==[sys.argv[1]]; v=d[sys.argv[1]]; "
                     'assert v.get("type")=="api" and isinstance(v.get("key"),str) and v.get("key")\' "$2"',
                 )
             )
@@ -915,7 +924,8 @@ class DockerOauthHomeMaterializer(_DockerMaterializerBackendMixin):
                 await self._resolve_writer_ref(
                     context.writer_image_ref,
                     expected_omnigent_version=context.expected_omnigent_version,
-                ),                "-ceu",
+                ),
+                "-ceu",
                 stage_script,
                 "--",
                 str(acquired.credential_generation),
@@ -1285,10 +1295,7 @@ class OmnigentCredentialProvisioningService:
                                 provider_route_ref=plan.payload.modelConfig.routeRef,
                                 profile_credential_home=profile_credential_home,
                                 expected_omnigent_version=str(
-                                    getattr(
-                                        plan.payload, "omnigentVersion", ""
-                                    )
-                                    or ""
+                                    getattr(plan.payload, "omnigentVersion", "") or ""
                                 ),
                             )
                         )

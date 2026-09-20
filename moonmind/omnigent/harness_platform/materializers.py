@@ -26,7 +26,6 @@ OPENCODE_AUTH_UID = 1000
 OPENCODE_AUTH_GID = 1000
 OPENCODE_PROVIDER_KEY = "opencode-go"
 OPENCODE_BUILTIN_PROVIDER_KEY = "opencode"
-OPENCODE_PROVIDER_KEYS = (OPENCODE_PROVIDER_KEY, OPENCODE_BUILTIN_PROVIDER_KEY)
 OPENCODE_SUPPORTED_VERSION_RANGE = (  # inclusive lower, exclusive upper
     "1.17.7",
     "1.19.0",
@@ -127,11 +126,6 @@ OAUTH_HOME_PROFILE_OWNED_STATE = {"scope": "profile", "mutable": True}
 OAUTH_HOME_PROFILE_OWNED_CLEANUP = {"mode": "detach-profile-owned"}
 
 _PROVIDER_MATERIALIZER_REFS: dict[tuple[str, str], str] = {
-    ("opencode", "opencode-go"): "opencode-auth-json@1",
-    # OpenCode's built-in Zen Contributor Free provider is credentialless.
-    # Keep the paid Go route on its explicit auth.json materializer so a
-    # deployment key can never bleed into the free provider implicitly.
-    ("opencode", "opencode"): "none@1",
     ("codex_cli", "openai"): "codex-oauth-home@1",
     ("claude_code", "anthropic"): "claude-oauth-home@1",
     ("omnigent", "anthropic"): "omnigent-provider-config@1",
@@ -267,6 +261,12 @@ def get_materializer(ref: str) -> CredentialMaterializer:
 
 
 def materializer_ref_for_provider(runtime_id: str, provider_id: str) -> str:
+    if runtime_id == "opencode" and _SAFE_ID_RE.fullmatch(provider_id):
+        return (
+            "none@1"
+            if provider_id == OPENCODE_BUILTIN_PROVIDER_KEY
+            else "opencode-auth-json@1"
+        )
     ref = _PROVIDER_MATERIALIZER_REFS.get((runtime_id, provider_id))
     if ref is None:
         raise HarnessPlatformError(
@@ -362,7 +362,10 @@ def _opencode_auth_json_payload(*, api_key: str, provider_key: str) -> dict[str,
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
     key = api_key.strip()
-    if provider_key not in OPENCODE_PROVIDER_KEYS:
+    if (
+        not _SAFE_ID_RE.fullmatch(provider_key)
+        or provider_key == OPENCODE_BUILTIN_PROVIDER_KEY
+    ):
         raise HarnessPlatformError(
             f"unsupported OpenCode provider key {provider_key!r}",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,

@@ -119,10 +119,10 @@ steps:
     instructions: |-
       Use story-reconcile-implementation to compare the generated MoonSpec story breakdown against the current repository implementation before any Jira issue creation occurs.
 
-      Read the runtime-provided story breakdown JSON path and rewrite that same JSON handoff with implementationStatus and jiraCreation fields for every story.
-      Mark fully implemented stories with jiraCreation.action = "skip" so no Jira issue or downstream Jira Implement workflow execution is created for completed work.
+      Read the runtime-provided story breakdown JSON path and rewrite that same JSON handoff with implementationStatus and issueCreation fields for every story.
+      Mark fully implemented stories with issueCreation.action = "skip" so no Jira issue or downstream Jira Implement workflow execution is created for completed work.
       For partially implemented stories, preserve the original story scope and add remainingWork so Jira tracks only the unmet requirements.
-      Mark unverifiable stories with jiraCreation.action = "manual_review" so deterministic Jira creation will not create implementation work automatically.
+      Mark unverifiable stories with issueCreation.action = "manual_review" so deterministic Jira creation will not create implementation work automatically.
       Write the reconciliation report to the runtime-provided markdown breakdown path when available.
       Do not create Jira issues, do not create downstream workflow executions, and do not implement code in this reconciliation step.
     skill:
@@ -136,8 +136,8 @@ steps:
 
       Use the runtime-provided story breakdown JSON path.
       Every Jira issue must include the Source Document path and canonical claim IDs from the story breakdown when present; otherwise include the source title and Source Jira issue key when present.
-      Do not create Jira issues for stories where jiraCreation.action is skip or manual_review.
-      For stories where jiraCreation.action is create_remaining_work_issue, create the Jira issue from the story's remainingWork while preserving the original story traceability.
+      Do not create Jira issues for stories where issueCreation.action is skip or manual_review.
+      For stories where issueCreation.action is create_remaining_work_issue, create the Jira issue from the story's remainingWork while preserving the original story traceability.
       {% if inputs.source_issue_key %}Source Jira issue key: {{ inputs.source_issue_key }}.{% endif %}
       {% if inputs.source_issue_key and inputs.jira_issue_type | lower in ["sub-task", "subtask", "sub task"] %}Create each generated Jira issue as a sub-task of {{ inputs.source_issue_key }}.{% endif %}
       Dependency mode: {{ inputs.jira_dependency_mode }}.

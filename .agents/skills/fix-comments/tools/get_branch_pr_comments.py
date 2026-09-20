@@ -292,6 +292,11 @@ def main() -> int:
         },
         "repository": comments_payload.get("repository"),
         "comment_count": comments_payload.get("comment_count"),
+        # Fail-closed passthrough: payloads from older helpers predate the
+        # flag, so a missing flag also counts as an incomplete inventory.
+        "thread_inventory_complete": comments_payload.get(
+            "thread_inventory_complete", False
+        ),
         "comments": comments_payload.get("comments", []),
     }
 

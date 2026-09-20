@@ -32,8 +32,9 @@ from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
-    daemon_visible_workspace_path,
+    WorkspaceLocatorResolutionError,
     resolve_sandbox_workspace_locator,
+    workspace_volume_subpath,
 )
 
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
@@ -56,7 +57,10 @@ async def resolve_daemon_workspace_root(
     """Resolve the authoritative workspace volume in local or remote mode."""
 
     mode = os.getenv("WORKFLOW_DOCKER_DAEMON_MODE", "").strip().lower()
-    if mode in {"", "local"}:
+    if not mode:
+        daemon_root = os.getenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "").strip()
+        mode = "remote" if daemon_root else "local"
+    if mode == "local":
         return None
     if mode != "remote" or not _SAFE_VOLUME.fullmatch(workspace_volume):
         raise HarnessPlatformError(
@@ -73,6 +77,55 @@ async def resolve_daemon_workspace_root(
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
     return Path(mountpoint).resolve()
+
+
+def resolve_daemon_attachment_source(
+    *,
+    workspace_volume: str,
+    path: Path,
+) -> dict[str, Any]:
+    """Return the mount authority the selected Docker daemon can resolve.
+
+    ``local``: the daemon shares the worker filesystem, so the worker path is
+    already a valid bind source.
+
+    ``remote``: the daemon does not share the worker filesystem, so the
+    attachment names the workspace volume plus the subpath inside it and lets
+    Docker resolve the volume. A bind source derived from the volume
+    mountpoint the daemon reports is not resolvable on every supported daemon
+    (Docker Desktop serves volumes from a store host bind paths cannot reach),
+    and Docker creates a missing bind source as an empty directory instead of
+    refusing it, so the container would mount an empty projection that still
+    passes a directory-level check.
+
+    When ``WORKFLOW_DOCKER_DAEMON_MODE`` is unset, remote mode is inferred
+    from a configured ``WORKFLOW_WORKSPACE_DAEMON_ROOT``, matching
+    ``resolve_workspace_backend()`` and ``daemon_visible_workspace_path()``.
+    """
+
+    mode = os.getenv("WORKFLOW_DOCKER_DAEMON_MODE", "").strip().lower()
+    if not mode:
+        daemon_root = os.getenv("WORKFLOW_WORKSPACE_DAEMON_ROOT", "").strip()
+        mode = "remote" if daemon_root else "local"
+    if mode == "local":
+        return {"kind": "bind", "sourceRef": str(Path(path).resolve())}
+    if mode != "remote" or not _SAFE_VOLUME.fullmatch(workspace_volume):
+        raise HarnessPlatformError(
+            "Docker daemon workspace mapping is unavailable or unsafe",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+    try:
+        subpath = workspace_volume_subpath(Path(path))
+    except WorkspaceLocatorResolutionError as exc:
+        raise HarnessPlatformError(
+            str(exc),
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        ) from exc
+    return {
+        "kind": "volume",
+        "sourceRef": workspace_volume,
+        "subPath": subpath,
+    }
 
 
 def normalize_github_clone_source(repo_ref: str) -> str | None:
@@ -274,15 +327,14 @@ class OmnigentWorkspaceMaterializer:
         named_paths = {name: paths_by_ref[ref] for name, ref in named_refs.items()}
         # An advanced selected directory is never permission for an arbitrary
         # host mount: the qualified locator/daemon mapping below is the only
-        # path from a worker path to a daemon-visible bind path.
-        daemon_root = await resolve_daemon_workspace_root(
-            runner=self._runner,
-            workspace_volume=self._workspace_volume,
-        )
+        # path from a worker path to a daemon-resolvable mount authority.
         try:
-            daemon_candidate = daemon_visible_workspace_path(
-                candidate, daemon_root=daemon_root
+            daemon_source = resolve_daemon_attachment_source(
+                workspace_volume=self._workspace_volume,
+                path=candidate,
             )
+        except HarnessPlatformError:
+            raise
         except Exception as exc:
             raise HarnessPlatformError(
                 "workspace cannot be translated to the selected Docker daemon",
@@ -295,8 +347,7 @@ class OmnigentWorkspaceMaterializer:
             elif mutation == "read_only":
                 pass
         return {
-            "kind": "bind",
-            "sourceRef": str(daemon_candidate),
+            **daemon_source,
             "targetPath": "/workspaces/run",
             "accessMode": access_mode,
             "cleanupRef": None,
@@ -734,5 +785,6 @@ __all__ = [
     "build_daemon_git_clone_argv",
     "build_daemon_workspace_chown_argv",
     "normalize_github_clone_source",
+    "resolve_daemon_attachment_source",
     "resolve_daemon_workspace_root",
 ]

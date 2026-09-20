@@ -1112,6 +1112,11 @@ Projection must satisfy all of these invariants before the runtime starts:
    fallback.
 5. the projection decision and any collision remediation are recorded in runtime
    metadata or diagnostics.
+6. the projection the runtime receives is verified inside the runtime, not only
+   on the worker that materialized it. A container runtime can be attached to a
+   directory that exists and is readable yet holds none of the projection, so
+   the runtime-side check reads `_manifest.json`, and a failed check names which
+   invariant failed rather than reporting one undifferentiated error.
 
 ### 14.8 Adapter Responsibilities
 

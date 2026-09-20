@@ -964,6 +964,7 @@ async def _compile_opencode_plan(
     plan_store=None,
     extra_parameters: dict | None = None,
     provider_id: str = "opencode-go",
+    document_source: dict | None = None,
 ):
     """Compile one real OpenCode plan through the product admission boundary."""
 
@@ -984,6 +985,8 @@ async def _compile_opencode_plan(
     snapshot["document"]["execution"][
         "allowedLaunchPolicyRefs"
     ] = _OPENCODE_ALLOWED_LAUNCH_POLICIES
+    if document_source is not None:
+        snapshot["document"]["source"] = document_source
     return await service.compile_and_persist_execution_plan(
         session_factory=object(),
         artifact_service=artifacts,
@@ -1557,3 +1560,75 @@ async def test_create_plan_reports_bootstrap_quarantine_instead_of_invalid_diges
             monkeypatch, artifacts=_ArtifactService(),
             launch_policy_ref="opencode-on-demand@1", plan_store=_PlanStore(object()),
         )
+
+
+def test_build_v2_profile_keeps_stable_agent_source_across_model_only_bump() -> None:
+    """A model-only Agent Profile version must not change agentSourceRef.
+
+    The deployment qualification key excludes per-run model/effort, so a
+    default-model migration (for example 1.2 -> 1.3) must not invalidate
+    deployment evidence with ``agentSourceRef differs``. The stable upstream
+    projection digest from the document owns the agent source, not the
+    profile version digest which includes the default model.
+    """
+    import hashlib
+
+    stable_projection = "sha256:" + "d" * 64
+
+    def _doc(model_qualified: str) -> dict:
+        return {
+            "endpointRef": "default",
+            "source": {
+                "kind": "upstream",
+                "upstreamId": "opencode-native-ui",
+                "upstreamVersion": "1",
+                "upstreamSnapshotDigest": stable_projection,
+            },
+            "harness": {"id": "opencode-native"},
+            "providerRequirements": {},
+            "model": {"qualifiedId": model_qualified, "effort": "xhigh"},
+            "workspace": {"mutation": "allowed"},
+            "skills": [],
+            "tools": [],
+            "capture": {"stream": True, "evidence": True},
+            "continuations": {"checkpoint": True, "branch": True},
+            "publish": {"mode": "none"},
+            "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+        }
+
+    def _snapshot(doc: dict, version: int) -> dict:
+        digest = "sha256:" + hashlib.sha256(
+            json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return {
+            "document": doc,
+            "digest": digest,
+            "version": version,
+            "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+        }
+
+    doc12 = _doc("opencode-go/muse-spark-1.2-contributor")
+    doc13 = _doc("opencode-go/muse-spark-1.3-contributor")
+    # Version digests differ because the default model differs.
+    assert _snapshot(doc12, 27)["digest"] != _snapshot(doc13, 28)["digest"]
+
+    catalog_ref = "omnigent-harness-catalog:sha256:" + "e" * 64
+    impl_ref = "omnigent-harness-implementation:sha256:" + "c" * 64
+    v2_12 = service._build_v2_profile(
+        snapshot=_snapshot(doc12, 27),
+        catalog_ref=catalog_ref,
+        implementation_ref=impl_ref,
+        harness_id="opencode-native",
+        auth_model="own-auth",
+    )
+    v2_13 = service._build_v2_profile(
+        snapshot=_snapshot(doc13, 28),
+        catalog_ref=catalog_ref,
+        implementation_ref=impl_ref,
+        harness_id="opencode-native",
+        auth_model="own-auth",
+    )
+    src12 = v2_12.source.model_dump(by_alias=True, mode="json")
+    src13 = v2_13.source.model_dump(by_alias=True, mode="json")
+    assert src12 == src13
+    assert src12["upstreamSnapshotDigest"] == stable_projection

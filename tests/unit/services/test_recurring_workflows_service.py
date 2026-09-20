@@ -1156,6 +1156,58 @@ async def test_managed_bootstrap_refresh_contains_individual_failures(
         assert set(visited) == set(definition_ids)
 
 
+async def test_managed_bootstrap_refresh_reports_why_a_schedule_failed(
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blocking refresh must name the reason, not only the definition id.
+
+    The release migration raises this from a detached updater container that is
+    gone by the time an operator reads the receipt, so an id-only message left
+    the failure undiagnosable outside container logs.
+    """
+
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+        )
+        definition = await service.create_definition(
+            name="Broken",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 13 * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=uuid4(),
+            target={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {"task": {"instructions": "Broken"}},
+            },
+            policy={},
+        )
+
+        definition_id = definition.id
+
+        async def refresh_target(_definition):
+            raise RecurringWorkflowValidationError(
+                "this deployment is not qualified for the requested execution combination"
+            )
+
+        monkeypatch.setattr(service, "_refresh_managed_bootstrap_target", refresh_target)
+        monkeypatch.setattr(service, "_ensure_schedule_action_current", AsyncMock())
+
+        with pytest.raises(RuntimeError) as caught:
+            await service.refresh_managed_bootstrap_schedules(raise_on_failure=True)
+
+        message = str(caught.value)
+        assert str(definition_id) in message
+        assert "not qualified for the requested execution combination" in message
+
+
 async def test_update_definition_rejects_stale_target_version(
     tmp_path: Path,
     mock_temporal_adapter,

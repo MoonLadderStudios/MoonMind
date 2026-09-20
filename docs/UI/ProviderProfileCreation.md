@@ -467,6 +467,8 @@ The API-key flow should:
 6. return normalized readiness; and
 7. clear plaintext input after submission.
 
+For `runtime_id=opencode`, guided API-key creation and saved-profile credential replacement/retry use backend-advertised capabilities, not a frontend provider allowlist. OpenRouter and future syntactically valid providers use the same enrollment drawer and `opencode_api_key` SecretRef role. Saved actions require supported capabilities matching the profile's runtime and provider, with `api_key` setup and `launch_ready_after_setup`; legacy `command_behavior.auth_actions` does not override that authority. The reserved credential-free provider `opencode` does not advertise guided API-key setup.
+
 ### 8.4 Guided OAuth setup
 
 The OAuth flow should own volume creation or registration, mount-path selection, validation, account identity, and activation. The normal form does not ask the user to type a volume name or runtime home path.

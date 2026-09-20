@@ -16,8 +16,8 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.omnigent.bootstrap.provider_revalidation import (
-    ProviderReconcileOutcome,
     REVALIDATION_FAILURE_KEY,
+    ProviderReconcileOutcome,
     evidence_identity_for_profile,
     evidence_is_current,
     reconcile_opencode_provider_readiness,
@@ -146,7 +146,9 @@ def _session_factory(rows):
 
 @pytest.mark.asyncio
 async def test_failed_discovery_preserves_enrolled_credential_readiness():
-    from moonmind.omnigent.bootstrap.provider_revalidation import _record_revalidation_failure
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        _record_revalidation_failure,
+    )
 
     profile = _profile(command_behavior={"auth_readiness": {
         "connected": True, "launch_ready": True, "backing_secret_exists": True,
@@ -695,6 +697,62 @@ async def test_targeted_revalidation_ignores_an_unrelated_stale_profile(
     )
 
     assert outcome == ProviderReconcileOutcome(ready=True, checked=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_id", ["openrouter", "vendor.v2_test"])
+async def test_generic_provider_revalidation_refreshes_existing_credential(
+    monkeypatch, provider_id
+):
+    from sqlalchemy import create_engine
+
+    from api_service.db.models import ManagedAgentProviderProfile
+    from moonmind.omnigent.bootstrap import provider_revalidation
+
+    row = _profile(
+        profile_id="custom",
+        provider_id=provider_id,
+        default_model=f"{provider_id}/author/model",
+    )
+    releases = []
+
+    async def validate(profile, image_ref, lease, kwargs):
+        assert kwargs == {}
+        return _evidence(profile, image_ref)
+
+    _install_stubs(monkeypatch, validate=validate, releases=releases)
+    engine = create_engine("sqlite://")
+    table = ManagedAgentProviderProfile.__table__
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            str(__import__("sqlalchemy").schema.CreateTable(table).compile(engine))
+        )
+        connection.execute(
+            table.insert().values(
+                profile_id="custom",
+                runtime_id="opencode",
+                provider_id=provider_id,
+                capacity_scope_ref="provider-profile:custom",
+                credential_source="secret_ref",
+                runtime_materialization_mode="composite",
+            )
+        )
+
+        class Session(_Session):
+            async def execute(self, statement):
+                ids = [result.profile_id for result in connection.execute(statement)]
+                return _Result([item for item in self._rows if item.profile_id in ids])
+
+        def factory():
+            return Session([row])
+        assert await provider_revalidation._opencode_profiles(factory) == [row]
+        outcome = await reconcile_opencode_provider_readiness(
+            session_factory=factory, controller=_Controller()
+        )
+    engine.dispose()
+    assert outcome.refreshed == ("custom",)
+    assert releases == ["custom"]
+    assert evidence_is_current(row, image_ref=CURRENT_IMAGE)
 
 
 @pytest.mark.asyncio

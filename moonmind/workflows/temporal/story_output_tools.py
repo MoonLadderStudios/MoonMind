@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import re
+import time as _time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Mapping, Sequence
@@ -6625,8 +6626,12 @@ async def _prepare_github_issue_claim(*, inputs, context, repository, issue_numb
         trusted = _trusted_posters(service=service) + [str((comment.get("user") or {}).get("login") or "")
             for comment in comments if str((comment.get("user") or {}).get("id")) == actor["actorId"]
             or comment.get("author_association") in {"OWNER", "MEMBER", "COLLABORATOR"}]
+        # A real clock here enforces the portable back-off a runtime-unavailable
+        # attempt recorded, so a deployment that cannot launch rotates past the
+        # candidate instead of re-announcing on it every scheduled tick.
         lineage = reconstruct_from_comments(comments, expected_repository=repository,
-            expected_issue_number=issue_number, trusted_posters=trusted, max_attempts=handoff.retry_allowance)
+            expected_issue_number=issue_number, trusted_posters=trusted, max_attempts=handoff.retry_allowance,
+            now_epoch=_time.time())
         if lineage.outcome != "reconstructed":
             raise ActiveIssueClaimConflict("retry_lineage_blocks_admission", evidence={
                 "reasonCode": lineage.reason_code, "source": "github_comments"})

@@ -94,6 +94,8 @@ async def _credential_maintenance_guard(
 ) -> AsyncIterator[object]:
     """Hold the shared credential lane through an HTTP maintenance action."""
 
+    from temporalio.service import RPCError
+
     from moonmind.provider_profiles.lease_client import CredentialLeasePurpose
     from moonmind.provider_profiles.maintenance import (
         acquire_credential_maintenance_guard,
@@ -110,16 +112,51 @@ async def _credential_maintenance_guard(
         or request.headers.get("X-Request-ID")
         or uuid4().hex
     )
-    guard = await acquire_credential_maintenance_guard(
-        runtime_id=profile.runtime_id,
-        profile_id=profile.profile_id,
-        purpose=CredentialLeasePurpose(purpose),
-        operation_id=operation_id,
-        metadata={
-            "workflowId": f"http:{operation_id}",
-            "ownerIsWorkflow": False,
-        },
-    )
+    try:
+        guard = await acquire_credential_maintenance_guard(
+            runtime_id=profile.runtime_id,
+            profile_id=profile.profile_id,
+            purpose=CredentialLeasePurpose(purpose),
+            operation_id=operation_id,
+            metadata={
+                "workflowId": f"http:{operation_id}",
+                "ownerIsWorkflow": False,
+            },
+        )
+    except (RPCError, TimeoutError) as exc:
+        # Acquisition failed before credential validation or persistence. Keep
+        # the current profile intact and return a safe diagnostic the drawer
+        # can display instead of an unhandled, non-JSON 500 response.
+        # The failure is ambiguous: Temporal may have accepted
+        # AcquireCredentialMaintenanceLease before the result was lost, so the
+        # deterministic owner derived from operation_id may hold a waiter or
+        # lease. Echo operation_id as the stable retry identity: a retry that
+        # reuses it via Idempotency-Key reattaches to the same owner
+        # (already_held) instead of orphaning a competing owner behind the
+        # original. operation_id is a random hex or caller identity, never
+        # credential material, so it is safe to return.
+        logger.warning(
+            "Provider credential manager unavailable: runtime_id=%s "
+            "profile_id=%s operation_id=%s error_type=%s rpc_status=%s",
+            profile.runtime_id,
+            profile.profile_id,
+            operation_id,
+            type(exc).__name__,
+            exc.status.name if isinstance(exc, RPCError) else None,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "provider_credential_manager_unavailable",
+                "message": (
+                    "Credential setup could not start because the provider "
+                    "credential manager is temporarily unavailable. "
+                    "Your saved credentials have not changed. Try again; "
+                    "if this continues, check the workflow worker diagnostics."
+                ),
+                "retry_idempotency_key": operation_id,
+            },
+        ) from exc
     try:
         await drain_profile_bound_hosts(
             profile_id=profile.profile_id,
@@ -1225,8 +1262,6 @@ async def _enforce_scope_compatibility(
     scope_ref = str(capacity_scope_ref or "").strip()
     if not scope_ref:
         return
-    from sqlalchemy import select as _select
-
     from api_service.db.models import ProviderCapacityScope as _Scope
 
     scope = await session.get(_Scope, scope_ref)
@@ -1391,7 +1426,9 @@ async def create_profile(
         file_templates=values["file_templates"],
         home_path_overrides=values["home_path_overrides"],
         command_behavior=values["command_behavior"],
-        owner_user_id=getattr(current_user, "id", None),
+        # Single-user (#4349): new profiles carry no human owner. Legacy
+        # ``owner_user_id`` values persist as provenance only.
+        owner_user_id=None,
         max_parallel_runs=values["max_parallel_runs"],
         cooldown_after_429_seconds=values["cooldown_after_429_seconds"],
         rate_limit_policy=ManagedAgentRateLimitPolicy(values["rate_limit_policy"]),
@@ -2213,15 +2250,17 @@ async def setup_provider_api_key(
     mapping = _api_key_mapping_for_profile(profile)
 
     api_key = body.api_key.strip()
+    is_opencode = mapping.auth_strategy == "opencode_auth_json"
+    rotated = mapping.secret_role in (profile.secret_refs or {})
     if not _looks_like_provider_api_key(mapping, api_key):
-        await _mark_api_key_validation_failed(
-            session=session,
-            profile=profile,
-            reason="API key validation failed.",
-        )
+        if not (is_opencode and rotated):
+            await _mark_api_key_validation_failed(
+                session=session,
+                profile=profile,
+                reason="API key validation failed.",
+            )
         raise HTTPException(status_code=422, detail="API key validation failed.")
 
-    is_opencode = mapping.provider_id in {"opencode-go", "opencode"}
     if not is_opencode:
         try:
             await validate_provider_api_key(profile.provider_id, api_key)
@@ -2240,7 +2279,6 @@ async def setup_provider_api_key(
         mapping.secret_role,
     )
     secret_ref = f"db://{secret_slug}"
-    rotated = mapping.secret_role in (profile.secret_refs or {})
     candidate_generation = int(profile.credential_generation) + (1 if rotated else 0)
     runtime_evidence: dict[str, Any] | None = None
     if is_opencode:
@@ -2667,24 +2705,17 @@ def _require_provider_profile_permission(user: Any, permission: str) -> None:
 
 
 def _can_view_profile(row: ManagedAgentProviderProfile, user: Any) -> bool:
-    user_id = _user_id(user)
-    if user_id is None or bool(getattr(user, "is_superuser", False)):
-        return True
-    owner_id = row.owner_user_id
-    return owner_id is None or str(owner_id) == user_id
+    # Single-user (#4349): provider profiles are instance resources without
+    # human-owner visibility. ``owner_user_id`` is legacy provenance, never
+    # an access predicate. All profiles are visible to the operator; settings
+    # permission gates (checked separately) remain the access boundary.
+    return True
 
 
 def _require_profile_management(row: ManagedAgentProviderProfile, user: Any) -> None:
-    user_id = _user_id(user)
-    if user_id is None or bool(getattr(user, "is_superuser", False)):
-        return
-    owner_id = row.owner_user_id
-    if owner_id is None or str(owner_id) == user_id:
-        return
-    raise HTTPException(
-        status_code=403,
-        detail="Not authorized to manage this provider profile.",
-    )
+    # Single-user (#4349): no user-owned management gate. Instance-wide
+    # settings permission (checked by callers) is the boundary.
+    return None
 
 
 def _validate_codex_oauth_profile_row(row: ManagedAgentProviderProfile) -> None:
@@ -2740,8 +2771,8 @@ def _api_key_mapping_for_profile(
         raise HTTPException(
             status_code=422,
             detail=(
-                "API-key setup is only supported for first-party Anthropic, "
-                "OpenAI, and OpenCode Go profiles."
+                "API-key setup requires a supported runtime/provider strategy; "
+                "the credential-free OpenCode provider does not accept API keys."
             ),
         )
     return mapping
@@ -2775,14 +2806,14 @@ def _looks_like_provider_api_key(
 ) -> bool:
     if not api_key:
         return False
+    if mapping.auth_strategy == "opencode_auth_json":
+        # OpenCode API keys are provider-specific; accept common prefixes
+        # but require minimum entropy to avoid trivial values.
+        return len(api_key.strip()) >= 12 and " " not in api_key.strip()
     if mapping.provider_id == "anthropic":
         return api_key.startswith("sk-ant-") and len(api_key) >= 12
     if mapping.provider_id == "openai":
         return api_key.startswith("sk-") and len(api_key) >= 12
-    if mapping.provider_id in {"opencode-go", "opencode"}:
-        # OpenCode API keys are provider-specific; accept common prefixes
-        # but require minimum entropy to avoid trivial values.
-        return len(api_key.strip()) >= 12 and " " not in api_key.strip()
     return False
 
 
@@ -2934,25 +2965,55 @@ async def _upsert_managed_secret(
     plaintext: str,
     details: dict[str, Any],
 ) -> ManagedSecret:
+    """Write provider credentials through the revision owner.
+
+    Direct ``ManagedSecret.ciphertext`` replacement would bypass credential
+    revisions, outbox evidence, and audit. Route through
+    :class:`SecretsService` with ``commit=False`` so the caller's transaction
+    still owns the commit while every write advances revisions atomically.
+    """
+    from api_service.services.secrets import SecretsService
+
     result = await session.execute(
         select(ManagedSecret).where(ManagedSecret.slug == slug)
     )
-    secret = result.scalar_one_or_none()
-    if secret is None:
-        secret = ManagedSecret(
+    row = result.scalar_one_or_none()
+    if row is None:
+        created = await SecretsService.create_secret(
+            session,
             slug=slug,
-            ciphertext=plaintext,
-            status=SecretStatus.ACTIVE,
+            plaintext=plaintext,
             details=details,
+            commit=False,
         )
-        session.add(secret)
-        return secret
+        return created
+    # Preserve existing owner/details and merge the caller's metadata.
+    current_details = dict(getattr(row, "details", {}) or {})
+    try:
+        updated = await SecretsService.update_secret(
+            session,
+            slug,
+            plaintext,
+            commit=False,
+        )
+    except Exception as exc:
+        from api_service.services.secrets import SecretRepairRequiredError
 
-    secret.ciphertext = plaintext
-    secret.status = SecretStatus.ACTIVE
-    secret.details = {**(secret.details or {}), **details}
-    secret.updated_at = datetime.now(UTC)
-    return secret
+        if not isinstance(exc, SecretRepairRequiredError):
+            raise
+        # A historical ROTATED provider credential is reactivated only with
+        # the just-validated token through the reviewed repair path.
+        updated = await SecretsService.repair_rotated_secret(
+            session,
+            slug,
+            plaintext,
+            validator=lambda _c: True,
+            commit=False,
+        )
+    if updated is None:  # pragma: no cover - defensive; slug existed above
+        raise RuntimeError(f"Managed secret '{slug}' disappeared during upsert.")
+    updated.details = {**current_details, **details}
+    return updated
 
 
 async def validate_claude_manual_token(token: str) -> None:

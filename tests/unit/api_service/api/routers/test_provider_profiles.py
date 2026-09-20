@@ -2,6 +2,7 @@
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -1969,6 +1970,9 @@ async def test_guided_oauth_profiles_reserve_distinct_credential_volumes(
 async def test_provider_profile_update_rejects_non_owner(
     client_app: AsyncClient, _module_db
 ) -> None:
+    # Single-user (#4349): provider profiles are instance resources; legacy
+    # ``owner_user_id`` never gates management. An update from any operator
+    # context succeeds instance-wide.
     profile_id = "profile_owned_by_someone_else"
     owner_id = uuid4()
 
@@ -2001,8 +2005,12 @@ async def test_provider_profile_update_rejects_non_owner(
         app.dependency_overrides.clear()
 
     assert str(other_user.id) != str(owner_id)
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Not authorized to manage this provider profile."
+    assert response.status_code == 200
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert row is not None
+        assert row.enabled is False
 
 @pytest.mark.asyncio
 async def test_provider_profile_update_allows_ownerless_shared_profile(
@@ -3914,6 +3922,158 @@ async def test_provider_api_key_setup_stores_secret_ref_mappings_only(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["failed_workflow_task", "unavailable", "timeout"])
+async def test_api_key_setup_reports_unavailable_manager_without_changing_credentials(
+    client_app: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    from temporalio.service import RPCError, RPCStatusCode
+
+    from moonmind.omnigent.opencode_runtime_validation import (
+        OpenCodeProviderRuntimeValidationService,
+    )
+    from moonmind.provider_profiles import maintenance
+
+    profile_id = f"opencode-unavailable-{failure}"
+    raw_key = "test-submitted-credential-never-echo"
+    errors = {
+        "failed_workflow_task": RPCError(
+            "Unable to perform workflow execution update due to Workflow Task in failed state.",
+            RPCStatusCode.FAILED_PRECONDITION,
+            b"",
+        ),
+        "unavailable": RPCError(raw_key, RPCStatusCode.UNAVAILABLE, b""),
+        "timeout": TimeoutError(raw_key),
+    }
+    acquire = AsyncMock(side_effect=errors[failure])
+    drain = AsyncMock()
+    validate = AsyncMock()
+    monkeypatch.setattr(maintenance, "acquire_credential_maintenance_guard", acquire)
+    monkeypatch.setattr(maintenance, "drain_profile_bound_hosts", drain)
+    monkeypatch.setattr(OpenCodeProviderRuntimeValidationService, "validate", validate)
+    # Exercise the real HTTP dependency, not the successful guard fixture.
+    app.dependency_overrides.pop(provider_profiles_router._credential_validation_guard)
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="opencode",
+                provider_id="opencode-go",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                secret_refs={"opencode_api_key": "db://previous-opencode-key"},
+                credential_generation=7,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            json={"api_key": raw_key},
+        )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_credential_manager_unavailable"
+    assert "could not start" in detail["message"]
+    assert "Try again" in detail["message"]
+    assert raw_key not in response.text
+    # The 503 carries the stable retry identity: the exact operation_id the
+    # deterministic lease owner was derived from, so a retry that reuses it
+    # via Idempotency-Key reattaches to the same owner instead of orphaning
+    # a competing one behind an ambiguous acquisition.
+    assert detail["retry_idempotency_key"]
+    assert raw_key not in detail["retry_idempotency_key"]
+    assert acquire.await_args is not None
+    assert acquire.await_args.kwargs["operation_id"] == detail["retry_idempotency_key"]
+    acquire.assert_awaited_once()
+    drain.assert_not_awaited()
+    validate.assert_not_awaited()
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.enabled is True
+        assert profile.auth_state == ProviderProfileAuthState.CONNECTED
+        assert profile.credential_generation == 7
+        assert profile.secret_refs == {"opencode_api_key": "db://previous-opencode-key"}
+        slug = provider_profiles_router._provider_api_key_secret_slug(
+            profile_id, "opencode_api_key"
+        )
+        assert (
+            await session.scalar(
+                select(ManagedSecret).where(ManagedSecret.slug == slug)
+            )
+            is None
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header_name", ["Idempotency-Key", "X-Request-ID"])
+async def test_unavailable_manager_echoes_client_retry_identity(
+    client_app: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    header_name: str,
+) -> None:
+    """A client-supplied request identity is echoed as the stable retry key.
+
+    MoonLadderStudios/MoonMind#4434 review: an UNAVAILABLE/deadline error
+    after Temporal accepted the acquisition leaves the effect ambiguous. The
+    503 must return the exact identity the deterministic owner was derived
+    from so the instructed retry reuses it and reattaches idempotently.
+    """
+    from temporalio.service import RPCError, RPCStatusCode
+
+    from moonmind.provider_profiles import maintenance
+
+    profile_id = f"opencode-retry-identity-{header_name.lower().replace('-', '')}"
+    raw_key = "test-submitted-credential-never-echo"
+    acquire = AsyncMock(
+        side_effect=RPCError("manager unavailable", RPCStatusCode.UNAVAILABLE, b"")
+    )
+    monkeypatch.setattr(maintenance, "acquire_credential_maintenance_guard", acquire)
+    app.dependency_overrides.pop(provider_profiles_router._credential_validation_guard)
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="opencode",
+                provider_id="opencode-go",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                secret_refs={"opencode_api_key": "db://previous-opencode-key"},
+                credential_generation=7,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            json={"api_key": raw_key},
+            headers={header_name: "stable-retry-abc"},
+        )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_credential_manager_unavailable"
+    assert detail["retry_idempotency_key"] == "stable-retry-abc"
+    assert acquire.await_args is not None
+    assert acquire.await_args.kwargs["operation_id"] == "stable-retry-abc"
+
+
+@pytest.mark.asyncio
 async def test_zen_api_key_setup_is_rejected_without_mutating_profile(
     client_app: AsyncClient,
     _module_db,
@@ -3957,7 +4117,7 @@ async def test_zen_api_key_setup_is_rejected_without_mutating_profile(
 
     assert response.status_code == 422
     assert raw_key not in response.text
-    assert "OpenCode Go profiles" in response.text
+    assert "does not accept API keys" in response.text
     async with db_base.async_session_maker() as session:
         persisted = await session.get(ManagedAgentProviderProfile, profile_id)
     assert persisted is not None
@@ -3967,6 +4127,7 @@ async def test_zen_api_key_setup_is_rejected_without_mutating_profile(
     assert persisted.credential_source is ProviderCredentialSource.NONE
     assert persisted.secret_refs == {}
     assert persisted.command_behavior == command_behavior
+
 
 @pytest.mark.asyncio
 async def test_provider_api_key_setup_failed_validation_updates_state_without_secret(
@@ -4162,24 +4323,170 @@ async def test_provider_api_key_setup_transient_validation_error_preserves_profi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_id",
+    ["openrouter", "future.v2_provider-1", "opencode-go", "openai", "anthropic"],
+)
+async def test_opencode_create_enroll_and_routing_data(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_id: str,
+) -> None:
+    from datetime import UTC, datetime
+
+    from moonmind.omnigent.harness_platform.materializers import (
+        materializer_ref_for_provider,
+    )
+    from moonmind.omnigent.opencode_runtime_validation import (
+        OpenCodeProviderRuntimeValidationService,
+    )
+
+    profile_id = f"generic-{provider_id}"
+    raw_key = "provider-specific-test-key"
+    image_ref = "registry.test/opencode@sha256:" + "a" * 64
+    evidence = {
+        "credentialGeneration": 1,
+        "imageRef": image_ref,
+        "validatedAt": datetime.now(UTC).isoformat(),
+        "runtimeVersions": {"opencode": "1.18.11"},
+        "models": [{"qualifiedId": f"{provider_id}/model"}],
+    }
+    runtime_calls: list[str] = []
+
+    async def _validate(self, **kwargs):
+        assert kwargs["profile"].provider_id == provider_id
+        assert kwargs["candidate_secret"] == raw_key
+        assert kwargs["candidate_generation"] == 1
+        assert kwargs["lease"].lease_id == "generic-enrollment"
+        runtime_calls.append(kwargs["profile"].profile_id)
+        return evidence
+
+    async def _maintenance_guard_override():
+        yield SimpleNamespace(lease=SimpleNamespace(lease_id="generic-enrollment"))
+
+    validated_providers: list[tuple[str, str]] = []
+
+    async def _forbidden_direct_validation(provider: str, key: str) -> None:
+        validated_providers.append((provider, key))
+
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.validate_provider_api_key",
+        _forbidden_direct_validation,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.sync_provider_profile_manager",
+        AsyncMock(),
+    )
+    monkeypatch.setattr(
+        OpenCodeProviderRuntimeValidationService, "validate", _validate
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.host_classes.get_opencode_host_image_ref",
+        lambda: image_ref,
+    )
+    app.dependency_overrides[
+        provider_profiles_router._credential_validation_guard
+    ] = _maintenance_guard_override
+
+    async with client_app as client:
+        preset_response = await client.get(
+            "/api/v1/provider-profiles/creation-preset",
+            params={
+                "runtime_id": "opencode",
+                "provider_id": provider_id,
+                "authentication_method": "api_key",
+            },
+        )
+        assert preset_response.status_code == 200
+        preset = preset_response.json()
+        assert preset["supported"] is True
+        created = await client.post(
+            "/api/v1/provider-profiles",
+            json={
+                "profile_id": profile_id,
+                "runtime_id": "opencode",
+                "provider_id": provider_id,
+                "authentication_method": "api_key",
+                "preset_version": preset["version"],
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert created.json()["enabled"] is False
+        assert created.json()["launch_ready"] is False
+        assert created.json()["auth_state"] == "api_key_pending"
+        enrolled = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            json={"api_key": raw_key},
+        )
+        assert enrolled.status_code == 200, enrolled.text
+        saved = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+
+    assert runtime_calls == [profile_id]
+    assert validated_providers == []
+    assert raw_key not in enrolled.text + saved.text
+    payload = saved.json()
+    assert payload["provider_id"] == provider_id
+    assert payload["runtime_id"] == "opencode"
+    assert payload["launch_ready"] is True
+    assert payload["model_catalog_evidence"] == evidence
+    assert payload["credential_generation"] == 1
+    assert payload["runtime_materialization_mode"] == "composite"
+    assert payload["env_template"] == {}
+    assert payload["file_templates"] == []
+    assert payload["clear_env_keys"] == preset["fields"]["clear_env_keys"]["value"]
+    assert payload["command_behavior"]["auth_strategy"] == "opencode_auth_json"
+    secret_ref = enrolled.json()["secret_ref"]
+    assert payload["secret_refs"] == {"opencode_api_key": secret_ref}
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentProviderProfile, profile_id)
+        statuses = await _managed_secret_statuses_for_profiles(
+            session=session, rows=[row]
+        )
+        routing = _manager_profile_payload(row, managed_secret_statuses=statuses)
+        secret = (
+            await session.execute(
+                select(ManagedSecret).where(
+                    ManagedSecret.slug == secret_ref.removeprefix("db://")
+                )
+            )
+        ).scalar_one()
+        assert secret.ciphertext == raw_key
+        assert secret.details["provider_id"] == provider_id
+    assert routing["launch_ready"] is True
+    assert routing["provider_id"] == provider_id
+    assert routing["default_model"] == f"{provider_id}/model"
+    assert routing["secret_refs"] == {"opencode_api_key": secret_ref}
+    assert (
+        materializer_ref_for_provider(routing["runtime_id"], routing["provider_id"])
+        == "opencode-auth-json@1"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_id", ["opencode-go", "openrouter", "future-provider"])
+@pytest.mark.parametrize("failure", ["runtime", "shape"])
 async def test_opencode_rotation_validation_failure_preserves_previous_authority(
     client_app: AsyncClient,
     _module_db,
     monkeypatch: pytest.MonkeyPatch,
+    provider_id: str,
+    failure: str,
 ) -> None:
     from moonmind.omnigent.opencode_runtime_validation import (
         OpenCodeProviderRuntimeValidationService,
     )
 
-    profile_id = "opencode-atomic-rotation"
+    profile_id = f"opencode-atomic-rotation-{provider_id}-{failure}"
     owner = _override_current_user()
-    previous_ref = "db://opencode-existing-secret"
+    previous_ref = f"db://{profile_id}-secret"
     previous_evidence = {
         "credentialGeneration": 4,
         "imageRef": "registry.test/opencode@sha256:" + "a" * 64,
-        "models": [{"qualifiedId": "opencode-go/model"}],
+        "models": [{"qualifiedId": f"{provider_id}/model"}],
     }
-    candidate_key = "candidate-opencode-key"
+    candidate_key = "candidate-opencode-key" if failure == "runtime" else "short"
 
     async def _failing_validation(self, **kwargs):
         assert kwargs["candidate_secret"] == candidate_key
@@ -4189,9 +4496,9 @@ async def test_opencode_rotation_validation_failure_preserves_previous_authority
     async def _maintenance_guard_override():
         yield SimpleNamespace(lease=SimpleNamespace(lease_id="maintenance-1"))
 
-    monkeypatch.setenv(
-        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
-        "registry.test/opencode@sha256:" + "a" * 64,
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.host_classes.get_opencode_host_image_ref",
+        lambda: previous_evidence["imageRef"],
     )
     monkeypatch.setattr(
         OpenCodeProviderRuntimeValidationService,
@@ -4207,8 +4514,8 @@ async def test_opencode_rotation_validation_failure_preserves_previous_authority
             ManagedAgentProviderProfile(
                 profile_id=profile_id,
                 runtime_id="opencode",
-                provider_id="opencode-go",
-                provider_label="OpenCode Go",
+                provider_id=provider_id,
+                provider_label=provider_id,
                 owner_user_id=owner.id,
                 credential_source=ProviderCredentialSource.SECRET_REF,
                 runtime_materialization_mode=RuntimeMaterializationMode.CONFIG_BUNDLE,
@@ -4227,7 +4534,7 @@ async def test_opencode_rotation_validation_failure_preserves_previous_authority
             json={"api_key": candidate_key},
         )
 
-    assert response.status_code == 502
+    assert response.status_code == (502 if failure == "runtime" else 422)
     assert candidate_key not in response.text
     async with db_base.async_session_maker() as session:
         persisted = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -4464,16 +4771,19 @@ async def test_claude_manual_auth_commit_rejects_non_owner_without_validating_or
     _module_db,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Single-user (#4349): manual-auth commit is instance-scoped; legacy
+    # ``owner_user_id`` never gates credential enrollment. Validation runs
+    # and the secret is persisted as a managed-secret reference.
     profile_id = "claude-anthropic-owned-manual-auth"
     owner_id = uuid4()
     raw_token = "sk-ant-test-non-owner-token"
 
-    async def _unexpected_validate(token: str) -> None:
-        raise AssertionError("unauthorized callers must fail before token validation")
+    async def _validated(token: str) -> None:
+        assert token == raw_token
 
     monkeypatch.setattr(
         "api_service.api.routers.provider_profiles.validate_claude_manual_token",
-        _unexpected_validate,
+        _validated,
     )
 
     async with db_base.async_session_maker() as session:
@@ -4505,9 +4815,8 @@ async def test_claude_manual_auth_commit_rejects_non_owner_without_validating_or
         app.dependency_overrides.clear()
 
     assert str(other_user.id) != str(owner_id)
-    assert response.status_code == 403
+    assert response.status_code == 200
     assert raw_token not in response.text
-    assert response.json()["detail"] == "Not authorized to manage this provider profile."
 
     async with db_base.async_session_maker() as session:
         result = await session.execute(
@@ -4516,7 +4825,7 @@ async def test_claude_manual_auth_commit_rejects_non_owner_without_validating_or
                 == provider_profiles_router._claude_manual_secret_slug(profile_id)
             )
         )
-        assert result.scalar_one_or_none() is None
+        assert result.scalar_one_or_none() is not None
 
 @pytest.mark.asyncio
 async def test_claude_manual_auth_commit_rejects_unsupported_profile_without_persisting(
@@ -5054,6 +5363,8 @@ async def test_mm3788_runtime_filter_composes_with_enabled_only(
 async def test_mm3788_runtime_filter_still_applies_profile_visibility(
     client_app: AsyncClient, _module_db
 ) -> None:
+    # Single-user (#4349): profiles are instance-visible; the runtime filter
+    # narrows by runtime, never by human owner.
     owner = _override_current_user()
     other_owner_id = uuid4()
 
@@ -5087,8 +5398,9 @@ async def test_mm3788_runtime_filter_still_applies_profile_visibility(
     assert listed.status_code == 200
     listed_ids = {row["profile_id"] for row in listed.json()}
     assert "mm3788_visible_owned" in listed_ids
-    # Runtime scoping narrows the result set; it never widens visibility.
-    assert "mm3788_hidden_other_owner" not in listed_ids
+    # Runtime scoping narrows the result set by runtime; human ownership
+    # never filters instance profiles.
+    assert "mm3788_hidden_other_owner" in listed_ids
 
 
 # ---- MoonLadderStudios/MoonMind#3821 launch-safety isolation wiring ----

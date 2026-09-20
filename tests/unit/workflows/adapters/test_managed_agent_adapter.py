@@ -452,6 +452,9 @@ async def test_launch_context_exports_execution_profile_ref() -> None:
 
 
 async def test_launch_context_preserves_profile_workload_mode_and_owner() -> None:
+    # Single-user (#4349): legacy ``owner_user_id``/``ownerUserId`` is
+    # provenance, never launch authority; the execution context carries no
+    # human identity.
     context = build_managed_profile_launch_context(
         profile={
             "profile_id": "codex-no-docker",
@@ -481,7 +484,7 @@ async def test_launch_context_preserves_profile_workload_mode_and_owner() -> Non
     )
 
     assert context.workload_mode == "no-docker"
-    assert context.owner_user_id == "user-123"
+    assert context.owner_user_id is None
 
 
 async def test_pre_cutover_launch_context_defaults_to_container_jobs() -> None:
@@ -3966,3 +3969,255 @@ async def test_start_with_sensitive_runtime_env_overrides_does_not_raise(
     # Non-sensitive runtime_env_overrides keys are passed through.
     assert env_overrides.get("ANTHROPIC_BASE_URL") == "https://api.minimax.io/anthropic"
     assert env_overrides.get("ANTHROPIC_MODEL") == "MiniMax-M2.7"
+
+
+def test_pr_resolver_merge_gate_human_approval_is_not_an_agent_failure(
+    tmp_path: Path,
+) -> None:
+    """A gate that needs a human approval is the parent's decision, not a crash.
+
+    Reproduces resolver:pr:831:...:5, which cleared every resolver-owned
+    blocker and reported the one thing automation cannot supply: a required
+    approving review. The merge-gate parent owns that terminal, exactly as it
+    already owns ``reenter_gate`` and ``request_review``.
+    """
+
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    (resolver / "result.json").write_text(
+        '{"status":"blocked","mergeAutomationDisposition":"manual_review",'
+        '"reason":"merge_gate_requires_human_approval",'
+        '"final_reason":"merge_gate_requires_human_approval",'
+        '"next_step":"manual_review","finish_mode":"fix_only"}',
+        encoding="utf-8",
+    )
+
+    failure_class, summary = _derive_pr_resolver_failure(
+        str(tmp_path), merge_gate_owned=True
+    )
+
+    assert failure_class is None
+    assert summary is None
+
+
+def test_pr_resolver_merge_gate_human_approval_is_user_actionable_standalone(
+    tmp_path: Path,
+) -> None:
+    """Without a merge-gate parent it is still the operator's action, not ours."""
+
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    (resolver / "result.json").write_text(
+        '{"status":"blocked","mergeAutomationDisposition":"manual_review",'
+        '"reason":"merge_gate_requires_human_approval",'
+        '"next_step":"manual_review"}',
+        encoding="utf-8",
+    )
+
+    failure_class, summary = _derive_pr_resolver_failure(str(tmp_path))
+
+    assert failure_class == "user_error"
+    assert summary is not None
+    assert "merge_gate_requires_human_approval" in summary
+
+
+def test_pr_resolver_other_manual_review_reasons_still_fail_under_merge_gate(
+    tmp_path: Path,
+) -> None:
+    """The exemption is scoped to the human-approval gate, not manual_review."""
+
+    resolver = tmp_path / "var" / "pr_resolver"
+    resolver.mkdir(parents=True)
+    (resolver / "result.json").write_text(
+        '{"status":"blocked","mergeAutomationDisposition":"manual_review",'
+        '"reason":"publish_unavailable","next_step":"manual_review"}',
+        encoding="utf-8",
+    )
+
+    failure_class, summary = _derive_pr_resolver_failure(
+        str(tmp_path), merge_gate_owned=True
+    )
+
+    assert failure_class == "execution_error"
+    assert summary is not None
+
+
+async def test_fetch_result_clears_generic_failed_exit_for_human_approval_gate(
+    tmp_path: Path,
+):
+    """A non-zero exit must not bury the validated human-approval verdict."""
+
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "blocked",\n'
+            '  "mergeAutomationDisposition": "manual_review",\n'
+            '  "reason": "merge_gate_requires_human_approval",\n'
+            '  "final_reason": "merge_gate_requires_human_approval",\n'
+            '  "next_step": "manual_review",\n'
+            '  "finish_mode": "fix_only"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-human-approval",
+            agent_id="claude_code",
+            runtime_id="claude_code",
+            status="failed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+            failure_class="execution_error",
+            error_message="Process exited with code 3",
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-human-approval",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-human-approval",
+        pr_resolver_expected=True,
+        pr_resolver_merge_gate_owned=True,
+    )
+
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "manual_review"
+    assert "merge_gate_requires_human_approval" in result.summary
+
+
+async def test_fetch_result_publishes_merge_gate_ownership_for_terminal_evaluation(
+    tmp_path: Path,
+):
+    """The terminal-contract boundary needs the ownership fact in metadata."""
+
+    import json
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "status": "blocked",
+                "mergeAutomationDisposition": "manual_review",
+                "reason": "merge_gate_requires_human_approval",
+                "next_step": "manual_review",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-ownership-marker",
+            agent_id="claude_code",
+            runtime_id="claude_code",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-ownership-marker",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-ownership-marker",
+        pr_resolver_expected=True,
+        pr_resolver_merge_gate_owned=True,
+    )
+
+    assert result.metadata["prResolverMergeGateOwned"] is True
+    assert result.metadata["prResolverFinalReason"] == (
+        "merge_gate_requires_human_approval"
+    )
+
+
+async def test_fetch_result_does_not_clear_unrelated_manual_review_failures(
+    tmp_path: Path,
+):
+    """Only the validated approval reason may clear a generic process exit.
+
+    A terminal artifact can carry an explicit disposition with no failing
+    status, which returns no derived failure class and previously reached the
+    clearing branch on disposition alone.
+    """
+
+    import json
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "mergeAutomationDisposition": "manual_review",
+                "reason": "publish_unavailable",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-unrelated-manual-review",
+            agent_id="claude_code",
+            runtime_id="claude_code",
+            status="failed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+            failure_class="execution_error",
+            error_message="Process exited with code 3",
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-unrelated-manual-review",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-unrelated-manual-review",
+        pr_resolver_expected=True,
+        pr_resolver_merge_gate_owned=True,
+    )
+
+    assert result.failure_class == "execution_error"

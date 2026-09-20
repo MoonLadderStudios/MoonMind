@@ -117,6 +117,28 @@ def test_check_reports_mode_drift(tmp_path, capsys):
     ) in err
 
 
+def test_check_accepts_a_checkout_widened_by_the_umask(tmp_path, capsys):
+    """The same commit must not read as drift because of the caller's umask.
+
+    Git records only the owner-execute bit, so a checkout lands as 0755/0644
+    under umask 022 and as 0775/0664 under umask 002. Comparing raw modes made
+    `--check` fail for every developer and CI runner on the second setting.
+    """
+    _make_bundle(tmp_path)
+    assert _run(tmp_path, "--write") == 0
+    script = tmp_path / ".specify" / "scripts" / "bash" / "setup-plan.sh"
+    skill_md = tmp_path / ".agents" / "skills" / "moonspec-verify" / "SKILL.md"
+    script.chmod(0o775)
+    skill_md.chmod(0o664)
+
+    capsys.readouterr()
+    assert _run(tmp_path, "--check") == 0
+    assert "MoonSpec projection is current" in capsys.readouterr().out
+    # A widened checkout is left alone; nothing is rewritten to claim a fix.
+    assert stat.S_IMODE(script.stat().st_mode) == 0o775
+    assert stat.S_IMODE(skill_md.stat().st_mode) == 0o664
+
+
 def test_check_rejects_symlinked_targets(tmp_path, capsys):
     source_root = _make_bundle(tmp_path)
     skill_dir = tmp_path / ".agents" / "skills" / "moonspec-verify"

@@ -41,14 +41,28 @@ on child publishing; do not infer one from the coordinator's local mode.
 The helper requires Python 3 and `httpx`, plus `gh` for discovery. Keep the
 portable `_shared/workflow_execution_client.py` beside the skill directories;
 resolved snapshots include it automatically. No MoonMind or API-service
-installation is required. In a managed run, resolve the
-helper from `$MOONMIND_ACTIVE_SKILLS_DIR/batch-pr-resolver/bin/batch_pr_resolver.py`.
-Use the repository path below only outside MoonMind when no active path is set.
+installation is required. Resolve helpers exclusively from the run's immutable
+active bundle:
+
+```bash
+BATCH_PR_RESOLVER_SKILL_DIR="${BATCH_PR_RESOLVER_SKILL_DIR:-${MOONMIND_ACTIVE_SKILLS_DIR:+$MOONMIND_ACTIVE_SKILLS_DIR/batch-pr-resolver}}"
+test -n "$BATCH_PR_RESOLVER_SKILL_DIR" && test -f "$BATCH_PR_RESOLVER_SKILL_DIR/SKILL.md"
+```
+
+Inside MoonMind, `MOONMIND_ACTIVE_SKILLS_DIR` is always set; a checked-in
+`.agents/skills` directory must never shadow the selected snapshot. When no
+skill-specific override is present, the helper resolves to
+`${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/batch-pr-resolver/bin/batch_pr_resolver.py`.
+Outside
+MoonMind, set `BATCH_PR_RESOLVER_SKILL_DIR` to the directory containing this
+`SKILL.md` (no MoonMind-only environment variables required). A missing
+selected helper is a materialization/packaging error: stop as blocked instead
+of substituting stale repository code.
 
 1. Run the helper script:
 
 ```bash
-python3 "${MOONMIND_ACTIVE_SKILLS_DIR:-.agents/skills}/batch-pr-resolver/bin/batch_pr_resolver.py" \
+python3 "$BATCH_PR_RESOLVER_SKILL_DIR/bin/batch_pr_resolver.py" \
   --repo <owner/repo> \
   --state <open|merged|closed> \
   --max-attempts 3 \

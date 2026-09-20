@@ -6,8 +6,6 @@ selection data, never launch authority or provider/host secret material.
 
 from __future__ import annotations
 
-from moonmind.omnigent.harness_platform.harness_registry import harness_registration
-
 import json
 import os
 import re
@@ -49,15 +47,15 @@ from moonmind.config.container_backend_settings import (
     resolve_container_backend_settings,
 )
 from moonmind.config.settings import settings
-from moonmind.omnigent.control_plane.identities import (
-    EGRESS_CLEANUP_AUTHORITY_KEY,
-    EGRESS_CLEANUP_AUTHORITY_VERSION,
-)
 from moonmind.omnigent.conformance import (
     ConformanceContractError,
     validate_acceptance_manifest,
 )
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+from moonmind.omnigent.control_plane.identities import (
+    EGRESS_CLEANUP_AUTHORITY_KEY,
+    EGRESS_CLEANUP_AUTHORITY_VERSION,
+)
 from moonmind.omnigent.control_plane.readiness import (
     ReadinessInputs,
     evaluate_admission_readiness,
@@ -69,6 +67,7 @@ from moonmind.omnigent.exact_artifact_conformance import (
     assert_exact_artifact_evidence,
 )
 from moonmind.omnigent.execution_profiles import POLICIES, PROFILES
+from moonmind.omnigent.harness_platform.harness_registry import harness_registration
 from moonmind.omnigent.live_verification_health import (
     LiveVerificationHealthError,
     assert_live_health_projection,
@@ -82,10 +81,7 @@ from moonmind.omnigent.settings import (
 )
 from moonmind.utils.logging import redact_sensitive_payload
 
-from .omnigent_bridge import (
-    _compatibility_diagnostics,
-    get_bridge_config,
-)
+from .omnigent_bridge import _compatibility_diagnostics, get_bridge_config
 
 router = APIRouter(prefix="/api/omnigent", tags=["Omnigent Catalog"])
 
@@ -1146,7 +1142,9 @@ async def get_omnigent_codex_catalog_readiness(
             runtime_id == "opencode"
             and credential_source in {"secret_ref", "none"}
             and materialization in {"composite", "api_key_env", "config_bundle"}
-            and row.provider_id in {"opencode-go", "opencode"}
+            and re.fullmatch(r"[a-z0-9][a-z0-9._-]*", str(row.provider_id or ""))
+            is not None
+            and (credential_source == "none") == (row.provider_id == "opencode")
         )
         if compatible and readiness["launch_ready"]:
             # A busy profile that queues can still accept new work, so it is
@@ -1692,9 +1690,7 @@ async def get_omnigent_execution_readiness(
     from moonmind.omnigent.harness_platform.materializers import (
         materializer_ref_for_provider,
     )
-    from moonmind.omnigent.runtime_provider_rollout import (
-        RuntimeProviderPathClass,
-    )
+    from moonmind.omnigent.runtime_provider_rollout import RuntimeProviderPathClass
     from moonmind.workflows.executions.runtime_target_selection import (
         resolve_runtime_target_catalog,
     )

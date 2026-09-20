@@ -1020,7 +1020,7 @@ Remediation steps carry `annotations.jiraOrchestrateRole = "moonspec-remediation
 
 A workflow-owned remediation loop authors its remediation and verification tools as `auto`, meaning the loop inherits the run's runtime selection. `auto` is a planning-time selection sentinel and never a runtime identity: each materialized attempt names the run's resolved agent runtime and carries that runtime's model, effort, and provider profile, so loop attempts route exactly like the authored steps of the same run. A loop whose controller step carries no resolved runtime fails when an attempt is admitted rather than routing to a substitute runtime or provider adapter.
 
-`ADDITIONAL_WORK_NEEDED` is retryable only while a later MoonSpec remediation step remains in the plan. When no later remediation step remains and publish mode is `pr`, the parent workflow publishes the accumulated work as a draft pull request with `attention_required: true`, then skips downstream promotion and trusted handoff steps. Non-retryable blocking verdicts such as `NO_DETERMINATION`, `BLOCKED`, or `FAILED_UNRECOVERABLE` stop before publication unless an explicit environment-blocked draft policy applies.
+`ADDITIONAL_WORK_NEEDED` is retryable only while a later MoonSpec remediation step remains in the plan. When no later remediation step remains and publish mode is `pr`, the parent workflow publishes the accumulated work as a draft pull request with `attention_required: true`, then completes the run and skips downstream promotion and trusted handoff steps. The same draft handoff applies to declared environment-class `BLOCKED` and malformed/degraded `NO_DETERMINATION` outcomes. Verifier-declared `NO_DETERMINATION` and `FAILED_UNRECOVERABLE` remain fail-closed and stop before publication.
 
 ---
 
@@ -1266,7 +1266,7 @@ Desired behavior:
 
 The default Jira Orchestrate budget allows up to six remediation/verification pairs after the initial verification gate. The loop may exit earlier when any MoonSpec verification returns `FULLY_IMPLEMENTED`.
 
-If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.UserWorkflow` creates a draft pull request, fails with `attention_required: true`, and does not move Jira or perform any other downstream promotion. The draft is a recoverability handoff rather than success evidence. Its annotation and the failed final state include the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
+If the post-remediation gate remains `ADDITIONAL_WORK_NEEDED` after budget exhaustion, `MoonMind.UserWorkflow` creates a draft pull request, completes with `attention_required: true`, and does not move Jira or perform any other downstream promotion. The draft is a recoverability handoff rather than success evidence. Its annotation and the completed-with-attention final state include the latest verification report, remaining work, attempted remediation evidence, side-effect dispositions, and a recommended next action.
 
 ### 20.2 Failed-step recovery
 

@@ -1080,6 +1080,7 @@ async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatc
         "state": "completed",
         "closeStatus": "completed",
         "summary": "Workflow completed successfully",
+        "attentionRequired": False,
         "finishOutcomeCode": "PUBLISH_DISABLED",
         "finishOutcomeStage": "publish",
         "finishOutcomeReason": "publishing disabled",

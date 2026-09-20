@@ -775,6 +775,22 @@ async def mutate_execution_projection(
             stale = stale or bool(
                 latest.close_status and not incoming.get("close_status")
             )
+            if (
+                stale
+                and owner == "canonical"
+                and projection is not None
+                and projection.sync_state
+                is TemporalExecutionProjectionSyncState.ORPHANED
+                and projection.run_id == incoming_run
+                and projection.state == incoming.get("state")
+                and projection.close_status == incoming.get("close_status")
+            ):
+                # Orphan-mark bookkeeping advances updated_at without
+                # advancing lifecycle, so a same-run canonical repair with
+                # identical lifecycle is recovery, not a stale observation.
+                # Genuinely newer lifecycle (different state/close) stays
+                # stale and keeps its reconciliation-needed status.
+                stale = False
         else:
             stored_first_run = (getattr(latest, "memo", None) or {}).get("first_run_id")
             incoming_first_run = incoming.get("first_run_id")

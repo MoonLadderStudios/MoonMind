@@ -21,6 +21,8 @@ from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import (
     CANONICAL_WAITING_STATE_PATCH_ID,
     MoonMindAgentRun,
+    manager_slot_wait_health,
+    manager_slot_wait_health_suffix,
     structured_manager_slot_wait,
 )
 
@@ -1101,3 +1103,135 @@ def test_replay_compat_pre_flag_history_upgrades_without_fabrication() -> None:
         )
         is None
     )
+
+
+# MoonLadderStudios/MoonMind#4363: an unqueryable singleton names itself.
+
+
+def _wedged_manager_state(**overrides):
+    state = {
+        "running": True,
+        "inspection_succeeded": False,
+        "workflow_id": "provider-profile-manager:opencode",
+        "runtime_id": "opencode",
+        "status": "RUNNING",
+        "inspection_status": "RPC_ERROR_FAILED_PRECONDITION",
+        "error": "Unable to query workflow due to Workflow Task in failed state.",
+    }
+    state.update(overrides)
+    return state
+
+
+def test_manager_slot_wait_health_names_unqueryable_singleton() -> None:
+    health = manager_slot_wait_health(_wedged_manager_state())
+
+    assert health == {
+        "workflow_id": "provider-profile-manager:opencode",
+        "inspection_status": "RPC_ERROR_FAILED_PRECONDITION",
+        "error": "Unable to query workflow due to Workflow Task in failed state.",
+    }
+
+
+def test_manager_slot_wait_health_absent_unless_wedge_signature() -> None:
+    assert manager_slot_wait_health(_base_manager_state()) is None
+    assert manager_slot_wait_health(_wedged_manager_state(running=False)) is None
+    assert (
+        manager_slot_wait_health(_wedged_manager_state(inspection_succeeded=True))
+        is None
+    )
+    assert manager_slot_wait_health("not-a-mapping") is None
+
+
+def test_manager_slot_wait_health_bounds_error_excerpt() -> None:
+    health = manager_slot_wait_health(_wedged_manager_state(error="x" * 1000))
+
+    assert health is not None
+    assert len(health["error"]) <= 320
+    assert health["error"].endswith("...[truncated]")
+
+
+def test_manager_slot_wait_health_suffix_empty_when_healthy() -> None:
+    assert manager_slot_wait_health_suffix(_base_manager_state()) == ""
+    suffix = manager_slot_wait_health_suffix(_wedged_manager_state())
+    assert "provider-profile-manager:opencode" in suffix
+    assert "RPC_ERROR_FAILED_PRECONDITION" in suffix
+    assert "lease" not in suffix and "credential" not in suffix
+
+
+@pytest.mark.asyncio
+async def test_inspected_wait_reason_names_unqueryable_manager(monkeypatch) -> None:
+    """The parent progress summary names the wedged singleton, not just capacity."""
+    _enable_canonical(monkeypatch)
+    _mock_workflow_identity(monkeypatch)
+
+    async def _fake_manager_state(self, **kwargs):
+        return _wedged_manager_state()
+
+    monkeypatch.setattr(
+        MoonMindAgentRun,
+        "_manager_state_for_slot_wait",
+        _fake_manager_state,
+    )
+    wf = MoonMindAgentRun()
+    reason = await wf._inspected_provider_slot_waiting_reason(
+        manager_id="provider-profile-manager:opencode",
+        runtime_id="opencode",
+        request=_make_request(),
+    )
+    assert reason.startswith("awaiting_provider_capacity")
+    assert "provider-profile-manager:opencode" in reason
+    assert "RPC_ERROR_FAILED_PRECONDITION" in reason
+
+
+@pytest.mark.asyncio
+async def test_inspected_slot_wait_observation_carries_manager_health(
+    monkeypatch,
+) -> None:
+    """The structured wait observation carries bounded manager health."""
+    _enable_canonical(monkeypatch)
+    _mock_workflow_identity(monkeypatch)
+
+    async def _fake_manager_state(self, **kwargs):
+        return _wedged_manager_state()
+
+    monkeypatch.setattr(
+        MoonMindAgentRun,
+        "_manager_state_for_slot_wait",
+        _fake_manager_state,
+    )
+    wf = MoonMindAgentRun()
+    observation = await wf._inspected_provider_slot_wait(
+        manager_id="provider-profile-manager:opencode",
+        runtime_id="opencode",
+        request=_make_request(),
+    )
+    assert observation["reason"].startswith("awaiting_provider_capacity")
+    assert observation["manager_health"] == {
+        "workflow_id": "provider-profile-manager:opencode",
+        "inspection_status": "RPC_ERROR_FAILED_PRECONDITION",
+        "error": "Unable to query workflow due to Workflow Task in failed state.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_inspected_slot_wait_observation_health_absent_when_healthy(
+    monkeypatch,
+) -> None:
+    _enable_canonical(monkeypatch)
+    _mock_workflow_identity(monkeypatch)
+
+    async def _fake_manager_state(self, **kwargs):
+        return _base_manager_state()
+
+    monkeypatch.setattr(
+        MoonMindAgentRun,
+        "_manager_state_for_slot_wait",
+        _fake_manager_state,
+    )
+    wf = MoonMindAgentRun()
+    observation = await wf._inspected_provider_slot_wait(
+        manager_id="manager-1",
+        runtime_id="codex_cli",
+        request=_make_request(),
+    )
+    assert observation["manager_health"] is None

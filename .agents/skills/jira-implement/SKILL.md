@@ -1,6 +1,6 @@
 ---
 name: jira-implement
-description: Implement repository work from a Jira issue. Use when a user gives Codex a Jira issue key or URL and asks it to fetch the issue, pull relevant instructions, comments, linked context, and attachments, implement the requested code/docs/tests, verify the result, and report what changed.
+description: Implement repository work from a Jira issue. Use when a user provides a Jira issue key or URL with a request to fetch the issue, pull relevant instructions, comments, linked context, and attachments, implement the requested code/docs/tests, verify the result, and report what changed.
 metadata:
   required-capabilities:
     - jira
@@ -75,7 +75,7 @@ Never scrape private Atlassian browser pages, ask for `ATLASSIAN_API_KEY`, call 
    - Read applicable repo instructions before editing.
    - Use `rg` for targeted searches by feature terms, Jira keywords, API names, UI text, and related tests.
    - Identify the narrowest source, test, docs, migration, and fixture files needed for the issue.
-   - If the issue touches agent skills, read `docs/Steps/SkillSystem.md` and preserve `.agents/skills` as the canonical active path.
+   - If the issue touches agent skills, read `docs/Steps/SkillSystem.md` and resolve skill helpers through the run's immutable active bundle (`$MOONMIND_ACTIVE_SKILLS_DIR` inside MoonMind), never the checked-in `.agents/skills` directory.
 
 4. Implement the change.
    - Keep edits scoped to the Jira requirements and current repository patterns.

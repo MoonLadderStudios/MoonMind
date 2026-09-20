@@ -248,11 +248,13 @@ def run_orchestration(
             return result, EXIT_CODE_MERGED
 
         if finalize_status == "review_clean":
-            # fix_only finish mode: the merge gate opened with nothing left to
-            # address, so the loop is complete without a merge side effect.
+            # fix_only finish mode: nothing resolver-owned is left to address,
+            # so the loop is complete without a merge side effect. The gate may
+            # still be closed on a human approving review, which is not this
+            # run's blocker; `final_reason` carries that distinction.
             result = _build_result(
                 status="review_clean",
-                decision="review clean; merge gate passed without merging",
+                decision="review clean; nothing left to address and not merging",
                 merge_outcome="skipped",
                 final_reason=reason or "finish_mode_fix_only",
                 next_step="done",

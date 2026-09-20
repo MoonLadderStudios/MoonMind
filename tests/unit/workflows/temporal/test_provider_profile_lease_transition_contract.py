@@ -23,7 +23,7 @@ import asyncio
 import contextlib
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from temporalio import exceptions
@@ -1182,6 +1182,55 @@ async def test_the_retained_snapshot_writer_carries_its_own_generation() -> None
 
     assert ledger.calls[0]["action"] == "save"
     assert ledger.calls[0]["writer_generation"] == 4
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_restart_restores_cleanup_requested_obligations() -> None:
+    """Terminating an ambiguous manager history must not drop owed cleanup.
+
+    PR #4425 review (comment 4048923511): histories that recorded the #4330
+    redrive activities without the redrive marker cannot replay on the
+    patched worker, and markers alone cannot tell them apart from the older
+    generation. Their tested, state-preserving cutover is a fresh start:
+    the durable ledger already holds the cleanup request, so the restart
+    restores the same stable claim (original reason, zeroed attempts) and
+    the redrive resumes without re-requesting or freeing the slot.
+    """
+
+    ledger = _Ledger(
+        {
+            "load": {
+                "leases": [
+                    {
+                        "workflow_id": "agent-run-1",
+                        "profile_id": PROFILE_ID,
+                        "leaseId": "agent-run-1",
+                        "ownerId": "agent-run-1",
+                        "purpose": "execution_direct",
+                        "granted_at": (NOW - timedelta(hours=4)).isoformat(),
+                        "fencingGeneration": 6,
+                        "leaseState": DurableLeaseState.CLEANUP_REQUESTED.value,
+                        "safeMetadata": {
+                            "evidenceIdentity": "evidence-1",
+                            "cleanupReason": "lease_expired",
+                        },
+                    }
+                ],
+                "max_fencing_generation": 6,
+            }
+        }
+    )
+    successor = _manager()
+    successor._signal_slot_assigned = AsyncMock()
+
+    with _patched(ledger):
+        assert await successor._load_leases_from_db() is True
+
+    assert successor._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+    assert "agent-run-1" in successor._cleanup_requested_leases
+    assert successor._cleanup_request_reasons["agent-run-1"] == "lease_expired"
+    assert successor._cleanup_delivery_attempts["agent-run-1"] == 0
+    successor._signal_slot_assigned.assert_awaited_once()
 
 
 class _Signals:
@@ -2464,3 +2513,136 @@ async def test_direct_cleanup_leaves_live_and_unowned_obligations_spent() -> Non
         await attached._complete_direct_cleanup_obligations()
     assert ledger.actions() == []
     assert attached._profiles[PROFILE_ID].current_leases == ["agent-run-1"]
+
+
+# ---------------------------------------------------------------------------
+# Orphaned credential-validation leases wedge OpenCode API-key enrollment.
+# Production: provider-revalidation holds an exclusive validation lease, its
+# owner process is gone (NOT_FOUND), cleanup redrives 100+ times, and the
+# user's exclusive enrollment waiter blocks behind it in validating_token.
+# A bounded validation probe (docker --rm, 120s timeout, 900s lease max) that
+# is expired past its escalation horizon with a terminal/missing owner is
+# positive teardown evidence: the ephemeral probe cannot still be running.
+# ---------------------------------------------------------------------------
+
+
+def _orphaned_validation_manager(
+    *,
+    age_hours: float = 3.0,
+    status: str = "NOT_FOUND",
+    purpose: str = "credential_validation",
+    live: bool = False,
+) -> tuple[
+    MoonMindProviderProfileManagerWorkflow, str, dict[str, dict[str, Any]]
+]:
+    wf = _manager()
+    profile = wf._profiles[PROFILE_ID]
+    lease_id = "profile-lease:credential_validation:orphan"
+    owner_workflow_id = (
+        "provider-revalidation:opencode-model-catalog:v2:deadbeef"
+    )
+    granted_at = NOW - timedelta(hours=age_hours)
+    profile.current_leases.append(lease_id)
+    profile.lease_granted_at[lease_id] = granted_at.isoformat()
+    profile.lease_metadata[lease_id] = {
+        "leaseId": lease_id,
+        "ownerId": lease_id,
+        "purpose": purpose,
+        "workflowId": owner_workflow_id,
+        "ownerIsWorkflow": False,
+        "evidenceIdentity": "opencode-model-catalog:v2:deadbeef",
+        "fencingGeneration": 846,
+        "compatibilityClass": "exclusive_maintenance",
+    }
+    wf._lease_profile_index[lease_id] = PROFILE_ID
+    wf._cleanup_requested_leases.add(lease_id)
+    wf._cleanup_request_reasons[lease_id] = "owner_terminal"
+    wf._cleanup_delivery_attempts[lease_id] = 119
+    statuses = {
+        owner_workflow_id: {"running": live, "status": status},
+    }
+    return wf, lease_id, statuses
+
+
+@pytest.mark.asyncio
+async def test_orphaned_validation_lease_is_reclaimed_after_escalation() -> None:
+    """Expired validation probe with missing owner frees the enrollment lane."""
+
+    wf, lease_id, statuses = _orphaned_validation_manager()
+
+    async def _verify(_workflow_ids, run_hints=None):
+        return statuses
+
+    ledger = _Ledger(
+        {
+            "release_verified": {
+                "released": True,
+                "outcome": LeaseTransitionOutcome.RELEASED.value,
+            },
+        }
+    )
+    with _patched(ledger), patch.object(
+        wf, "_verify_workflow_statuses", side_effect=_verify
+    ):
+        await wf._complete_orphaned_validation_cleanup_obligations()
+
+    assert ledger.actions() == ["release_verified"]
+    row = ledger.rows_for("release_verified")[0]
+    assert row["lease_id"] == lease_id
+    assert row["fencing_generation"] == 846
+    assert wf._profiles[PROFILE_ID].current_leases == []
+    assert wf.get_state()["cleanup_obligations"] == []
+
+
+@pytest.mark.asyncio
+async def test_validation_reclamation_leaves_live_and_fresh_obligations_spent() -> None:
+    """Live owners, fresh leases, and execution leases never auto-release."""
+
+    # Live owner stays spent.
+    wf, lease_id, statuses = _orphaned_validation_manager(live=True)
+    statuses_next = {
+        key: {"running": True, "status": "RUNNING"} for key in statuses
+    }
+
+    async def _verify_live(_workflow_ids, run_hints=None):
+        return statuses_next
+
+    ledger = _Ledger()
+    with _patched(ledger), patch.object(
+        wf, "_verify_workflow_statuses", side_effect=_verify_live
+    ):
+        await wf._complete_orphaned_validation_cleanup_obligations()
+    assert ledger.actions() == []
+    assert wf._profiles[PROFILE_ID].current_leases == [lease_id]
+
+    # Fresh (unexpired) validation lease stays spent even with missing owner.
+    fresh, fresh_lease, fresh_statuses = _orphaned_validation_manager(
+        age_hours=0.1
+    )
+
+    async def _verify_missing(_workflow_ids, run_hints=None):
+        return fresh_statuses
+
+    ledger = _Ledger()
+    with _patched(ledger), patch.object(
+        fresh, "_verify_workflow_statuses", side_effect=_verify_missing
+    ):
+        await fresh._complete_orphaned_validation_cleanup_obligations()
+    assert ledger.actions() == []
+    assert fresh._profiles[PROFILE_ID].current_leases == [fresh_lease]
+
+    # Execution leases stay for their janitor/operator even when expired.
+    exec_wf, exec_lease, exec_statuses = _orphaned_validation_manager(
+        purpose="execution_omnigent"
+    )
+
+    async def _verify_exec(_workflow_ids, run_hints=None):
+        return exec_statuses
+
+    ledger = _Ledger()
+    with _patched(ledger), patch.object(
+        exec_wf, "_verify_workflow_statuses", side_effect=_verify_exec
+    ):
+        await exec_wf._complete_orphaned_validation_cleanup_obligations()
+    assert ledger.actions() == []
+    assert exec_wf._profiles[PROFILE_ID].current_leases == [exec_lease]

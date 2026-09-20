@@ -22,7 +22,11 @@ from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
 from moonmind.omnigent.execution_support_evidence import (
     load_protected_execution_support_evidence,  # re-export for hermetic test patching
 )
-from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
+from moonmind.omnigent.harness_platform.agent_profile import (
+    OmnigentAgentProfileV2,
+    stable_imported_content_digest,
+    stable_upstream_snapshot_digest,
+)
 from moonmind.omnigent.harness_platform.catalog import (
     HarnessImplementationIdentity,
     HarnessRecord,
@@ -31,7 +35,10 @@ from moonmind.omnigent.harness_platform.catalog import (
     classify_harness_trust,
     create_catalog_snapshot,
 )
-from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
+from moonmind.omnigent.harness_platform.credential_bindings import (
+    create_binding_set,
+    derive_repository_slot_requirements,
+)
 from moonmind.omnigent.harness_platform.execution_plan import (
     AdmissionAuthority,
     OmnigentExecutionPlanEnvelope,
@@ -584,12 +591,18 @@ def _build_v2_profile(
     snapshot_digest = str(snapshot.get("digest") or "").strip()
     if not snapshot_digest.startswith("sha256:"):
         raise ValueError("Agent Profile snapshot digest is invalid")
+    # ``stable_upstream_snapshot_digest`` / ``stable_imported_content_digest``
+    # own this derivation; launch-time plan verification recomputes the same
+    # identity from the same document, so writer and reader cannot diverge.
     if source.get("upstreamId"):
+        stable_upstream_digest = stable_upstream_snapshot_digest(
+            source, snapshot_digest
+        )
         agent_source: dict[str, Any] = {
             "kind": "upstream",
             "upstreamId": str(source["upstreamId"]),
             "upstreamVersion": str(source.get("upstreamVersion") or "0.0.0"),
-            "upstreamSnapshotDigest": snapshot_digest,
+            "upstreamSnapshotDigest": stable_upstream_digest,
         }
     else:
         bundle_ref = str(source.get("bundleArtifactRef") or "").strip()
@@ -602,14 +615,21 @@ def _build_v2_profile(
         )
         if not bundle_ref or not bundle_digest or not import_receipt:
             raise ValueError("bundle Agent Profile lacks immutable import authority")
+        stable_content_digest = stable_imported_content_digest(source, snapshot_digest)
+        stable_agent_id = str(
+            source.get("importedAgentId") or snapshot.get("agentId") or ""
+        ).strip()
+        stable_agent_version = str(
+            source.get("importedAgentVersion") or snapshot.get("version") or ""
+        ).strip()
         agent_source = {
             "kind": "bundle",
             "bundleArtifactRef": bundle_ref,
             "bundleDigest": bundle_digest,
             "importReceiptRef": import_receipt,
-            "importedAgentId": str(snapshot.get("agentId") or ""),
-            "importedAgentVersion": str(snapshot.get("version") or ""),
-            "importedContentDigest": snapshot_digest,
+            "importedAgentId": stable_agent_id,
+            "importedAgentVersion": stable_agent_version,
+            "importedContentDigest": stable_content_digest,
         }
     required = list(document.get("requiredCapabilities") or [])
     workspace = document.get("workspace")
@@ -679,6 +699,16 @@ async def compile_and_persist_execution_plan(
     task_input_snapshot_digest: str,
     execution_plan_store: Any | None = None,
     db_session: Any | None = None,
+    trusted_repository_declarations: Mapping[str, Mapping[str, Any]] | None = None,
+    workspace_source_kind: str | None = None,
+    workspace_access_snapshot_ref: str | None = None,
+    worker_authority_kinds: tuple[str, ...] | list[str] | None = None,
+    # Repository bindings re-admitted for child work (attenuated grants
+    # composed by the fan-out caller from trusted snapshots). Each entry is
+    # a v2 ``repository_connection`` binding payload keyed by slot. They are
+    # admitted only through ``trusted_repository_declarations``; entries
+    # without a declaration are rejected by the planner.
+    repository_bindings: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> PersistedOmnigentExecutionPlan:
     """Compile and persist one plan before Temporal or provider side effects."""
 
@@ -914,8 +944,12 @@ async def compile_and_persist_execution_plan(
             effective_launch, host_class.imageRef
         )
         if reconciled is None:
+            planned_ref = str(effective_launch.get("hostImageRef") or "")
             raise ValueError(
-                "effective launch host image conflicts with the selected Host Class"
+                "effective launch host image conflicts with the selected Host Class "
+                f"(planned={planned_ref[:120]} selected={host_class.imageRef[:120]} "
+                f"hostClass={config['hostClassRef']}); refresh the bootstrap policy "
+                "default to the qualified image and retry"
             )
         import logging
 
@@ -944,7 +978,10 @@ async def compile_and_persist_execution_plan(
         host_architecture = f"linux/{host_architecture}"
     if not host_architecture or host_architecture not in host_class.architectures:
         raise ValueError(
-            "launch policy architecture conflicts with the selected Host Class"
+            "launch policy architecture conflicts with the selected Host Class "
+            f"(launch={host_architecture or '<missing>'} "
+            f"hostClass={config['hostClassRef']} "
+            f"supported={','.join(host_class.architectures) or '<none>'})"
         )
     matching_entry = next(
         (
@@ -956,7 +993,12 @@ async def compile_and_persist_execution_plan(
         None,
     )
     if matching_entry is None:
-        raise ValueError("Host Class does not declare the selected exact harness")
+        raise ValueError(
+            "Host Class does not declare the selected exact harness "
+            f"(harness={harness_id} "
+            f"implementation={implementation.implementation_ref()} "
+            f"hostClass={config['hostClassRef']})"
+        )
     catalog = exact_catalog or create_catalog_snapshot(
         endpointRef=str(document.get("endpointRef") or "default"),
         omnigentVersion=host_class.omnigentVersion,
@@ -1040,16 +1082,43 @@ async def compile_and_persist_execution_plan(
         "session.start": True,
         **{tool_name: True for tool_name in mounted_skill_tools},
     }
-    binding_set = create_binding_set(
-        bindingSetId=f"{harness_id}.primary-model",
-        version=int(agent_profile_snapshot.get("version") or 1),
-        bindings={
-            "primary-model": {
-                "providerProfileRef": provider_profile_ref,
-                "materializerRef": config["materializerRef"],
-            }
-        },
-    )
+    binding_payloads: dict[str, dict[str, Any]] = {
+        "primary-model": {
+            "providerProfileRef": provider_profile_ref,
+            "materializerRef": config["materializerRef"],
+        }
+    }
+    if repository_bindings:
+        # A mixed model/repository plan uses the v2 envelope so repository
+        # authority carries its explicit kind, delivery contract, and role.
+        # Model entries without a discriminator upgrade to model authority
+        # inside the versioned constructor.
+        for slot, repo_binding in dict(repository_bindings).items():
+            slot_name = str(slot or "").strip()
+            if not slot_name:
+                raise ValueError("repository binding requires a slot name")
+            if slot_name in binding_payloads:
+                raise ValueError(
+                    f"repository binding slot {slot_name!r} conflicts with "
+                    "the model authority slot"
+                )
+            if not isinstance(repo_binding, Mapping):
+                raise ValueError(
+                    f"repository binding for slot {slot_name!r} must be a mapping"
+                )
+            binding_payloads[slot_name] = dict(repo_binding)
+        binding_set = create_binding_set(
+            bindingSetId=f"{harness_id}.primary-model",
+            version=int(agent_profile_snapshot.get("version") or 1),
+            bindings=binding_payloads,
+            schema_version="moonmind.omnigent-credential-bindings.v2",
+        )
+    else:
+        binding_set = create_binding_set(
+            bindingSetId=f"{harness_id}.primary-model",
+            version=int(agent_profile_snapshot.get("version") or 1),
+            bindings=binding_payloads,
+        )
     if real_config is not None:
         trust = real_config.get("_freshnessTrustRecord")
         if not isinstance(trust, HarnessTrustRecord):
@@ -1126,6 +1195,15 @@ async def compile_and_persist_execution_plan(
     }
     model = document.get("model")
     model_mapping = dict(model) if isinstance(model, Mapping) else {}
+    # MoonLadderStudios/MoonMind#4009: repository slot declarations derive
+    # from admitted profile authority plus trusted delivery / publication
+    # declarations when those owners supply them (#4011/#1090; issuance is
+    # #4007). Agent-supplied binding keys never create declarations.
+    # Fail-closed ({}) without trusted input.
+    repository_slot_requirements = derive_repository_slot_requirements(
+        profile_document=dict(document),
+        trusted_repository_declarations=trusted_repository_declarations,
+    )
     plan = compile_execution_plan(
         agent_profile=_build_v2_profile(
             snapshot=agent_profile_snapshot,
@@ -1140,6 +1218,10 @@ async def compile_and_persist_execution_plan(
         trust_record=trust,
         resolved_skills=resolved_skills,
         credential_binding_set=binding_set,
+        repository_slot_requirements=repository_slot_requirements,
+        workspace_source_kind=workspace_source_kind,
+        workspace_access_snapshot_ref=workspace_access_snapshot_ref,
+        worker_authority_kinds=worker_authority_kinds,
         host_class_ref=host_class.ref,
         host_class=host_class,
         launch_policy_ref=launch_policy_ref,

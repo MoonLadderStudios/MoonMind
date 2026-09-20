@@ -175,6 +175,13 @@ def _stub_empty_ghcr_store(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _login(value):
+    async def _resolve(_token):
+        return value
+
+    return _resolve
+
+
 def _forbid_source_token_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _unexpected_github_token(*_args: object, **_kwargs: object) -> str:
         raise AssertionError("source GitHub token resolution must not run")
@@ -219,17 +226,58 @@ async def test_resolve_ghcr_pull_credentials_uses_complete_env_pair(
         "pull-token",
     )
 
-async def test_resolve_ghcr_pull_credentials_never_converts_source_pat(
+async def test_resolve_ghcr_pull_credentials_derives_from_the_github_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # MoonLadderStudios/MoonMind#4012: a source PAT must never become pull
-    # credentials, with or without an explicit registry identity elsewhere.
+    # Reverses #4012's removal by operator choice: with nothing registry-
+    # specific configured, the deployment's own GitHub credential authenticates
+    # ghcr.io rather than downgrading to an anonymous pull a private package
+    # will deny.
+    _clear_ghcr_deployment_env(monkeypatch)
+    _stub_empty_ghcr_store(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token")
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "_resolve_github_login_for_token",
+        _login("octocat"),
+    )
+
+    assert await resolve_ghcr_pull_credentials_for_launch() == (
+        "octocat",
+        "github-token",
+    )
+
+
+async def test_github_derivation_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An operator who wants #4012's strict separation keeps it with one setting.
     _clear_ghcr_deployment_env(monkeypatch)
     _stub_empty_ghcr_store(monkeypatch)
     _forbid_source_token_resolution(monkeypatch)
     monkeypatch.setenv("GITHUB_TOKEN", "github-token")
+    monkeypatch.setenv("MOONMIND_GHCR_PULL_FROM_GITHUB_TOKEN_ENABLED", "false")
 
     assert await resolve_ghcr_pull_credentials_for_launch() is None
+
+
+async def test_github_derivation_survives_a_failed_username_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # GHCR authenticates by token and ignores the username, so a /user outage
+    # must not sink the pull.
+    _clear_ghcr_deployment_env(monkeypatch)
+    _stub_empty_ghcr_store(monkeypatch)
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token")
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "_resolve_github_login_for_token",
+        _login(None),
+    )
+
+    user, token = await resolve_ghcr_pull_credentials_for_launch()
+    assert token == "github-token"
+    assert user
 
 
 async def test_resolve_ghcr_pull_credentials_ignores_launch_environment_plaintext(
@@ -242,6 +290,9 @@ async def test_resolve_ghcr_pull_credentials_ignores_launch_environment_plaintex
 
     _clear_ghcr_deployment_env(monkeypatch)
     _stub_empty_ghcr_store(monkeypatch)
+    # Derivation is a separate concern; this asserts only that the resolver
+    # accepts no agent-supplied mapping.
+    monkeypatch.setenv("MOONMIND_GHCR_PULL_FROM_GITHUB_TOKEN_ENABLED", "false")
     _forbid_source_token_resolution(monkeypatch)
 
     assert list(
@@ -312,11 +363,11 @@ async def test_resolve_ghcr_pull_credentials_requires_complete_secret_ref_pair(
 async def test_resolve_ghcr_pull_credentials_public_anonymous_returns_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Omitted configuration is the public-anonymous path: no credentials, no
-    # source lookup, no username probing.
+    # With no registry configuration and no deployment GitHub token, there is
+    # nothing to present: the public-anonymous path still exists.
     _clear_ghcr_deployment_env(monkeypatch)
     _stub_empty_ghcr_store(monkeypatch)
-    _forbid_source_token_resolution(monkeypatch)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
     assert await resolve_ghcr_pull_credentials_for_launch() is None
 

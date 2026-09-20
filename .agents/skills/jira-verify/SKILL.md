@@ -53,8 +53,12 @@ defaults:
 
 Read the portable acceptance policy from the resolved `moonspec-verify` bundle
 before assessing, verifying, or completing work. Resolve it at
-`$MOONMIND_ACTIVE_SKILLS_DIR/moonspec-verify/references/acceptance-policy.md`;
-outside MoonMind use `.agents/skills/moonspec-verify/references/acceptance-policy.md`.
+`$MOONMIND_ACTIVE_SKILLS_DIR/moonspec-verify/references/acceptance-policy.md`
+inside MoonMind; outside MoonMind resolve it from the installed skills directory
+(the directory containing this `SKILL.md`, sibling
+`moonspec-verify/references/acceptance-policy.md`) without requiring
+MoonMind-only environment variables. A checked-in `.agents/skills` directory
+must never shadow the selected snapshot.
 It owns scope, mandatory versus optional evidence, reuse, and completion rules.
 Preserve the original scope and previously met requirements as regression constraints;
 prior reports are context, not current proof. Candidate success alone cannot close
@@ -162,6 +166,16 @@ Never print raw environment variables. Use targeted checks such as `test -n "$MO
     - Include only the planned status update when `update status` is true: the transition ID/name selected in step 6 (or already-done/blocked/skipped), described explicitly as planned/pending execution after this comment posts. Do not claim `transitioned` or `failed` here; the confirmed transition result is recorded only after step 9 executes, in the ledger and outputs (with a separate follow-up Jira comment only when operator context explicitly requests one).
    - Do not paste long private Jira text, raw command dumps, credentials, auth headers, cookies, or full environment/config dumps.
 
+   Suggested follow-up comment shape (posted after the step 9 transition attempt, when operator context explicitly requests a separate outcome comment):
+
+```markdown
+Status update for `<ISSUE>`: **<already done | transitioned | skipped | blocked | failed>**
+
+Verification: `<PASS|PARTIAL|FAIL|BLOCKED>` on `<branch>` at `<short-sha>`
+Transition: `<selected transition ID/name, or reason no transition was attempted>`
+Detail: `<sanitized outcome, e.g. transition receipt, already-done status, or blocker>`
+```
+
 Suggested comment shape (branch mode):
 
 ```markdown
@@ -210,7 +224,7 @@ Status update (planned, pending execution after this comment):
 - <omitted when `update status` is false; otherwise already done / planned transition ID-name / skipped / blocked>
 ```
 
-8. Scan and post to Jira.
+8. Scan and post to Jira (executed as part of step 6, before any status transition; the step 9 follow-up comment reuses the same scan and post path).
    - Before posting, scan the outgoing comment for secret-like patterns such as `ghp_`, `github_pat_`, `ATATT`, `AIza`, `AKIA`, private key blocks, `token=`, `password=`, and `Authorization:`.
    - If any secret-like content appears, do not post. Redact and re-scan.
    - Post through the bundled helper or the trusted Jira tool directly; see

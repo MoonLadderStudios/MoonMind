@@ -453,10 +453,10 @@ requirements:
     - "docker_admin"
 policies:
   timeouts:
-    start_to_close_seconds: 900
-    schedule_to_close_seconds: 1800
+    start_to_close_seconds: 1200
+    schedule_to_close_seconds: 8400
   retries:
-    max_attempts: 1
+    max_attempts: 7
     non_retryable_error_codes:
       - "INVALID_INPUT"
       - "PERMISSION_DENIED"
@@ -602,8 +602,6 @@ The backend validates:
 
 The workflow acquires a lock for the stack.
 
-If another update is running, the request fails with `DEPLOYMENT_LOCKED` or remains queued according to policy.
-
 The default deployment-control worker uses an atomic file lock under the
 allowlisted deployment-state mount, for example:
 
@@ -613,6 +611,18 @@ allowlisted deployment-state mount, for example:
 
 This lock is shared by worker processes that mount the same deployment-state
 directory and is released when the update lifecycle exits.
+
+The same lock is also held by owners that are not updates: the availability
+supervisor sweeps on a short cycle in every deployment worker, and the
+maintenance pass reconciles retained release jobs. Those holds are bounded, so
+an update waits for the lock rather than treating routine observation as a
+deployment that is already running. The wait is bounded by
+`DEPLOYMENT_UPDATE_LOCK_WAIT_SECONDS`, which outlasts the longest bounded
+background hold; only when that budget is spent does the request fail with
+`DEPLOYMENT_LOCKED`.
+
+Background sweeps take the same lock without a wait, so they always yield to a
+running update instead of queueing behind one.
 
 ## 10.3 Capture before state
 
@@ -799,7 +809,13 @@ job. It is configured with:
 - `MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE` for the audit sidecar
 - `MOONMIND_DEPLOYMENT_LOCK_DIR` for durable per-stack lock files
 - `MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES` for explicit specialized maintenance;
-  a coherent release rejects exclusion of the deployment-control worker
+  a coherent release rejects exclusion of the deployment-control worker.
+  Release-owned substrate excluded from the main stage (for example the
+  docker transport proxy or stateful database services) is still reconciled
+  and verified in a staged pass after the main stack verifies: converged
+  substrate is left running, drifted substrate is pulled, recreated, and
+  re-verified, and substrate that does not converge fails the release
+  instead of reporting success on previous definitions.
 
 On Windows Docker Desktop, the Linux worker resolves Compose files through its
 local checkout mount and maps checkout bind sources into the daemon's
@@ -818,6 +834,21 @@ under the deployment-owned `release-jobs` directory. Kernel locks serialize
 stack changes and job ownership; PID age cannot transfer authority across
 container namespaces. The updater has a two-hour cumulative deadline and at
 most three attempts, preserved across restarts.
+
+Promotion recreates every worker fleet, including the one running the Activity
+that submitted the release, so the updater routinely outlives its own
+supervisor. The supervising Activity is therefore budgeted from the same
+two-hour deadline rather than from a single attempt: its schedule-to-close
+covers the whole job budget, and each start-to-close window only bounds how
+long a replaced supervisor goes unnoticed while still outlasting one runner
+command plus the pre-launch work around it, so a pull that uses its whole
+timeout is supervised rather than cancelled. That deadline is anchored to the
+instant the Activity was scheduled, so neither queue delay nor pre-launch work
+starts the budget late enough to outlive the supervisor. A supervision
+timeout re-attaches
+to the running job by its durable identity and never launches a second
+updater; the job's own deadline, never the supervisor's, decides when a
+release stops. Terminal release failures remain terminal and are not retried.
 
 Candidate workers first register all workflow and Activity queues. A stable,
 pinned canary verifies their image identity through each queue. The controller
@@ -839,13 +870,32 @@ the handoff. A live route is never displaced whatever image backs it, so
 deliberate moves of a serving route stay on the managed update path.
 
 Before promotion, the controller retains pollers from the exact previous image.
+Those pollers attest deployment-owned singleton infrastructure before they
+report ready, so the controller first repairs an unhealthy or absent
+restricted-egress gateway from the previous release's own definition; a
+gateway broken out of band must not make the deployment un-updatable. A
+recreate that does not take is retried within that repair window, each attempt
+keeping a cooldown to converge on its own, so a gateway needing more than one
+recreate is repaired inside the current release attempt instead of failing
+retention and waiting for the job to retry the whole update. When
+retention still does not converge, the recorded failure names the fleet, the
+observed gateway health and the retained container's redacted log tail, and
+the bound that keeps that record small preserves both ends of the diagnosis
+so the exception line naming the cause survives to every operator surface.
 Pinned work remains owned by that version after normal Compose services change.
 The existing maintenance schedule retires those temporary pollers only when
 Temporal reports the version drained. Inactive private candidates require a
 terminal release owner, closed canary and server-confirmed inactive status.
 Unknown drainage or ownership keeps the cohort. Candidate pollers may retire
-after the normal fleet verifies the same image. These containers exist only for
-bounded release work and drainage; they add no idle deployment service.
+after the normal fleet verifies the same image. A promoted candidate never
+enters drainage or inactive status, so that verification is the only evidence
+that can release its cohort; maintenance accepts either the primary receipt or
+the attempt receipt of a release whose deployment completed before a later step
+failed, and requires the owner match and the installed-fleet proof in both
+cases. Requiring only the primary receipt kept such a cohort polling the
+deployment task queues indefinitely alongside the installed fleet. These
+containers exist only for bounded release work and drainage; they add no idle
+deployment service.
 
 The primary result is persisted before auxiliary cleanup. Failed cleanup records
 its pending owner for `release.reconcile` without replacing verified deployment
@@ -987,8 +1037,11 @@ through the operator URL. The preflight never infers ingress authorization or
 prints rendered environment/inspect payloads, including OIDC credentials.
 
 The host scripts require Python 3.10+ and Docker Compose V2, validated before
-deployment changes. Fetching a branch selects its published source-SHA image
-without changing the checkout. Failed qualification preserves current routing
+deployment changes. Fetching a branch selects the newest published source-SHA
+image on that branch's first-parent history (up to 20 commits) without changing
+the checkout. The fetched tip is preferred: when its publish workflow has not
+finished yet the scripts wait a bounded interval for that exact commit, then
+fall back to its newest published ancestor with a recorded notice. Failed qualification preserves current routing
 and normal services. Explicit specialized maintenance skips the API check only
 when its dependency closure and orphan removal cannot affect the API.
 
@@ -1012,10 +1065,20 @@ and verifies those same origins again before recording release success. The port
 updater accepts repeatable `--operator-url <existing-origin>` declarations, recorded
 as `deployment_operator_urls` in the immutable submission context. These supply
 verification targets without changing API authentication or published bindings.
-A configured `MOONMIND_PUBLIC_BASE_URL` remains a required target. Otherwise, fixed published
-API bindings supply the origins; omitted and explicitly empty public URL values
-use this same path when no operator origins were declared. Wildcard bindings require a declared operator origin because
-an unspecified address cannot identify the client's route. Missing targets or an
+A configured `MOONMIND_PUBLIC_BASE_URL` remains a required target. For
+`AUTH_PROVIDER=header`, verification must use the trusted ingress origin, supplied by
+that public URL or `--operator-url`. Published API bindings bypass the proxy, and the
+trusted-proxy peer allowlist does not identify its public scheme, host, and port. If
+neither origin is supplied, preflight stops with actionable ingress configuration
+guidance before recording a target or replacing the API; it never substitutes a
+direct API probe or a fabricated identity header.
+For other authentication modes, published API bindings supply the origins when no
+public URL or operator origins were declared; omitted and explicitly empty public URL
+values use the same path. A fixed binding supplies its own address. A wildcard binding
+(`MOONMIND_API_PUBLISH_HOST=0.0.0.0` or `::`) publishes on every host address, so its own
+loopback origin on the published port is the derived target without a declaration,
+`.env` edit, or authentication change. Declare the LAN or VPN address with
+`--operator-url` to verify that route instead. Missing targets or an
 unreachable route leave the existing release in place before replacement; a
 post-replacement failure retains the durable updater and recovery evidence.
 
@@ -1209,7 +1272,7 @@ The system fails fast on:
 - invalid input
 - authorization failure
 - policy violation
-- unavailable deployment lock
+- a deployment lock still unavailable after the bounded wait
 - Compose config validation failure
 - image pull failure
 - service recreation failure
@@ -1223,6 +1286,15 @@ silently rolls back. The caller can reattach using the recorded submission ID;
 scheduled maintenance can resume a stopped owned updater. Exhaustion preserves
 receipts and retained worker ownership and reports the exact failure. A new
 release is a distinct audited operation.
+
+Every attempt's error is retained in `last-error.json` under `attempts`, and
+the terminal receipt names the failure that started the release alongside the
+final one. A later attempt that fails for an unrelated reason therefore cannot
+erase the cause from the receipt, the Temporal failure or the operator's
+incident reconstruction. A job already running when that history was
+introduced carries only the record's top-level `attempt` and `error`; its next
+attempt seeds the history from them, so the update that adds the history does
+not erase the failure the history exists to preserve.
 
 ## 15.3 Rollback behavior
 
