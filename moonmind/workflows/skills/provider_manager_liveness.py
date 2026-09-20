@@ -349,7 +349,7 @@ class WorkflowTaskFailureTail:
 
 
 def scan_workflow_task_failure_tail(events: Iterable[Any]) -> WorkflowTaskFailureTail:
-    """Count the trailing failed-workflow-task run in history order.
+    """Count the unbroken tail of failed workflow tasks, in history order.
 
     ``events`` is the history tail in forward order. Events that always sit
     between two workflow tasks are skipped; the scan stops at the first
