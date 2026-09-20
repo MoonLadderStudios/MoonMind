@@ -1,9 +1,12 @@
 # Plan A cutover report (temporary rollout handoff)
 
 Removal of the custom CPU pool and automatic machine-resource admission.
-Primary PR only: the obsolete `machine_capacity_reservations` table drop is
-deferred until after the deployment cutover (forward migration, post rollback
-window; revision `372_machine_reservations` stays in history).
+Repository implementation: the obsolete `machine_capacity_reservations`
+table drop is authored as forward migration `386_drop_machine_capacity_4459`
+(MoonLadderStudios/MoonMind#4459; revision `372_machine_reservations` stays
+in history). Applying that migration to a deployment still waits for the
+existing release process after the release owner's rollback/consumer
+disposition — this report does not authorize production data deletion.
 
 ## Retired aggregate settings (remove from deployment configuration)
 
@@ -48,7 +51,11 @@ counts, so a full host count never blocks an agent's own test job.
 3. Production cutover: pause dispatch, drain or preserve affected executions,
    deploy API + worker builds, let bootstrap advance eligible inactive bindings
    to fixed successors, resume dispatch.
-4. Post-cutover: drop the obsolete table in a forward migration.
+4. Post-cutover: apply forward migration `386_drop_machine_capacity_4459`
+   to drop the obsolete table, once the release owner confirms the
+   rollback/consumer disposition. The downgrade recreates only the empty
+   schema — dropped rows are not restored, so rollback needing that data
+   must restore a pre-upgrade backup.
 
 ## Verification that could not run in this environment
 

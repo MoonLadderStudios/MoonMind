@@ -764,7 +764,14 @@ The retired aggregate settings (`MOONMIND_MACHINE_*`,
 `MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB`) are ignored when still
 exported and must be removed — never reinterpreted as per-container limits.
 The `machine_capacity_reservations` table is no longer read or written at
-runtime; it is dropped in a forward migration after the rollback window. Fixed
+runtime; forward migration `386_drop_machine_capacity_4459`
+(MoonLadderStudios/MoonMind#4459) drops it with its table-owned indexes
+after the rollback window, and current ORM metadata omits it. The
+downgrade recreates only the empty schema — dropped rows are not
+restored, so old-code rollback that needs that data must restore a
+pre-upgrade backup. Applying the drop to a deployment follows the
+existing release process after the release owner's rollback/consumer
+disposition, not the migration landing alone. Fixed
 limits and concurrency reduce exposure but do not guarantee that every
 deployment configuration fits its host: size the host count, the job count,
 and the per-container limits so the configured concurrency fits its host.
