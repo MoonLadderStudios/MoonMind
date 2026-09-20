@@ -2874,13 +2874,22 @@ async def test_update_reconciles_and_verifies_drifted_substrate_before_completio
     result = await executor.execute(_inputs())
 
     assert result.status == "COMPLETED"
-    kinds = [command[0] for command in runner.commands]
-    assert kinds[:2] == ["pull", "up"]
-    main_up = runner.commands[1][1]
+    # The egress gateway is aligned between the main pull and the main up, so
+    # select the staged substrate commands by content rather than position.
+    ups = [command[1] for command in runner.commands if command[0] == "up"]
+    main_up = next(
+        command for command in ups if "sandbox-egress-proxy" not in tuple(command)
+    )
     assert "postgres" not in main_up
     assert "docker-proxy" not in main_up
-    substrate_pull = runner.commands[2][1]
-    substrate_up = runner.commands[3][1]
+    substrate_pull = next(
+        command[1]
+        for command in runner.commands
+        if command[0] == "pull" and "postgres" in tuple(command[1])
+    )
+    substrate_up = next(
+        command for command in ups if "postgres" in tuple(command)
+    )
     assert tuple(substrate_pull[-1:]) == ("postgres",)
     assert "--no-deps" in substrate_up
     assert "postgres" in substrate_up
@@ -2911,7 +2920,18 @@ async def test_update_skips_substrate_stage_when_already_converged(monkeypatch) 
     result = await executor.execute(_inputs())
 
     assert result.status == "COMPLETED"
-    assert [command[0] for command in runner.commands] == ["pull", "up"]
+    # Converged substrate still runs no staged pass. The egress gateway is
+    # aligned unconditionally before the main up; Compose leaves it alone when
+    # it already matches the incoming configuration.
+    assert [command[0] for command in runner.commands] == [
+        "pull",
+        "pull",
+        "up",
+        "up",
+    ]
+    gateway_up, main_up = (command[1] for command in runner.commands if command[0] == "up")
+    assert "sandbox-egress-proxy" in tuple(gateway_up)
+    assert "sandbox-egress-proxy" not in tuple(main_up)
     assert "runner:capture:substrate" not in events
 
 
@@ -2982,11 +3002,7 @@ class EgressGatewayRunner(RecordingRunner):
 
     async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
         self.events.append(f"runner:capture:{phase}")
-        egress = (
-            "tecnativa/docker-socket-proxy:0.1.1"
-            if self.aligned
-            else "tecnativa/docker-socket-proxy:0.0.9"
-        )
+        egress = "tecnativa/docker-socket-proxy:0.1.1"
         return {
             "stack": stack,
             "phase": phase,
@@ -3002,7 +3018,7 @@ class EgressGatewayRunner(RecordingRunner):
 
 
 @pytest.mark.asyncio
-async def test_drifted_egress_gateway_is_aligned_before_workers_are_recreated(
+async def test_egress_gateway_is_aligned_before_workers_are_recreated(
     monkeypatch,
 ) -> None:
     """Workers attest the gateway at startup, so it cannot lag their recreation.
@@ -3011,6 +3027,11 @@ async def test_drifted_egress_gateway_is_aligned_before_workers_are_recreated(
     stale gateway fails their startup attestation, which fails `up --wait`
     before the staged substrate pass -- gated on the main stack verifying --
     could ever repair it.
+
+    The alignment is unconditional: the pre-update snapshot renders the
+    installed image, so a gateway on the old release reads as converged even
+    though it must move. Compose compares against the incoming configuration
+    and leaves a converged service alone.
     """
     monkeypatch.setenv("HOSTNAME", "deploy123")
     events: list[str] = []

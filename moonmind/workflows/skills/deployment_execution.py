@@ -1931,6 +1931,14 @@ class DeploymentUpdateExecutor:
         this by aligning the candidate gateway before starting candidate
         workers; recreate-in-place needs the same ordering.
 
+        Convergence is not decided here. ``before_state`` renders the
+        *installed* image, so a gateway correctly running the old release
+        reads as converged and would be skipped -- and the gateway is itself
+        parameterized by the release image, so it does need to move. Compose
+        already performs that comparison against the incoming configuration
+        and leaves a converged service untouched, so this issues the pull and
+        up unconditionally and lets Compose decide whether to recreate.
+
         Only the egress gateway moves here. The controller's own transport
         (docker-proxy) and stateful substrate stay with the staged pass so
         the updater never recreates its own transport mid-update.
@@ -1947,25 +1955,7 @@ class DeploymentUpdateExecutor:
         )
         if not targets:
             return None
-        configured_images = before_state.get("configuredServiceImages")
-        expected_images = (
-            configured_images if isinstance(configured_images, Mapping) else {}
-        )
-        pending = _substrate_service_mismatches(
-            state=before_state,
-            targets=targets,
-            expected_images=expected_images,
-        )
-        pending_services = [str(item["service"]) for item in pending]
-        report: dict[str, Any] = {
-            "targets": list(targets),
-            "pendingBefore": list(pending_services),
-            "reconciled": [],
-            "remaining": [],
-        }
-        if not pending_services:
-            command_log["attestedSubstrate"] = report
-            return report
+        report: dict[str, Any] = {"targets": list(targets)}
         _add_progress(
             progress_events,
             "ALIGNING_EGRESS_GATEWAY",
@@ -1977,7 +1967,7 @@ class DeploymentUpdateExecutor:
             wait=bool(parsed["wait"]),
             runner_mode=command_plan.runner_mode,
         )
-        pull_command = (*gateway_plan.pull_args, *pending_services)
+        pull_command = (*gateway_plan.pull_args, *targets)
         pull_result = await self.runner.pull(
             stack=stack, command=pull_command, requested_image=execution_image
         )
@@ -1988,7 +1978,7 @@ class DeploymentUpdateExecutor:
             else pull_result,
         }
         _ensure_command_succeeded("egress-gateway-pull", pull_result)
-        up_command = (*gateway_plan.up_args, "--no-deps", *pending_services)
+        up_command = (*gateway_plan.up_args, "--no-deps", *targets)
         up_result = await self.runner.up(
             stack=stack, command=up_command, requested_image=execution_image
         )
@@ -1996,31 +1986,10 @@ class DeploymentUpdateExecutor:
             "command": list(up_command),
             "result": dict(up_result) if isinstance(up_result, Mapping) else up_result,
         }
+        # A gateway that cannot come up on the incoming release must fail the
+        # update here, not after workers fail an attestation against it.
         _ensure_command_succeeded("egress-gateway-up", up_result)
-        gateway_state = await self.runner.capture_state(
-            stack=stack, phase="egress-gateway"
-        )
-        remaining = _substrate_service_mismatches(
-            state=gateway_state,
-            targets=tuple(pending_services),
-            expected_images=expected_images,
-        )
-        remaining_services = {str(item["service"]) for item in remaining}
-        report["reconciled"] = [
-            service for service in pending_services if service not in remaining_services
-        ]
-        report["remaining"] = remaining
         command_log["attestedSubstrate"] = report
-        if remaining:
-            raise ToolFailure(
-                error_code="DEPLOYMENT_EGRESS_GATEWAY_UNALIGNED",
-                message=(
-                    "The restricted-egress gateway did not converge to the "
-                    "selected release before worker recreation."
-                ),
-                retryable=False,
-                details={"failureClass": "egress_gateway_unaligned", "remaining": remaining},
-            )
         return report
 
     async def execute(
