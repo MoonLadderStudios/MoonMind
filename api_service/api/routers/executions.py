@@ -323,6 +323,7 @@ from moonmind.workflows.executions.execution_contract import (
     reject_workflow_capability_identity_versions,
     resolve_publish_mode_for_skill,
     strip_absent_vector_fields,
+    validate_publish_mode_repository_authority,
 )
 from moonmind.workflows.executions.repository_contract import (
     RepositoryContractError,
@@ -11289,6 +11290,13 @@ async def _create_execution_from_workflow_request(
         skill_publish_metadata=publish_metadata,
         skill_side_effect_metadata=side_effect_metadata,
     )
+    try:
+        validate_publish_mode_repository_authority(
+            publish_mode=publish_payload.get("mode"),
+            steps=normalized_steps,
+        )
+    except WorkflowContractError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
     _validate_repository_submission_compatibility(
         repository_payload=repository_payload,
         task_payload=task_payload,

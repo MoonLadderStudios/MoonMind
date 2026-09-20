@@ -17,6 +17,7 @@ from moonmind.workflows.executions.execution_contract import (
     reject_workflow_capability_identity_versions,
     resolve_publish_mode_for_skill,
     strip_workflow_capability_identity_versions,
+    validate_publish_mode_repository_authority,
     WorkflowContractError,
     WorkflowExecutionSpec,
     WorkflowRecoveryProvenance,
@@ -2592,3 +2593,55 @@ def test_edge_case_repository_branch_is_preserved_without_workflow_git() -> None
     )
     assert result["repository"]["branch"] == {"name": "main"}
     assert "git" not in result["workflow"]
+
+
+def test_read_only_plan_rejects_managed_repository_publish_modes() -> None:
+    """A plan that declares no repository mutation cannot publish a branch or PR.
+
+    Contract source: docs/Workflows/WorkflowPublishing.md PUBLISH-004.
+    """
+
+    read_only_steps = [
+        {
+            "id": "tpl:pr-review-resolve:01",
+            "title": "Resolve target pull request",
+            "repositoryOperation": "read",
+        }
+    ]
+    for mode in ("branch", "pr"):
+        with pytest.raises(WorkflowContractError, match="repositoryOperation"):
+            validate_publish_mode_repository_authority(
+                publish_mode=mode,
+                steps=read_only_steps,
+            )
+
+
+def test_read_only_plan_allows_non_publishing_modes() -> None:
+    read_only_steps = [{"id": "step-1", "repositoryOperation": "read"}]
+    for mode in ("none", "auto", None, ""):
+        validate_publish_mode_repository_authority(
+            publish_mode=mode,
+            steps=read_only_steps,
+        )
+
+
+def test_publish_mode_repository_authority_accepts_write_or_undeclared_step() -> None:
+    """One mutating or undeclared step keeps the workflow's publication intent."""
+
+    validate_publish_mode_repository_authority(
+        publish_mode="pr",
+        steps=[
+            {"id": "step-1", "repositoryOperation": "read"},
+            {"id": "step-2", "repositoryOperation": "write"},
+        ],
+    )
+    validate_publish_mode_repository_authority(
+        publish_mode="branch",
+        steps=[
+            {"id": "step-1", "repositoryOperation": "read"},
+            {"id": "step-2"},
+        ],
+    )
+    # A single-task workflow authors no steps and keeps its publish selection.
+    validate_publish_mode_repository_authority(publish_mode="branch", steps=[])
+    validate_publish_mode_repository_authority(publish_mode="branch", steps=None)
