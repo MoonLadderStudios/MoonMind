@@ -15,6 +15,7 @@ from temporalio.api.workflowservice.v1 import (
     SetWorkerDeploymentCurrentVersionRequest,
 )
 from temporalio.common import PinnedVersioningOverride, WorkerDeploymentVersion
+from temporalio.exceptions import TemporalError
 from temporalio.service import RPCError, RPCStatusCode
 
 logger = logging.getLogger(__name__)
@@ -605,7 +606,21 @@ async def reconcile_parked_routing(client, spec, readiness_metadata=None):
         await _routing_sleep(_PARKED_RECONCILE_POLL_SECONDS)
         try:
             result = await bootstrap_version_routing(client, spec)
-        except (RPCError, RuntimeError, ValueError) as exc:
+        except asyncio.CancelledError:
+            raise
+        except (
+            TemporalError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            asyncio.TimeoutError,
+        ) as exc:
+            # A pinned canary that times out or fails raises
+            # WorkflowFailureError, which shares only TemporalError with
+            # RPCError; catching RPCError alone let the first such failure
+            # kill this task while readiness stayed true and nothing else
+            # retried. Each of these is a bounded recoverable attempt until
+            # the deadline.
             logger.info("Parked release routing retry did not converge: %s", exc)
             continue
         if result.get("status") != "awaiting_promotion":

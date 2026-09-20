@@ -90,17 +90,33 @@ async def retire_legacy_cohort(directory, owner, kind):
         await docker("rm", name)
 
 
-async def retire_legacy_cohorts(directory, runner, owner, pending):
-    """Retire this job's legacy cohorts once the installed fleet serves alone.
+def _legacy_cohort_version(directory, kind, deployment):
+    """The Temporal deployment version a legacy cohort served."""
+    if kind == "candidate":
+        routing = json.loads((directory / "routing.json").read_text())
+        return f"{routing.get('deployment') or deployment}.{routing['candidate']}"
+    return json.loads((directory / "retained.json").read_text())["version"]
 
-    Temporal can still route to an unfinished blue/green job's cohort -- after
-    promotion but before the installed fleet converged -- so the marker's
-    presence is not evidence the cohort is idle. Removing it then would delete
-    the only live pollers and the only recoverable release. Retire only after
-    the installed fleet is observed uniquely serving the running release, which
-    makes any surviving cohort redundant whichever version routing names.
+
+async def retire_legacy_cohorts(directory, runner, client, owner, pending):
+    """Retire this job's legacy cohorts once nothing can still be routed to them.
+
+    Installed-fleet readiness alone is not sufficient. A retained cohort can
+    still be the current route, or still serve pinned in-flight executions,
+    while every newly installed container is ready -- stopping it then removes
+    the only old-version pollers. Two independent proofs are required: the
+    installed fleet is uniquely serving the running release, and Temporal
+    agrees the cohort's own version is finished, either because it has drained
+    or because it is the current version that the installed fleet now serves.
     """
+    import os
+
     from moonmind.release_identity import installed_release
+    from moonmind.workflows.temporal.release_routing import (
+        current_version,
+        routing_snapshot,
+        version_drained,
+    )
 
     kinds = [
         kind
@@ -117,18 +133,29 @@ async def retire_legacy_cohorts(directory, runner, owner, pending):
     if not await installed_fleet_is_serving(runner, release["digest"]):
         pending.extend(f"{kind}_awaiting_installed_fleet" for kind in kinds)
         return []
+    deployment = (
+        os.environ.get("TEMPORAL_WORKER_DEPLOYMENT_NAME") or "moonmind-workflow-fleet"
+    )
+    current = current_version(await routing_snapshot(client, deployment))
     retired = []
     for kind in kinds:
+        version = _legacy_cohort_version(directory, kind, deployment)
+        # Unknown drainage never releases authority: only Temporal's terminal
+        # evidence, or the installed fleet already holding that same route,
+        # permits removal.
+        if version != current and not await version_drained(client, version):
+            pending.append(f"{kind}_awaiting_drainage")
+            continue
         await retire_legacy_cohort(directory, owner, kind)
         write_record(
             directory / f"{kind}-retired.json",
-            {"owner": owner, "status": "verified_removed"},
+            {"owner": owner, "status": "verified_removed", "version": version},
         )
         retired.append(kind)
     return retired
 
 
-async def reconcile_availability_owner(directory, runner):
+async def reconcile_availability_owner(directory, runner, client):
     """Retire a cohort the deleted availability supervisor left behind.
 
     That supervisor wrote its own ``release-jobs/<version>/`` directory with a
@@ -141,12 +168,14 @@ async def reconcile_availability_owner(directory, runner):
     retained = json.loads((directory / "retained.json").read_text())
     result = {"job": directory.name, "resumed": False, "retired": [], "pending": []}
     result["retired"].extend(
-        await retire_legacy_cohorts(directory, runner, retained["owner"], result["pending"])
+        await retire_legacy_cohorts(
+            directory, runner, client, retained["owner"], result["pending"]
+        )
     )
     return result
 
 
-async def reconcile_release(directory, runner):
+async def reconcile_release(directory, runner, client):
     """Resume an unfinished release updater and retire its leftovers.
 
     Recreate-in-place has no routing to reconcile: the installed fleet is the
@@ -160,7 +189,18 @@ async def reconcile_release(directory, runner):
     observed = await inspect_owned(updater, owner)
     if observed and observed["Image"] != request["imageId"]:
         raise ValueError("Release updater image differs from its durable owner")
-    if not (directory / "result.json").exists():
+    # A job authored before recreate-in-place is identified by the blue/green
+    # records only that controller wrote. Relaunching it would run the deleted
+    # ReleaseCohort algorithm from its own pinned image: it could recreate a
+    # candidate or retained cohort beside the installed fleet and promote its
+    # older digest over the release that is now installed. Such a job is never
+    # resumed; it is retired below and its budget is reported as closed.
+    legacy = any(
+        (directory / marker).exists() for marker in ("routing.json", "retained.json")
+    )
+    if legacy and not (directory / "result.json").exists():
+        result["pending"].append("legacy_release_not_resumable")
+    if not legacy and not (directory / "result.json").exists():
         if observed and observed["State"]["Running"]:
             result["pending"].append("running")
             return result
@@ -181,7 +221,9 @@ async def reconcile_release(directory, runner):
         result["pending"].append("execution_budget_exhausted")
 
     result["retired"].extend(
-        await retire_legacy_cohorts(directory, runner, owner, result["pending"])
+        await retire_legacy_cohorts(
+            directory, runner, client, owner, result["pending"]
+        )
     )
 
     if (
@@ -200,7 +242,9 @@ async def reconcile_releases():
     import asyncio
     import fcntl
 
+    from moonmind.config.settings import settings
     from moonmind.utils.logging import redact_sensitive_text
+    from moonmind.workflows.temporal.client import get_temporal_client
     from moonmind.workflows.temporal.worker_runtime import (
         _build_deployment_update_executor,
     )
@@ -217,10 +261,12 @@ async def reconcile_releases():
         executor.runner,
         compose_file=executor.runner.compose_file or "/app/release/docker-compose.yaml",
     )
-    # Recreate-in-place leaves no routing to reconcile, so this pass needs no
-    # Temporal connection. Resuming a stalled release and clearing containers
-    # that block the next update therefore still work while Temporal is down --
-    # which is exactly when an operator needs to repair the deployment.
+    # Retiring a legacy cohort needs Temporal's drainage and current-route
+    # evidence, so this pass still connects. It is dispatched by the
+    # Temporal-managed maintenance workflow in any case.
+    client = await get_temporal_client(
+        settings.temporal.address, settings.temporal.namespace
+    )
     result = {"jobs": [], "errors": []}
     # Visit least-recently reconciled jobs first so retained versions cannot
     # starve later jobs. Each pass and each deployment's execution are bounded.
@@ -256,9 +302,11 @@ async def reconcile_releases():
                     continue
                 try:
                     outcome = (
-                        await reconcile_release(directory, runner)
+                        await reconcile_release(directory, runner, client)
                         if (directory / "request.json").exists()
-                        else await reconcile_availability_owner(directory, runner)
+                        else await reconcile_availability_owner(
+                            directory, runner, client
+                        )
                     )
                     result["jobs"].append(outcome)
                     write_record(directory / "maintenance.json", outcome)
