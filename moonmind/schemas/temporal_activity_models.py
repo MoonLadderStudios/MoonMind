@@ -182,6 +182,7 @@ class ExecutionTerminalStateInput(BaseModel):
     finish_outcome_stage: str | None = Field(None, alias="finishOutcomeStage")
     finish_outcome_reason: str | None = Field(None, alias="finishOutcomeReason")
     finish_summary: dict[str, Any] | None = Field(None, alias="finishSummary")
+    attention_required: bool | None = Field(None, alias="attentionRequired")
     error_category: Literal[
         "user_error",
         "integration_error",

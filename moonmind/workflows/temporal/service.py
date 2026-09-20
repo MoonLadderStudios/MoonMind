@@ -563,6 +563,7 @@ class ExecutionDependencySummary:
     state: str | None
     close_status: str | None
     workflow_type: str | None
+    attention_required: bool = False
 
 class TemporalExecutionService:
     """Canonical execution store for Temporal workflows."""
@@ -1930,6 +1931,10 @@ class TemporalExecutionService:
                     getattr(record, "workflow_type", None),
                     "value",
                     record.workflow_type,
+                ),
+                attention_required=bool(
+                    getattr(record, "attention_required", False)
+                    or (record.memo or {}).get("attention_required")
                 ),
             )
             for record in records
@@ -3881,6 +3886,7 @@ class TemporalExecutionService:
         error_category: str | None = None,
         finish_outcome_code: str | None = None,
         finish_summary: dict[str, Any] | None = None,
+        attention_required: bool | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         normalized_state = canonicalize_workflow_state_alias(
             str(state or "").strip().lower(),
@@ -3931,6 +3937,11 @@ class TemporalExecutionService:
                 self._set_state(record, target_state, close_status=target_close_status)
                 if isinstance(record, TemporalExecutionCanonicalRecord):
                     await self._sync_integration_correlation_record(record)
+            self._preserve_terminal_attention(
+                record,
+                attention_required=attention_required,
+                finish_summary=finish_summary,
+            )
             await self._session.commit()
             await self._session.refresh(record)
             if isinstance(record, TemporalExecutionRecord):
@@ -3945,6 +3956,11 @@ class TemporalExecutionService:
             finish_summary=finish_summary,
         )
         self._attach_terminal_governance_report(record)
+        self._preserve_terminal_attention(
+            record,
+            attention_required=attention_required,
+            finish_summary=finish_summary,
+        )
         if summary:
             if target_state is MoonMindWorkflowState.FAILED:
                 category = str(error_category or "execution_error").strip()
@@ -5633,6 +5649,14 @@ class TemporalExecutionService:
         self, record: TemporalExecutionCanonicalRecord
     ) -> str | None:
         if record.state is MoonMindWorkflowState.COMPLETED:
+            # MoonLadderStudios/MoonMind#4446: a completed-with-attention draft
+            # PR is not successful evidence for dependents. Keep the
+            # disposition distinguishable so the dependency gate stays blocked
+            # instead of releasing the prerequisite.
+            if bool(getattr(record, "attention_required", False)) or bool(
+                (record.memo or {}).get("attention_required")
+            ):
+                return "dependency_attention_required"
             return None
         error_category = str((record.memo or {}).get("error_category") or "").strip()
         if error_category:
@@ -5873,6 +5897,34 @@ class TemporalExecutionService:
         record.awaiting_external = False
         record.waiting_reason = None
         record.attention_required = False
+
+    def _preserve_terminal_attention(
+        self,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
+        *,
+        attention_required: bool | None,
+        finish_summary: dict[str, Any] | None,
+    ) -> None:
+        """Persist the completed-with-attention marker across the terminal boundary.
+
+        MoonLadderStudios/MoonMind#4446: ``_set_state`` clears waiting metadata
+        for every terminal state. A verification-incomplete draft PR completes
+        with ``attention_required`` set on the workflow, so re-apply it here
+        from the explicit activity input (or the durable finish summary) to
+        keep the canonical execution and API projection honest.
+        """
+        wants_attention = bool(attention_required)
+        if not wants_attention and isinstance(finish_summary, dict):
+            for key in ("attentionRequired", "attention_required"):
+                if key in finish_summary:
+                    wants_attention = bool(finish_summary.get(key))
+                    break
+        if not wants_attention:
+            return
+        record.attention_required = True
+        memo = dict(record.memo or {})
+        memo["attention_required"] = True
+        record.memo = memo
 
     def _clean_text(self, value: Any) -> str | None:
         if value is None:

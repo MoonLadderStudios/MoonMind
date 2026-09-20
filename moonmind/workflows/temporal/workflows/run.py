@@ -806,6 +806,20 @@ RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH = (
 RUN_MOONSPEC_ADDITIONAL_WORK_DRAFT_PUBLISH_PATCH = (
     "run-moonspec-additional-work-draft-publish-v1"
 )
+# MoonLadderStudios/MoonMind#4446: version the always-draft environment policy.
+# Histories that already recorded RUN_MOONSPEC_GATE_ENVIRONMENT_DRAFT_PUBLISH_PATCH
+# keep replaying their snapshotted operator policy; only histories that record
+# this new marker draft unconditionally.
+RUN_MOONSPEC_ENVIRONMENT_ALWAYS_DRAFT_PUBLISH_PATCH = (
+    "run-moonspec-environment-always-draft-publish-v1"
+)
+# MoonLadderStudios/MoonMind#4446: version the terminal-outcome change where a
+# preserved draft PR completes (with attention) instead of failing. Retained
+# histories that already passed the authoritative-publish patch keep the
+# recorded failed outcome during replay.
+RUN_MOONSPEC_DRAFT_COMPLETION_OUTCOME_PATCH = (
+    "run-moonspec-draft-publish-completion-v1"
+)
 RUN_WORKFLOW_GATE_TERMINAL_HANDOFF_PATCH = "run-workflow-gate-terminal-handoff-v1"
 RUN_MOONSPEC_DRAFT_PUBLISH_RECOVERY_HANDOFF_PATCH = (
     "run-moonspec-draft-publish-recovery-handoff-v1"
@@ -1278,6 +1292,13 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # say which closed turn source a Step Execution launches under.
         self._canonical_turn_lineage_by_step: dict[str, dict[str, Any]] = {}
         self._original_input_payload: dict[str, Any] = {}
+        # MoonLadderStudios/MoonMind#4446: retained snapshot of the operator
+        # policy for environment-blocked verification outcomes. New histories
+        # draft unconditionally behind
+        # RUN_MOONSPEC_ENVIRONMENT_ALWAYS_DRAFT_PUBLISH_PATCH; replayed
+        # histories without that marker keep their snapshotted fail-closed
+        # behavior.
+        self._moonspec_environment_blocked_publish_action_snapshot: str = "fail"
         self._moonspec_draft_publication_reason: Optional[str] = None
         # A valid verifier can stop workflow routing without fabricating a
         # failed execution.  This compact evidence is added to incident output.
@@ -9052,6 +9073,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._publish_context["publicationBlockedBy"] = "moonspec_verify"
         return True
 
+    @staticmethod
+    def _normalize_moonspec_environment_blocked_publish_action(value: Any) -> str:
+        action = str(value or "fail").strip().lower()
+        return action if action in {"fail", "draft_pr"} else "fail"
+
+    def _moonspec_environment_blocked_publish_action(self) -> str:
+        return self._normalize_moonspec_environment_blocked_publish_action(
+            self._moonspec_environment_blocked_publish_action_snapshot
+        )
+
     def _moonspec_gate_qualifies_for_draft_publish(self) -> bool:
         """Environment-class gate outcomes eligible for draft publication.
 
@@ -9093,7 +9124,16 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             environment_blocked_enabled
             and self._moonspec_gate_qualifies_for_draft_publish()
         ):
-            return "draft_pr_on_environment_blocked"
+            # MoonLadderStudios/MoonMind#4446: new histories draft
+            # unconditionally; replayed histories without the new marker keep
+            # their snapshotted operator policy so a retained "fail" snapshot
+            # cannot gain draft-publication commands on replay.
+            if self._patched_or_false_outside_workflow(
+                RUN_MOONSPEC_ENVIRONMENT_ALWAYS_DRAFT_PUBLISH_PATCH
+            ):
+                return "draft_pr_on_environment_blocked"
+            if self._moonspec_environment_blocked_publish_action() == "draft_pr":
+                return "draft_pr_on_environment_blocked"
         return None
 
     def _activate_moonspec_draft_publication(
@@ -10437,6 +10477,17 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         if terminal_state == "succeeded":
             terminal_state = "completed"
 
+        # MoonLadderStudios/MoonMind#4446: a completed-with-attention draft PR
+        # is not successful evidence. A draft PR does not make the incomplete
+        # objective successful, so keep the gate blocked instead of releasing
+        # the dependent workflow.
+        attention_blocked = (
+            terminal_state in {STATE_COMPLETED, STATE_NO_COMMIT}
+            and (signal.failure_category or "") == "dependency_attention_required"
+        )
+        if attention_blocked:
+            terminal_state = STATE_FAILED
+
         is_terminal_failure = terminal_state not in {STATE_COMPLETED, STATE_NO_COMMIT}
         if is_terminal_failure:
             self._get_logger().warning(
@@ -10566,6 +10617,14 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             close_status = str(raw_entry.get("closeStatus") or "").strip() or None
             workflow_type = str(raw_entry.get("workflowType") or "").strip() or None
             message = str(raw_entry.get("summary") or "").strip() or None
+            # MoonLadderStudios/MoonMind#4446: snapshot carries the terminal
+            # attention flag (attentionRequired). A completed prerequisite that
+            # still requires operator review must not satisfy the gate.
+            snapshot_attention = bool(
+                raw_entry.get("attentionRequired")
+                if "attentionRequired" in raw_entry
+                else raw_entry.get("attention_required")
+            )
 
             if (
                 workflow_type
@@ -10585,6 +10644,20 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 continue
 
             if state in {STATE_COMPLETED, STATE_NO_COMMIT}:
+                if snapshot_attention and state == STATE_COMPLETED:
+                    self._record_dependency_outcome(
+                        prerequisite_workflow_id=dependency_id,
+                        terminal_state=STATE_FAILED,
+                        close_status=close_status or CLOSE_STATUS_COMPLETED,
+                        resolved_at=workflow.now().isoformat(),
+                        failure_category="dependency_attention_required",
+                        message=message
+                        or (
+                            f"Prerequisite execution '{dependency_id}' completed "
+                            "with attention required; waiting for successful rerun."
+                        ),
+                    )
+                    continue
                 self._record_dependency_outcome(
                     prerequisite_workflow_id=dependency_id,
                     terminal_state=state,
@@ -11272,6 +11345,12 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             input_payload,
             "initialParameters",
             "initial_parameters",
+        )
+        self._moonspec_environment_blocked_publish_action_snapshot = (
+            self._normalize_moonspec_environment_blocked_publish_action(
+                parameters.get("moonspecEnvironmentBlockedPublishAction")
+                or parameters.get("moonspec_environment_blocked_publish_action")
+            )
         )
         recovery_source = self._mapping_value(
             parameters, "recoverySource", "recovery_source"
@@ -18709,6 +18788,29 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 self._pull_request_url or self._publish_context.get("pullRequestUrl"),
                 max_chars=500,
             )
+            # MoonLadderStudios/MoonMind#4446: the #4442 completion semantic
+            # (preserved draft falls through to success with attention) is
+            # replay-gated. Retained histories without the new marker keep the
+            # recorded failed outcome so replay cannot flip FailWorkflow to
+            # CompleteWorkflow.
+            if not self._patched_or_false_outside_workflow(
+                RUN_MOONSPEC_DRAFT_COMPLETION_OUTCOME_PATCH
+            ):
+                if pull_request_url:
+                    return (
+                        "failed",
+                        "Workflow failed MoonSpec verification; incomplete work was "
+                        f"preserved in draft pull request {pull_request_url}. "
+                        f"{self._moonspec_draft_publication_reason}",
+                        True,
+                    )
+                return (
+                    "failed",
+                    "Workflow failed MoonSpec verification and draft pull request "
+                    "publication did not complete. "
+                    f"{self._moonspec_draft_publication_reason}",
+                    True,
+                )
             if not pull_request_url:
                 return (
                     "failed",
@@ -23602,6 +23704,10 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 merge_automation_summary = self._merge_automation_summary_from_context()
                 if merge_automation_summary:
                     finish_summary["mergeAutomation"] = merge_automation_summary
+            # MoonLadderStudios/MoonMind#4446: persist the terminal attention
+            # flag in the durable finish summary so the completed-with-attention
+            # disposition survives the execution/API projection boundary.
+            finish_summary["attentionRequired"] = bool(self._attention_required)
             if status == "failed":
                 failure_summary = self._finish_summary_failure_summary()
                 if failure_summary:
@@ -23731,6 +23837,11 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                         state=state,
                         closeStatus=close_status,
                         summary=summary,
+                        # MoonLadderStudios/MoonMind#4446: carry the terminal
+                        # attention flag so the canonical execution and API
+                        # projection keep the required-review marker even
+                        # though _set_state clears waiting metadata.
+                        attentionRequired=bool(self._attention_required),
                         finishOutcomeCode=(
                             str(finish_outcome.get("code") or "").strip() or None
                         ),
