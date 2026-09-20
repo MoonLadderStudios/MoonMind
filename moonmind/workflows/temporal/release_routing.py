@@ -286,7 +286,13 @@ async def promote_version(
             ),
             id=execution_id,
             task_queue=task_queue,
-            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+            # A failed canary must not pin this ID forever. REJECT_DUPLICATE
+            # made every later retry reattach to the closed failed run and
+            # re-raise its error, so a transient canary failure left the old
+            # route current with no pollers even after the outage cleared.
+            # FAILED_ONLY still refuses to re-run a successful canary, and
+            # USE_EXISTING still dedupes concurrent stewards.
+            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
             id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
             execution_timeout=timedelta(seconds=max(90, 65 * len(task_queues))),
             versioning_override=PinnedVersioningOverride(
@@ -609,6 +615,11 @@ async def reconcile_parked_routing(client, spec, readiness_metadata=None):
     still-live route keeps parking, so this converges only once the old fleet
     is really gone.
     """
+    # A promotion can move routing and then fail its ordinary-route check.
+    # bootstrap_version_routing reports an already-current target as converged
+    # without repeating that check, so once an attempt has failed this loop
+    # must prove ordinary traffic itself before accepting convergence.
+    verification_owed = False
     while True:
         await _routing_sleep(_PARKED_RECONCILE_POLL_SECONDS)
         try:
@@ -627,8 +638,34 @@ async def reconcile_parked_routing(client, spec, readiness_metadata=None):
             # RPCError. Every one of these is retried rather than ending the
             # only reconciler this deployment has.
             logger.info("Parked release routing retry did not converge: %s", exc)
+            verification_owed = True
             continue
         if result.get("status") != "awaiting_promotion":
+            if verification_owed:
+                target = f"{spec.deployment_id}.{spec.build_id}"
+                try:
+                    await verify_ordinary_route(
+                        client,
+                        version=target,
+                        canary_id=f"mm-steward-reverify-{uuid4().hex}",
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except (
+                    TemporalError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                    asyncio.TimeoutError,
+                ) as exc:
+                    logger.info(
+                        "Release routing reports %s current, but ordinary "
+                        "traffic is not verified yet: %s",
+                        target,
+                        exc,
+                    )
+                    continue
+                verification_owed = False
             if readiness_metadata is not None:
                 readiness_metadata["releaseRouting"] = result
             logger.info(

@@ -885,13 +885,16 @@ execute the removed cohort controller against the installed fleet. Re-running
 `./tools/update-moonmind.sh` starts a fresh audited release, which is simpler
 and cannot resurrect a deleted controller.
 
-Cohorts left by those releases are reported, not retired automatically. They
-reuse the deployment's own Compose project and service labels, so
-`docker compose ps -q <service>` returns more than one id while they exist and
-an update cannot verify the installed fleet; they must be removed with
-`docker rm -f`. Deciding that automatically needs drainage, current-route and
-inactivity proofs whose failure modes are worse than the command they replace:
-each proof can be wrong in a way that stops the last poller for pinned work.
+Cohorts left by those releases are reported, not retired automatically, and
+they are not update blockers. They are `compose run` one-offs and
+`docker compose ps -q <service>` excludes one-offs, so installed-fleet
+verification never counts them. What makes them worth surfacing is that they
+run an older image against this deployment's Temporal task queues, which is
+the mixed-version condition behind MoonLadderStudios/MoonMind#4363.
+
+Nothing removes them automatically. A cohort may still hold the only poller
+for pinned or in-flight work, and the proofs that would establish otherwise --
+drainage, current route, inactivity -- each fail in ways that stop that poller.
 The pass names the containers, scoped to this deployment's Compose project so
 a second deployment on the same host is never implicated, and the operator
 decides.

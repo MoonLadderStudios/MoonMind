@@ -35,12 +35,16 @@ async def observed_legacy_cohorts(project="moonmind"):
     """Names of this deployment's leftover blue/green cohort containers.
 
     Recreate-in-place never creates these. A deployment upgrading across that
-    change can still be carrying some, and they must be removed before an
-    update can succeed. Removing them is an operator action -- `docker rm -f`
-    on the reported names -- not something this pass decides: the containers
-    may still be the only pollers for pinned work, and no proof available here
-    distinguishes that safely. Reporting them makes the blocker obvious
-    instead of silently deleting or silently ignoring it.
+    change can still be carrying some, and they are worth surfacing because
+    they run an older image against the same Temporal task queue -- the
+    mixed-version condition behind MoonLadderStudios/MoonMind#4363.
+
+    They do not block an update. They are `compose run` one-offs, and
+    `docker compose ps -q <service>` excludes one-offs, so installed-fleet
+    verification never counts them. This is reported as retained-work
+    evidence, not as a blocker, and nothing here removes them: a cohort may
+    still hold the only poller for pinned or in-flight work, and no proof
+    available to this pass distinguishes that safely.
 
     Scoped to this deployment's Compose project. One host can run several
     independent MoonMind deployments, and a daemon-wide listing would name
@@ -139,9 +143,11 @@ async def reconcile_releases():
                     result["errors"].append(error)
                     write_record(directory / "maintenance.json", error)
     if result["legacyCohorts"]:
-        logger.warning(
-            "Leftover blue/green cohort containers block deployment updates "
-            "until they are removed: %s",
+        logger.info(
+            "Leftover blue/green cohort containers are still running an older "
+            "image against this deployment's task queues. They do not block "
+            "updates; remove one only when its version is known to hold no "
+            "pinned or in-flight work: %s",
             ", ".join(result["legacyCohorts"]),
         )
     return result
