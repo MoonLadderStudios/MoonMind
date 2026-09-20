@@ -119,3 +119,22 @@ def test_raw_provider_events_redacted_before_persistence() -> None:
     events = [{"text": "call with sk-live-synthetic-4356-abcdef done"}]
     (redacted,) = redact_raw_events(events)
     assert "sk-live-synthetic-4356-abcdef" not in str(redacted)
+
+
+@pytest.mark.asyncio
+async def test_websocket_blank_token_refused_before_store_access() -> None:
+    """An empty WebSocket token is denied at the transport without a store.
+
+    Exercises the real terminal-socket principal boundary
+    (api_service.api.websockets.get_current_user_ws): ``db=None`` proves
+    the refusal happens before any account/revocation store is touched.
+    """
+    from fastapi import HTTPException
+
+    from api_service.api.websockets import get_current_user_ws
+
+    for blank in ("", "   "):
+        with pytest.raises(HTTPException) as exc:
+            await get_current_user_ws(blank, None, None)
+        assert exc.value.status_code == 401
+        assert exc.value.detail == {"code": "auth_required"}
