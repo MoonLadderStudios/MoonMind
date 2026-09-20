@@ -31,13 +31,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import multiprocessing
+import os
 import shutil
 import uuid
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
 import pytest
+from temporalio import activity
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
+from moonmind.config.container_backend_settings import (
+    resolve_container_backend_settings,
+)
+from moonmind.config.settings import settings
 from moonmind.container_job_cli import python_test_submission
 from moonmind.omnigent.host_capacity import evaluate_generic_host_capacity
 from moonmind.schemas.container_job_models import (
@@ -45,10 +55,18 @@ from moonmind.schemas.container_job_models import (
     ContainerJobActivityResult,
     ContainerJobBackendError,
     ContainerJobFailureClass,
+    ContainerJobWorkflowInput,
+)
+from moonmind.workflows.temporal.activity_runtime import (
+    TemporalAgentRuntimeActivities,
 )
 from moonmind.workflows.temporal.container_job_backend import (
+    LABEL_OWNERSHIP,
     DockerContainerJobBackend,
     FilesystemCapacityAdmissionLock,
+)
+from moonmind.workflows.temporal.workflows.container_job import (
+    MoonMindContainerJobWorkflow,
 )
 
 pytestmark = [
@@ -148,7 +166,15 @@ class _FakeDockerDaemon:
             self._record_running()
             return 0, b"", b""
         if command[0] == "inspect":
+            # Containers the daemon never created read as absent (its 404),
+            # so create-path ownership checks behave like production. Known
+            # containers report an empty label set.
+            name = command[-1]
+            if name not in self.states:
+                return 1, b"", f"Error: No such object: {name}".encode()
             return 0, b"{}", b""
+        if command[0] == "create":
+            return 0, command[command.index("--name") + 1].encode(), b""
         return 0, b"", b""
 
     def ps_count(self) -> int:
@@ -243,6 +269,83 @@ async def test_created_waiters_make_forward_progress(tmp_path: Path) -> None:
     assert daemon.max_overlap <= 1
 
 
+def _capacity_lock_worker(lock_root: str, key: str, tag: str, order_path: str) -> None:
+    """Hold the shared capacity lock across a widened race window.
+
+    Top-level so ``spawn``-context worker processes can import it. Each
+    worker builds its own lock instance over the shared root -- the
+    supported cross-worker mount shape -- so serialization relies only on
+    the OS-held flock, never on shared in-process state.
+    """
+
+    import asyncio
+
+    from moonmind.workflows.temporal.container_job_backend import (
+        FilesystemCapacityAdmissionLock,
+    )
+
+    async def _main() -> None:
+        lock = FilesystemCapacityAdmissionLock(lock_root)
+        lease = await lock.acquire(key, wait_seconds=30, poll_seconds=0.01)
+        try:
+            with open(order_path, "a", encoding="utf-8") as handle:
+                handle.write(f"enter-{tag}\n")
+            await asyncio.sleep(0.3)
+            with open(order_path, "a", encoding="utf-8") as handle:
+                handle.write(f"exit-{tag}\n")
+        finally:
+            await lock.release(lease)
+
+    asyncio.run(_main())
+
+
+def _process_context() -> Any:
+    try:
+        return multiprocessing.get_context("fork")
+    except ValueError:  # pragma: no cover - non-POSIX hosts
+        return multiprocessing.get_context("spawn")
+
+
+async def test_capacity_lock_serializes_two_worker_processes(
+    tmp_path: Path,
+) -> None:
+    """R1: two independent worker processes serialize on the shared lock.
+
+    The same-process race below proves enumerate-then-start admission; this
+    test proves the mechanism it relies on across real process boundaries:
+    two separate lock instances in two OS processes sharing one lock root
+    never hold the lock together, so two workers racing for the final slot
+    cannot both observe it free.
+    """
+    lock_root = tmp_path / "capacity-locks"
+    lock_root.mkdir(parents=True, exist_ok=True)
+    order_path = tmp_path / "order.log"
+    order_path.write_text("", encoding="utf-8")
+    ctx = _process_context()
+    processes = [
+        ctx.Process(
+            target=_capacity_lock_worker,
+            args=(str(lock_root), "plan-a-r1-process-race", tag, str(order_path)),
+        )
+        for tag in ("a", "b")
+    ]
+    for process in processes:
+        process.start()
+    try:
+        for process in processes:
+            await asyncio.to_thread(process.join, 30)
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+    assert all(process.exitcode == 0 for process in processes)
+    lines = order_path.read_text(encoding="utf-8").split()
+    assert len(lines) == 4, f"both workers must log enter/exit: {lines}"
+    pairs = {("enter-a", "exit-a"), ("enter-b", "exit-b")}
+    assert (lines[0], lines[1]) in pairs, f"lock overlapped: {lines}"
+    assert (lines[2], lines[3]) in pairs, f"lock overlapped: {lines}"
+
+
 async def test_lost_start_ack_reconciles_without_duplicate_side_effect(
     tmp_path: Path,
 ) -> None:
@@ -290,6 +393,35 @@ async def test_worker_death_releases_capacity_lock_for_next_worker(
         timeout=5,
     )
     await survivor.release(next_lease)
+
+
+async def test_worker_death_before_start_leaves_no_side_effect(
+    tmp_path: Path,
+) -> None:
+    """R2: a worker lost before its start leaves nothing to reconcile.
+
+    The victim holds the shared admission lock and dies before any Docker
+    call (the OS releases the flock with the file description). The next
+    worker admits and starts cleanly: no wedged lock, no phantom container,
+    exactly one side effect.
+    """
+    daemon = _FakeDockerDaemon()
+    survivor, _spare = _backends(tmp_path, daemon, count=2)
+    victim = FilesystemCapacityAdmissionLock(tmp_path / "capacity-locks")
+    lease = await victim.acquire(
+        survivor._capacity_lock_key(), wait_seconds=5, poll_seconds=0.01
+    )
+    # Simulate worker death before the start: close the fd without the
+    # userspace release, as the OS does on process exit.
+    os.close(lease.file_descriptor)
+    assert daemon.states == {}
+
+    request = _request(tmp_path, _job_id())
+    started = await survivor.start_container(request)
+
+    assert started.running is True
+    assert daemon.states == {DockerContainerJobBackend._name(request): "running"}
+    assert daemon.real_starts == 1
 
 
 async def test_container_finishing_between_observation_and_retry(
@@ -415,10 +547,52 @@ async def test_stock_cli_route_reaches_docker_verbatim_without_probe(
     assert daemon.ps_count() == 1, "each start performs one slot enumeration"
 
 
+async def test_stock_create_carries_fixed_limits_verbatim(
+    tmp_path: Path,
+) -> None:
+    """R4: stock 2 CPU / 4 GiB / PID bound reach `docker create` verbatim.
+
+    The hermetic complement to the real-Docker inspect below: the normal
+    CLI-to-container route carries the stock Batch PR Resolver limits to the
+    daemon boundary with no pool probe, no helper, and no cgroup parent.
+    """
+    daemon = _FakeDockerDaemon()
+    (backend,) = _backends(tmp_path, daemon, count=1)
+    request = _request(
+        tmp_path,
+        _job_id(),
+        resources={"cpuMillis": 2000, "memoryMiB": 4096, "pids": 512},
+    )
+    created = await backend.create_container(request)
+
+    assert created.container_ref == DockerContainerJobBackend._name(request)
+    creates = [c for c in daemon.commands if c[0] == "create"]
+    assert len(creates) == 1
+    command = " ".join(creates[0])
+    assert "--cpus 2.0" in command
+    assert "--memory 4096m" in command
+    assert "--pids-limit 512" in command
+    assert "--cgroup-parent" not in command
+    assert "pool" not in command.lower()
+    assert daemon.info_count() == 0, "Plan A performs no machine-budget probe"
+
+
 @pytest.mark.skipif(shutil.which("docker") is None, reason="requires the Docker CLI")
 async def test_real_docker_inspect_shows_stock_fixed_limits(tmp_path: Path) -> None:
     """R4: real-Docker config inspection for the stock limits (CI Docker)."""
     import subprocess
+
+    probing = subprocess.run(
+        ["docker", "info", "--format", "{{.ServerVersion}}"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if probing.returncode != 0:
+        pytest.skip(
+            "requires a reachable Docker daemon: "
+            f"{probing.stderr.strip()[:200]}"
+        )
 
     del tmp_path  # real Docker needs no fixture workspace
     name = f"moonmind-test-plan-a-{uuid.uuid4().hex[:12]}"
@@ -461,3 +635,239 @@ async def test_real_docker_inspect_shows_stock_fixed_limits(tmp_path: Path) -> N
             capture_output=True,
             timeout=120,
         )
+
+
+_DIGEST = "sha256:" + "a" * 64
+_OPERATIONS = (
+    "resolve_workspace",
+    "acquire_image",
+    "reconcile_container",
+    "create_container",
+    "start_container",
+    "observe_container",
+    "stop_container",
+    "publish_evidence",
+    "remove_container",
+    "cleanup",
+    "project_status",
+    "repair_projection",
+)
+
+
+class _PlanAWorkflowDaemon:
+    """Full-lifecycle hermetic daemon with one pre-seeded running holder.
+
+    Unlike the start-path fake above, this daemon answers the whole
+    production lifecycle (workspace/image acquisition, create, start, stop,
+    inspect, logs) so the workflow journey below drives the real registered
+    Activities instead of calling the backend directly. The pre-seeded
+    holder occupies the only slot at limit 1, so the workflow must park in
+    ``WAITING_FOR_CAPACITY`` until it is cancelled.
+    """
+
+    def __init__(self, *, holder_name: str, ownership_token: str) -> None:
+        self.images = {"alpine:3.20"}
+        self.commands: list[tuple[str, ...]] = []
+        self.states: dict[str, str] = {holder_name: "running"}
+        self.created: dict[str, str] = {}
+        self.holder_token = ownership_token
+
+    async def run(self, raw: Any) -> tuple[int, bytes, bytes]:
+        command = tuple(str(item) for item in raw)
+        self.commands.append(command)
+        if command[0] == "ps":
+            lines = "\n".join(
+                f"{name}\t{state}" for name, state in self.states.items()
+            )
+            return 0, lines.encode(), b""
+        if command[0] == "image" and len(command) > 1 and command[1] == "inspect":
+            image = command[-1]
+            if image not in self.images:
+                return 1, b"", b"Error: No such image"
+            if "--format" in command:
+                return 0, _DIGEST.encode(), b""
+            return 0, f"{_DIGEST}\t{image}@{_DIGEST}".encode(), b""
+        if command[0] == "pull":
+            self.images.add(command[1])
+            return 0, b"pulled", b""
+        if command[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            name = command[-1]
+            if name in self.created:
+                labels = {LABEL_OWNERSHIP: self.created[name]}
+                return 0, json.dumps(labels).encode(), b""
+            if name in self.states:
+                labels = {LABEL_OWNERSHIP: self.holder_token}
+                return 0, json.dumps(labels).encode(), b""
+            return 1, b"", f"Error: No such object: {name}".encode()
+        if command[:3] == ("inspect", "--format", "{{json .State}}"):
+            running = self.states.get(command[-1]) == "running"
+            return 0, json.dumps({"Running": running, "ExitCode": 0}).encode(), b""
+        if command[0] == "create":
+            name = command[command.index("--name") + 1]
+            token = next(
+                (
+                    item.split("=", 1)[1]
+                    for item in command
+                    if item.startswith(f"{LABEL_OWNERSHIP}=")
+                ),
+                "",
+            )
+            self.created[name] = token
+            self.states[name] = "created"
+            return 0, name.encode(), b""
+        if command[0] == "start":
+            self.states[command[1]] = "running"
+            return 0, command[1].encode(), b""
+        if command[0] == "stop":
+            self.states[command[-1]] = "exited"
+            return 0, b"", b""
+        if command[0] == "rm":
+            self.states.pop(command[-1], None)
+            self.created.pop(command[-1], None)
+            return 0, b"", b""
+        if command[0] == "logs":
+            return 0, b"journey-complete\n", b""
+        return 0, b"", b""
+
+
+def _workflow_input(job_id: str, workspace: Path) -> dict[str, Any]:
+    request = ContainerJobWorkflowInput.model_validate(
+        {
+            "jobId": job_id,
+            "observeIntervalSeconds": 1,
+            "request": {
+                "idempotencyKey": f"plan-a-workflow:{job_id}",
+                "source": {
+                    "source": "workflow",
+                    "workflowId": f"plan-a-workflow:{job_id}",
+                    "runId": "run-1",
+                    "stepId": "container-test",
+                },
+                "spec": {
+                    "image": "alpine:3.20",
+                    "workspaceRef": {
+                        "kind": "external_state",
+                        "artifactRef": workspace.name,
+                    },
+                    "command": ["test", "-f", "/workspace/result.txt"],
+                    "outputs": [{"name": "result", "relativePath": "result.txt"}],
+                    "networkMode": "none",
+                    "resources": {"cpuMillis": 500, "memoryMiB": 512, "pids": 64},
+                    "timeoutSeconds": 60,
+                },
+            },
+        }
+    )
+    return request.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
+def _registered_activities(runtime: TemporalAgentRuntimeActivities) -> list[Any]:
+    handlers: list[Any] = []
+    for operation in _OPERATIONS:
+        method = getattr(runtime, f"container_job_{operation}")
+
+        def bind(bound_method: Any):
+            async def handler(payload: dict[str, Any]) -> dict[str, Any]:
+                return await bound_method(payload)
+
+            return handler
+
+        handler = bind(method)
+        handler.__name__ = f"container_job_{operation}"
+        handlers.append(activity.defn(name=f"container_job.{operation}")(handler))
+    return handlers
+
+
+async def test_capacity_wait_cancel_through_production_workflow(
+    tmp_path: Path,
+) -> None:
+    """R3: slot waiting and the cancel signal through the real workflow.
+
+    The production ``MoonMindContainerJobWorkflow`` with its registered
+    Activities parks in ``WAITING_FOR_CAPACITY`` behind a running holder,
+    then honors the ``cancel`` signal: no ``docker start`` for the parked
+    job, the created container is stopped during cancellation, and the
+    terminal state is ``canceled``.
+    """
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "result.txt").write_text("passed\n", encoding="utf-8")
+    job_id = "container-job:" + "9" * 32
+    holder_token = "container-job:holder:v1"
+    daemon = _PlanAWorkflowDaemon(
+        holder_name="moonmind-container-job-holder",
+        ownership_token=holder_token,
+    )
+    published: list[tuple[str, str, bytes]] = []
+    projected: list[tuple[str, str]] = []
+
+    async def publish(request: Any, name: str, payload: bytes) -> str:
+        published.append((request.job_id, name, payload))
+        return f"artifact:{len(published)}"
+
+    async def project(request: Any) -> None:
+        state = request.state or request.terminal_state
+        projected.append((request.job_id, getattr(state, "value", state)))
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        backend_ref="system-proxy",
+        docker_host="tcp://dockerproxy:2375",
+        command_runner=daemon.run,
+        evidence_publisher=publish,
+        projection_writer=project,
+        image_lock_root=tmp_path / "image-locks",
+        workspace_volume_name="agent_workspaces",
+        settings=resolve_container_backend_settings(
+            {"MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_JOBS": "1"}
+        ),
+    )
+    runtime = TemporalAgentRuntimeActivities(container_job_backend=backend)
+    workflow_queue = f"container-job-plan-a-{uuid.uuid4()}"
+    activity_queue = settings.temporal.activity_agent_runtime_task_queue
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(
+                Worker(
+                    env.client,
+                    task_queue=workflow_queue,
+                    workflows=[MoonMindContainerJobWorkflow],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                )
+            )
+            await stack.enter_async_context(
+                Worker(
+                    env.client,
+                    task_queue=activity_queue,
+                    activities=_registered_activities(runtime),
+                )
+            )
+            handle = await env.client.start_workflow(
+                MoonMindContainerJobWorkflow.run,
+                _workflow_input(job_id, workspace),
+                id=f"container-job-plan-a-{uuid.uuid4()}",
+                task_queue=workflow_queue,
+            )
+            for _ in range(200):
+                status = await handle.query("status")
+                if "waiting_for_capacity" in str(status.get("state")).lower():
+                    break
+                await asyncio.sleep(0.1)
+            else:
+                pytest.fail("workflow never parked in WAITING_FOR_CAPACITY")
+            await handle.signal("cancel")
+            result = await handle.result()
+
+    assert result["state"] == "canceled"
+    assert job_id in {owner for owner, _ in projected}
+    assert "waiting_for_capacity" in {state for _, state in projected}
+    assert "canceled" in {state for _, state in projected}
+    assert not any(command[0] == "start" for command in daemon.commands), (
+        "a parked job must never reach docker start"
+    )
+    assert sum(command[0] == "create" for command in daemon.commands) == 1
+    assert any(command[0] == "stop" for command in daemon.commands), (
+        "cancellation must stop the created container"
+    )
+    assert not any(command[0] == "info" for command in daemon.commands)
