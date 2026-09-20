@@ -79,6 +79,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
 )
 from moonmind.workflows.temporal.container_job_backend import (
+    LABEL_CONTAINER_JOB,
     LABEL_OWNERSHIP,
     DockerContainerJobBackend,
     FilesystemCapacityAdmissionLock,
@@ -328,6 +329,41 @@ def _capacity_lock_worker(lock_root: str, key: str, tag: str, order_path: str) -
     asyncio.run(_main())
 
 
+def _hold_capacity_lock_until_killed(
+    lock_root: str, key: str, ready_path: str
+) -> None:
+    """Acquire the shared capacity lock and hold it until SIGKILLed.
+
+    Top-level so ``spawn``-context worker processes can import it. The
+    worker never releases the lease in userspace: only SIGKILL ends it,
+    so the OS must release the flock with the file description -- the
+    real worker-death path, not an fd-close simulation.
+    """
+
+    import asyncio
+
+    from moonmind.workflows.temporal.container_job_backend import (
+        FilesystemCapacityAdmissionLock,
+    )
+
+    async def _main() -> None:
+        lock = FilesystemCapacityAdmissionLock(lock_root)
+        lease = await lock.acquire(key, wait_seconds=30, poll_seconds=0.01)
+        try:
+            with open(ready_path, "w", encoding="utf-8") as handle:
+                handle.write("holding\n")
+            # Hold the lease until the OS kills us; never release it here.
+            while True:
+                await asyncio.sleep(3600)
+        finally:
+            # Unreached on SIGKILL by construction. If this worker ever
+            # returns normally the test fails on the exit code instead of
+            # passing through a userspace release.
+            await lock.release(lease)
+
+    asyncio.run(_main())
+
+
 def _process_context() -> Any:
     try:
         return multiprocessing.get_context("fork")
@@ -451,6 +487,62 @@ async def test_worker_death_before_start_leaves_no_side_effect(
     assert started.running is True
     assert daemon.states == {DockerContainerJobBackend._name(request): "running"}
     assert daemon.real_starts == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX SIGKILL")
+async def test_worker_sigkill_before_start_frees_lock_for_survivor(
+    tmp_path: Path,
+) -> None:
+    """R2: a SIGKILLed worker mid-admission cannot wedge the shared lock.
+
+    OS-level counterpart to the fd-close simulations above: a real worker
+    process acquires the backend's capacity-lock key and dies by SIGKILL
+    before any Docker call, with no userspace cleanup. The OS releases the
+    flock with the file description, so the surviving worker admits and
+    starts cleanly: no wedged lock, no phantom container, exactly one side
+    effect.
+    """
+    import signal
+
+    daemon = _FakeDockerDaemon()
+    (survivor,) = _backends(tmp_path, daemon, count=1)
+    lock_root = tmp_path / "capacity-locks"
+    lock_root.mkdir(parents=True, exist_ok=True)
+    ready_path = tmp_path / "victim-ready"
+    ctx = _process_context()
+    victim = ctx.Process(
+        target=_hold_capacity_lock_until_killed,
+        args=(str(lock_root), survivor._capacity_lock_key(), str(ready_path)),
+    )
+    victim.start()
+    try:
+        for _ in range(200):
+            if ready_path.exists():
+                break
+            await asyncio.sleep(0.05)
+        else:
+            pytest.fail("victim worker never acquired the capacity lock")
+        assert daemon.states == {}
+        # Real worker death: uncatchable SIGKILL, no userspace cleanup.
+        os.kill(victim.pid, signal.SIGKILL)
+        await asyncio.to_thread(victim.join, 30)
+        assert victim.exitcode == -signal.SIGKILL, (
+            f"victim must die by SIGKILL, got exitcode={victim.exitcode}"
+        )
+
+        request = _request(tmp_path, _job_id())
+        started = await asyncio.wait_for(
+            survivor.start_container(request), timeout=30
+        )
+
+        assert started.running is True
+        assert daemon.states == {
+            DockerContainerJobBackend._name(request): "running"
+        }
+        assert daemon.real_starts == 1
+    finally:
+        if victim.is_alive():
+            victim.terminate()
 
 
 async def test_container_finishing_between_observation_and_retry(
