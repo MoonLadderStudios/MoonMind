@@ -52,16 +52,18 @@ counts, so a full host count never blocks an agent's own test job.
 
 ## Verification evidence (MoonLadderStudios/MoonMind#4457)
 
-Tested content: `8769ddaea32939d1f0162a553d7379daadc97c55` (qualification
-journey + handoff, committed) plus the working-tree remediation to
+Tested content: `001d47fa4240a87916d67510f8ed226b2c57ba66` (qualification
+journey + handoff, committed: production `LABEL_CONTAINER_JOB` import fix
+for Docker-gated pre-creates and hermetic OS-level before-start worker-death
+test) plus the working-tree remediation to
 `tests/integration/reliability/test_container_job_plan_a_qualification_journey.py`:
-import the production `LABEL_CONTAINER_JOB` used by both Docker-gated
-pre-creates (previously a `NameError` at runtime in Docker-backed CI) and
-a new hermetic OS-level worker-death test
-(`test_worker_sigkill_before_start_frees_lock_for_survivor`: a real worker
-process holds the backend capacity-lock key, dies by SIGKILL with no
-userspace cleanup, the survivor admits and starts with exactly one side
-effect). 20 test defs. No production-code change in the remediation pass:
+a new hermetic OS-level during/after-start worker-death test
+(`test_worker_sigkill_after_start_reconciles_without_duplicate`: a real
+worker process applies the container start, dies by SIGKILL while holding
+the backend capacity-lock key with no userspace cleanup, the survivor
+observes the daemon ledger holding its slot and reconciles with no
+duplicate start) and this handoff revision-line fix.
+21 test defs. No production-code change in the remediation pass:
 the new boundary tests confirm the existing daemon/lock mechanism, so it
 is retained. Preserved hermetic suites untouched.
 
@@ -108,7 +110,10 @@ untouched):
   death before the start leaves no side effect and the next worker proceeds;
   a real worker process killed by SIGKILL while holding the backend
   capacity-lock key frees the OS-held flock, and the survivor admits and
-  starts with exactly one side effect (no fd-close simulation);
+  starts with exactly one side effect (no fd-close simulation); a second
+  real worker process killed by SIGKILL after applying the container start
+  is reconciled by the survivor with no duplicate start (daemon-ledger
+  slot holder observed first);
   worker death releases the shared lock; container finishing between
   observation and retry frees its slot; own paused-holder retry keeps its
   slot (covers the `_admit_job_slot` fix admitting any slot-holding own

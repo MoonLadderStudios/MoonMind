@@ -364,6 +364,44 @@ def _hold_capacity_lock_until_killed(
     asyncio.run(_main())
 
 
+def _hold_lock_apply_start_until_killed(
+    lock_root: str, key: str, state_dir: str, container_name: str, ready_path: str
+) -> None:
+    """Apply the daemon start, then die by SIGKILL before any acknowledgment.
+
+    Top-level so ``spawn``-context worker processes can import it. The
+    worker acquires the shared capacity lock, applies the container start as
+    the daemon would (a state file the survivor's daemon-ledger ``ps``
+    observes as ``running``), signals readiness, then sleeps while still
+    holding the lock -- the real during/after-start worker-death path. Only
+    SIGKILL ends it, so the OS releases the flock with the file description
+    and the survivor must reconcile the existing container first.
+    """
+
+    import asyncio
+    from pathlib import Path
+
+    from moonmind.workflows.temporal.container_job_backend import (
+        FilesystemCapacityAdmissionLock,
+    )
+
+    async def _main() -> None:
+        lock = FilesystemCapacityAdmissionLock(lock_root)
+        lease = await lock.acquire(key, wait_seconds=30, poll_seconds=0.01)
+        try:
+            Path(state_dir, container_name).write_text("running", encoding="utf-8")
+            with open(ready_path, "w", encoding="utf-8") as handle:
+                handle.write("started\n")
+            # Hold the lease until the OS kills us; never release or ack here.
+            while True:
+                await asyncio.sleep(3600)
+        finally:
+            # Unreached on SIGKILL by construction.
+            await lock.release(lease)
+
+    asyncio.run(_main())
+
+
 def _process_context() -> Any:
     try:
         return multiprocessing.get_context("fork")
@@ -540,6 +578,105 @@ async def test_worker_sigkill_before_start_frees_lock_for_survivor(
             DockerContainerJobBackend._name(request): "running"
         }
         assert daemon.real_starts == 1
+    finally:
+        if victim.is_alive():
+            victim.terminate()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX SIGKILL")
+async def test_worker_sigkill_after_start_reconciles_without_duplicate(
+    tmp_path: Path,
+) -> None:
+    """R2: a SIGKILLed worker after the start is reconciled, not duplicated.
+
+    During/after-start counterpart to the before-start SIGKILL test: a real
+    worker process acquires the backend's capacity-lock key, applies the
+    container start as the daemon would, then dies by SIGKILL while still
+    holding the lock and before any acknowledgment reaches a caller. The
+    daemon ledger survives the worker, so the survivor must observe its own
+    container holding the slot and reconcile it first: exactly one side
+    effect, no duplicate start, no abandoned live consumer, no wedged lock.
+    """
+    import signal
+
+    state_dir = tmp_path / "daemon-state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    new_starts = 0
+
+    async def file_backed_runner(raw: Any) -> tuple[int, bytes, bytes]:
+        nonlocal new_starts
+        command = tuple(str(item) for item in raw)
+        if command[0] == "ps":
+            lines = "\n".join(
+                f"{path.name}\t{path.read_text(encoding='utf-8').strip()}"
+                for path in sorted(state_dir.iterdir())
+                if path.is_file()
+            )
+            return 0, lines.encode(), b""
+        if command[0] == "start":
+            name = command[1]
+            if (state_dir / name).exists():
+                # Idempotent retry: the container already runs, so the
+                # daemon reports success without a second side effect.
+                return 0, name.encode(), b""
+            (state_dir / name).write_text("running", encoding="utf-8")
+            new_starts += 1
+            return 0, name.encode(), b""
+        return 0, b"", b""
+
+    survivor = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=file_backed_runner,
+        capacity_lock=FilesystemCapacityAdmissionLock(
+            tmp_path / "capacity-locks"
+        ),
+    )
+    request = _request(tmp_path, _job_id())
+    container_name = DockerContainerJobBackend._name(request)
+    ready_path = tmp_path / "victim-started"
+    ctx = _process_context()
+    victim = ctx.Process(
+        target=_hold_lock_apply_start_until_killed,
+        args=(
+            str(tmp_path / "capacity-locks"),
+            survivor._capacity_lock_key(),
+            str(state_dir),
+            container_name,
+            str(ready_path),
+        ),
+    )
+    victim.start()
+    try:
+        for _ in range(200):
+            if ready_path.exists():
+                break
+            await asyncio.sleep(0.05)
+        else:
+            pytest.fail("victim worker never applied the container start")
+        # The daemon applied the start before the worker died.
+        assert (state_dir / container_name).read_text(
+            encoding="utf-8"
+        ).strip() == "running"
+        # Real worker death during/after start: uncatchable SIGKILL, no
+        # userspace cleanup, lock still held.
+        os.kill(victim.pid, signal.SIGKILL)
+        await asyncio.to_thread(victim.join, 30)
+        assert victim.exitcode == -signal.SIGKILL, (
+            f"victim must die by SIGKILL, got exitcode={victim.exitcode}"
+        )
+
+        # Daemon-ledger reconcile evidence before retry.
+        holders = await survivor._slot_holders()
+        assert holders.get(container_name) == "running"
+
+        retried = await asyncio.wait_for(
+            survivor.start_container(request), timeout=30
+        )
+        assert retried.running is True
+        assert new_starts == 0, "retry must not launch a second container"
+        assert (state_dir / container_name).read_text(
+            encoding="utf-8"
+        ).strip() == "running"
     finally:
         if victim.is_alive():
             victim.terminate()
