@@ -9,8 +9,7 @@ recorded history wedges the singleton in a workflow-task failure loop
 forever while ``update-moonmind`` reports success, and every waiter parks in
 ``AWAITING SLOT`` / ``awaiting_provider_capacity`` despite free DB capacity.
 
-This module owns the liveness gate the release controller runs before
-promotion:
+This module owns the definition of that wedged signature:
 
 * the manager is not stuck in a repeated workflow-task failure loop,
   especially a nondeterminism loop;
@@ -18,6 +17,12 @@ promotion:
   unqueryable is the exact wedged signature from the incident);
 * the DB held-lease count reconciles with the in-memory execution grants the
   manager reports — when both sides were observed.
+
+:func:`scan_workflow_task_failure_tail` is that definition's one
+implementation. :mod:`moonmind.provider_profiles.manager_recovery` reads it to
+decide whether a blocked caller may replace the run, so automatic recovery and
+a release-time liveness disposition can never disagree about whether a
+singleton is wedged.
 
 Evaluation itself (:func:`evaluate_provider_manager_liveness`) is pure and
 dependency-free so it is unit-testable without Temporal or Postgres.
@@ -31,7 +36,7 @@ runbook pointer; it never silently passes a wedged singleton.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 
 # A manager that cannot be queried while running is already actionable: the
@@ -50,10 +55,13 @@ NONDETERMINISM_FAILURE_THRESHOLD = 3
 # bounded and recent failures are the ones that matter.
 HISTORY_TAIL_SCAN_LIMIT = 200
 
-# Recovery ownership published on every blocking disposition.
-RECOVERY_OWNER = "update-moonmind"
+# Recovery ownership published on every blocking disposition. A wedge is
+# replaced automatically by manager_recovery when the durable ledger shows no
+# held lease; the runbook covers the refused case, where capacity may be
+# genuinely spent and an operator decides.
+RECOVERY_OWNER = "provider-profile-manager-recovery"
 RECOVERY_RUNBOOK = (
-    "docs/Security/ProviderProfiles.md#119-wedged-singleton-recovery-runbook-4363"
+    "docs/Security/ProviderProfiles.md#119-wedged-singleton-recovery-4363"
 )
 
 # Visibility query that enumerates the manager singletons without touching
@@ -266,12 +274,11 @@ def evaluate_provider_manager_liveness(
         "recoveryOwner": RECOVERY_OWNER if blocked else None,
         "recoveryRunbook": RECOVERY_RUNBOOK if blocked else None,
         "recoveryHint": (
-            "Promotion is held: a provider-profile manager singleton shows the "
-            f"wedged-singleton signature from MoonMind#4363. {RECOVERY_OWNER} "
-            f"owns recovery; follow {RECOVERY_RUNBOOK} (verify DB held "
-            "leases, terminate the failing run, fresh-start with "
-            "fresh-start-db-lease-restore, verify get_state plus a fresh "
-            "grant with fencing evidence). Do not promote past an "
+            "A provider-profile manager singleton shows the wedged-singleton "
+            f"signature from MoonMind#4363. {RECOVERY_OWNER} replaces the run "
+            "automatically when the durable ledger reports no held lease for "
+            f"the runtime; when it reports one, follow {RECOVERY_RUNBOOK} "
+            "(reconcile the held row, then retry). Do not promote past an "
             "unqueryable singleton."
             if blocked
             else None
@@ -315,6 +322,60 @@ def _is_workflow_task_completed(event: Any) -> bool:
         return bool(event.HasField("workflow_task_completed_event_attributes"))
     except Exception:
         return False
+
+
+def _workflow_task_failure_message(event: Any) -> str:
+    """The recorded failure message of one WorkflowTaskFailed event."""
+
+    try:
+        return _bounded(event.workflow_task_failed_event_attributes.failure.message)
+    except Exception:
+        return ""
+
+
+@dataclass(frozen=True)
+class WorkflowTaskFailureTail:
+    """The unbroken run of failed workflow tasks at a history's tail.
+
+    A successful workflow task, or a failure from another cause, ends the run:
+    only an unbroken nondeterminism streak is the wedge signature. Recovery and
+    the release liveness gate share this one definition so they can never
+    disagree about whether a singleton is wedged.
+    """
+
+    task_failures: int = 0
+    nondeterminism_failures: int = 0
+    last_failure_message: str = ""
+
+
+def scan_workflow_task_failure_tail(events: Iterable[Any]) -> WorkflowTaskFailureTail:
+    """Count the trailing failed-workflow-task run in history order.
+
+    ``events`` is the history tail in forward order. Events that always sit
+    between two workflow tasks are skipped; the scan stops at the first
+    successful task or non-nondeterminism failure.
+    """
+
+    task_failures = 0
+    nondeterminism_failures = 0
+    last_failure_message = ""
+    for event in reversed(list(events)):
+        if _is_workflow_task_failed(event):
+            task_failures += 1
+            if not _is_nondeterminism_cause(event):
+                break
+            nondeterminism_failures += 1
+            if not last_failure_message:
+                last_failure_message = _workflow_task_failure_message(event)
+        elif _is_workflow_task_completed(event):
+            break
+        else:
+            continue
+    return WorkflowTaskFailureTail(
+        task_failures=task_failures,
+        nondeterminism_failures=nondeterminism_failures,
+        last_failure_message=last_failure_message,
+    )
 
 
 async def collect_provider_manager_liveness(
@@ -440,21 +501,9 @@ async def collect_provider_manager_liveness(
                     if len(tail) > history_tail_limit:
                         tail.pop(0)
                 observed_from_history = True
-                # Count the trailing run of failed workflow tasks, skipping
-                # the normal events that always sit between two tasks. A
-                # successful task, or a failure from another cause, ends the
-                # run: only an unbroken nondeterminism streak is the wedge.
-                for event in reversed(tail):
-                    if _is_workflow_task_failed(event):
-                        task_failures += 1
-                        if _is_nondeterminism_cause(event):
-                            nondeterminism_failures += 1
-                        else:
-                            break
-                    elif _is_workflow_task_completed(event):
-                        break
-                    else:
-                        continue
+                failure_tail = scan_workflow_task_failure_tail(tail)
+                task_failures = failure_tail.task_failures
+                nondeterminism_failures = failure_tail.nondeterminism_failures
             except Exception:
                 # History scanning is best-effort evidence; the describe +
                 # query pair above already decides the fail-closed cases.
