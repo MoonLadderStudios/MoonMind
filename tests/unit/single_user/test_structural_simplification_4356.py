@@ -1,11 +1,10 @@
 """MoonLadderStudios/MoonMind#4356 R7 (early): structural-simplification probes.
 
 Narrow behavioral regressions for the single-user contracts that #4349
-already established, plus an explicit inventory of the account-era routes
-that the remaining cohort (#4346-4355) still owns. These tests detect
-removal regressions without retaining multi-user features and without
-brittle filename/wording checks: they exercise runtime behavior (profile
-creation, secret handling, route admission) rather than matching text.
+already established. These tests exercise runtime behavior (profile
+creation, secret handling) rather than matching text. Account-era route
+inventory assertions were removed: the owning cohort deletes those
+surfaces, and this suite must not pin their continued importability.
 """
 
 from __future__ import annotations
@@ -54,29 +53,3 @@ def test_secret_redaction_hides_credential_material() -> None:
     sample = f"config updated with key={secret} for profile openai"
     assert redactor.scrub(sample) == sample.replace(secret, "***")
     assert secret not in redactor.scrub_sequence([sample])[0]
-
-
-def test_account_route_inventory_is_explicit() -> None:
-    """Account-era routers stay mounted until the cohort removes them.
-
-    The inventory is explicit so the removal in #4346-4355 is a visible
-    diff rather than a silent skip: both account routers are still importable
-    and carry route handlers today.
-    """
-    from api_service.api.routers import accounts_4122, auth_advanced_4124
-
-    assert len(accounts_4122.router.routes) > 0
-    assert len(auth_advanced_4124.router.routes) > 0
-
-
-def test_default_user_helper_remains_explicit_opt_in() -> None:
-    """Default-user provisioning is a named helper, not ambient seeding."""
-    import api_service.auth as auth_module
-
-    assert hasattr(auth_module, "get_or_create_default_user")
-    # The helper must require an explicit database session argument rather
-    # than provisioning from import-time global state.
-    import inspect
-
-    params = inspect.signature(auth_module.get_or_create_default_user).parameters
-    assert "db_session" in params or "session" in params

@@ -1,22 +1,17 @@
 """MoonLadderStudios/MoonMind#4356 R4: hermetic protected-ingress matrix (integration).
 
-Transport-shaped admission coverage under the ``integration_ci`` resource
-boundary with synthetic fixtures only (no live secrets, no built-artifact
-browser run):
+Accurate scope: proxy-header sanitization primitives (what MoonMind
+forwards upstream to the Omnigent server via ``sanitize_proxy_headers``)
+plus real ingress refusals at owned boundaries (container capability
+verification with forged material, blank WebSocket token refused before
+any store, provider-secret redaction before persistence).
 
-- SSE-shaped requests (``Accept: text/event-stream``) with a forged
-  Origin/Host never forward credential or routing material upstream;
-- WebSocket-shaped requests (``Upgrade: websocket``) with forged
-  Host/forwarding headers never forward;
-- direct container/host-gateway bypass material (a foreign-secret machine
-  token) fails verification;
-- a blank WebSocket token is refused at the transport before any store;
-- credential-shaped provider values never reach stored artifacts.
-
-MFA is asserted as an ingress/cutover contract only (no new account
-implementation). Transport-vs-built-artifacts evidence on the integrated
-#4346-4355 candidate remains cohort-owned; this matrix pins the admission
-primitives hermetically in the integration lane.
+This matrix pins the admission primitives hermetically in the integration
+lane with synthetic fixtures only. A full operator-facing ASGI/deployed
+transport ingress journey against built artifacts (exposed backend route,
+hostile-origin acceptance, ingress credential bypass over SSE/WebSocket)
+remains cohort-owned and is explicitly unverified here rather than
+claimed through the outbound proxy helper.
 """
 
 from __future__ import annotations

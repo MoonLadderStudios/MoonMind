@@ -83,7 +83,7 @@ def test_default_user_provisioning_requires_explicit_caller() -> None:
     """No ambient seeding: helper needs an explicit session; import is inert."""
     import inspect
 
-    import api_service.auth as auth_module
+    from api_service import auth as auth_module
 
     assert hasattr(auth_module, "get_or_create_default_user")
     params = inspect.signature(auth_module.get_or_create_default_user).parameters
