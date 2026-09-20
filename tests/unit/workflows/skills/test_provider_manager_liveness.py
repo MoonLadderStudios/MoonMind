@@ -75,7 +75,7 @@ def test_running_but_unqueryable_manager_blocks_with_evidence() -> None:
 
     assert disposition["blocked"] is True
     assert disposition["reasonCode"] == "provider_manager_liveness_blocked"
-    assert disposition["recoveryOwner"] == "update-moonmind"
+    assert disposition["recoveryOwner"] == "provider-profile-manager-recovery"
     assert disposition["recoveryRunbook"] is not None
     assert disposition["recoveryHint"] is not None
     (reason,) = disposition["reasons"]

@@ -84,6 +84,56 @@ router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
 _claude_manual_validation_client: httpx.AsyncClient | None = None
 
 
+#: Reported when the manager never answered at all, so nothing about its
+#: state — wedged, restarting, unreachable — was actually observed.
+_MANAGER_UNREACHABLE = "manager_unreachable"
+
+_GENERIC_MANAGER_UNAVAILABLE_MESSAGE = (
+    "Credential setup could not start because the provider "
+    "credential manager is temporarily unavailable. "
+    "Your saved credentials have not changed. Try again; "
+    "if this continues, check the workflow worker diagnostics."
+)
+
+
+def _credential_manager_unavailable_report(recovery: Any) -> tuple[str, str]:
+    """Name the condition that blocked credential setup, not a guess at it.
+
+    A manager whose recorded history the running build cannot replay is
+    replaced automatically from the durable ledger. The refusals below are the
+    cases where that replacement must not happen, and each has a different
+    remedy than waiting, so the drawer reports which one occurred instead of
+    offering one generic retry for every cause.
+    """
+
+    from moonmind.provider_profiles.manager_recovery import (
+        MANAGER_HELD_LEASE_PRESENT,
+        MANAGER_UNREADABLE_LEDGER,
+    )
+
+    refusal = str(getattr(recovery, "refusal", "") or "")
+    if not refusal:
+        return _MANAGER_UNREACHABLE, _GENERIC_MANAGER_UNAVAILABLE_MESSAGE
+    if refusal == MANAGER_HELD_LEASE_PRESENT:
+        held = getattr(recovery, "held_leases", None)
+        return refusal, (
+            "Credential setup could not start because this runtime's provider "
+            "credential manager cannot process requests, and it cannot be "
+            f"replaced while {held if held is not None else 'a'} run(s) still "
+            "hold its capacity. Your saved credentials have not changed. "
+            "Retry once that work finishes."
+        )
+    if refusal == MANAGER_UNREADABLE_LEDGER:
+        return refusal, (
+            "Credential setup could not start because this runtime's provider "
+            "credential manager cannot process requests, and the credential "
+            "ledger could not be read to confirm it is safe to replace. Your "
+            "saved credentials have not changed. Try again; if this "
+            "continues, check database availability."
+        )
+    return refusal, _GENERIC_MANAGER_UNAVAILABLE_MESSAGE
+
+
 async def _credential_maintenance_guard(
     *,
     profile_id: str,
@@ -100,6 +150,9 @@ async def _credential_maintenance_guard(
     from moonmind.provider_profiles.maintenance import (
         acquire_credential_maintenance_guard,
         drain_profile_bound_hosts,
+    )
+    from moonmind.provider_profiles.manager_recovery import (
+        ProviderManagerUnavailableError,
     )
 
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -123,7 +176,7 @@ async def _credential_maintenance_guard(
                 "ownerIsWorkflow": False,
             },
         )
-    except (RPCError, TimeoutError) as exc:
+    except (ProviderManagerUnavailableError, RPCError, TimeoutError) as exc:
         # Acquisition failed before credential validation or persistence. Keep
         # the current profile intact and return a safe diagnostic the drawer
         # can display instead of an unhandled, non-JSON 500 response.
@@ -135,25 +188,27 @@ async def _credential_maintenance_guard(
         # (already_held) instead of orphaning a competing owner behind the
         # original. operation_id is a random hex or caller identity, never
         # credential material, so it is safe to return.
+        recovery = getattr(exc, "recovery", None)
+        refusal, message = _credential_manager_unavailable_report(recovery)
         logger.warning(
             "Provider credential manager unavailable: runtime_id=%s "
-            "profile_id=%s operation_id=%s error_type=%s rpc_status=%s",
+            "profile_id=%s operation_id=%s error_type=%s rpc_status=%s "
+            "refusal=%s held_leases=%s evidence=%s",
             profile.runtime_id,
             profile.profile_id,
             operation_id,
             type(exc).__name__,
             exc.status.name if isinstance(exc, RPCError) else None,
+            refusal,
+            getattr(recovery, "held_leases", None),
+            getattr(recovery, "evidence", ""),
         )
         raise HTTPException(
             status_code=503,
             detail={
                 "code": "provider_credential_manager_unavailable",
-                "message": (
-                    "Credential setup could not start because the provider "
-                    "credential manager is temporarily unavailable. "
-                    "Your saved credentials have not changed. Try again; "
-                    "if this continues, check the workflow worker diagnostics."
-                ),
+                "refusal": refusal,
+                "message": message,
                 "retry_idempotency_key": operation_id,
             },
         ) from exc
