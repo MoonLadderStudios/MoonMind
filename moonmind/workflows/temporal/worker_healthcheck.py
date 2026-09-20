@@ -46,12 +46,6 @@ class WorkerHealthState:
     pollers_started: bool = False
     readiness_metadata: dict[str, Any] = field(default_factory=dict)
     startup_error: str | None = None
-    # Set when bounded parked-routing reconciliation exhausted its budget
-    # without promoting this fleet. The worker polls, but Temporal still routes
-    # ordinary work to a version whose pollers are gone, so reporting ready
-    # would hide the outage. Going unready lets Compose restart the container,
-    # which starts reconciliation again.
-    release_routing_unresolved: bool = False
     # Startup-recorded code identity (MoonLadderStudios/MoonMind#4224): the git
     # revision (or package digest) of the modules this process imported. It is
     # compared with an off-loop, bounded-age checkout snapshot so a
@@ -72,7 +66,6 @@ class WorkerHealthState:
             and self.workers_constructed
             and self.pollers_started
             and self.startup_error is None
-            and not self.release_routing_unresolved
         )
 
     def code_identity(self) -> dict[str, Any]:
@@ -204,7 +197,6 @@ def _build_response_body(
                 "temporalConnected": current.temporal_connected,
                 "workersConstructed": current.workers_constructed,
                 "pollersStarted": current.pollers_started,
-                "releaseRoutingUnresolved": current.release_routing_unresolved,
             },
             **code_identity,
         }

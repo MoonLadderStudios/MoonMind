@@ -140,48 +140,6 @@ async def version_drained(client, version: str) -> bool:
     )
 
 
-async def qualification_closed_without_activation(
-    client, *, version: str, canary_id: str
-) -> bool:
-    """A private candidate's only admitted workflow is its named canary.
-
-    Inactive versions never enter Temporal's drainage state machine, so a
-    legacy candidate that failed qualification without ever being promoted can
-    never report drained. It can retire after the service confirms the version
-    never took traffic and its canary is closed or was never started. Without
-    this proof those `mm-candidate-*` containers survive forever, and because
-    they reuse the deployment's Compose service labels they keep blocking
-    later updates.
-    """
-    from temporalio.api.enums.v1 import WorkerDeploymentVersionStatus
-    from temporalio.client import WorkflowExecutionStatus
-
-    try:
-        response = await client.workflow_service.describe_worker_deployment_version(
-            DescribeWorkerDeploymentVersionRequest(
-                namespace=client.namespace, version=version
-            )
-        )
-        if (
-            response.worker_deployment_version_info.status
-            != WorkerDeploymentVersionStatus.WORKER_DEPLOYMENT_VERSION_STATUS_INACTIVE
-        ):
-            return False
-    except RPCError as exc:
-        if exc.status != RPCStatusCode.NOT_FOUND:
-            raise
-    try:
-        execution = await client.get_workflow_handle(canary_id).describe()
-        return execution.status not in {
-            WorkflowExecutionStatus.RUNNING,
-            WorkflowExecutionStatus.CONTINUED_AS_NEW,
-        }
-    except RPCError as exc:
-        if exc.status != RPCStatusCode.NOT_FOUND:
-            raise
-        return True
-
-
 async def await_registered_queues(
     client, *, version, workflow_queue, activity_queues, workflow_queues=()
 ):
@@ -503,15 +461,23 @@ async def steward_abandoned_routing(
                     raise
                 _registered = set()
             if served <= _registered:
+                # The outgoing version served queues this process does not
+                # declare -- on a multi-fleet deployment the other workers
+                # host them -- and the target has registered all of them.
+                # Promotion therefore converges to a release ordinary work can
+                # use, and it is qualified below across the full served
+                # surface rather than this fleet's own queues. This used to
+                # park for the release controller that owned promotion; there
+                # is no such controller now, so parking here left routing on
+                # the dead version forever.
                 logger.info(
                     "Release routing current version %s served queues %s beyond "
-                    "this fleet's declared %s; preserving its route for the "
-                    "authorized release controller",
+                    "this fleet's declared %s; the target registered them, "
+                    "promoting across the full served surface",
                     current,
                     sorted(served - declared),
                     sorted(declared),
                 )
-                return _parked(current, target)
     else:
         workflow_queues = ()
         activity_queues = tuple(spec.task_queues)
@@ -620,9 +586,7 @@ async def bootstrap_version_routing(client, spec):
 
 # A recreated worker can observe the outgoing fleet's pollers for as long as
 # Compose lets it drain (stop_grace_period: 6m), which outlasts the route-death
-# wait above. Reconciliation must therefore outlast the stop grace with margin
-# rather than leaving routing parked on a version that is going away.
-_PARKED_RECONCILE_TIMEOUT_SECONDS = 900
+# wait above.
 _PARKED_RECONCILE_POLL_SECONDS = 30
 
 
@@ -637,14 +601,15 @@ async def reconcile_parked_routing(client, spec, readiness_metadata=None):
     Temporal's current version pointing at a version with no workers and
     ordinary workflows would stall.
 
-    Retry the same canary-gated promotion on a bounded schedule until it
-    reports current, the deadline passes, or the task is cancelled at
-    shutdown. Promotion authority is unchanged: a route that is still live
-    keeps parking, so this only converges once the old fleet is actually
-    gone.
+    There is deliberately no retry budget. A budget only converts one outage
+    into a second, quieter one: the task ends, the worker keeps serving, and
+    routing stays on a version with no pollers with nothing left to fix it.
+    Retrying until it succeeds -- or until shutdown cancels this task -- is
+    both simpler and the only behaviour that cannot abandon promotion. A
+    still-live route keeps parking, so this converges only once the old fleet
+    is really gone.
     """
-    deadline = _routing_monotonic() + _PARKED_RECONCILE_TIMEOUT_SECONDS
-    while _routing_monotonic() < deadline:
+    while True:
         await _routing_sleep(_PARKED_RECONCILE_POLL_SECONDS)
         try:
             result = await bootstrap_version_routing(client, spec)
@@ -659,10 +624,8 @@ async def reconcile_parked_routing(client, spec, readiness_metadata=None):
         ) as exc:
             # A pinned canary that times out or fails raises
             # WorkflowFailureError, which shares only TemporalError with
-            # RPCError; catching RPCError alone let the first such failure
-            # kill this task while readiness stayed true and nothing else
-            # retried. Each of these is a bounded recoverable attempt until
-            # the deadline.
+            # RPCError. Every one of these is retried rather than ending the
+            # only reconciler this deployment has.
             logger.info("Parked release routing retry did not converge: %s", exc)
             continue
         if result.get("status") != "awaiting_promotion":
@@ -673,9 +636,3 @@ async def reconcile_parked_routing(client, spec, readiness_metadata=None):
                 result.get("currentVersion"),
             )
             return result
-    logger.warning(
-        "Parked release routing did not converge within %ss; the installed "
-        "fleet is serving but Temporal still routes elsewhere",
-        _PARKED_RECONCILE_TIMEOUT_SECONDS,
-    )
-    return None
