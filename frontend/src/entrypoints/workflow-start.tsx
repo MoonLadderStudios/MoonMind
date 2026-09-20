@@ -10502,8 +10502,39 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     // the preset's own backend scope/scopeRef travels with the request and
     // the server remains the authorization boundary (detail/delete/expand
     // require scope as Query(...); owned by #4350 with the same removal
-    // condition as the list/save contract above).
-    const target = templateItems.find(matchesName);
+    // condition as the list/save contract above). A colliding title/slug
+    // across scopes must not silently pick the first sorted match: require
+    // an unambiguous exact slug instead of issuing a destructive request.
+    const matches = templateItems.filter(matchesName);
+    if (matches.length === 0) {
+      setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
+      return false;
+    }
+    let target = matches.find(
+      (item) => item.slug.trim().toLowerCase() === normalized,
+    );
+    if (!target) {
+      if (matches.length > 1) {
+        const options = matches.map((item) => `'${item.slug}'`).join(', ');
+        setTemplateMessage(
+          `Multiple presets match '${nameOverride.trim()}'. Enter the exact slug: ${options}.`,
+        );
+        return false;
+      }
+      target = matches[0];
+    } else if (matches.length > 1) {
+      const exactSlugMatches = matches.filter(
+        (item) => item.slug.trim().toLowerCase() === normalized,
+      );
+      if (exactSlugMatches.length !== 1) {
+        const options = matches.map((item) => `'${item.slug}'`).join(', ');
+        setTemplateMessage(
+          `Multiple presets match '${nameOverride.trim()}'. Enter the exact slug: ${options}.`,
+        );
+        return false;
+      }
+      target = exactSlugMatches[0];
+    }
     if (!target) {
       setTemplateMessage(`No preset named '${nameOverride.trim()}' found.`);
       return false;

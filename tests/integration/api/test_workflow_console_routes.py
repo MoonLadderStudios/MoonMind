@@ -224,7 +224,7 @@ async def test_ui_info_endpoint_exposes_spa_capabilities_and_endpoints(
     assert payload["apiBase"] == "/api"
     assert payload["features"]["workflowList"] is True
     assert payload["features"]["settingsProvidersSecrets"] is True
-    assert payload["features"]["settingsUserWorkspace"] is True
+    assert payload["features"]["settingsInstance"] is True
     assert payload["features"]["settingsOperations"] is True
     assert payload["endpoints"]["workflows"] == "/api/executions"
     assert payload["endpoints"]["workflowDetail"] == "/api/executions/{workflowId}"

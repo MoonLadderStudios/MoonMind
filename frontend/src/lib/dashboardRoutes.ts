@@ -313,6 +313,10 @@ export function destinationForPath(pathname: string): DashboardDestination | nul
 const LEGACY_SETTINGS_REDIRECTS: Record<string, string> = {
   '/secrets': '/settings/providers-secrets',
   '/workers': '/settings/operations',
+  // Retired account-scoped route (MoonMind#4353): existing
+  // `/settings/user-workspace` bookmarks land on the Instance replacement
+  // with stale human-scope params filtered by the target allowlist below.
+  '/settings/user-workspace': '/settings/instance',
 };
 
 // Only preserve page-relevant filters per target. The Instance page keeps

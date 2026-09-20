@@ -1482,13 +1482,23 @@ async def settings_spa_fallback_route(
     dashboard_path: str,
     session: AsyncSession = Depends(get_async_session),
     _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
+) -> HTMLResponse | RedirectResponse:
     """Serve the settings SPA shell for extensionless settings sub-routes.
 
     An empty sub-path is the trailing-slash form of the bare `/settings` entry
     point. The client normalizes it the same way, so a direct load must resolve
     to the same page and boot payload rather than 404.
     """
+    normalized = (dashboard_path or "").strip("/")
+    # Retired account-scoped route (MoonMind#4353): existing
+    # `/settings/user-workspace` bookmarks redirect to the Instance
+    # replacement with stale human-scope params filtered. Permission-aware
+    # fallback applies when the operator cannot inspect Instance.
+    if normalized == "user-workspace" or normalized.startswith("user-workspace/"):
+        return RedirectResponse(
+            url=_settings_redirect_url(request, _user, "settings-instance"),
+            status_code=307,
+        )
     if dashboard_path and not _is_extensionless_dashboard_path(dashboard_path):
         _raise_dashboard_route_not_found()
     return await task_settings_route(request, session=session, _user=_user)
