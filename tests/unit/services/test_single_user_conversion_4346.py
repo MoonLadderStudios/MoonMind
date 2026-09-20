@@ -322,3 +322,141 @@ async def test_reports_contain_no_credentials(tmp_path):
         blob = str(pre.decision.to_sanitized_dict())
         assert "super-secret-value" not in blob
         assert "secret-person@example.com" not in blob
+
+
+@pytest.mark.asyncio
+async def test_schedule_preset_settings_workflow_surfaces_attribute_owners(tmp_path):
+    """Schedules/presets/settings/workflow_runs count as retained ownership."""
+    from api_service.services.single_user_conversion import evaluate_disposition
+
+    engine, factory = _factory(tmp_path, "surfaces.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with factory() as session:
+        from api_service.db.models import (
+            Preset,
+            PresetScopeType,
+            RecurringWorkflowDefinition,
+            SettingsOverride,
+            UserProfile,
+            WorkflowRun,
+        )
+
+        u1 = await _mk_user(session)
+        u2 = await _mk_user(session)
+        session.add(UserProfile(user_id=u1.id))
+        session.add(UserProfile(user_id=u2.id))
+        session.add(
+            RecurringWorkflowDefinition(
+                name="sched-1",
+                cron="0 * * * *",
+                timezone="UTC",
+                owner_user_id=u1.id,
+            )
+        )
+        session.add(
+            Preset(
+                slug="preset-1",
+                scope_type=PresetScopeType.GLOBAL,
+                title="Preset 1",
+                description="preset fixture",
+                created_by=u1.id,
+            )
+        )
+        session.add(
+            SettingsOverride(
+                scope="user", user_id=u1.id, key="theme", value_json={"v": 1}
+            )
+        )
+        session.add(WorkflowRun(feature_key="feat-1", requested_by_user_id=u2.id))
+        await session.commit()
+        decision = await evaluate_disposition(session)
+        assert decision.disposition == "multi_person_refusal"
+        assert set(decision.present_subsystems) >= {
+            "schedules",
+            "presets",
+            "settings",
+            "workflows",
+        }
+
+
+@pytest.mark.asyncio
+async def test_single_operator_subsystem_presence_requires_coverage(tmp_path):
+    """One operator with schedules/presets refuses without registered coverage."""
+    from api_service.services import single_user_conversion as suc
+
+    engine, factory = _factory(tmp_path, "single-surface.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with factory() as session:
+        from api_service.db.models import (
+            Preset,
+            PresetScopeType,
+            RecurringWorkflowDefinition,
+            UserProfile,
+        )
+
+        u = await _mk_user(session)
+        session.add(UserProfile(user_id=u.id))
+        session.add(
+            RecurringWorkflowDefinition(
+                name="sched-solo",
+                cron="0 * * * *",
+                timezone="UTC",
+                owner_user_id=u.id,
+            )
+        )
+        session.add(
+            Preset(
+                slug="preset-solo",
+                scope_type=PresetScopeType.GLOBAL,
+                title="Solo",
+                description="solo fixture",
+                created_by=u.id,
+            )
+        )
+        await session.commit()
+        decision = await suc.evaluate_disposition(session)
+        assert decision.disposition == "eligible_conversion"
+        assert set(decision.present_subsystems) >= {"schedules", "presets"}
+        pre = await suc.preflight(session)
+        # Shared entrypoint default transforms cover only profile_secrets,
+        # so schedules/presets presence must refuse rather than partially convert.
+        result = await suc.run_guarded_upgrade(
+            session, operator_authorized=True
+        )
+        assert result.published is False
+        assert result.decision.reason_code == "missing_transform_coverage"
+        assert result.digest == pre.digest
+
+
+@pytest.mark.asyncio
+async def test_guarded_upgrade_converts_profile_secrets_with_real_transform(tmp_path):
+    """Eligible conversion executes the real profile_secrets transform."""
+    from sqlalchemy import select
+
+    from api_service.db.models import ManagedSecret, UserProfile
+    from api_service.services import single_user_conversion as suc
+
+    engine, factory = _factory(tmp_path, "real-transform.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with factory() as session:
+        u = await _mk_user(session)
+        session.add(
+            UserProfile(user_id=u.id, openai_api_key_encrypted="real-transform-tok")
+        )
+        await session.commit()
+        result = await suc.run_guarded_upgrade(session, operator_authorized=True)
+        assert result.published is True
+        assert result.decision.disposition in {"eligible_conversion", "fresh_init"}
+        assert "profile_secrets" in result.transforms
+        assert "real-transform-tok" not in str(result.to_sanitized_dict())
+        rows = (await session.execute(select(ManagedSecret))).scalars().all()
+        assert len(rows) == 1
+        # Idempotent rerun replays without duplicating work.
+        second = await suc.run_guarded_upgrade(session, operator_authorized=True)
+        assert second.published is True
+        assert second.digest == result.digest
+        rows2 = (await session.execute(select(ManagedSecret))).scalars().all()
+        assert len(rows2) == 1

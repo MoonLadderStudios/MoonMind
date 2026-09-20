@@ -276,64 +276,53 @@ async def _sweep_secret_invalidation_outbox() -> int:
         return 0
 
 
-async def _convert_legacy_profile_secrets() -> dict:
-    """Run the gated #4349 legacy profile-secret conversion on startup.
+async def _run_guarded_single_user_upgrade() -> dict:
+    """Run the #4346 shared guarded upgrade entrypoint on startup.
 
-    Single-user design, sections 6 and 9: eligible legacy ``UserProfile``-held
-    secrets are converted into managed-secret references exactly once; reruns
-    converge without duplicating or changing slugs. Multi-operator databases
-    are blocked without mutation (attribution stays owned by #4346's guarded
-    migration). Resilient by design: conversion must never fail startup, so
-    every failure (including the multi-operator block) is logged and startup
-    continues. Returns the metadata-only conversion summary.
+    Single-user design, sections 9-10: this is the only startup upgrade
+    route that may publish a conversion candidate. It runs preflight plus
+    apply through versioned migration 386 + ledger idempotency with the
+    registered production subsystem transforms (``profile_secrets`` via
+    #4349). Alembic revision 386 creates only the ledger table and never
+    applies a destructive conversion as a schema-upgrade side effect, so
+    CLI, worker, and HTTP startup routes all converge here instead of
+    invoking subsystem conversions directly. Refusals (multi-person,
+    unresolved evidence, missing transform coverage) perform no
+    conversion-side writes and preserve the serving release. Resilient by
+    design: conversion must never fail startup, so every failure is logged
+    and startup continues. Returns a metadata-only summary.
     """
     try:
-        from api_service.services.profile_secret_migration import (
-            MultiOperatorAttributionError,
-            run_single_operator_profile_secret_conversion,
-        )
+        from api_service.services.single_user_conversion import run_guarded_upgrade
 
         async with get_async_session_context() as session:
             try:
-                summary = await run_single_operator_profile_secret_conversion(
-                    session
+                result = await run_guarded_upgrade(
+                    session, operator_authorized=True
                 )
-            except MultiOperatorAttributionError as exc:
+            except Exception as exc:
                 logger.warning(
-                    "Legacy profile secret conversion deferred: %s",
-                    exc,
+                    "Single-user guarded upgrade deferred: %s",
+                    type(exc).__name__,
                 )
-                logger.warning(
-                    "Multi-operator legacy database: provider profiles stay "
-                    "visible as instance resources pending #4346 guarded "
-                    "migration; resolve attribution before relying on "
-                    "single-operator access cutover."
+                return {"deferred": True, "reason": type(exc).__name__}
+            summary = result.to_sanitized_dict()
+            if result.published:
+                logger.info(
+                    "Single-user guarded upgrade published (%s)",
+                    result.decision.disposition,
                 )
-                return {"deferred": True, "reason": "multi_operator_attribution"}
-            if summary.get("migration", {}).get("migrated"):
-                # Metadata counts are intentionally not logged: the
-                # migration summary is tainted by secret handling and
-                # CodeQL flags any logged derived value as clear-text
-                # sensitive data. Conversion outcome stays observable via
-                # the returned summary, not log arguments.
-                logger.info("Converted legacy profile secrets on startup")
-                # Single-user (#4349): the startup upgrade path migrates
-                # eligible legacy secrets without implicit profile rewires
-                # (no UserProfile->provider-profile mapping exists). The
-                # new ProfileAuthProvider requires an explicit
-                # provider-profile secret_ref, so converted secrets stay
-                # unreferenced until the operator (or #4346's guarded
-                # migration) publishes transactional rewires via
-                # rewire_provider_profile_secret_refs.
+            else:
                 logger.warning(
-                    "Legacy profile secrets converted without profile rewires: "
-                    "publish explicit provider-profile secret_refs to restore "
-                    "effective access."
+                    "Single-user guarded upgrade blocked (%s); preserving "
+                    "source data, serving release, and operator access "
+                    "without conversion-side mutation.",
+                    result.decision.reason_code,
                 )
             return summary
     except Exception as exc:  # pragma: no cover - bounded startup conversion
         logger.warning(
-            "Legacy profile secret conversion deferred: %s",
+            "Single-user guarded upgrade deferred: %s",
             type(exc).__name__,
         )
         return {"deferred": True, "reason": type(exc).__name__}
@@ -3128,7 +3117,7 @@ async def startup_event():
     # HTTP listener closed; execution admission still requires their evidence.
     await _sync_env_managed_secrets()
     await _sweep_secret_invalidation_outbox()
-    await _convert_legacy_profile_secrets()
+    await _run_guarded_single_user_upgrade()
     # MoonLadderStudios/MoonMind#3955 retired the experimental embedded host
     # transport: startup no longer runs an embedded host-auth preflight or
     # gates on it. Proxy mode is the only supported transport; retained
