@@ -115,12 +115,19 @@ async def resolve_execution_request_authority(
             },
         ) from exc
     owner_id = getattr(parent, "owner_id", None)
-    if _owner_type(parent) != "user" or not str(owner_id or "").strip():
+    parent_owner_type = _owner_type(parent)
+    # Single-user (#4351): fan-out children inherit the parent's
+    # authoritative owner, whether a retained human (user) owner or the
+    # instance (system) default for new executions. Other owner types stay
+    # unsupported so a capability can never mint an unrelated owner.
+    if parent_owner_type == "system":
+        owner_id = str(owner_id or "").strip() or "system"
+    elif parent_owner_type != "user" or not str(owner_id or "").strip():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "code": "execution_fanout_parent_unsupported",
-                "message": "The capability parent has no user execution owner.",
+                "message": "The capability parent has no supported execution owner.",
             },
         )
     scoped_user = SimpleNamespace(
@@ -129,6 +136,7 @@ async def resolve_execution_request_authority(
         is_active=True,
         is_superuser=False,
         roles=[],
+        owner_type=parent_owner_type,
     )
     principal = ExecutionPrincipal(
         user_id=str(owner_id),

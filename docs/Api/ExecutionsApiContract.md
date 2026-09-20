@@ -89,6 +89,17 @@ Non-admin list requests are scoped to the caller. Listing another owner returns 
 
 A schema, required-capability token, selected preset, copied parent ID, or publication mode is not an authorization grant. Repository credentials, allowed operations, runtime/model authority, artifacts, and tracker effects are independently validated through their existing owners.
 
+### 6.4 Single-user operation (#4351)
+
+Executions are instance resources: the admitted operator lists, describes,
+and controls every execution without a human-owner lookup. Owner filters
+(`ownerType`/`ownerId`) pass through as provenance selectors, never 403
+gates; new executions default to the instance (`SYSTEM`) owner while
+retained human-owner values persist as non-authoritative provenance.
+Approval, state, source, and policy validation stay at their owning
+boundaries; raw secret access and agent policy permissions are not
+broadened. See [Single-User Application Design](../SingleUserApplicationDesign.md).
+
 ### 6.5 Workflow-scoped Execution Fan-out
 
 An admitted runtime with the normalized `execution.fanout` requirement may receive a short-lived bearer and `X-MoonMind-Execution-Fanout: v1`. This is not a user session, worker token, container token, or general API credential.
