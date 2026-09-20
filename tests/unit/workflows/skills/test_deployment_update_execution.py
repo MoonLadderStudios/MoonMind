@@ -2952,27 +2952,36 @@ async def test_update_fails_when_substrate_does_not_converge(monkeypatch) -> Non
     assert "substrate" in str(result.outputs.get("failure", {}).get("reason", "")).lower()
 
 
-class _ForbiddenReleaseCohort:
-    """Any cohort interaction is a blue/green regression.
+class _RecordingReleaseCohort:
+    """Records any cohort interaction; any at all is a blue/green regression.
 
     MoonLadderStudios/MoonMind#4363 and its successors trace to running a
     candidate fleet beside the installed one on a shared Temporal task queue.
     An update recreates the installed fleet in place; it never qualifies,
     preserves, or promotes a parallel cohort.
+
+    ``__getattr__`` records the name and then raises ``AttributeError``, which
+    is what a missing attribute is supposed to raise. The assertion lives in
+    the test, so a reintroduced cohort call fails on the recorded name rather
+    than on whatever the caller did with the exception.
     """
 
+    def __init__(self) -> None:
+        self.touched: list[str] = []
+
     def __getattr__(self, name: str):
-        raise AssertionError(
-            f"deployment update consulted a release cohort ({name}); "
-            "updates recreate the installed fleet in place"
-        )
+        self.touched.append(name)
+        raise AttributeError(name)
 
 
 @pytest.mark.asyncio
 async def test_update_recreates_in_place_without_a_release_cohort():
     executor, store, evidence, runner, _ = _executor()
-    result = await executor.execute(
-        _inputs(), {"release_cohort": _ForbiddenReleaseCohort()}
+    cohort = _RecordingReleaseCohort()
+    result = await executor.execute(_inputs(), {"release_cohort": cohort})
+    assert cohort.touched == [], (
+        f"deployment update consulted a release cohort ({cohort.touched}); "
+        "updates recreate the installed fleet in place"
     )
     assert result.status == "COMPLETED"
     phases = [phase for phase, _ in runner.commands]
