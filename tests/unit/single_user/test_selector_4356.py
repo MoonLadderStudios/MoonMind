@@ -112,3 +112,25 @@ def test_unknown_paths_still_fail_open_to_full_backend() -> None:
     outputs = _outputs(["totally-unknown-single-user-path-xyz"])
     assert outputs["full_backend"] == "true"
     assert all(value == "true" for value in outputs.values())
+
+
+def test_design_doc_change_stays_unit_fast_without_integration() -> None:
+    """A design-doc edit must not drag the integration foundation along."""
+    outputs = _outputs(["docs/SingleUserApplicationDesign.md"])
+    assert outputs["unit_fast"] == "true"
+    assert outputs["integration_ci"] == "false"
+    assert outputs["full_backend"] == "false"
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "api_service/api/routers/temporal_artifacts.py",
+        "api_service/api/routers/workflows.py",
+    ],
+)
+def test_generic_route_changes_select_api_component(changed_path: str) -> None:
+    """Ordinary route edits run the component suite that owns the boundary."""
+    outputs = _outputs([changed_path])
+    assert outputs["unit_fast"] == "true"
+    assert outputs["api_component"] == "true"

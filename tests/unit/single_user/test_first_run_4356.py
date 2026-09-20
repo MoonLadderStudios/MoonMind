@@ -113,3 +113,55 @@ async def test_default_admin_claim_refuses_without_operator_authorization(
             await claim_default_admin(
                 session, UserManager(MagicMock()), operator_authorized=False
             )
+
+
+def test_recurring_policy_omitted_inputs_match_documented_defaults() -> None:
+    """First-run recurring execution needs no explicit policy to be safe.
+
+    Omitted inputs must behave like their documented default equivalents
+    (AGENTS.md principle 7): skip/1/last/3/900s/0s. Exercises the real
+    production normalization boundary, not a copy of its defaults.
+    """
+    from api_service.services.recurring_workflows_service import (
+        RecurringPolicy,
+        _normalize_policy,
+    )
+
+    assert _normalize_policy(None, global_max_backfill=10) == RecurringPolicy(
+        overlap_mode="skip",
+        max_concurrent_runs=1,
+        catchup_mode="last",
+        max_backfill=3,
+        misfire_grace_seconds=900,
+        jitter_seconds=0,
+    )
+    assert _normalize_policy({}, global_max_backfill=10) == _normalize_policy(
+        None, global_max_backfill=10
+    )
+
+
+def test_recurring_policy_invalid_modes_fail_closed() -> None:
+    """An invalid recurring policy is refused, never partially scheduled."""
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowValidationError,
+        _normalize_policy,
+    )
+
+    with pytest.raises(RecurringWorkflowValidationError):
+        _normalize_policy({"overlap": {"mode": "bogus-4356"}}, global_max_backfill=10)
+    with pytest.raises(RecurringWorkflowValidationError):
+        _normalize_policy({"catchup": {"mode": "bogus-4356"}}, global_max_backfill=10)
+    with pytest.raises(RecurringWorkflowValidationError):
+        _normalize_policy(
+            {"misfireGraceSeconds": "not-a-number"}, global_max_backfill=10
+        )
+
+
+def test_recurring_policy_backfill_clamped_to_global_max() -> None:
+    """A first-run backfill request cannot exceed the deployment bound."""
+    from api_service.services.recurring_workflows_service import _normalize_policy
+
+    policy = _normalize_policy(
+        {"catchup": {"maxBackfill": 99}}, global_max_backfill=4
+    )
+    assert policy.max_backfill == 4

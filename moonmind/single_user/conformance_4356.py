@@ -135,6 +135,7 @@ CONFORMANCE_ROWS: tuple[dict, ...] = (
         "existing_tests": (
             "tests/unit/security/test_container_job_capabilities.py",
             "tests/unit/security/test_execution_fanout_capabilities.py",
+            "tests/unit/security/test_session_authority_4121.py",
         ),
         "new_tests": (
             "tests/unit/single_user/test_selector_4356.py",
@@ -153,6 +154,7 @@ CONFORMANCE_ROWS: tuple[dict, ...] = (
         "existing_tests": (
             "tests/unit/security/test_container_job_capabilities.py",
             "tests/unit/security/test_execution_fanout_capabilities.py",
+            "tests/unit/security/test_session_authority_4121.py",
         ),
         "new_tests": (
             "tests/unit/single_user/test_selector_4356.py",
