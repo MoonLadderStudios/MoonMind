@@ -19,10 +19,17 @@ logger = logging.getLogger(__name__)
 
 
 def _deployment_project():
-    """The Compose project this deployment owns."""
+    """The Compose project this deployment owns.
+
+    Deployment services are configured with MOONMIND_DEPLOYMENT_PROJECT_NAME,
+    which the host updater also passes; COMPOSE_PROJECT_NAME is not set here.
+    Reading the wrong variable silently fell back to "moonmind", so a
+    deployment installed under a custom --compose-project would have ignored
+    its own containers and reported another deployment's instead.
+    """
     import os
 
-    return os.environ.get("COMPOSE_PROJECT_NAME") or "moonmind"
+    return os.environ.get("MOONMIND_DEPLOYMENT_PROJECT_NAME") or "moonmind"
 
 # Containers a pre-recreate-in-place release or availability owner created
 # beside the installed fleet. They reuse the deployment's own Compose project
