@@ -632,50 +632,6 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_create_execution_snapshots_moonspec_environment_publish_action(
-    tmp_path,
-    mock_client_adapter,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(
-        settings.workflow,
-        "moonspec_environment_blocked_publish_action",
-        "draft_pr",
-    )
-    async with temporal_db(tmp_path) as session:
-        service = TemporalExecutionService(
-            session,
-            client_adapter=mock_client_adapter,
-        )
-
-        record = await service.create_execution(
-            workflow_type="MoonMind.UserWorkflow",
-            owner_id=uuid4(),
-            title="My run",
-            input_artifact_ref=None,
-            plan_artifact_ref=None,
-            manifest_artifact_ref=None,
-            failure_policy=None,
-            initial_parameters=_valid_user_workflow_parameters(),
-            idempotency_key="create-moonspec-draft-policy",
-        )
-
-        assert (
-            record.parameters["moonspecEnvironmentBlockedPublishAction"]
-            == "draft_pr"
-        )
-        start_args = mock_client_adapter.start_workflow.await_args.kwargs[
-            "input_args"
-        ]
-        assert (
-            start_args["initial_parameters"][
-                "moonspecEnvironmentBlockedPublishAction"
-            ]
-            == "draft_pr"
-        )
-
-
-@pytest.mark.asyncio
 async def test_create_execution_writes_runtime_and_primary_skill_search_attributes(tmp_path):
     async with temporal_db(tmp_path) as session:
         service = TemporalExecutionService(session)
@@ -3247,13 +3203,7 @@ async def test_create_execution_normalizes_depends_on_before_limit_and_persisten
 async def test_create_execution_removes_empty_normalized_depends_on_from_parameters(
     tmp_path,
     mock_client_adapter,
-    monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(
-        settings.workflow,
-        "moonspec_environment_blocked_publish_action",
-        "fail",
-    )
     async with temporal_db(tmp_path) as session:
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
@@ -3274,9 +3224,7 @@ async def test_create_execution_removes_empty_normalized_depends_on_from_paramet
             TemporalExecutionCanonicalRecord, created.workflow_id
         )
         assert source is not None
-        assert source.parameters == {
-            "moonspecEnvironmentBlockedPublishAction": "fail"
-        }
+        assert source.parameters == {}
 
 @pytest.mark.asyncio
 async def test_validate_dependencies_rejects_self_dependency(tmp_path):
