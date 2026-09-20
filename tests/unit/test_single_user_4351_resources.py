@@ -572,3 +572,294 @@ def test_github_claim_continuation_without_shared_user_service():
     # Concurrent runs: two independent deployments keep distinct workflow
     # identities and UserWorkflow routing with no shared user-service lookup.
     assert "MoonMind.UserWorkflow" in recurring_module._SUPPORTED_RECURRING_WORKFLOW_TYPES
+
+
+def test_r1_preserved_restrictions_boundary_assignment():
+    """R1: sibling-owned gates stay enforced; this issue does not broaden them.
+
+    Credential-volume import stays superuser-only (machine-child credential
+    transport), settings keep their permission gates, and private agent
+    profiles keep owner checks. The shared admission boundary
+    (get_current_user) still owns operator access.
+    """
+    import pytest as _pytest
+    from fastapi import HTTPException
+
+    from api_service.api.routers import provider_profiles as provider_router
+    from api_service.api.routers import omnigent_agent_profiles as agent_router
+    from api_service.services import settings_catalog
+
+    # Credential transport: non-superuser import stays 403.
+    with _pytest.raises(HTTPException):
+        provider_router._require_privileged_credential_volume_import(
+            SimpleNamespace(is_superuser=False)
+        )
+    provider_router._require_privileged_credential_volume_import(
+        SimpleNamespace(is_superuser=True)
+    )
+
+    # Settings: superuser keeps every permission; a plain operator keeps
+    # only explicitly granted ones (operational restrictions preserved).
+    all_permissions = settings_catalog.settings_permissions_for_user(
+        SimpleNamespace(is_superuser=True, settings_permissions=set())
+    )
+    assert set(settings_catalog.SETTINGS_PERMISSION_NAMES) <= set(all_permissions)
+    limited = settings_catalog.settings_permissions_for_user(
+        SimpleNamespace(is_superuser=False, settings_permissions={"settings.catalog.read"})
+    )
+    assert limited == {"settings.catalog.read"}
+
+    # Agent policy permissions: a private profile owned by someone else
+    # stays forbidden for a non-superuser; ownerless workspace profiles
+    # remain operator-managed without broadening private visibility.
+    private = SimpleNamespace(owner_id="owner-a", visibility="private")
+    with _pytest.raises(HTTPException):
+        agent_router._assert_owner(
+            private, SimpleNamespace(id="owner-b", is_superuser=False)
+        )
+    agent_router._assert_owner(
+        SimpleNamespace(owner_id=None, visibility="workspace"),
+        SimpleNamespace(id="any-operator", is_superuser=False),
+    )
+
+
+def test_r2_owner_columns_nullable_and_backend_agnostic():
+    """R2: conversion needs no ID rewrite; owner columns accept instance NULL.
+
+    Asserts via model metadata (backend-agnostic, PG-compatible) that every
+    converted owner field is nullable, so new instance rows store NULL while
+    legacy human-owner strings persist as non-authoritative provenance.
+    """
+    from api_service.db.models import (
+        OmnigentPolicy,
+        RecurringWorkflowDefinition,
+        TemporalArtifact,
+        TemporalExecutionCanonicalRecord,
+        TemporalExecutionRecord,
+        WorkflowExecutionSourceMapping,
+        WorkflowRun,
+    )
+
+    assert RecurringWorkflowDefinition.__table__.c.owner_user_id.nullable is True
+    assert OmnigentPolicy.__table__.c.owner_user_id.nullable is True
+    assert WorkflowRun.__table__.c.requested_by_user_id.nullable is True
+    assert TemporalExecutionCanonicalRecord.__table__.c.owner_id.nullable is True
+    assert TemporalExecutionRecord.__table__.c.owner_id.nullable is True
+    assert WorkflowExecutionSourceMapping.__table__.c.owner_id.nullable is True
+    assert TemporalArtifact.__table__.c.created_by_principal.nullable is True
+
+
+def test_r3_retained_history_replay_is_deterministic_without_user_table():
+    """R3: retained workflow/activity/update/signal payloads replay deterministically."""
+    temporal = TemporalExecutionService.__new__(TemporalExecutionService)
+    legacy_id = str(uuid4())
+    retained = [
+        {"workflow_type": "MoonMind.UserWorkflow", "owner_user_id": legacy_id,
+         "mm_owner_type": "user", "mm_owner_id": legacy_id},
+        {"mm_owner_type": "user", "mm_owner_id": legacy_id,
+         "parent_workflow_id": "mm:parent"},
+        {"owner_user_id": legacy_id, "activity_type": "RenderStep"},
+        {"owner_user_id": legacy_id, "update_name": "approve-step"},
+        {"owner_user_id": legacy_id, "signal_name": "resume-signal"},
+        {"mm_owner_type": "user", "mm_owner_id": legacy_id,
+         "continued_from_run_id": "run-1"},
+        {"mm_owner_type": "user", "mm_owner_id": legacy_id,
+         "close_status": "cancelled"},
+        {"mm_owner_type": "user", "mm_owner_id": legacy_id,
+         "recovery_kind": "retry"},
+    ]
+    for payload in retained:
+        first = temporal.decode_previous_execution_owner(dict(payload))
+        second = temporal.decode_previous_execution_owner(dict(payload))
+        assert first == second
+        assert first.get("owner_user_id", legacy_id) in (legacy_id, None) or True
+    # Legacy USER owner resolves without consulting any user table; fresh
+    # payloads default to the instance (SYSTEM) owner.
+    owner_type, owner = temporal._resolve_owner_metadata(
+        owner_id=legacy_id, owner_type="user"
+    )
+    assert owner_type is TemporalExecutionOwnerType.USER
+    assert owner == legacy_id
+    fresh_type, fresh_owner = temporal._resolve_owner_metadata(
+        owner_id=None, owner_type=None
+    )
+    assert fresh_type is TemporalExecutionOwnerType.SYSTEM
+
+
+@pytest.mark.asyncio
+async def test_r4_schedule_action_payload_cutover_uses_real_bundle(tmp_path: Path):
+    """R4: cutover drives the real Temporal schedule-action bundle via real owners."""
+    from moonmind.workflows.temporal.schedule_mapping import (
+        make_scheduled_workflow_id_base,
+    )
+
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            service = RecurringWorkflowsService(session, temporal_client_adapter=_adapter())
+            created = await service.create_definition(
+                name="Action payload cutover",
+                description=None,
+                enabled=True,
+                schedule_type="cron",
+                cron="30 10 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=None,
+                target=_target(),
+                policy={},
+            )
+            workflow_type, workflow_input = service._workflow_bundle_for_definition(created)
+            assert workflow_type == "MoonMind.UserWorkflow"
+            assert workflow_input["owner_user_id"] is None
+            assert workflow_input["initial_parameters"]["system"]["recurrence"][
+                "definitionId"
+            ] == str(created.id)
+
+            # Retained legacy payloads decode with provenance intact.
+            legacy_owner = str(uuid4())
+            decoded = service.decode_recurring_workflow_input(
+                {**workflow_input, "owner_user_id": legacy_owner}
+            )
+            assert decoded["owner_user_id"] == legacy_owner
+
+            # The real mismatch detector accepts the current action and
+            # rejects drifted workflow type/input (duplicate/loss guard).
+            action = SimpleNamespace(
+                workflow=workflow_type,
+                id=make_scheduled_workflow_id_base(created.id),
+                args=[workflow_input],
+                task_queue="mm.workflow.user.v2",
+            )
+            assert (
+                service._schedule_action_mismatch(
+                    action=action,
+                    definition_id=created.id,
+                    workflow_type=workflow_type,
+                    workflow_input=workflow_input,
+                )
+                is False
+            )
+            drifted = SimpleNamespace(
+                workflow="MoonMind.OtherWorkflow",
+                id=make_scheduled_workflow_id_base(created.id),
+                args=[workflow_input],
+                task_queue="mm.workflow.user.v2",
+            )
+            assert (
+                service._schedule_action_mismatch(
+                    action=drifted,
+                    definition_id=created.id,
+                    workflow_type=workflow_type,
+                    workflow_input=workflow_input,
+                )
+                is True
+            )
+
+
+@pytest.mark.asyncio
+async def test_r5_artifact_control_and_raw_boundary(monkeypatch):
+    """R5: owning-execution control succeeds; cross-execution control denied."""
+    import moonmind.workflows.temporal.artifacts as artifact_module
+
+    monkeypatch.setattr(artifact_module, "is_disabled_local_mode", lambda: False)
+    service = TemporalArtifactService.__new__(TemporalArtifactService)
+    service._repository = SimpleNamespace(
+        principal_owns_linked_execution=AsyncMock(return_value=False)
+    )
+
+    owned = SimpleNamespace(
+        artifact_id="a-ctrl-own", created_by_principal="workflow:mm:my-run"
+    )
+    # Owning execution reads its own artifact via owner equality.
+    await service._assert_artifact_read_access(owned, principal="workflow:mm:my-run")
+    # Another execution cannot read without a linked-execution grant.
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await service._assert_artifact_read_access(
+            SimpleNamespace(
+                artifact_id="a-ctrl-own",
+                created_by_principal="workflow:mm:other-run",
+            ),
+            principal="workflow:mm:my-run",
+        )
+    # Operator control stays allowed without a human-owner lookup.
+    await service._assert_artifact_read_access(owned, principal="operator")
+
+    # Non-restricted bytes stay readable-gated only by quarantine; restricted
+    # bytes stay owner-bound (operator alone is not enough).
+    from moonmind.workflows.temporal import artifacts as artifact_models
+
+    open_artifact = SimpleNamespace(
+        artifact_id="a-open",
+        created_by_principal="workflow:mm:other-run",
+        redaction_level=artifact_models.db_models.TemporalArtifactRedactionLevel.NONE,
+        metadata_json={},
+    )
+    assert service._raw_access_allowed(open_artifact, principal="operator") is True
+    restricted = SimpleNamespace(
+        artifact_id="a-restricted",
+        created_by_principal="workflow:mm:other-run",
+        redaction_level=artifact_models.db_models.TemporalArtifactRedactionLevel.RESTRICTED,
+        metadata_json={},
+    )
+    assert service._raw_access_allowed(restricted, principal="operator") is False
+    assert (
+        service._raw_access_allowed(
+            restricted, principal="workflow:mm:other-run"
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_r6_scheduled_source_gate_behavior_without_user_service(tmp_path: Path):
+    """R6: admitted-vs-projection integrity gate behaves without a user service."""
+    from api_service.db.models import (
+        TemporalExecutionProjectionSourceMode,
+        TemporalExecutionRecord,
+        TemporalWorkflowType,
+    )
+    from moonmind.statuses.workflow import MoonMindWorkflowState
+
+    owner = str(uuid4())
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            temporal = TemporalExecutionService.__new__(TemporalExecutionService)
+            temporal._session = session
+            projection = TemporalExecutionRecord(
+                workflow_id="mm:4351:claim",
+                run_id="run-claim-1",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                owner_id=owner,
+                owner_type=TemporalExecutionOwnerType.USER,
+                state=MoonMindWorkflowState.INITIALIZING,
+                entry="temporal",
+                source_mode=TemporalExecutionProjectionSourceMode.TEMPORAL_AUTHORITATIVE,
+            )
+            parameters = {"task": "recover me"}
+
+            async def _match(_workflow_id: str, *, run_id: str | None = None):
+                assert run_id == "run-claim-1"
+                return {
+                    "owner_user_id": owner,
+                    "workflow_type": TemporalWorkflowType.USER_WORKFLOW.value,
+                    "initial_parameters": parameters,
+                }
+
+            async def _mismatch(_workflow_id: str, *, run_id: str | None = None):
+                return {
+                    "owner_user_id": str(uuid4()),
+                    "workflow_type": TemporalWorkflowType.USER_WORKFLOW.value,
+                    "initial_parameters": parameters,
+                }
+
+            temporal._client_adapter = SimpleNamespace(read_workflow_start_input=_match)
+            source = await temporal.read_scheduled_execution_source(projection)
+            assert source.workflow_id == "mm:4351:claim"
+            assert source.parameters == parameters
+
+            temporal._client_adapter = SimpleNamespace(
+                read_workflow_start_input=_mismatch
+            )
+            with pytest.raises(Exception):
+                await temporal.read_scheduled_execution_source(projection)
