@@ -581,3 +581,48 @@ def test_fix_only_approval_gate_still_respects_resolver_owned_blockers(
     assert code == finalize_module["EXIT_CODE_BLOCKED"]
     assert payload["status"] != "review_clean"
     assert payload["_merged_calls"] == []
+
+
+def test_fix_only_approval_stop_is_distinguishable_from_an_open_gate(
+    finalize_module, tmp_path, monkeypatch
+) -> None:
+    """A clean stop at a closed gate must not record "merge gate passed".
+
+    Both terminals are `review_clean`, but only one of them observed an open
+    merge gate. The durable result has to keep that distinction.
+    """
+
+    open_gate_code, open_gate = _run_finalize_with(
+        finalize_module,
+        _mergeable_snapshot(),
+        tmp_path / "open",
+        monkeypatch,
+        "--finish-mode",
+        "fix_only",
+    )
+    approval_code, approval = _run_finalize_with(
+        finalize_module,
+        _approval_blocked_snapshot(),
+        tmp_path / "approval",
+        monkeypatch,
+        "--finish-mode",
+        "fix_only",
+    )
+
+    assert open_gate_code == approval_code == finalize_module["EXIT_CODE_REVIEW_CLEAN"]
+    assert open_gate["status"] == approval["status"] == "review_clean"
+    assert open_gate["final_reason"] == "finish_mode_fix_only"
+    assert approval["final_reason"] == "finish_mode_fix_only_awaiting_human_approval"
+    assert "merge gate passed" not in approval["decision"]
+
+
+def test_full_gate_defers_the_approval_decision_to_the_finalizer(
+    tmp_path, monkeypatch
+) -> None:
+    """`pr_resolve_full` has no finish mode, so it must not decide this."""
+
+    full_module = _load_module("pr_resolve_full.py")
+    evaluation = full_module["evaluate_full_state"](_approval_blocked_snapshot())
+
+    assert evaluation["status"] == "ready_for_finalize"
+    assert evaluation["next_step"] == "run_finalize"

@@ -475,3 +475,43 @@ def test_approved_pull_request_still_reaches_the_merge_gate() -> None:
 
     assert decision.classification == "ready_to_merge"
     assert decision.action is ResolverAction.ATTEMPT_MERGE
+
+
+def test_approval_gate_waits_while_mergeability_is_still_unknown() -> None:
+    """Positive mergeability evidence is required before declaring clean.
+
+    `reviewDecision=REVIEW_REQUIRED` can be reported while GitHub is still
+    computing mergeability. Declaring the head clean then would skip the
+    conflict check the resolver owns.
+    """
+
+    decision = classify_snapshot(
+        normalize_portable_snapshot(
+            {
+                "repository": "g3-qrtr/crash_server_main",
+                "pr": {
+                    "number": 831,
+                    "state": "OPEN",
+                    "headRefOid": "b" * 40,
+                    "mergeStateStatus": "UNKNOWN",
+                    "mergeable": "UNKNOWN",
+                    "reviewDecision": "REVIEW_REQUIRED",
+                },
+                "ci": {"isRunning": False, "hasFailures": False, "signalQuality": "ok"},
+                "commentsFetch": {"succeeded": True},
+                "commentsSummary": {
+                    "includeBotReviewComments": True,
+                    "hasActionableComments": False,
+                },
+                "automatedReview": {
+                    "enabled": True,
+                    "provider": "codex",
+                    "freshReviewForHead": True,
+                    "requestPending": False,
+                },
+            }
+        )
+    )
+
+    assert decision.classification == "mergeability_transient"
+    assert decision.action is ResolverAction.WAIT

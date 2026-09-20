@@ -94,7 +94,11 @@ Because `fix_only` never merges, merge *authorization* is not its blocker. A
 merge gate held closed only by a missing human approving review
 (`reviewDecision=REVIEW_REQUIRED`) does not stand between `fix_only` and
 `review_clean`: no automated action can produce an approval, and the run was
-never going to use one. Under `finishMode=merge` the same state is a durable
+never going to use one. That terminal records
+`final_reason=finish_mode_fix_only_awaiting_human_approval` so it stays
+distinguishable from a genuinely open gate, and it still requires confirmed
+mergeability -- an approval requirement never substitutes for the conflict
+check. Under `finishMode=merge` the same state is a durable
 `merge_gate_requires_human_approval` blocker, never a transient wait to retry.
 
 ## Inputs (skill args)

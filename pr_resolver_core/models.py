@@ -33,6 +33,10 @@ class CanonicalPullRequestSnapshot:
     # waiting cannot change it, and under ``fix_only`` it does not stand
     # between the resolver and a clean review.
     approving_review_required: bool = False
+    # Positive evidence that the provider computed a conflict-free merge,
+    # as opposed to still calculating it. Required before an approval-only
+    # gate may be treated as a clean head.
+    mergeable_confirmed: bool = False
     checks_complete: bool = False
     checks_passing: bool = False
     checks_failed: bool = False

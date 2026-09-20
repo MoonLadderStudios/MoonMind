@@ -440,7 +440,9 @@ def main() -> None:
                     ),
                     merge_outcome="skipped",
                     status="review_clean",
-                    reason="finish_mode_fix_only",
+                    # Distinct from the open-gate terminal: both are clean, but
+                    # only one of them saw a gate that would authorize a merge.
+                    reason="finish_mode_fix_only_awaiting_human_approval",
                 )
                 print(
                     "No comments left to address (not merging); merge gate "

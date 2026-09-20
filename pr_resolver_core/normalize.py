@@ -181,6 +181,7 @@ def normalize_portable_snapshot(
         approving_review_required=(
             _text(pr.get("reviewDecision")).upper() == "REVIEW_REQUIRED"
         ),
+        mergeable_confirmed=(mergeable is True or mergeable_text == "MERGEABLE"),
         checks_complete=not _bool(ci.get("isRunning")),
         checks_passing=(
             not _bool(ci.get("hasFailures"))
