@@ -202,3 +202,28 @@ def test_a_configurable_row_does_not_weaken_actual_admission(
 
     assert decision.admitted is False
     assert decision.limiting_layer == LIMITING_LAYER_HOST_CAPACITY
+
+
+def test_fresh_install_defaults_to_single_agent_host() -> None:
+    """Plan A conservative default: fresh installs carry one agent host.
+
+    MoonLadderStudios/MoonMind#4458: the shipped fresh-install path — the
+    code default, every Compose fallback, and the environment template —
+    agrees on 1 end to end. Higher fixed concurrency stays available through
+    the same setting; this pins only the no-override path.
+    """
+
+    assert OMNIGENT_GENERIC_HOST_DEFAULT_CAPACITY == 1
+
+    for service in _HOST_CAPACITY_SERVICES:
+        declared = _service_environment(service)[OMNIGENT_GENERIC_HOST_CAPACITY_ENV]
+        assert declared.startswith(f"${{{OMNIGENT_GENERIC_HOST_CAPACITY_ENV}:-")
+        assert int(_default_of(declared)) == 1
+
+    template = Path(".env-template").read_text(encoding="utf-8")
+    (line,) = [
+        entry
+        for entry in template.splitlines()
+        if entry.startswith(f"{OMNIGENT_GENERIC_HOST_CAPACITY_ENV}=")
+    ]
+    assert line.split("=", 1)[1].strip() == "1"
