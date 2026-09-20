@@ -341,7 +341,11 @@ def _parked(current: str, target: str) -> dict[str, str]:
         "status": "awaiting_promotion",
         "currentVersion": current,
         "candidateVersion": target,
-        "recoveryOwner": "deployment-control",
+        # The fleet that parks is the fleet that retries: startup spawns
+        # reconcile_parked_routing in this worker. The deployment-control
+        # supervisor that used to own this no longer exists, and naming it
+        # sent operators to the wrong service during an outage.
+        "recoveryOwner": "workflow-fleet-startup",
     }
 
 
@@ -665,7 +669,6 @@ async def reconcile_parked_routing(client, spec, readiness_metadata=None):
                         exc,
                     )
                     continue
-                verification_owed = False
             if readiness_metadata is not None:
                 readiness_metadata["releaseRouting"] = result
             logger.info(

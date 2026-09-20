@@ -242,6 +242,14 @@ async def container_health(name):
 def readiness_matches(state, digest):
     if state.get("ready") is not True:
         return False
+    # A worker can be ready while routing still targets the outgoing version:
+    # startup parks rather than displacing a live route, and only a background
+    # task retries the promotion. Treating that as verified issued a success
+    # receipt while ordinary work still routed elsewhere, with no proof the
+    # handoff ever completed. Verification fails closed until routing moves.
+    routing = state.get("releaseRouting")
+    if isinstance(routing, dict) and routing.get("status") == "awaiting_promotion":
+        return False
     if "children" in state:
         children = state["children"]
         return bool(children) and all(
@@ -1105,7 +1113,12 @@ async def run_job(request_file):
             outcome = json.loads(primary_file.read_text())
             if outcome.get("owner") != owner:
                 raise ValueError("Release primary receipt owner differs")
-            outcome["result"]["outputs"].update(cleanupPending=True, cleanupOwner=owner)
+            # Recreate-in-place has no cleanup phase. Reporting one hid the
+            # finalization error behind an operation that no longer exists
+            # and named an owner with no recovery action.
+            outcome["result"]["outputs"].update(
+                recoveryOwner=owner, finalError=error
+            )
         else:
             attempt_file = request_file.parent / "attempt-result.json"
             if attempt_file.exists():

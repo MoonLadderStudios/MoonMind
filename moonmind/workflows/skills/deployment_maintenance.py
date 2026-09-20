@@ -116,11 +116,24 @@ async def reconcile_releases():
     root = state_root()
     if not root.exists():
         return {"jobs": [], "errors": [], "legacyCohorts": []}
-    result = {
-        "jobs": [],
-        "errors": [],
-        "legacyCohorts": await observed_legacy_cohorts(_deployment_project()),
-    }
+    result = {"jobs": [], "errors": [], "legacyCohorts": []}
+    # Auxiliary reporting must not erase the pass. An unreachable daemon here
+    # raised before any job was visited, so a transient Docker outage returned
+    # no maintenance result at all even though every job record stayed
+    # readable.
+    try:
+        result["legacyCohorts"] = await observed_legacy_cohorts(
+            _deployment_project()
+        )
+    except Exception as exc:
+        from moonmind.utils.logging import redact_sensitive_text
+
+        result["errors"].append(
+            {
+                "job": "legacy-cohort-discovery",
+                "error": redact_sensitive_text(str(exc))[:500],
+            }
+        )
     # Visit least-recently reconciled jobs first so one job cannot starve the
     # rest. Each pass is bounded.
     requests = sorted(
