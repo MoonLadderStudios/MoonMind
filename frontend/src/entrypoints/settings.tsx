@@ -8,7 +8,6 @@ import { SecretManager } from '../components/secrets/SecretManager';
 import { ConfigurationHealthSummary } from '../components/settings/ConfigurationHealthSummary';
 import {
   GeneratedSettingsSection,
-  type SettingScope,
 } from '../components/settings/GeneratedSettingsSection';
 import { GithubTokenProbePanel } from '../components/settings/GithubTokenProbePanel';
 import {
@@ -29,11 +28,6 @@ import { filterSettingsQueryForTarget } from '../lib/dashboardRoutes';
 import { resetDashboardPreferences } from '../utils/dashboardPreferences';
 
 const NON_PROFILE_OWNING_RUNTIMES = new Set(['omnigent']);
-
-interface ProfileData {
-  id?: string | number;
-  email?: string;
-}
 
 interface Notice {
   level: 'ok' | 'error';
@@ -120,8 +114,9 @@ function SettingsUnavailableState({
         This configuration page is unavailable
       </h3>
       <p className="mt-2 text-sm text-amber-800 dark:text-amber-200">
-        Your account cannot inspect this destination. Direct navigation remains on this route so
-        the authorization boundary is explicit.
+        This instance destination cannot be inspected with the current access.
+        Direct navigation remains on this route so the authorization boundary
+        is explicit.
       </p>
       <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
         Required inspection permission: {permissions.map((permission) => (
@@ -341,60 +336,18 @@ export function ProvidersSecretsSettingsPage({ payload }: { payload: BootPayload
   );
 }
 
-function UserWorkspaceSettingsContent({ payload }: { payload: BootPayload }) {
-  const [searchParams, setSearchParams] = useSearchParams();
+function InstanceSettingsContent({ payload }: { payload: BootPayload }) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const permissions = settingsPermissions(payload);
-  const scope: SettingScope = searchParams.get('scope') === 'user' ? 'user' : 'workspace';
-  const canWriteScope = permissions.has(`settings.${scope}.write`);
-
-  const profileQuery = useQuery<ProfileData>({
-    queryKey: ['profile'],
-    queryFn: async () => {
-      const response = await fetch('/me', {
-        credentials: 'include',
-        headers: { Accept: 'application/json' },
-      });
-      if (!response.ok) throw new Error(`Failed to fetch profile: ${response.statusText}`);
-      return response.json();
-    },
-  });
-
-  const changeScope = (nextScope: SettingScope) => {
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current);
-      next.set('scope', nextScope);
-      return next;
-    });
-  };
 
   return (
     <SettingsPageFrame
-      title="User / Workspace"
-      description="Review descriptor-driven preferences and defaults at user or workspace scope, including validation and application diagnostics."
+      title="Instance"
+      description="Review instance configuration and defaults, including validation and application diagnostics."
     >
-      <section aria-label="User and workspace settings summary" className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
-              {scope === 'user' ? 'User scope' : 'Workspace scope'}
-            </h3>
-            <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
-              {canWriteScope
-                ? 'Overrides can be reviewed and saved at this scope.'
-                : 'Safe inspection is available; changes at this scope are read-only.'}
-            </p>
-          </div>
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-            {canWriteScope ? 'Writable' : 'Read-only'}
-          </span>
-        </div>
-      </section>
-
       <NoticeBanner notice={notice} />
       <GeneratedSettingsSection
-        scope={scope}
-        onScopeChange={changeScope}
+        scope="workspace"
         canReadAudit={permissions.has('settings.audit.read')}
       />
 
@@ -416,42 +369,22 @@ function UserWorkspaceSettingsContent({ payload }: { payload: BootPayload }) {
           Reset dashboard preferences
         </button>
       </section>
-
-      <section className="rounded-3xl border border-mm-border/80 bg-transparent p-6 shadow-sm">
-        {profileQuery.isLoading ? (
-          <LoadingPlaceholder surface="settings" region="current user" variant="settings" density="normal" preserveContext />
-        ) : profileQuery.isError ? (
-          <p className="text-sm text-rose-700 dark:text-rose-400">Failed to load profile data.</p>
-        ) : (
-          <div>
-            <div className="text-sm font-medium text-slate-500 dark:text-slate-400">Signed-in user</div>
-            <div className="mt-2 text-base font-semibold text-slate-900 dark:text-white">
-              {profileQuery.data?.email || 'Unknown user'}
-            </div>
-            {profileQuery.data?.id ? (
-              <div className="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">
-                {profileQuery.data.id}
-              </div>
-            ) : null}
-          </div>
-        )}
-      </section>
     </SettingsPageFrame>
   );
 }
 
-export function UserWorkspaceSettingsPage({ payload }: { payload: BootPayload }) {
+export function InstanceSettingsPage({ payload }: { payload: BootPayload }) {
   const canInspect = settingsPermissions(payload).has('settings.catalog.read');
   return (
     <SettingsDraftGuardProvider>
       {canInspect ? (
-        <UserWorkspaceSettingsContent payload={payload} />
+        <InstanceSettingsContent payload={payload} />
       ) : (
         <SettingsPageFrame
-          title="User / Workspace"
-          description="Review descriptor-driven preferences and defaults at user or workspace scope, including validation and application diagnostics."
+          title="Instance"
+          description="Review instance configuration and defaults, including validation and application diagnostics."
         >
-          <SettingsUnavailableState title="User / Workspace" permissions={['settings.catalog.read']} />
+          <SettingsUnavailableState title="Instance" permissions={['settings.catalog.read']} />
         </SettingsPageFrame>
       )}
     </SettingsDraftGuardProvider>
@@ -498,7 +431,7 @@ export function SettingsEntryPage({ payload }: { payload: BootPayload }) {
     return <Navigate to={entryTarget('/settings/providers-secrets')} replace />;
   }
   if (permissions.has('settings.catalog.read')) {
-    return <Navigate to={entryTarget('/settings/user-workspace')} replace />;
+    return <Navigate to={entryTarget('/settings/instance')} replace />;
   }
   if (permissions.has('operations.read')) {
     return <Navigate to={entryTarget('/settings/operations')} replace />;
@@ -506,7 +439,7 @@ export function SettingsEntryPage({ payload }: { payload: BootPayload }) {
   return (
     <SettingsPageFrame
       title="Configuration"
-      description="No configuration destination is available for this account."
+      description="No configuration destination is available for this instance."
     >
       <SettingsUnavailableState
         title="Configuration"

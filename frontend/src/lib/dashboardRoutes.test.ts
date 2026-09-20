@@ -22,7 +22,7 @@ describe('dashboard route resolution', () => {
     expect(DASHBOARD_DESTINATIONS.map(({ key }) => key)).toEqual([
       'workflows', 'create', 'recurring', 'skills',
       'omnigent-agents', 'omnigent-policies', 'remediation', 'artifacts',
-      'settings-providers-secrets', 'settings-user-workspace', 'settings-operations',
+      'settings-providers-secrets', 'settings-instance', 'settings-operations',
     ]);
     expect(new Set(DASHBOARD_DESTINATIONS.map(({ canonicalPath }) => canonicalPath)).size).toBe(11);
     expect(DASHBOARD_REACT_ROUTE_PATHS).toEqual(
@@ -40,7 +40,7 @@ describe('dashboard route resolution', () => {
       triggerIconKey: 'settings',
       destinationKeys: [
         'settings-providers-secrets',
-        'settings-user-workspace',
+        'settings-instance',
         'settings-operations',
       ],
     });
@@ -62,7 +62,7 @@ describe('dashboard route resolution', () => {
     ]);
     expect(visibleSystemDestinations(info).map(({ key }) => key)).toEqual([
       'recurring', 'skills', 'omnigent-agents', 'remediation', 'artifacts',
-      'settings-providers-secrets', 'settings-user-workspace', 'settings-operations',
+      'settings-providers-secrets', 'settings-instance', 'settings-operations',
     ]);
   });
 
@@ -78,7 +78,7 @@ describe('dashboard route resolution', () => {
     ['/observability/run/1', 'artifacts'],
     ['/remediations/mm:1', 'remediation'],
     ['/settings/providers-secrets', 'settings-providers-secrets'],
-    ['/settings/user-workspace', 'settings-user-workspace'],
+    ['/settings/instance', 'settings-instance'],
     ['/settings/operations', 'settings-operations'],
     ['/schedules', 'recurring'],
     ['/schedules/nightly%3Abuild', 'recurring'],
@@ -120,7 +120,7 @@ describe('dashboard route resolution', () => {
   it.each([
     ['/settings', 'settings-entry'],
     ['/settings/providers-secrets', 'settings-providers-secrets'],
-    ['/settings/user-workspace', 'settings-user-workspace'],
+    ['/settings/instance', 'settings-instance'],
     ['/settings/operations', 'settings-operations'],
   ])('resolves the canonical Settings route %s to %s', (path, page) => {
     expect(resolveDashboardRoute(path)).toEqual({
@@ -255,12 +255,12 @@ describe('dashboard route resolution', () => {
 
   it('exposes canonical Settings paths with correct destination metadata', () => {
     const providers = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-providers-secrets')!;
-    const workspace = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-user-workspace')!;
+    const instance = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-instance')!;
     const ops = DASHBOARD_DESTINATIONS.find(({ key }) => key === 'settings-operations')!;
     expect(providers.canonicalPath).toBe('/settings/providers-secrets');
-    expect(workspace.canonicalPath).toBe('/settings/user-workspace');
+    expect(instance.canonicalPath).toBe('/settings/instance');
     expect(ops.canonicalPath).toBe('/settings/operations');
-    for (const dest of [providers, workspace, ops]) {
+    for (const dest of [providers, instance, ops]) {
       expect(dest.menuGroupKey).toBe('configuration');
       expect(dest.navigationGroup).toBe('system');
     }
@@ -270,7 +270,7 @@ describe('dashboard route resolution', () => {
     it.each([
       ['/settings/', 'settings-entry', '/settings'],
       ['/settings/providers-secrets/', 'settings-providers-secrets', '/settings/providers-secrets'],
-      ['/settings/user-workspace/', 'settings-user-workspace', '/settings/user-workspace'],
+      ['/settings/instance/', 'settings-instance', '/settings/instance'],
       ['/settings/operations/', 'settings-operations', '/settings/operations'],
     ])('normalizes the trailing-slash Settings route %s to %s', (path, page, currentPath) => {
       expect(resolveDashboardRoute(path)).toEqual({
@@ -282,7 +282,7 @@ describe('dashboard route resolution', () => {
 
     it.each([
       ['/settings/providers-secrets/', 'settings-providers-secrets'],
-      ['/settings/user-workspace/', 'settings-user-workspace'],
+      ['/settings/instance/', 'settings-instance'],
       ['/settings/operations/', 'settings-operations'],
     ])('resolves the trailing-slash Settings route %s to the %s destination', (path, key) => {
       expect(destinationForPath(path)?.key).toBe(key);
@@ -296,11 +296,11 @@ describe('dashboard route resolution', () => {
     it('retires ?section= as Settings page identity instead of aliasing it', () => {
       // SettingsPage.md 5.3: `section` carries no page identity. It is dropped from
       // every redirect target and never maps back to a sibling Configuration page.
-      for (const section of ['providers-secrets', 'user-workspace', 'operations', 'legacy-alias']) {
+      for (const section of ['providers-secrets', 'instance', 'operations', 'legacy-alias']) {
         expect(filterSettingsQueryForTarget(`?section=${section}`, '/settings/providers-secrets'))
           .toBe('/settings/providers-secrets');
-        expect(filterSettingsQueryForTarget(`?section=${section}`, '/settings/user-workspace'))
-          .toBe('/settings/user-workspace');
+        expect(filterSettingsQueryForTarget(`?section=${section}`, '/settings/instance'))
+          .toBe('/settings/instance');
         expect(filterSettingsQueryForTarget(`?section=${section}`, '/settings/operations'))
           .toBe('/settings/operations');
         expect(legacySettingsRedirect('/secrets', `?section=${section}`))
@@ -314,7 +314,7 @@ describe('dashboard route resolution', () => {
       const origin = window.location.origin;
       for (const path of [
         '/settings/providers-secrets',
-        '/settings/user-workspace',
+        '/settings/instance',
         '/settings/operations',
       ]) {
         const url = new URL(`${origin}${path}?section=operations`);
@@ -332,7 +332,7 @@ describe('dashboard route resolution', () => {
     const allAuthorized = {
       features: {
         settingsProvidersSecrets: true,
-        settingsUserWorkspace: true,
+        settingsInstance: true,
         settingsOperations: true,
       },
     };
@@ -359,7 +359,7 @@ describe('dashboard route resolution', () => {
       const uiInfo = {
         features: {
           settingsProvidersSecrets: true,
-          settingsUserWorkspace: false,
+          settingsInstance: false,
           settingsOperations: false,
         },
       };
@@ -375,7 +375,7 @@ describe('dashboard route resolution', () => {
       const uiInfo = {
         features: {
           settingsProvidersSecrets: false,
-          settingsUserWorkspace: true,
+          settingsInstance: true,
           settingsOperations: false,
         },
       };
@@ -383,7 +383,7 @@ describe('dashboard route resolution', () => {
         resolveAuthorizedLegacySettingsTarget('/secrets', '?runtime=codex', uiInfo, false),
       ).toEqual({
         status: 'redirect',
-        target: '/settings/user-workspace',
+        target: '/settings/instance',
       });
     });
 
@@ -391,7 +391,7 @@ describe('dashboard route resolution', () => {
       const uiInfo = {
         features: {
           settingsProvidersSecrets: false,
-          settingsUserWorkspace: false,
+          settingsInstance: false,
           settingsOperations: false,
         },
       };
