@@ -1970,8 +1970,34 @@ async def test_create_executes_a_legacy_successor_with_fixed_resources(tmp_path)
         )
     )
     repeat_create = next(c for c in repeat_commands if c[0] == "create")
-    assert repeat_create == create
+
+    def _without_expiry(argv: tuple[str, ...]) -> tuple[str, ...]:
+        """Drop the wall-clock expiry label; it is deployment metadata, not resources."""
+        tokens = list(argv)
+        kept: list[str] = []
+        idx = 0
+        while idx < len(tokens):
+            token = tokens[idx]
+            if token == "--label" and idx + 1 < len(tokens):
+                nxt = tokens[idx + 1]
+                if nxt.startswith(f"{LABEL_EXPIRES_AT}="):
+                    idx += 2
+                    continue
+                kept.extend([token, nxt])
+                idx += 2
+                continue
+            if token.startswith(f"{LABEL_EXPIRES_AT}="):
+                idx += 1
+                continue
+            kept.append(token)
+            idx += 1
+        return tuple(kept)
+
+    assert _without_expiry(repeat_create) == _without_expiry(create)
     assert repeat.resolved_resources == result.resolved_resources
+    # Deterministic convergence: the resource-relevant launch flags agree.
+    for flag in ("--cpus", "--memory", "--pids-limit"):
+        assert repeat_create[repeat_create.index(flag) + 1] == create[create.index(flag) + 1]
 
 
 @pytest.mark.asyncio
@@ -1998,3 +2024,119 @@ async def test_legacy_successor_beyond_the_deployment_ceiling_stays_rejected(
     assert (
         raised.value.failure_class is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
     )
+
+
+@pytest.mark.asyncio
+async def test_legacy_successor_name_is_deterministic_and_reconcile_skips_create(
+    tmp_path,
+):
+    """MoonLadderStudios/MoonMind#4456: duplicate retries converge on one successor."""
+
+    import json as _json
+
+    (tmp_path / "art_workspace").mkdir()
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner([])
+    )
+    first = _request(
+        tmp_path,
+        resources={
+            "cpuMillis": 0,
+            "memoryMiB": 4096,
+            "minimumMemoryMiB": 2048,
+        },
+    )
+    second = _request(
+        tmp_path,
+        resources={
+            "cpuMillis": 0,
+            "memoryMiB": 4096,
+            "minimumMemoryMiB": 2048,
+        },
+    )
+    assert backend._name(first) == backend._name(second)
+    other = first.model_copy(
+        update={"ownership_token": "container-job:ffffffffffffffffffffffffffffffff:v9"}
+    )
+    assert backend._name(other) != backend._name(first)
+
+    async def owned_runner(args):
+        args = tuple(args)
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return 0, _json.dumps({LABEL_OWNERSHIP: first.ownership_token}).encode(), b""
+        if args[:2] == ("inspect", "--format"):
+            return 0, b"true", b""
+        return 0, b"", b""
+
+    owned_backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=owned_runner
+    )
+    reconciled = await owned_backend.reconcile_container(first)
+    assert reconciled.container_ref == backend._name(first)
+    assert reconciled.running is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_successor_stop_and_remove_follow_the_same_continuation(
+    tmp_path,
+):
+    """MoonLadderStudios/MoonMind#4456: cancel/cleanup follow the successor."""
+
+    import json as _json
+
+    (tmp_path / "art_workspace").mkdir()
+    commands: list = []
+
+    async def lifecycle_runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return (
+                0,
+                _json.dumps(
+                    {LABEL_OWNERSHIP: f"{JOB_ID}:v1"}
+                ).encode(),
+                b"",
+            )
+        if args[0] == "version":
+            return 0, b"27.0.0", b""
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=lifecycle_runner
+    )
+    request = _request(
+        tmp_path,
+        resources={
+            "cpuMillis": 0,
+            "memoryMiB": 4096,
+            "minimumMemoryMiB": 2048,
+        },
+    )
+    # Create first with no existing container visible, then stop/remove the
+    # same continuation. The recording create runner reports absence so the
+    # successor launches; lifecycle_runner reports ownership for stop/remove.
+    create_commands: list = []
+    create_backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner(create_commands)
+    )
+    created = await create_backend.create_container(request)
+    assert created.container_ref == backend._name(request)
+    request.container_ref = created.container_ref
+
+    await backend.stop_container(request)
+    await backend.remove_container(request)
+    kinds = [c[0] for c in commands]
+    assert "stop" in kinds and "rm" in kinds
+    assert any(created.container_ref in c for c in commands if c[0] in {"stop", "rm"})
+
+    async def gone_runner(args):
+        args = tuple(args)
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return 1, b"", b"Error: No such object: moonmind-container-job"
+        return 0, b"", b""
+
+    gone_backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=gone_runner
+    )
+    await gone_backend.remove_container(request)
