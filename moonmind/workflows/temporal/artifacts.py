@@ -1614,6 +1614,39 @@ class TemporalArtifactService:
         return principal.startswith("service:")
 
     @staticmethod
+    def _is_workflow_principal(principal: str) -> bool:
+        return principal.startswith("workflow:")
+
+    @staticmethod
+    def _is_instance_operator_principal(principal: str | None) -> bool:
+        """Single-user (#4351): admitted-operator instance visibility.
+
+        The operator (stable ``operator``/``system`` principals and legacy
+        human-owner UUID strings) sees instance artifacts without a
+        human-owner lookup. ``workflow:``/``service:`` machine principals
+        remain execution-bound and are never instance operators. Raw
+        restricted bytes, quarantine, and mutation of execution-owned links
+        keep their owning checks; this predicate only widens metadata/
+        collection visibility and operator control, never raw secrets or
+        agent policy permissions.
+        """
+        text = str(principal or "").strip()
+        if not text:
+            return False
+        if text.startswith("service:") or text.startswith("workflow:"):
+            return False
+        if text in {"operator", "system"}:
+            return True
+        # Legacy human-owner strings (UUIDs) are operator provenance.
+        try:
+            from uuid import UUID as _UUID
+
+            _UUID(text)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
     def _read_candidates(
         principal: str, admitted_principal: str | None = None
     ) -> set[str]:
@@ -1674,6 +1707,14 @@ class TemporalArtifactService:
         principal: str,
         admitted_principal: str | None = None,
     ) -> None:
+        # Single-user (#4351): instance-operator visibility. The admitted
+        # operator inspects any instance artifact without a human-owner
+        # lookup; legacy owner strings stay as provenance. Machine
+        # (workflow:/service:) readers remain execution-bound below.
+        if self._is_instance_operator_principal(
+            principal
+        ) or self._is_instance_operator_principal(admitted_principal):
+            return
         try:
             self._assert_read_access(
                 artifact, principal=principal, admitted_principal=admitted_principal
@@ -1701,6 +1742,10 @@ class TemporalArtifactService:
         principal: str,
     ) -> None:
         if is_disabled_local_mode():
+            return
+        # Single-user (#4351): the admitted operator controls instance
+        # artifacts; machine (workflow:/service:) mutation stays owner-bound.
+        if self._is_instance_operator_principal(principal):
             return
         owner = self._owner_principal(artifact)
         if owner and owner != principal and not self._is_service_principal(principal):

@@ -436,18 +436,18 @@ class RecurringWorkflowsService:
         self,
         *,
         scope: str,
-        user_id: UUID | None,
+        user_id: UUID | None = None,
         include_disabled: bool = True,
         limit: int = 200,
         offset: int = 0,
     ) -> list[RecurringWorkflowDefinition]:
+        # Single-user (#4351): schedules are instance resources. ``user_id``
+        # remains accepted for caller compatibility but is never a visibility
+        # predicate; legacy ``owner_user_id`` values are provenance and stay
+        # readable. Scope filtering is retained for history compatibility.
         scope_type = _normalize_scope_type(scope)
         stmt: Select[tuple[RecurringWorkflowDefinition]] = select(RecurringWorkflowDefinition)
         stmt = stmt.where(RecurringWorkflowDefinition.scope_type == scope_type)
-        if scope_type is RecurringWorkflowScopeType.PERSONAL:
-            if user_id is None:
-                return []
-            stmt = stmt.where(RecurringWorkflowDefinition.owner_user_id == user_id)
         if not include_disabled:
             stmt = stmt.where(RecurringWorkflowDefinition.enabled.is_(True))
         stmt = stmt.order_by(
@@ -461,16 +461,13 @@ class RecurringWorkflowsService:
         self,
         *,
         scope: str,
-        user_id: UUID | None,
+        user_id: UUID | None = None,
         include_disabled: bool = True,
     ) -> int:
+        # Single-user (#4351): instance visibility; ``user_id`` ignored.
         scope_type = _normalize_scope_type(scope)
         stmt = select(func.count()).select_from(RecurringWorkflowDefinition)
         stmt = stmt.where(RecurringWorkflowDefinition.scope_type == scope_type)
-        if scope_type is RecurringWorkflowScopeType.PERSONAL:
-            if user_id is None:
-                return 0
-            stmt = stmt.where(RecurringWorkflowDefinition.owner_user_id == user_id)
         if not include_disabled:
             stmt = stmt.where(RecurringWorkflowDefinition.enabled.is_(True))
         result = await self._session.execute(stmt)
@@ -494,29 +491,15 @@ class RecurringWorkflowsService:
         self,
         *,
         definition_id: UUID,
-        user_id: UUID | None,
-        can_manage_global: bool,
+        user_id: UUID | None = None,
+        can_manage_global: bool = True,
     ) -> RecurringWorkflowDefinition:
-        definition = await self.get_definition(definition_id)
-        if definition.scope_type is RecurringWorkflowScopeType.GLOBAL:
-            if not can_manage_global:
-                raise RecurringWorkflowAuthorizationError(
-                    "Operator privileges are required for global schedules"
-                )
-            return definition
-
-        if definition.scope_type is RecurringWorkflowScopeType.PERSONAL:
-            if user_id is None or definition.owner_user_id != user_id:
-                raise RecurringWorkflowAuthorizationError(
-                    "You do not have access to this recurring schedule"
-                )
-            return definition
-
-        if not can_manage_global:
-            raise RecurringWorkflowAuthorizationError(
-                "Operator privileges are required to manage this schedule"
-            )
-        return definition
+        # Single-user (#4351): the admitted operator sees every schedule.
+        # ``user_id``/``can_manage_global`` are accepted for compatibility but
+        # never gate access; legacy owner/scope values are provenance.
+        # Execution-state, source-authority, and approval validation still
+        # apply at their owning boundaries.
+        return await self.get_definition(definition_id)
 
     def _workflow_bundle_for_target(
         self,
@@ -547,12 +530,36 @@ class RecurringWorkflowsService:
         return workflow_type, {
             "workflow_type": workflow_type,
             "title": str(target_payload.get("title") or name),
+            # Single-user (#4351): legacy owner strings are preserved as
+            # provenance for retained histories; new schedules emit None.
+            # See decode_recurring_workflow_input for replay compatibility.
             "owner_user_id": str(owner_user_id) if owner_user_id else None,
             "initial_parameters": initial_parameters,
             "input_artifact_ref": target_payload.get("inputArtifactRef"),
             "plan_artifact_ref": target_payload.get("planArtifactRef"),
             "failure_policy": target_payload.get("failurePolicy"),
         }
+
+    def decode_recurring_workflow_input(
+        self, workflow_input: Mapping[str, Any] | None
+    ) -> dict[str, Any]:
+        """Decode a retained schedule action payload without a user table.
+
+        Single-user (#4351): already-admitted Temporal schedule payloads may
+        carry a legacy ``owner_user_id`` human-owner string. The decoder
+        preserves that string as non-authoritative provenance, keeps schedule
+        IDs/cadence/frozen inputs untouched, and never consults a present-day
+        user table nor maps every actor to a synthetic constant. ``None``
+        (new instance schedules) stays ``None``.
+        """
+        payload = dict(workflow_input or {})
+        owner = payload.get("owner_user_id")
+        if owner is None:
+            payload["owner_user_id"] = None
+        else:
+            text = str(owner).strip()
+            payload["owner_user_id"] = text or None
+        return payload
 
     def _owner_search_attributes(self, owner_user_id: UUID | None) -> dict[str, str]:
         if owner_user_id is None:
@@ -732,11 +739,10 @@ class RecurringWorkflowsService:
         ):
             return False
 
-        actor = (
-            await self._session.get(User, definition.owner_user_id)
-            if definition.owner_user_id is not None
-            else None
-        )
+        # Single-user (#4351): schedule refresh uses the definition's real
+        # frozen inputs, not a present-day user row. Legacy owner is
+        # provenance only.
+        actor = None
         refreshed = await refresh_managed_bootstrap_snapshot(
             self._session,
             parameters=initial_parameters,
@@ -802,12 +808,10 @@ class RecurringWorkflowsService:
             raise RecurringWorkflowValidationError(
                 "scheduled Omnigent Provider Profile is unavailable"
             )
-        actor = (
-            await self._session.get(User, definition.owner_user_id)
-            if definition.owner_user_id is not None
-            else None
-        )
-        principal = str(getattr(actor, "id", "") or "system")
+        # Single-user (#4351): execution-plan refresh is bound to the
+        # schedule's frozen snapshot, not a present-day user row.
+        actor = None
+        principal = "system"
         if initial_parameters.get("agentProfileSnapshot") != snapshot:
             raise RecurringWorkflowValidationError(
                 "scheduled Agent Profile snapshot identities conflict"
@@ -1102,10 +1106,9 @@ class RecurringWorkflowsService:
         )
         scope = _normalize_scope_type(scope_type)
 
-        if scope is RecurringWorkflowScopeType.PERSONAL and owner_user_id is None:
-            raise RecurringWorkflowValidationError(
-                "ownerUserId is required for personal schedules"
-            )
+        # Single-user (#4351): new schedules carry no human owner. Legacy
+        # ``owner_user_id`` values remain stored as non-authoritative
+        # provenance; ``None`` is the normal value for instance schedules.
 
         now = datetime.now(UTC)
         next_run_at = compute_next_occurrence(

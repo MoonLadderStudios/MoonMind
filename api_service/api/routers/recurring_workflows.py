@@ -211,31 +211,17 @@ def _serialize_definition(
 def _action_permissions_for_definition(
     definition: RecurringWorkflowDefinition,
     *,
-    user: User,
+    user: User | None = None,
 ) -> RecurringWorkflowActionPermissionsModel:
-    user_id = getattr(user, "id", None)
-    is_operator = bool(getattr(user, "is_superuser", False))
-    if definition.scope_type is RecurringWorkflowScopeType.GLOBAL:
-        can_manage = is_operator
-        manage_reason = "Operator privileges are required to manage global schedules."
-    elif definition.scope_type is RecurringWorkflowScopeType.PERSONAL:
-        can_manage = isinstance(user_id, UUID) and definition.owner_user_id == user_id
-        manage_reason = "Only the schedule owner can manage this schedule."
-    else:
-        can_manage = is_operator
-        manage_reason = "Operator privileges are required to manage this schedule."
-
-    disabled_reasons: dict[str, str] = {}
-    if not can_manage:
-        disabled_reasons["canEdit"] = manage_reason
-        disabled_reasons["canRunNow"] = manage_reason
-        disabled_reasons["canDelete"] = manage_reason
-
+    # Single-user (#4351): the admitted operator manages every instance
+    # schedule. Legacy scope/owner values are provenance, never an action
+    # gate. Execution-state and approval validation remain at their owning
+    # boundaries.
     return RecurringWorkflowActionPermissionsModel(
-        can_edit=can_manage,
-        can_run_now=can_manage,
-        can_delete=can_manage,
-        disabled_reasons=disabled_reasons,
+        can_edit=True,
+        can_run_now=True,
+        can_delete=True,
+        disabled_reasons={},
     )
 
 def _serialize_run(
@@ -262,18 +248,12 @@ def _serialize_run(
 def _require_operator_for_global_scope(
     *,
     scope: RecurringWorkflowScopeType,
-    user: User,
+    user: User | None = None,
 ) -> None:
-    if scope is RecurringWorkflowScopeType.GLOBAL and not bool(
-        getattr(user, "is_superuser", False)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "operator_role_required",
-                "message": "Operator privileges are required for global schedules.",
-            },
-        )
+    # Single-user (#4351): no human-owner gate. The shared admission boundary
+    # (get_current_user) owns operator access; scope is history-compatible
+    # provenance. Retained as a no-op for call-site compatibility.
+    return None
 
 def _log_route_exception(
     *, action: str, definition_id: UUID | None, user_id: UUID | None, exc: Exception
@@ -723,16 +703,9 @@ async def create_recurring_workflow(
     scope = RecurringWorkflowScopeType(payload.scope_type)
     _require_operator_for_global_scope(scope=scope, user=user)
 
-    user_id = getattr(user, "id", None)
-    owner_user_id = user_id if scope is RecurringWorkflowScopeType.PERSONAL else None
-    if scope is RecurringWorkflowScopeType.PERSONAL and not isinstance(owner_user_id, UUID):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "owner_user_required",
-                "message": "A persisted user id is required for personal schedules.",
-            },
-        )
+    # Single-user (#4351): new schedules carry no human owner. Legacy
+    # ``owner_user_id`` values persist as provenance on old rows.
+    owner_user_id = None
 
     try:
         definition = await service.create_definition(
@@ -792,7 +765,7 @@ async def get_recurring_workflow(
         definition = await service.require_authorized_definition(
             definition_id=definition_id,
             user_id=user_id if isinstance(user_id, UUID) else None,
-            can_manage_global=bool(getattr(user, "is_superuser", False)),
+            can_manage_global=True,
         )
         runtime_summary = await service.runtime_summary_for_definition(definition)
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -821,7 +794,7 @@ async def update_recurring_workflow(
         definition = await service.require_authorized_definition(
             definition_id=definition_id,
             user_id=user_id if isinstance(user_id, UUID) else None,
-            can_manage_global=bool(getattr(user, "is_superuser", False)),
+            can_manage_global=True,
         )
         updated = await service.update_definition(
             definition,
@@ -878,7 +851,7 @@ async def run_recurring_workflow_now(
         definition = await service.require_authorized_definition(
             definition_id=definition_id,
             user_id=user_id if isinstance(user_id, UUID) else None,
-            can_manage_global=bool(getattr(user, "is_superuser", False)),
+            can_manage_global=True,
         )
         run = await service.create_manual_run(definition, request_id=idempotency_key)
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -916,7 +889,7 @@ async def delete_recurring_workflow(
         definition = await service.require_authorized_definition(
             definition_id=definition_id,
             user_id=user_id if isinstance(user_id, UUID) else None,
-            can_manage_global=bool(getattr(user, "is_superuser", False)),
+            can_manage_global=True,
         )
         await service.delete_definition(definition)
     except Exception as exc:  # pragma: no cover - thin mapping layer
@@ -955,7 +928,7 @@ async def list_recurring_workflow_runs(
         definition = await service.require_authorized_definition(
             definition_id=definition_id,
             user_id=user_id if isinstance(user_id, UUID) else None,
-            can_manage_global=bool(getattr(user, "is_superuser", False)),
+            can_manage_global=True,
         )
         runs = await service.list_runs(definition_id=definition.id, limit=limit)
         started_at_by_workflow_id = await service.started_at_by_workflow_id(

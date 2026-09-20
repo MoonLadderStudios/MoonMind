@@ -5829,6 +5829,10 @@ class TemporalExecutionService:
         owner_id: UUID | str | None,
         owner_type: str | None,
     ) -> tuple[TemporalExecutionOwnerType, str]:
+        # Single-user (#4351): new executions default to instance (SYSTEM)
+        # without a human-owner lookup. Legacy USER payloads still decode
+        # unchanged for retained-history replay; no present-day user table is
+        # consulted and histories are never rewritten.
         owner_value = str(owner_id).strip() if owner_id is not None else ""
         if owner_type:
             try:
@@ -5839,6 +5843,8 @@ class TemporalExecutionService:
                     f"Unsupported owner type: {owner_type}. Supported values: {supported}"
                 ) from exc
         elif owner_value:
+            # History compatibility: a retained payload that carries an owner
+            # id without an explicit type keeps its legacy USER meaning.
             owner_type_enum = TemporalExecutionOwnerType.USER
         else:
             owner_type_enum = TemporalExecutionOwnerType.SYSTEM
@@ -5861,6 +5867,32 @@ class TemporalExecutionService:
                 "owner_id is required when owner_type is service"
             )
         return owner_type_enum, owner_value
+
+    def decode_previous_execution_owner(
+        self, payload: Mapping[str, Any] | None
+    ) -> dict[str, Any]:
+        """Decode a retained workflow/activity/update/signal payload.
+
+        Single-user (#4351) history-compatibility inventory: already-admitted
+        parent/child runs, previous activity payloads, Continue-As-New,
+        cancellation, and recovery records may carry legacy ``owner_user_id``,
+        ``mm_owner_type``, or ``mm_owner_id`` human-owner fields. They are
+        preserved as non-authoritative provenance without consulting a
+        present-day user table, without rewriting histories, and without
+        mapping every actor to a synthetic constant. Missing owner fields
+        decode to the instance default (``system``).
+        """
+        data = dict(payload or {})
+        for key in ("owner_user_id", "mm_owner_id"):
+            if key in data and data[key] is not None:
+                text = str(data[key]).strip()
+                data[key] = text or None
+        owner_type = str(data.get("mm_owner_type") or data.get("owner_type") or "").strip()
+        if owner_type:
+            data["mm_owner_type"] = owner_type
+        else:
+            data.setdefault("mm_owner_type", "system")
+        return data
 
     def _default_owner_id(
         self,

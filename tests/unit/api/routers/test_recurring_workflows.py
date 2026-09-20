@@ -127,19 +127,23 @@ def test_recurring_workflow_version_conflict_maps_to_409() -> None:
 
 @pytest.mark.asyncio
 async def test_list_recurring_workflows_global_requires_operator() -> None:
+    # Single-user (#4351): global scope is instance-visible; no human-owner
+    # gate. The shared admission boundary owns access.
     service = AsyncMock()
+    service.list_definitions.return_value = []
+    service.count_definitions.return_value = 0
     user = SimpleNamespace(id=uuid4(), is_superuser=False)
 
-    with pytest.raises(HTTPException) as exc:
-        await recurring_router.list_recurring_workflows(
-            scope="global",
-            limit=50,
-            **LIST_DEFAULTS,
-            service=service,
-            user=user,
-        )
+    response = await recurring_router.list_recurring_workflows(
+        scope="global",
+        limit=50,
+        **LIST_DEFAULTS,
+        service=service,
+        user=user,
+    )
 
-    assert exc.value.status_code == 403
+    assert response.count == 0
+    service.list_definitions.assert_awaited()
 
 @pytest.mark.asyncio
 async def test_list_recurring_workflows_uses_runtime_schedule_summary() -> None:
@@ -334,6 +338,8 @@ async def test_get_recurring_workflow_serializes_action_permissions() -> None:
 
 @pytest.mark.asyncio
 async def test_global_recurring_workflow_action_permissions_require_operator() -> None:
+    # Single-user (#4351): the admitted operator manages every instance
+    # schedule; legacy scope/owner values are provenance.
     definition = _definition(
         scope_type=RecurringWorkflowScopeType.GLOBAL,
         owner_user_id=None,
@@ -352,15 +358,10 @@ async def test_global_recurring_workflow_action_permissions_require_operator() -
 
     assert operator_permissions.can_edit is True
     assert operator_permissions.can_run_now is True
-    assert viewer_permissions.can_edit is False
-    assert viewer_permissions.can_run_now is False
-    assert viewer_permissions.can_delete is False
-    assert viewer_permissions.disabled_reasons["canEdit"] == (
-        "Operator privileges are required to manage global schedules."
-    )
-    assert viewer_permissions.disabled_reasons["canDelete"] == (
-        "Operator privileges are required to manage global schedules."
-    )
+    assert viewer_permissions.can_edit is True
+    assert viewer_permissions.can_run_now is True
+    assert viewer_permissions.can_delete is True
+    assert viewer_permissions.disabled_reasons == {}
 
 @pytest.mark.asyncio
 async def test_run_recurring_workflow_now_returns_run_row() -> None:
@@ -402,7 +403,7 @@ async def test_delete_recurring_workflow_deletes_authorized_definition() -> None
     service.require_authorized_definition.assert_awaited_once_with(
         definition_id=definition.id,
         user_id=user.id,
-        can_manage_global=False,
+        can_manage_global=True,
     )
     service.delete_definition.assert_awaited_once_with(definition)
 
