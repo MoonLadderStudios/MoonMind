@@ -4015,6 +4015,95 @@ async def test_api_key_setup_reports_unavailable_manager_without_changing_creden
 
 
 @pytest.mark.asyncio
+async def test_api_key_setup_names_the_live_consumer_blocking_manager_recovery(
+    client_app: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refused manager replacement is reported as what it is.
+
+    A manager whose history the running build cannot replay is replaced
+    automatically, but not while the durable ledger says a run still holds
+    this runtime's capacity: replacing it would revoke authority from a live
+    consumer. That refusal is a different condition from a manager outage and
+    has a different remedy, so the 503 names it instead of telling the
+    operator to try again forever.
+    """
+    from moonmind.omnigent.opencode_runtime_validation import (
+        OpenCodeProviderRuntimeValidationService,
+    )
+    from moonmind.provider_profiles import maintenance
+    from moonmind.provider_profiles.manager_recovery import (
+        MANAGER_HELD_LEASE_PRESENT,
+        ManagerReplayRecovery,
+        ProviderManagerUnavailableError,
+    )
+
+    profile_id = "opencode-recovery-refused"
+    raw_key = "test-submitted-credential-never-echo"
+    refusal = ManagerReplayRecovery(
+        runtime_id="opencode",
+        workflow_id="provider-profile-manager:opencode",
+        recovered=False,
+        refusal=MANAGER_HELD_LEASE_PRESENT,
+        detail=(
+            "the durable lease ledger reports 1 held lease(s) for this runtime, "
+            "so a live consumer would lose its authority"
+        ),
+        evidence="[TMPRL1100] Nondeterminism error",
+        nondeterminism_failures=3,
+        held_leases=1,
+    )
+    acquire = AsyncMock(side_effect=ProviderManagerUnavailableError(refusal))
+    drain = AsyncMock()
+    validate = AsyncMock()
+    monkeypatch.setattr(maintenance, "acquire_credential_maintenance_guard", acquire)
+    monkeypatch.setattr(maintenance, "drain_profile_bound_hosts", drain)
+    monkeypatch.setattr(OpenCodeProviderRuntimeValidationService, "validate", validate)
+    app.dependency_overrides.pop(provider_profiles_router._credential_validation_guard)
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="opencode",
+                provider_id="opencode-go",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                secret_refs={"opencode_api_key": "db://previous-opencode-key"},
+                credential_generation=7,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            json={"api_key": raw_key},
+        )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["code"] == "provider_credential_manager_unavailable"
+    assert detail["refusal"] == MANAGER_HELD_LEASE_PRESENT
+    # The operator learns the actual blocker and the saved state is untouched.
+    assert "still hold its capacity" in detail["message"]
+    assert "have not changed" in detail["message"]
+    assert detail["retry_idempotency_key"]
+    assert raw_key not in response.text
+    drain.assert_not_awaited()
+    validate.assert_not_awaited()
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.credential_generation == 7
+        assert profile.secret_refs == {"opencode_api_key": "db://previous-opencode-key"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("header_name", ["Idempotency-Key", "X-Request-ID"])
 async def test_unavailable_manager_echoes_client_retry_identity(
     client_app: AsyncClient,

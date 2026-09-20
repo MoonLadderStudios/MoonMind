@@ -914,3 +914,26 @@ async def test_legacy_error_record_is_carried_into_the_attempt_history(
     recorded = json.loads((directory / "last-error.json").read_text())
     assert recorded["attempts"] == history
     assert original in release.release_failure_summary(history)
+
+
+def _wedged_manager_disposition(blocked: bool = True) -> dict:
+    """A liveness disposition carrying the wedged-singleton signature."""
+
+    return {
+        "blocked": blocked,
+        "reasonCode": (
+            "provider_manager_liveness_blocked" if blocked
+            else "provider_manager_liveness_ok"
+        ),
+        "reasons": ["opencode: nondeterminism_loop"] if blocked else [],
+        "evidence": (
+            [{"runtime_id": "opencode", "finding": "nondeterminism_loop"}]
+            if blocked
+            else []
+        ),
+        "recoveryOwner": "provider-profile-manager-recovery" if blocked else None,
+        "recoveryRunbook": "docs/Security/ProviderProfiles.md" if blocked else None,
+        "recoveryHint": "hint" if blocked else None,
+    }
+
+
