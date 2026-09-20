@@ -11,8 +11,10 @@ from moonmind.omnigent.bootstrap.evidence import (
     write_deployment_evidence,
 )
 from moonmind.omnigent.deployment_evidence import (
+    assert_deployment_evidence_matches_plan,
     load_deployment_evidence,
     load_deployment_evidence_entries,
+    validate_deployment_evidence,
 )
 from moonmind.omnigent.harness_platform.support import (
     SupportKeyPayload,
@@ -367,3 +369,86 @@ def test_collapsed_publication_history_admits_the_current_qualification(
         hostImageRef=current["hostImageRef"],
     )
     assert load_deployment_evidence(plan, path=path) == current
+
+
+def test_plan_match_selects_on_the_qualification_key_and_host_image(
+    tmp_path, monkeypatch,
+) -> None:
+    """The qualification key is the whole identity comparison.
+
+    ``compute_deployment_qualification_key`` owns which identity fields a
+    deployment qualifies. A second projection here could disagree with the key
+    that admission and publication already select on, which is exactly how a
+    plan and its evidence drift apart.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
+        str(tmp_path / "deployment_evidence_key"),
+    )
+    auth = validate_deployment_evidence(
+        _evidence("opencode-auth-json@1", profile_ref="opencode-go-default")
+    )
+    none = validate_deployment_evidence(
+        _evidence("none@1", profile_ref="opencode-zen-free")
+    )
+
+    def _plan(identity: SupportKeyPayload, *, host_image_ref: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            supportIdentity=identity,
+            supportCombinationKey=compute_support_combination_key(identity),
+            hostImageRef=host_image_ref,
+        )
+
+    image = auth.host_image_ref
+    # Same class, same key: per-run model and capability variance is admitted.
+    assert_deployment_evidence_matches_plan(
+        auth,
+        _plan(
+            _identity("opencode-auth-json@1", model_digest="sha256:" + "b" * 64),
+            host_image_ref=image,
+        ),
+    )
+    # none@1 additionally admits volatile build drift.
+    assert_deployment_evidence_matches_plan(
+        none,
+        _plan(
+            _identity("none@1").model_copy(
+                update={"omnigentServerBuildRef": "sha256:" + "f" * 64}
+            ),
+            host_image_ref=image,
+        ),
+    )
+    # Auth-bearing build drift is a different qualified combination.
+    with pytest.raises(ValueError, match="conflicts with the execution plan"):
+        assert_deployment_evidence_matches_plan(
+            auth,
+            _plan(
+                _identity("opencode-auth-json@1").model_copy(
+                    update={"omnigentServerBuildRef": "sha256:" + "f" * 64}
+                ),
+                host_image_ref=image,
+            ),
+        )
+    # A credential class never qualifies another, in either direction.
+    with pytest.raises(ValueError, match="conflicts with the execution plan"):
+        assert_deployment_evidence_matches_plan(
+            none, _plan(_identity("opencode-auth-json@1"), host_image_ref=image)
+        )
+    with pytest.raises(ValueError, match="conflicts with the execution plan"):
+        assert_deployment_evidence_matches_plan(
+            auth, _plan(_identity("none@1"), host_image_ref=image)
+        )
+    # The qualified host image is deployment substrate, not per-run variance.
+    with pytest.raises(ValueError, match="conflicts with the execution plan"):
+        assert_deployment_evidence_matches_plan(
+            auth,
+            _plan(
+                _identity("opencode-auth-json@1"),
+                host_image_ref="ghcr.io/example/opencode@sha256:" + "0" * 64,
+            ),
+        )
+    # A plan without an admitted identity can never match.
+    with pytest.raises(ValueError, match="lacks exact support identity"):
+        assert_deployment_evidence_matches_plan(
+            auth, SimpleNamespace(supportIdentity=None, hostImageRef=image)
+        )

@@ -20,12 +20,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.omnigent.conformance import assert_secret_free
 from moonmind.omnigent.harness_platform.support import (
-    DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS,
     SupportKeyPayload,
     compute_deployment_qualification_key,
     compute_support_combination_key,
     deployment_excluded_fields_for,
-    is_none_materializer_identity,
 )
 
 DEPLOYMENT_EVIDENCE_VERSION = "moonmind.omnigent-deployment-execution-evidence/v1"
@@ -249,6 +247,21 @@ def assert_deployment_evidence_matches_plan(
     evidence: DeploymentExecutionEvidence,
     plan_payload: Any,
 ) -> None:
+    """Verify one qualification document answers this exact plan.
+
+    ``compute_deployment_qualification_key`` is the single owner of which
+    identity fields a deployment qualifies, so comparing that key is the whole
+    identity comparison. Re-projecting the identity here would be a second
+    owner of the same rule, free to disagree with the key that admission and
+    publication already select on — which is how a plan and its evidence drift
+    apart in the first place.
+
+    Everything outside that key is either per-run variance the qualification
+    deliberately ignores (model, effort, required capabilities) or a
+    deployment fact recorded beside the identity. The host image is the one
+    such fact: it is substrate, not variance, so it is compared exactly.
+    """
+
     support_identity = getattr(plan_payload, "supportIdentity", None)
     if support_identity is None:
         raise ValueError("execution plan lacks exact support identity")
@@ -276,53 +289,18 @@ def assert_deployment_evidence_matches_plan(
             f"deployment evidence rollbackPolicyVersion {evidence.rollback_policy_version!r} "
             f"does not match current {SUPERVISOR_ROLLBACK_POLICY_VERSION!r}"
         )
-    # For deployment evidence, we only require exact match on the core support
-    # combination, not on per-run policy snapshots which may vary across workflow
-    # compilations. The policy digests are intentionally excluded for deployment
-    # qualification, which proves the deployment can run the combination, not a
-    # single historical policy snapshot. For the credentialless none@1
-    # fast-path, volatile build digests are likewise excluded (same projection
-    # as compute_deployment_qualification_key); auth-bearing identities stay
-    # exact. materializerRefs itself is never excluded.
-    excluded = deployment_excluded_fields_for(support_identity)
-    if not (
-        is_none_materializer_identity(support_identity)
-        and is_none_materializer_identity(evidence.support_identity)
-    ):
-        # Auth-bearing comparison stays exact: only per-run model/capabilities
-        # are excluded. deployment_excluded_fields_for already returns base
-        # for auth; this keeps the narrowing from leaking across classes.
-        excluded = DEPLOYMENT_QUALIFICATION_EXCLUDED_FIELDS
-
-    def _qualified_identity(identity: SupportKeyPayload) -> dict[str, Any]:
-        return {
-            key: value
-            for key, value in identity.model_dump(mode="json", by_alias=True).items()
-            if key not in excluded
-        }
-
-    expected = {
-        "deploymentQualificationKey": compute_deployment_qualification_key(
-            support_identity
-        ),
-        "supportIdentity": _qualified_identity(support_identity),
-        "hostImageRef": plan_payload.hostImageRef,
-        "featureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
-        "replayCompatibilityVersion": OMNIGENT_SESSION_COMPATIBILITY_VERSION,
-        "rollbackPolicyVersion": SUPERVISOR_ROLLBACK_POLICY_VERSION,
-    }
-    actual = {
-        "deploymentQualificationKey": compute_deployment_qualification_key(
-            evidence.support_identity
-        ),
-        "supportIdentity": _qualified_identity(evidence.support_identity),
-        "hostImageRef": evidence.host_image_ref,
-        "featureGeneration": evidence.feature_generation,
-        "replayCompatibilityVersion": evidence.replay_compatibility_version,
-        "rollbackPolicyVersion": evidence.rollback_policy_version,
-    }
-    if actual != expected:
-        raise ValueError("deployment evidence conflicts with the execution plan")
+    if compute_deployment_qualification_key(
+        evidence.support_identity
+    ) != compute_deployment_qualification_key(support_identity):
+        raise ValueError(
+            "deployment evidence conflicts with the execution plan: it "
+            "qualifies a different execution combination"
+        )
+    if evidence.host_image_ref != plan_payload.hostImageRef:
+        raise ValueError(
+            "deployment evidence conflicts with the execution plan: it "
+            "qualifies a different host image"
+        )
 
 
 def _candidate_qualification_key(candidate: Mapping[str, Any]) -> str | None:
