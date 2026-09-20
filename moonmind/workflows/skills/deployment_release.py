@@ -718,27 +718,15 @@ async def verify_installed_fleet(runner, image, *, expected=None, attempts=60):
     from moonmind.workflows.temporal.workers import _FLEET_SERVICE_NAMES
 
     expected = expected or installed_release()["digest"]
-    project = getattr(runner, "project_name", None) or "moonmind"
     for _ in range(attempts):
         ready = True
         for service in _FLEET_SERVICE_NAMES.values():
-            # `compose ps` returns one-off containers alongside the installed
-            # service: `compose run` stamps them with the same project and
-            # service labels. The updater executing this check is itself one
-            # of them for temporal-worker-deployment-control, so an exact-one
-            # count over `compose ps` can never pass during a release. Count
-            # only installed containers, as installed_bind_sources does.
-            found = await docker(
-                "ps",
-                "-q",
-                "--filter",
-                f"label=com.docker.compose.project={project}",
-                "--filter",
-                f"label=com.docker.compose.service={service}",
-                "--filter",
-                "label=com.docker.compose.oneoff=False",
+            found = await runner._run_compose_command(
+                ("docker", "compose", "ps", "-q", service),
+                requested_image=image,
             )
-            identifiers = found.split()
+            _ensure_command_succeeded("inspect installed worker", found)
+            identifiers = found["stdout"].split()
             if len(identifiers) != 1:
                 ready = False
                 break
