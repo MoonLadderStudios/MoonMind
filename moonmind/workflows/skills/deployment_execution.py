@@ -1943,16 +1943,7 @@ class DeploymentUpdateExecutor:
         (docker-proxy) and stateful substrate stay with the staged pass so
         the updater never recreates its own transport mid-update.
         """
-        from moonmind.security.egress import EGRESS_GATEWAY_SERVICE
-
-        targets = tuple(
-            service
-            for service in _substrate_reconciliation_targets(
-                before_state=before_state,
-                excluded_services=self.excluded_services,
-            )
-            if _service_name_matches(service, EGRESS_GATEWAY_SERVICE)
-        )
+        targets = _attested_gateway_services(before_state)
         if not targets:
             return None
         report: dict[str, Any] = {"targets": list(targets)}
@@ -2104,9 +2095,17 @@ class DeploymentUpdateExecutor:
                     excluded_services=self.excluded_services,
                 )
                 one_shot_services = _one_shot_services_from_plan(command_plan)
+                # The egress gateway is recreated ahead of the workers that
+                # attest it, so the main recreation must not restart it under
+                # them. `--no-deps` on the main plan means dependency ordering
+                # would not provide that handoff either.
+                gateway_services = {
+                    service.strip().lower()
+                    for service in _attested_gateway_services(before_state)
+                }
                 service_command_plan = _command_plan_without_services(
                     command_plan,
-                    excluded_services=one_shot_services,
+                    excluded_services={*one_shot_services, *gateway_services},
                 )
                 command_log["pull"]["command"] = list(command_plan.pull_args)
                 command_log["up"]["command"] = list(service_command_plan.up_args)
@@ -3009,6 +3008,26 @@ def _compose_one_shot_up_args(
     if parts and parts[-1] == "--":
         parts.pop()
     return (*parts, "--exit-code-from", one_shot_service, one_shot_service)
+
+
+def _attested_gateway_services(before_state: Mapping[str, Any]) -> tuple[str, ...]:
+    """Configured services whose policy workers attest at startup.
+
+    Selected from the configured services, never from the exclusion list. The
+    documented default excludes only the deployment-control runner, so keying
+    this off exclusions made the pre-worker alignment a no-op on exactly the
+    supported default configuration.
+    """
+    from moonmind.security.egress import EGRESS_GATEWAY_SERVICE
+
+    configured = before_state.get("configuredServices")
+    if not isinstance(configured, Sequence) or isinstance(configured, (str, bytes)):
+        return ()
+    return tuple(
+        str(service)
+        for service in configured
+        if _service_name_matches(str(service), EGRESS_GATEWAY_SERVICE)
+    )
 
 
 def _remove_services_from_command_args(

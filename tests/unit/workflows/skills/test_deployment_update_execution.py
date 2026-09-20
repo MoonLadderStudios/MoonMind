@@ -3056,3 +3056,36 @@ async def test_egress_gateway_is_aligned_before_workers_are_recreated(
     )
     assert gateway_up < main_up, kinds
     assert "--no-deps" in runner.commands[gateway_up][1]
+
+
+@pytest.mark.asyncio
+async def test_egress_gateway_is_aligned_under_the_documented_default_exclusions(
+    monkeypatch,
+) -> None:
+    """The default `.env` excludes only the deployment-control runner.
+
+    Selecting the gateway from the exclusion list made the pre-worker
+    alignment a no-op on exactly that supported default, so an ordinary A-to-B
+    update could still recreate workers against the old gateway. The gateway
+    is chosen from the configured services instead, and is then kept out of
+    the main recreation so it is not restarted underneath the workers that
+    attest it.
+    """
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    runner = EgressGatewayRunner(events)
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner,
+        events=events,
+        excluded_services=("temporal-worker-deployment-control",),
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    ups = [tuple(command[1]) for command in runner.commands if command[0] == "up"]
+    gateway_ups = [command for command in ups if "sandbox-egress-proxy" in command]
+    assert len(gateway_ups) == 1, ups
+    assert "--no-deps" in gateway_ups[0]
+    main_up = next(command for command in ups if "sandbox-egress-proxy" not in command)
+    assert ups.index(gateway_ups[0]) < ups.index(main_up)

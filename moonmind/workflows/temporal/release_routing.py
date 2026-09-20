@@ -140,6 +140,48 @@ async def version_drained(client, version: str) -> bool:
     )
 
 
+async def qualification_closed_without_activation(
+    client, *, version: str, canary_id: str
+) -> bool:
+    """A private candidate's only admitted workflow is its named canary.
+
+    Inactive versions never enter Temporal's drainage state machine, so a
+    legacy candidate that failed qualification without ever being promoted can
+    never report drained. It can retire after the service confirms the version
+    never took traffic and its canary is closed or was never started. Without
+    this proof those `mm-candidate-*` containers survive forever, and because
+    they reuse the deployment's Compose service labels they keep blocking
+    later updates.
+    """
+    from temporalio.api.enums.v1 import WorkerDeploymentVersionStatus
+    from temporalio.client import WorkflowExecutionStatus
+
+    try:
+        response = await client.workflow_service.describe_worker_deployment_version(
+            DescribeWorkerDeploymentVersionRequest(
+                namespace=client.namespace, version=version
+            )
+        )
+        if (
+            response.worker_deployment_version_info.status
+            != WorkerDeploymentVersionStatus.WORKER_DEPLOYMENT_VERSION_STATUS_INACTIVE
+        ):
+            return False
+    except RPCError as exc:
+        if exc.status != RPCStatusCode.NOT_FOUND:
+            raise
+    try:
+        execution = await client.get_workflow_handle(canary_id).describe()
+        return execution.status not in {
+            WorkflowExecutionStatus.RUNNING,
+            WorkflowExecutionStatus.CONTINUED_AS_NEW,
+        }
+    except RPCError as exc:
+        if exc.status != RPCStatusCode.NOT_FOUND:
+            raise
+        return True
+
+
 async def await_registered_queues(
     client, *, version, workflow_queue, activity_queues, workflow_queues=()
 ):

@@ -29,6 +29,10 @@ from moonmind.workflows.skills.deployment_tools import RELEASE_JOB_BUDGET_SECOND
 
 CONTROL_SERVICE = "temporal-worker-deployment-control"
 
+# Identifies the controller algorithm a release request was authored for.
+# Requests predating recreate-in-place carry no generation at all.
+RELEASE_CONTROLLER_GENERATION = "recreate-in-place/v1"
+
 DIAGNOSIS_BOUND = 1000
 _DIAGNOSIS_ELISION = "\n...[elided]...\n"
 
@@ -581,6 +585,11 @@ async def execute_detached(executor, inputs, context):
             # supervising it cannot disagree about when the release is still
             # allowed to be running.
             "deadline": deadline,
+            # Names the controller algorithm this request was authored for. A
+            # request without it predates recreate-in-place and would execute
+            # the removed blue/green cohort controller from its own pinned
+            # image, so maintenance retires such a job instead of resuming it.
+            "controller": RELEASE_CONTROLLER_GENERATION,
         }
         record = reserve_record(request_file, record)
         if record["authored"] != authored:
