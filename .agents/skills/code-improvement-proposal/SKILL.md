@@ -341,7 +341,7 @@ Rationale: `<why this matters now>`
 - [ ] Integration test for `<flow>`
 - [ ] Existing test suite passes
 - [ ] Linter/typechecker passes
-- [ ] Targeted executable verification from the repository's own acceptance entrypoints (tests, checks, or documented validation commands) covering `<user-facing flow>`
+- [ ] Targeted executable verification from the repository's own acceptance entrypoints (tests, checks, or documented validation commands; not a mandatory human smoke test) covering `<user-facing flow>`
 
 ## Architecture alignment
 
@@ -392,7 +392,9 @@ Use the issue for human planning and the optional SARIF for file/line-level stat
 
 ## Output statuses
 
-Report exactly one terminal status: `dry_run` (payload only), `published` (issue created, include URL/key), `duplicate` (matched an existing open issue, no new issue created), `needs_routing` (no backend could be resolved), or `blocked` (a required tool, permission, or field is unavailable). Include sanitized blocker details when blocked.
+A clean review may legitimately produce no findings: report `no_findings` with the reviewed scope and evidence instead of inventing a ticket to fill a quota.
+
+Report exactly one terminal status: `dry_run` (payload only), `published` (issue created, include URL/key), `duplicate` (matched an existing open issue, no new issue created), `needs_routing` (no backend could be resolved), `no_findings` (review completed with evidence and nothing met the proposal bar), or `blocked` (a required tool, permission, or field is unavailable). Include sanitized blocker details when blocked.
 
 ## Failure modes
 

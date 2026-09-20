@@ -100,6 +100,18 @@ ATTEMPT_NEXT_ACTIONS = frozenset(
     }
 )
 
+#: The deployment could not start a runtime for this attempt, so no work was
+#: attempted on the issue. Evidence about the deployment, never about the
+#: issue: it stays in lineage but does not consume the issue's allowance
+#: (design section 2 -- ordinary worker disappearance is not an attention
+#: trigger). The attempt carries a cooldown instead, so a deployment that
+#: cannot launch backs off across candidates rather than hammering one issue,
+#: and recovers on its own once the launcher is repaired.
+OUTCOME_RUNTIME_UNAVAILABLE = "runtime_unavailable"
+
+#: Portable back-off applied to a runtime-unavailable attempt.
+RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS = 3600
+
 #: Bounded outcome categories.
 ATTEMPT_OUTCOMES = frozenset(
     {
@@ -109,6 +121,7 @@ ATTEMPT_OUTCOMES = frozenset(
         "failed",
         "cancelled",
         "held",
+        OUTCOME_RUNTIME_UNAVAILABLE,
     }
 )
 
@@ -1001,6 +1014,107 @@ class RetryDecision:
         }
 
 
+def _cooldown_is_live(cooldown_until: str, now_epoch: float) -> bool:
+    """Return True when *cooldown_until* is a future instant against a clock.
+
+    ``now_epoch`` of zero means the caller supplied no clock, which keeps the
+    recorded cooldown reported but unenforced. An unparseable value never
+    blocks: an unreadable back-off is not evidence of one.
+    """
+    if not _string(cooldown_until):
+        return False
+    try:
+        now = float(now_epoch)
+    except (TypeError, ValueError):
+        return False
+    if now <= 0:
+        return False
+    from datetime import UTC, datetime
+
+    try:
+        deadline = datetime.fromisoformat(_string(cooldown_until))
+    except ValueError:
+        return False
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=UTC)
+    return deadline.timestamp() > now
+
+
+def _lapsed_announcement_at(handoff: AttemptHandoff, now_epoch: float) -> str:
+    """Return when *handoff*'s pre-dispatch announcement lapsed, else ``""``.
+
+    Selection announces an attempt with the short ``preparing`` lease and
+    keeps that deadline until dispatch; the first execution renewal promotes
+    it to ``active``. A handoff still reading ``preparing`` after its lease
+    expired therefore never reached dispatch, so it could not have produced
+    work on the issue -- the ``runtime_unavailable`` case seen from before
+    the attempt could write it down. Nothing else will ever write it:
+    reservation reclamation retires the label and deliberately claims no
+    terminal authority over another deployment's attempt, and the bounded
+    reconciliation scan skips the issue once that label is gone. Charging it
+    would spend the allowance on evidence the system has designed itself
+    never to resolve.
+
+    An expired ``active`` attempt is not exempt. Its execution lease was
+    granted, so from GitHub alone we cannot prove no agent ever ran, and an
+    attempt that crashed mid-run must still cost one: otherwise a crash loop
+    bypasses the allowance and keeps discarding unrecovered work. Proving
+    that no runtime started needs the controlling history, which is what the
+    local claim sweep uses to record the ``runtime_unavailable`` outcome.
+
+    Recorded work (a pull request, a saved branch or sha) is evidence about
+    the issue, so such an attempt keeps costing one. A version-1 handoff
+    carries no lease, and a caller with no clock (``now_epoch`` of zero)
+    cannot prove a lapse; both keep their existing accounting.
+    """
+    if handoff.outcome != "in_progress":
+        return ""
+    if handoff.activity != ATTEMPT_ACTIVITY_PREPARING:
+        return ""
+    if (
+        _string(handoff.pr_url)
+        or _string(handoff.saved_branch)
+        or _string(handoff.saved_sha)
+    ):
+        return ""
+    try:
+        now = float(now_epoch)
+    except (TypeError, ValueError):
+        return ""
+    if now <= 0:
+        return ""
+    from moonmind.workflows.temporal.github_issue_claim_lease import (
+        parse_time,
+        valid_lease,
+    )
+
+    if not valid_lease(handoff):
+        return ""
+    expires = parse_time(handoff.lease_expires_at)
+    if expires is None or expires.timestamp() > now:
+        return ""
+    return expires.isoformat()
+
+
+def _announcement_backoff_until(lapsed_at: str) -> str:
+    """Portable back-off for a lapsed announcement, or ``""`` if unreadable.
+
+    The same window a ``runtime_unavailable`` outcome would have carried, so a
+    deployment that is still broken rotates past the candidate instead of
+    re-announcing on it every scheduled tick.
+    """
+    from datetime import timedelta
+
+    from moonmind.workflows.temporal.github_issue_claim_lease import parse_time
+
+    expires = parse_time(lapsed_at)
+    if expires is None:
+        return ""
+    return (
+        expires + timedelta(seconds=RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS)
+    ).isoformat()
+
+
 def compute_effective_retry(
     handoffs: Sequence[AttemptHandoff],
     *,
@@ -1052,15 +1166,33 @@ def compute_effective_retry(
             summary="Authorized audited reset establishes a fresh allowance.",
             remaining=max(0, int(max_attempts)),
         )
-    failures = sum(1 for handoff in ordered if handoff.outcome in {"failed", "cancelled", "held"})
-    no_progress = sum(1 for handoff in ordered if handoff.outcome == "no_work")
-    observed_attempts = failures + no_progress + sum(1 for handoff in ordered if handoff.outcome in {"implemented", "in_progress"})
+    # An attempt whose deployment never started a runtime says nothing about
+    # this issue, so it is retained as lineage but never charged to the
+    # allowance. Charging it lets one broken deployment exhaust every issue.
+    # A pre-dispatch announcement that lapsed without ever recording an
+    # outcome is the same fault reached before the attempt could name it:
+    # also retained, also uncharged, and backed off the same way below.
+    # An expired ``active`` attempt reached dispatch and still counts.
+    lapses = [_lapsed_announcement_at(handoff, now_epoch) for handoff in ordered]
+    counted = [
+        handoff
+        for handoff, lapsed in zip(ordered, lapses)
+        if handoff.outcome != OUTCOME_RUNTIME_UNAVAILABLE and not lapsed
+    ]
+    failures = sum(1 for handoff in counted if handoff.outcome in {"failed", "cancelled", "held"})
+    no_progress = sum(1 for handoff in counted if handoff.outcome == "no_work")
+    observed_attempts = failures + no_progress + sum(1 for handoff in counted if handoff.outcome in {"implemented", "in_progress"})
     remaining = max(0, int(max_attempts) - observed_attempts)
     latest_cooldown = ""
-    for handoff in ordered:
-        if handoff.cooldown_until and handoff.cooldown_until > latest_cooldown:
-            latest_cooldown = handoff.cooldown_until
-    _ = (now_epoch, cooldown_seconds)
+    for handoff, lapsed in zip(ordered, lapses):
+        recorded = [
+            handoff.cooldown_until,
+            _announcement_backoff_until(lapsed) if lapsed else "",
+        ]
+        for candidate in recorded:
+            if candidate and candidate > latest_cooldown:
+                latest_cooldown = candidate
+    _ = cooldown_seconds
     if remaining <= 0:
         return RetryDecision(
             allowed=False,
@@ -1070,6 +1202,19 @@ def compute_effective_retry(
                 "no exact global count is claimed under simultaneous races."
             ),
             remaining=0,
+            cooldown_until=latest_cooldown,
+        )
+    # A supplied clock enforces the recorded back-off. Callers that pass no
+    # clock keep reporting the cooldown without acting on it.
+    if _cooldown_is_live(latest_cooldown, now_epoch):
+        return RetryDecision(
+            allowed=False,
+            reason_code="cooling_down",
+            summary=(
+                f"A recorded back-off runs until {latest_cooldown}; the candidate "
+                "is deferred with its allowance intact, not exhausted."
+            ),
+            remaining=remaining,
             cooldown_until=latest_cooldown,
         )
     return RetryDecision(
@@ -1201,6 +1346,7 @@ def reconstruct_from_comments(
     expected_issue_number: int,
     trusted_posters: Sequence[str] | None,
     max_attempts: int = 3,
+    now_epoch: float = 0.0,
 ) -> Reconstruction:
     """Reconstruct remaining work and retry restrictions from GitHub alone.
 
@@ -1275,7 +1421,9 @@ def reconstruct_from_comments(
     # Chain from roots (no predecessor) for a stable lineage view.
     lineage = sorted(handoffs, key=lambda item: (item.predecessor_attempt_id != "", item.attempt_id))
     latest = lineage[-1]
-    retry = compute_effective_retry(lineage, max_attempts=max_attempts)
+    retry = compute_effective_retry(
+        lineage, max_attempts=max_attempts, now_epoch=now_epoch
+    )
     if not retry.allowed and retry.reason_code in {"missing_lineage", "incompatible_policy"}:
         return Reconstruction(
             outcome="needs_attention",
@@ -1310,6 +1458,8 @@ __all__ = [
     "ATTEMPT_HANDOFF_FORMAT_VERSION",
     "ATTEMPT_NEXT_ACTIONS",
     "ATTEMPT_OUTCOMES",
+    "OUTCOME_RUNTIME_UNAVAILABLE",
+    "RUNTIME_UNAVAILABLE_COOLDOWN_SECONDS",
     "HANDOFF_CODE_FENCE",
     "HANDOFF_MARKER_PREFIX",
     "MAX_COMMENT_CHARS",

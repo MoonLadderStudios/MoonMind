@@ -1064,6 +1064,14 @@ interface ClaudeEnrollmentState {
   failureReason: string | null;
   statusLabel: string | null;
   readiness: ClaudeReadinessMetadata | null;
+  /**
+   * Stable retry identity returned by a 503
+   * `provider_credential_manager_unavailable` response. The next submit for
+   * this profile reuses it as `Idempotency-Key` so the retry reattaches to
+   * the same deterministic lease owner instead of orphaning a new owner
+   * behind an ambiguous acquisition.
+   */
+  retryIdempotencyKey?: string | null;
 }
 
 interface ClaudeManualAuthResult {
@@ -1202,6 +1210,20 @@ function extractErrorCode(payload: unknown): string | null {
   return null;
 }
 
+function extractRetryIdempotencyKey(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  const detail = record.detail;
+  const source: Record<string, unknown> =
+    detail && typeof detail === 'object' ? (detail as Record<string, unknown>) : record;
+  const candidate = source['retry_idempotency_key'] ?? source['retryIdempotencyKey'];
+  return typeof candidate === 'string' && candidate.trim() !== '' ? candidate : null;
+}
+
+interface EnrollmentRequestError extends Error {
+  retryIdempotencyKey?: string | null;
+}
+
 /**
  * FastAPI request validation answers with `detail: [{ loc: ['body', <field>, ...] }]`,
  * so read the first body-scoped location instead of treating the array as an
@@ -1327,25 +1349,25 @@ function claudeCredentialActions(profile: ProviderProfile): ClaudeAuthAction[] {
     .filter((action): action is ClaudeAuthAction => action !== null);
 }
 
-function isOpencodeGoProfile(profile: ProviderProfile): boolean {
-  return profile.runtime_id === 'opencode' && profile.provider_id === 'opencode-go';
+function hasGuidedApiKeySetup(profile: ProviderProfile): boolean {
+  const capabilities = profile.creation_capabilities;
+  return Boolean(
+    capabilities?.supported &&
+      capabilities.runtime_id === profile.runtime_id &&
+      capabilities.provider_id === profile.provider_id &&
+      capabilities.authentication_methods.some((method) =>
+        method.id === 'api_key' &&
+        setupContinuationAvailableForCreate('api_key', method.setup_action, method.launch_ready_after_setup, false),
+      ),
+  );
 }
 
 function isOpencodeCredentialMethodProfile(profile: ProviderProfile): boolean {
-  return profile.runtime_id === 'opencode' && (profile.provider_id === 'opencode-go' || profile.provider_id === 'opencode');
-}
-
-function defaultOpencodeCredentialActions(profile: ProviderProfile): string[] {
-  if (!isOpencodeGoProfile(profile)) {
-    return [];
-  }
-  return ['use_api_key'];
+  return profile.runtime_id === 'opencode';
 }
 
 function opencodeCredentialActions(profile: ProviderProfile): OpencodeAuthAction[] {
-  const actionIds = commandBehaviorStringArray(profile, 'auth_actions');
-  const resolvedActionIds = actionIds ?? defaultOpencodeCredentialActions(profile);
-  return resolvedActionIds
+  return (hasGuidedApiKeySetup(profile) ? ['use_api_key'] : [])
     .map((actionId) => {
       const label = OPENCODE_AUTH_ACTION_LABELS[actionId];
       return label ? { id: actionId, label } : null;
@@ -1393,7 +1415,7 @@ function apiKeyEnrollmentCopy(profile: ProviderProfile): ApiKeyEnrollmentCopy {
     providerName: 'OpenCode',
     credentialLabel: 'OpenCode API key',
     description:
-      'Use an OpenCode Go API key for OpenCode launches. Paste the key here, then validate and save it as a managed provider credential.',
+      `Use an API key from ${profile.provider_label || profile.provider_id} for OpenCode launches. Paste the key here, then validate and save it as a managed provider credential.`,
     readyLabel: 'OpenCode API key ready',
   };
 }
@@ -2749,6 +2771,7 @@ export function ProviderProfilesManager({
       failureReason: null,
       statusLabel: authModel.kind === 'opencode_credentials' ? authModel.statusLabel : null,
       readiness: authModel.kind === 'opencode_credentials' ? authModel.readiness : null,
+      retryIdempotencyKey: null,
     });
     onNotice(null);
   };
@@ -2768,27 +2791,37 @@ export function ProviderProfilesManager({
       profileId,
       submittedToken,
       profile,
+      idempotencyKey,
     }: {
       profileId: string;
       submittedToken: string;
       profile: ProviderProfile;
+      idempotencyKey: string | null;
     }) => {
       const copy = apiKeyEnrollmentCopy(profile);
       const response = await fetch(
         `/api/v1/provider-profiles/${encodeURIComponent(profileId)}/credentials/api-key`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+          },
           body: JSON.stringify({ api_key: submittedToken }),
         },
       );
       const payload: unknown = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error(
+        const error: EnrollmentRequestError = new Error(
           redactClaudeSecretText(extractErrorMessage(payload), submittedToken) ??
             `${copy.credentialLabel} validation failed.`,
         );
+        const retryIdempotencyKey = extractRetryIdempotencyKey(payload);
+        if (retryIdempotencyKey) {
+          error.retryIdempotencyKey = retryIdempotencyKey;
+        }
+        throw error;
       }
 
       return payload as ClaudeManualAuthResult;
@@ -2816,6 +2849,7 @@ export function ProviderProfilesManager({
         step: 'ready',
         token: '',
         failureReason: null,
+        retryIdempotencyKey: null,
         statusLabel: formatStatusLabel(result.status_label ?? result.statusLabel ?? current.statusLabel, ''),
         readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
       }));
@@ -2835,11 +2869,16 @@ export function ProviderProfilesManager({
         error instanceof Error
           ? redactClaudeSecretText(error.message, submittedToken)
           : `${copy.credentialLabel} validation failed.`;
+      const retryIdempotencyKey =
+        error instanceof Error
+          ? (error as EnrollmentRequestError).retryIdempotencyKey ?? null
+          : null;
       updateOpencodeEnrollmentForProfile(profileId, (current) => ({
         ...current,
         step: 'failed',
         token: '',
         failureReason: failureReason ?? `${copy.credentialLabel} validation failed.`,
+        retryIdempotencyKey,
       }));
     },
   });
@@ -2855,7 +2894,12 @@ export function ProviderProfilesManager({
       return;
     }
 
-    opencodeEnrollmentMutation.mutate({ profileId, submittedToken, profile });
+    opencodeEnrollmentMutation.mutate({
+      profileId,
+      submittedToken,
+      profile,
+      idempotencyKey: opencodeEnrollment.retryIdempotencyKey ?? null,
+    });
   };
 
   useEffect(() => {
@@ -3698,9 +3742,7 @@ export function ProviderProfilesManager({
                 const canStartOAuth = authModel.kind === 'codex_oauth';
                 const canUseGenericApiKey = Boolean(
                   ((profile.runtime_id === 'codex_cli' && profile.provider_id === 'openai') ||
-                    profile.creation_capabilities?.authentication_methods.some(
-                      (method) => method.id === 'api_key',
-                    )) &&
+                    hasGuidedApiKeySetup(profile)) &&
                     !isClaudeCredentialMethodProfile(profile) &&
                     !isOpencodeCredentialMethodProfile(profile),
                 );

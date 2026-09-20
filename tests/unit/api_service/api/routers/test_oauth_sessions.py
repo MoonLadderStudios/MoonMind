@@ -465,6 +465,9 @@ async def test_oauth_session_response_includes_safe_provider_profile_summary(
 async def test_oauth_session_response_omits_profile_summary_for_other_owner(
     client_app: AsyncClient, _module_db
 ) -> None:
+    # Single-user (#4349): provider profiles are instance resources; legacy
+    # ``owner_user_id`` is provenance, never a visibility predicate, so the
+    # profile summary is included regardless of the recorded owner.
     session_id = "oas_profilesummary2"
     profile_id = "codex-cli-profile-other-owner"
 
@@ -500,9 +503,8 @@ async def test_oauth_session_response_omits_profile_summary_for_other_owner(
         response = await client.get(f"/api/v1/oauth-sessions/{session_id}")
 
     assert response.status_code == 200
-    assert response.json()["profile_summary"] is None
-    assert "Other Owner" not in response.text
-    assert "other owner account" not in response.text
+    assert response.json()["profile_summary"] is not None
+    assert response.json()["profile_summary"]["profile_id"] == profile_id
 
 @pytest.mark.asyncio
 async def test_create_codex_oauth_session_uses_configured_volume_defaults(
@@ -540,6 +542,8 @@ async def test_create_codex_oauth_session_uses_configured_volume_defaults(
 async def test_create_oauth_session_rejects_profile_owned_by_another_user(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Single-user (#4349): legacy ``owner_user_id`` never gates enrollment.
+    # A profile recorded under another owner remains usable instance-wide.
     profile_id = "codex-cli-other-owner"
 
     async with db_base.async_session_maker() as session:
@@ -564,9 +568,12 @@ async def test_create_oauth_session_rejects_profile_owned_by_another_user(
             "workflow start should not be called for another user's profile"
         )
 
+    async def _capture_start(_session_model):
+        return None
+
     monkeypatch.setattr(
         "api_service.services.oauth_session_service.start_oauth_session_workflow",
-        _unexpected_start,
+        _capture_start,
     )
 
     async with client_app as client:
@@ -575,8 +582,8 @@ async def test_create_oauth_session_rejects_profile_owned_by_another_user(
             json=_oauth_payload(profile_id),
         )
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Not authorized to use this profile ID."
+    assert response.status_code == 201
+    assert response.json()["profile_id"] == profile_id
 
 @pytest.mark.asyncio
 async def test_create_oauth_session_resumes_non_stale_active_for_same_user(
@@ -774,6 +781,9 @@ async def test_create_oauth_session_replaces_active_row_without_running_workflow
 async def test_create_oauth_session_returns_conflict_for_another_users_active_session(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Single-user (#4349): one operator, one active enrollment per profile
+    # credential. A session recorded under a legacy requester resumes for
+    # the operator when its workflow is still running.
     profile_id = "codex-cli-other-user-busy-profile"
 
     async with db_base.async_session_maker() as session:
@@ -790,11 +800,15 @@ async def test_create_oauth_session_returns_conflict_for_another_users_active_se
         await session.commit()
 
     async def _unexpected_start(_session_model):
-        raise AssertionError("workflow start should not be called when conflict exists")
+        raise AssertionError("workflow start should not be called when resuming")
 
     monkeypatch.setattr(
         "api_service.services.oauth_session_service.start_oauth_session_workflow",
         _unexpected_start,
+    )
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.get_oauth_session_workflow_status",
+        lambda _session_id: _async_result("RUNNING"),
     )
 
     async with client_app as client:
@@ -802,8 +816,8 @@ async def test_create_oauth_session_returns_conflict_for_another_users_active_se
             "/api/v1/oauth-sessions", json=_oauth_payload(profile_id)
         )
 
-    assert response.status_code == 409
-    assert response.json()["detail"] == "An active OAuth session already exists for this profile."
+    assert response.status_code == 200
+    assert response.json()["session_id"] == "oas_otheruseractive1"
 
 @pytest.mark.asyncio
 async def test_create_oauth_session_marks_failed_when_workflow_start_fails(
@@ -1786,6 +1800,9 @@ async def test_finalize_oauth_session_registers_claude_oauth_profile(
 async def test_finalize_oauth_session_rejects_other_users_claude_session_before_verify(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Single-user (#4349): sessions are credential-scoped, not requester
+    # scoped. Finalize proceeds to volume verification for a legacy
+    # requester; a failed verification still fails the session closed.
     session_id = "oas_claudeotheruser1"
 
     async with db_base.async_session_maker() as session:
@@ -1806,30 +1823,37 @@ async def test_finalize_oauth_session_rejects_other_users_claude_session_before_
     async def _unexpected_verify(**_kwargs):
         raise AssertionError("unauthorized finalize must not verify volume")
 
+    async def _failed_verify(**_kwargs):
+        return {"verified": False, "reason": "test-verification-failed"}
+
+    async def _noop_fail(_session_id, _reason):
+        return None
+
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
-        _unexpected_verify,
+        _failed_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._fail_oauth_session_workflow",
+        _noop_fail,
     )
 
     async with client_app as client:
         response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
 
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Session not found"
+    assert response.status_code == 400
+    assert "test-verification-failed" in response.json()["detail"]
 
     async with db_base.async_session_maker() as session:
         row = await session.get(ManagedAgentOAuthSession, session_id)
         assert row is not None
-        assert row.status == OAuthSessionStatus.AWAITING_USER
-        profile = await session.get(
-            ManagedAgentProviderProfile, "claude_anthropic_other_user"
-        )
-        assert profile is None
+        assert row.status == OAuthSessionStatus.FAILED
 
 @pytest.mark.asyncio
 async def test_create_claude_oauth_session_rejects_other_users_profile_id(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Single-user (#4349): legacy ``owner_user_id`` never gates enrollment.
     profile_id = "claude_anthropic_owned_elsewhere"
     owner_id = uuid.uuid4()
 
@@ -1853,9 +1877,12 @@ async def test_create_claude_oauth_session_rejects_other_users_profile_id(
     async def _unexpected_start(_session_model):
         raise AssertionError("unauthorized create must not start workflow")
 
+    async def _capture_start(_session_model):
+        return None
+
     monkeypatch.setattr(
         "api_service.services.oauth_session_service.start_oauth_session_workflow",
-        _unexpected_start,
+        _capture_start,
     )
 
     async with client_app as client:
@@ -1868,21 +1895,15 @@ async def test_create_claude_oauth_session_rejects_other_users_profile_id(
             },
         )
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Not authorized to use this profile ID."
-
-    async with db_base.async_session_maker() as session:
-        query = await session.execute(
-            select(ManagedAgentOAuthSession).where(
-                ManagedAgentOAuthSession.profile_id == profile_id
-            )
-        )
-        assert query.scalars().all() == []
+    assert response.status_code == 201
+    assert response.json()["profile_id"] == profile_id
 
 @pytest.mark.asyncio
 async def test_cancel_oauth_session_rejects_other_users_claude_session(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Single-user (#4349): cancel operates on the credential session,
+    # regardless of the legacy recorded requester.
     session_id = "oas_claudecancelother1"
 
     async with db_base.async_session_maker() as session:
@@ -1903,26 +1924,33 @@ async def test_cancel_oauth_session_rejects_other_users_claude_session(
     async def _unexpected_cancel(_session_id: str) -> None:
         raise AssertionError("unauthorized cancel must not signal workflow")
 
+    cancelled = {}
+
+    async def _capture_cancel(_session_id: str) -> None:
+        cancelled["session_id"] = _session_id
+
     monkeypatch.setattr(
         "api_service.services.oauth_session_service.cancel_oauth_session_workflow",
-        _unexpected_cancel,
+        _capture_cancel,
     )
 
     async with client_app as client:
         response = await client.post(f"/api/v1/oauth-sessions/{session_id}/cancel")
 
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Session not found"
+    assert response.status_code == 200
+    assert cancelled["session_id"] == session_id
 
     async with db_base.async_session_maker() as session:
         row = await session.get(ManagedAgentOAuthSession, session_id)
         assert row is not None
-        assert row.status == OAuthSessionStatus.AWAITING_USER
+        assert row.status == OAuthSessionStatus.CANCELLED
 
 @pytest.mark.asyncio
 async def test_reconnect_oauth_session_rejects_other_users_claude_session(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Single-user (#4349): reconnect operates on the credential session,
+    # regardless of the legacy recorded requester.
     session_id = "oas_claudereconnectother1"
     profile_id = "claude_anthropic_reconnect_other_user"
 
@@ -1945,16 +1973,18 @@ async def test_reconnect_oauth_session_rejects_other_users_claude_session(
     async def _unexpected_start(_session_model) -> None:
         raise AssertionError("unauthorized reconnect must not start workflow")
 
+    async def _capture_start(_session_model) -> None:
+        return None
+
     monkeypatch.setattr(
         "api_service.services.oauth_session_service.start_oauth_session_workflow",
-        _unexpected_start,
+        _capture_start,
     )
 
     async with client_app as client:
         response = await client.post(f"/api/v1/oauth-sessions/{session_id}/reconnect")
 
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Session not found"
+    assert response.status_code == 201
 
     async with db_base.async_session_maker() as session:
         query = await session.execute(
@@ -1963,8 +1993,8 @@ async def test_reconnect_oauth_session_rejects_other_users_claude_session(
             )
         )
         rows = query.scalars().all()
-        assert len(rows) == 1
-        assert rows[0].session_id == session_id
+        assert len(rows) == 2
+        assert session_id in {r.session_id for r in rows}
 
 @pytest.mark.asyncio
 async def test_claude_oauth_terminal_websocket_rejects_replayed_attach_token(

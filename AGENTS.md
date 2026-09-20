@@ -12,7 +12,7 @@ Before implementation, check `docs/` for relevant documents and read any that ap
 4. **Loose coupling.** Depend on required interfaces and behavior, not equal SHAs, image digests, or patch versions. A changed version alone does not establish incompatibility. Do not replace exact matching with blanket major/minor equality or another compatibility fingerprint. Preserve artifact integrity and legitimate source-control concurrency checks.
 5. **Recover before failing and preserve progress.** Before failing, MoonMind should try to use agentic intelligence to recover unless the recovery would violate the intention of the workflow. Use bounded retries for transient failures and bounded agentic adaptation when needed. Reconcile uncertain effects before repeating them. Saved work must survive its host, and recovery must not depend exclusively on the failed component. Never delete the only recoverable copy during cleanup.
 6. **Keep failures observable.** Record useful progress and original errors. Keep recorded diagnostics readable when execution or interactive chat fails. Distinguish requested actions from confirmed outcomes and report unavailable information honestly. Reporting or cleanup failures must not erase confirmed work. Basic diagnostics must not require an LLM.
-7. **Make the default experience work.** Test the normal supported path with opinionated, self-maintaining defaults. Omitted inputs and their documented default equivalents must behave consistently. Routine correctness and updates must not require hidden switches or manual repairs. Preserve explicit user choices and make genuinely necessary setup clear.
+7. **Make the default experience work.** Test the normal supported path with opinionated, self-maintaining defaults. Omitted inputs and their documented default equivalents must behave consistently. Routine correctness and updates must not require hidden switches or manual repairs. Preserve explicit user choices and make genuinely necessary setup clear. Scripts, CLIs, and entrypoints must succeed when invoked with no arguments across the supported configurations, including every documented `.env` combination, not only the one a fresh install happens to produce. Derive what the deployment already determines — bindings, ports, project names, paths, and origins are observable, so read them instead of demanding a declaration. A flag overrides a derived default or adds a target; it never supplies a value the tool could have computed. Refusing to proceed because something was not declared is a defect whenever that value is derivable, and so is a default that only works on the maintainer's machine.
 
 ## Working on a Change
 
@@ -35,20 +35,25 @@ These are technology choices, not universal principles or claims that migrations
 
 **Do not unit test documentation.** Documentation-only changes need review, not unit tests. Do not add tests for documentation wording, headings, structure, counts, or required phrases, even when labeled contract or compliance checks. Test executable behavior instead.
 
-Keep the red-green-refactor loop small. An existing failing test can supply the red phase. Behavior-preserving refactors start with passing behavior coverage. Missing dependencies are not a reproduced regression.
+**Targeted local testing, broader verification in CI.** Prefer GitHub Actions CI for anything beyond targeted tests. During implementation, run the smallest relevant tests that reproduce the problem and exercise the changed behavior. Keep inexpensive, relevant formatting and static checks local. A targeted test may be an integration or browser test when that is the right boundary to exercise.
+
+Keep the red-green-refactor loop small. An existing failing test, including a representative CI failure, can supply the red phase. Behavior-preserving refactors start with passing behavior coverage. Missing dependencies are not a reproduced regression.
+
+Do not require broad local suites before opening or updating a PR, or routinely duplicate suites that CI will run. Available local or managed compute does not make broad local verification a prerequisite. Broader local execution remains appropriate when it materially helps diagnosis, exercises an environment CI does not cover, or provides a practical fallback when CI is unavailable or publication is prohibited. Never push solely to test when publication is not authorized.
 
 | Context | Entry point |
 | --- | --- |
-| Python tests inside a MoonMind-managed workflow | `moonmind container python-tests <pytest paths or node ids>` |
+| Targeted Python tests inside a MoonMind-managed workflow | `moonmind container python-tests <pytest paths or node ids>` |
 | Targeted Python tests outside a managed workflow | `./tools/test_unit.sh --python-only <pytest paths or node ids>` |
-| Targeted frontend tests | `./tools/test_unit.sh --ui-args <test path>` |
-| Host-side hermetic integration tests | `./tools/test_integration.sh` |
+| Targeted frontend tests | `./tools/test_unit.sh --dashboard-only --ui-args <test path>` |
+| Broader regression, integration, and browser suites | GitHub Actions CI |
+| Optional host-side hermetic integration reproduction | `./tools/test_integration.sh` |
 
-Managed agents use the container-job service, not Docker sockets, nested Docker, or the host-only Docker test wrapper. Use test-only Compose projects named `moonmind-test` or `moonmind-test-*`, never the deployment project.
+For Python execution in a MoonMind-managed workflow, use the container-job service, not Docker sockets, nested Docker, or the host-only Docker test wrapper. Use test-only Compose projects named `moonmind-test` or `moonmind-test-*`, never the deployment project.
 
-Before completing a change, run the affected suites and verify behavior across the boundaries it changes. Use real integration or browser journeys where those boundaries matter. Exercise relevant restart, retry, upgrade, and failure cases. A helper, styling fixture, image build, or acceptance-report validator does not prove a complete user journey. External-provider and hardware checks are separate from credential-free tests.
+Before claiming a change is verified, use affected-suite results for the current revision, preferably from CI, and verify behavior across the boundaries it changes. This changes execution location, not required coverage. Use real integration or browser journeys where those boundaries matter. Exercise relevant restart, retry, upgrade, and failure cases. Green CI does not prove behavior it did not exercise. A helper, styling fixture, image build, or acceptance-report validator does not prove a complete user journey. External-provider and hardware checks are separate from credential-free tests.
 
-Report commands, observed red/green results, and anything unexecuted. Do not weaken assertions to make a failing implementation pass. Runner details and CI selection live in [Pre-Commit Workflow](docs/Development/PreCommitWorkflow.md). Do not add approval machinery.
+When publication is authorized, push a coherent change and confirm the relevant CI workflow actually starts. Opening or updating a PR does not require CI to have finished. Report commands, observed red/green results, CI runs and their tested revision, and anything unexecuted. Distinguish PR creation from passing verification, and report pending, failed, or unavailable checks honestly. Do not weaken assertions or required checks to make a failing implementation pass. Runner details and CI selection live in [Pre-Commit Workflow](docs/Development/PreCommitWorkflow.md). Do not add approval machinery.
 
 ## Working Safeguards and Delivery
 

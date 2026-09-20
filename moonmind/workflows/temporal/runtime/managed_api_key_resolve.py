@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from sqlalchemy import select
 
@@ -33,6 +36,12 @@ _MANAGED_GITHUB_TOKEN_SLUGS: tuple[str, ...] = (
 GHCR_REGISTRY = "ghcr.io"
 _MANAGED_GHCR_PULL_USER_SLUGS: tuple[str, ...] = ("GHCR_PULL_USER",)
 _MANAGED_GHCR_PULL_TOKEN_SLUGS: tuple[str, ...] = ("GHCR_PULL_TOKEN",)
+
+_GITHUB_API_TIMEOUT_SECONDS = 10.0
+_GITHUB_USER_RESPONSE_MAX_BYTES = 64 * 1024
+#: GHCR authenticates a personal access token by the token alone and ignores
+#: the username, so a failed ``/user`` lookup does not have to sink the pull.
+_GHCR_TOKEN_USER_PLACEHOLDER = "x-access-token"
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +102,83 @@ async def resolve_managed_github_token_from_store() -> str | None:
             if candidate:
                 return candidate
     return None
+
+def _github_user_api_url() -> str:
+    api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").strip()
+    if not api_base:
+        api_base = "https://api.github.com"
+    return api_base.rstrip("/") + "/user"
+
+
+def _fetch_github_login_for_token(token: str) -> str | None:
+    request = Request(
+        _github_user_api_url(),
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "MoonMind-GHCR-Pull-Auth",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urlopen(request, timeout=_GITHUB_API_TIMEOUT_SECONDS) as response:
+        payload = json.loads(
+            response.read(_GITHUB_USER_RESPONSE_MAX_BYTES).decode("utf-8")
+        )
+    login = str(payload.get("login") or "").strip()
+    return login or None
+
+
+async def _resolve_github_login_for_token(token: str) -> str | None:
+    normalized = str(token or "").strip()
+    if not normalized:
+        return None
+    try:
+        return await asyncio.to_thread(_fetch_github_login_for_token, normalized)
+    except (HTTPError, URLError, TimeoutError, ValueError, OSError):
+        logger.warning(
+            "Failed to resolve GitHub username for GHCR pull authentication; "
+            "using the token-only form, which GHCR accepts",
+            exc_info=True,
+        )
+        return None
+
+
+def github_ghcr_pull_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """Whether the deployment GitHub token may authenticate ``ghcr.io`` pulls.
+
+    Reverses the #4012 removal by operator choice: the deployment's GitHub
+    credential is the same identity that already reads these packages, so
+    requiring a second, separately provisioned registry secret to pull an image
+    the deployment itself declared was setup this deployment does not need.
+
+    Only an explicit false disables it, restoring #4012's strict separation. The
+    derivation stays bound to ``ghcr.io`` and to deployment-declared images; it
+    is never applied to a registry or image reference that came from workflow
+    input, which is the exposure #4012 step 5 actually guards against.
+    """
+
+    source = os.environ if environ is None else environ
+    raw = str(source.get("MOONMIND_GHCR_PULL_FROM_GITHUB_TOKEN_ENABLED", "")).strip()
+    return raw.casefold() not in {"false", "0", "no", "off", "disabled"}
+
+
+async def github_derived_ghcr_credentials(
+    environment: Mapping[str, str] | None = None,
+    *,
+    github_credential: Any | None = None,
+) -> tuple[str, str] | None:
+    """Derive ``ghcr.io`` pull credentials from the deployment GitHub token."""
+
+    if not github_ghcr_pull_enabled():
+        return None
+    token = await resolve_github_token_for_launch(
+        environment or {}, github_credential=github_credential
+    )
+    if not token:
+        return None
+    login = await _resolve_github_login_for_token(token)
+    return (login or _GHCR_TOKEN_USER_PLACEHOLDER), token
+
 
 async def _read_ghcr_pull_pair_once(session: Any) -> tuple[str | None, str | None]:
     """Read the ``GHCR_PULL_USER``/``GHCR_PULL_TOKEN`` slugs once.
@@ -163,12 +249,15 @@ async def _resolve_managed_ghcr_pull_pair() -> tuple[str | None, str | None]:
 async def resolve_ghcr_pull_credentials_for_launch() -> tuple[str, str] | None:
     """Resolve deployment-scoped GHCR pull credentials for launch boundaries.
 
-    MoonLadderStudios/MoonMind#4012: source repository/model credentials are
-    never implicit registry credentials. This resolver compiles authentication
-    only from trusted deployment configuration and never converts a source
-    GitHub PAT into pull credentials, never probes the GitHub username for a
-    token, and never falls back to another identity, ambient Docker login, or
-    an anonymous downgrade when a configured credential fails.
+    Precedence: explicit secret refs, explicit environment pair, managed
+    registry slugs, then the deployment's GitHub credential. That last step
+    reverses #4012's removal by operator choice (see
+    ``github_ghcr_pull_enabled``); set
+    ``MOONMIND_GHCR_PULL_FROM_GITHUB_TOKEN_ENABLED=false`` to restore the strict
+    separation. What #4012 established still holds either way: a *configured*
+    credential that fails resolves to a failure, never to another identity, an
+    ambient Docker login, or an anonymous downgrade, and the derived identity is
+    only ever presented to ``ghcr.io`` for deployment-declared images.
 
     Production pull-boundary inventory (recorded here so deleting this helper
     alone is never mistaken for removing every implicit credential path):
@@ -314,7 +403,12 @@ async def resolve_ghcr_pull_credentials_for_launch() -> tuple[str, str] | None:
             )
         return stored_user.strip(), stored_token.strip()
 
-    return None
+    # Nothing registry-specific is configured. Rather than downgrade to an
+    # anonymous pull that a private package will deny, derive the identity from
+    # the deployment's own GitHub credential. A configured pair that *fails*
+    # still fails closed above: this is the unconfigured case only, so a broken
+    # explicit credential never silently becomes a different identity.
+    return await github_derived_ghcr_credentials()
 
 async def resolve_github_token_for_launch(
     environment: Mapping[str, str] | None = None,

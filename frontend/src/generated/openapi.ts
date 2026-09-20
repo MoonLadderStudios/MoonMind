@@ -4896,6 +4896,251 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/accounts/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accounts Setup
+         * @description Claim protected first-owner setup with an operator-held capability.
+         */
+        post: operations["accounts_setup_api_v1_accounts_setup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accounts Login
+         * @description Verify a password and mint a session for the existing UUID.
+         */
+        post: operations["accounts_login_api_v1_accounts_login_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accounts Logout
+         * @description Revoke the presented browser session only.
+         *
+         *     Browser logout revokes browser authority: it never cancels admitted
+         *     Temporal work and never revokes independent machine credentials
+         *     (only the ``moonmind_sessions`` row is touched).
+         */
+        post: operations["accounts_logout_api_v1_accounts_logout_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Accounts Me
+         * @description Return the current account status (never password or token material).
+         */
+        get: operations["accounts_me_api_v1_accounts_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/password/change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accounts Password Change
+         * @description Change the caller's password and invalidate other sessions.
+         */
+        post: operations["accounts_password_change_api_v1_accounts_password_change_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/invites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accounts Invite Create
+         * @description Mint an expiring one-use invitation (active administrators only).
+         *
+         *     Invitations confer plain membership, never administrator authority:
+         *     privilege changes go through the protected member actions below.
+         *     Delivery is the authenticated operator channel (no SMTP service):
+         *     the token is returned only on this admin-only endpoint and is never
+         *     echoed through ordinary account APIs.
+         */
+        post: operations["accounts_invite_create_api_v1_accounts_invites_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accounts Enroll
+         * @description Redeem an operator invitation and enroll exactly one member account.
+         *
+         *     Single-instance scope: there is no open registration, no tenant model,
+         *     and no new role framework. Invitations are minted only on the
+         *     admin-only ``POST /invites`` endpoint, confer plain membership (never
+         *     administrator authority — privilege changes go through the protected
+         *     member actions), and are expiring, one-use, and login-bound. This is
+         *     the K3/AuthenticationContracts §7 operator-invited onboarding for one
+         *     MoonMind instance, reusing the existing ``User.is_superuser`` flag.
+         */
+        post: operations["accounts_enroll_api_v1_accounts_enroll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/recovery/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accounts Recovery Request
+         * @description Mint a short-lived one-use recovery capability (admins only).
+         */
+        post: operations["accounts_recovery_request_api_v1_accounts_recovery_request_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/recovery/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accounts Recovery Redeem
+         * @description Redeem an operator-held recovery capability and rotate the password.
+         *
+         *     The capability itself is the authority (operator-held, expiring,
+         *     one-use, login-bound), so this endpoint is callable without an
+         *     active session — the stranded-administrator path. Active/admin
+         *     flags are preserved exactly: recovery rotates credentials and
+         *     invalidates prior sessions, it never promotes and never mints a
+         *     session (the operator logs in normally afterwards).
+         */
+        post: operations["accounts_recovery_redeem_api_v1_accounts_recovery_redeem_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Accounts Members
+         * @description List membership with server-owned flags (active administrators only).
+         */
+        get: operations["accounts_members_api_v1_accounts_members_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/accounts/members/action": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accounts Member Action
+         * @description Apply one server-owned member action with last-admin protection.
+         */
+        post: operations["accounts_member_action_api_v1_accounts_members_action_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -7507,6 +7752,17 @@ export interface components {
             /** Bridgemodes */
             bridgeModes: ("embedded" | "proxy")[];
         };
+        /** EnrollRequest */
+        EnrollRequest: {
+            /** Login */
+            login: string;
+            /** Password */
+            password: string;
+            /** Invite Token */
+            invite_token: string;
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * EnvironmentDiagnosticReferenceModel
          * @description Compact environment/system diagnostic ref for recovery decisions.
@@ -7738,6 +7994,11 @@ export interface components {
             closeStatus?: string | null;
             /** Workflowtype */
             workflowType?: string | null;
+            /**
+             * Attentionrequired
+             * @default false
+             */
+            attentionRequired: boolean;
         };
         /**
          * ExecutionFacetItemModel
@@ -9257,6 +9518,13 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** InviteCreateRequest */
+        InviteCreateRequest: {
+            /** Login */
+            login: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** JiraBoard */
         JiraBoard: {
             /** Id */
@@ -9538,6 +9806,15 @@ export interface components {
             /** Createdat */
             createdAt?: string | null;
         };
+        /** LoginRequest */
+        LoginRequest: {
+            /** Login */
+            login: string;
+            /** Password */
+            password: string;
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * ManagedAgentRateLimitPolicy
          * @description Rate limit handling policy for a managed agent provider profile.
@@ -9560,6 +9837,15 @@ export interface components {
              * @default repo
              */
             relativePath: string;
+        };
+        /** MemberActionRequest */
+        MemberActionRequest: {
+            /** Target Login */
+            target_login: string;
+            /** Action */
+            action: string;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * MigrationEvidenceView
@@ -9951,6 +10237,15 @@ export interface components {
             name: string;
             /** Relativepath */
             relativePath: string;
+        };
+        /** PasswordChangeRequest */
+        PasswordChangeRequest: {
+            /** Current Password */
+            current_password: string;
+            /** New Password */
+            new_password: string;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * PinArtifactRequest
@@ -11485,6 +11780,24 @@ export interface components {
             /** Promotionstate */
             promotionState?: string | null;
         };
+        /** RecoveryRedeemRequest */
+        RecoveryRedeemRequest: {
+            /** Login */
+            login: string;
+            /** New Password */
+            new_password: string;
+            /** Recovery Token */
+            recovery_token: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** RecoveryRequestRequest */
+        RecoveryRequestRequest: {
+            /** Login */
+            login: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** RecoverySourceIdentityModel */
         RecoverySourceIdentityModel: {
             /** Workflowid */
@@ -12561,6 +12874,16 @@ export interface components {
             slug: string;
             /** Status */
             status: string;
+            /**
+             * Credentialrevision
+             * @default 1
+             */
+            credentialRevision: number;
+            /**
+             * Policyrevision
+             * @default 1
+             */
+            policyRevision: number;
             /** Details */
             details: {
                 [key: string]: unknown;
@@ -12586,6 +12909,11 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "disabled";
+            /**
+             * Requestid
+             * @description Stable mutation request identity for idempotent retries.
+             */
+            requestId?: string | null;
         };
         /**
          * SecretUpdateRequest
@@ -12597,6 +12925,21 @@ export interface components {
              * @description The new raw secret value to be encrypted
              */
             plaintext: string;
+            /**
+             * Expectedcredentialrevision
+             * @description CAS fence: the active credential revision the caller admitted.
+             */
+            expectedCredentialRevision?: number | null;
+            /**
+             * Expectedpolicyrevision
+             * @description Fence against concurrent policy (disable) transitions.
+             */
+            expectedPolicyRevision?: number | null;
+            /**
+             * Requestid
+             * @description Stable mutation request identity for idempotent retries.
+             */
+            requestId?: string | null;
         };
         /**
          * SecretUsageDiagnosticResponse
@@ -12759,6 +13102,17 @@ export interface components {
             };
             /** Confirmation */
             confirmation?: string | null;
+        };
+        /** SetupRequest */
+        SetupRequest: {
+            /** Login */
+            login: string;
+            /** Password */
+            password: string;
+            /** Bootstrap Token */
+            bootstrap_token: string;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * SideEffectSummaryModel
@@ -24313,6 +24667,330 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    accounts_setup_api_v1_accounts_setup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accounts_login_api_v1_accounts_login_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accounts_logout_api_v1_accounts_logout_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    accounts_me_api_v1_accounts_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    accounts_password_change_api_v1_accounts_password_change_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accounts_invite_create_api_v1_accounts_invites_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InviteCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accounts_enroll_api_v1_accounts_enroll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accounts_recovery_request_api_v1_accounts_recovery_request_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryRequestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accounts_recovery_redeem_api_v1_accounts_recovery_redeem_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryRedeemRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accounts_members_api_v1_accounts_members_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    accounts_member_action_api_v1_accounts_members_action_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

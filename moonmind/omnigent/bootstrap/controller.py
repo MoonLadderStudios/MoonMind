@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from moonmind.omnigent.harness_platform.harness_registry import harness_registration
-
 import logging
 import os
 from datetime import UTC, datetime
@@ -29,9 +27,12 @@ from moonmind.omnigent.bootstrap.store import (
     load_bootstrap_record,
     save_bootstrap_record,
 )
-from moonmind.omnigent.harness_platform.support import (
-    compute_support_combination_key,
+from moonmind.omnigent.harness_platform.agent_profile import (
+    stable_imported_content_digest,
+    stable_upstream_snapshot_digest,
 )
+from moonmind.omnigent.harness_platform.harness_registry import harness_registration
+from moonmind.omnigent.harness_platform.support import compute_support_combination_key
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,74 @@ def _resolve_profile_model_effort(profile: Any) -> tuple[str, str]:
     # MoonLadderStudios/MoonMind#4021 req-3: validate effort against the
     # selected model's actual supported values, never the seeded default.
     # Unknown models fall back to the generic set inside the helper.
-    effort = validate_effort_for_model(raw_effort, model) if model else validate_effort(raw_effort)
+    effort = (
+        validate_effort_for_model(raw_effort, model)
+        if model
+        else validate_effort(raw_effort)
+    )
     return model, effort
+
+
+def _expected_stable_agent_source_ref(
+    document: Any, *, snapshot_digest: str = "", upstream_snapshot: Any = None
+) -> str:
+    """Compute the stable agentSourceRef admission will compile.
+
+    Shares ``stable_upstream_snapshot_digest`` /
+    ``stable_imported_content_digest`` with the plan compiler and with
+    launch-time plan verification, so qualification here cannot drift from the
+    identity those two pin.
+    """
+    import hashlib as _hashlib
+    import json as _json
+
+    if not isinstance(document, dict):
+        return ""
+    source = document.get("source")
+    if not isinstance(source, dict):
+        return ""
+    if source.get("upstreamId"):
+        stable = stable_upstream_snapshot_digest(source, snapshot_digest)
+        if not stable.startswith("sha256:"):
+            return ""
+        payload = {
+            "kind": "upstream",
+            "upstreamId": str(source.get("upstreamId") or ""),
+            "upstreamVersion": str(source.get("upstreamVersion") or "0.0.0"),
+            "upstreamSnapshotDigest": stable,
+        }
+    else:
+        bundle_ref = str(source.get("bundleArtifactRef") or "").strip()
+        bundle_digest = str(source.get("bundleDigest") or "").strip()
+        import_receipt = ""
+        if isinstance(upstream_snapshot, dict):
+            import_receipt = str(
+                upstream_snapshot.get("importReceiptRef") or ""
+            ).strip()
+        if not bundle_ref or not bundle_digest or not import_receipt:
+            return ""
+        stable_content = stable_imported_content_digest(source, snapshot_digest)
+        if not stable_content.startswith("sha256:"):
+            return ""
+        payload = {
+            "kind": "bundle",
+            "bundleArtifactRef": bundle_ref,
+            "bundleDigest": bundle_digest,
+            "importReceiptRef": import_receipt,
+            "importedAgentId": str(
+                source.get("importedAgentId")
+                or (upstream_snapshot.get("agentId") if isinstance(upstream_snapshot, dict) else "")
+                or ""
+            ).strip(),
+            "importedAgentVersion": str(
+                source.get("importedAgentVersion")
+                or (upstream_snapshot.get("version") if isinstance(upstream_snapshot, dict) else "")
+                or ""
+            ).strip(),
+            "importedContentDigest": stable_content,
+        }
+    canonical = _json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return "agent-source:sha256:" + _hashlib.sha256(canonical.encode()).hexdigest()
 
 
 class BootstrapController:
@@ -98,7 +165,9 @@ class BootstrapController:
 
         # Validate effort against the selected model's actual values
         # (MoonLadderStudios/MoonMind#4021 req-3); unknown models use generic.
-        eff = validate_effort_for_model(eff, display) if display else validate_effort(eff)
+        eff = (
+            validate_effort_for_model(eff, display) if display else validate_effort(eff)
+        )
 
         # Load or create record
         record = await self.get_state()
@@ -202,7 +271,9 @@ class BootstrapController:
             )
         if provider_profile is None:
             raise ValueError("the persisted OpenCode Provider Profile no longer exists")
-        desired_updates: dict[str, Any] = {}
+        desired_updates: dict[str, Any] = {
+            "provider": str(provider_profile.provider_id or "").strip(),
+        }
         current_model, current_effort = _resolve_profile_model_effort(provider_profile)
         if current_model:
             desired_updates["model_display_name"] = current_model
@@ -412,6 +483,57 @@ class BootstrapController:
                     drift.append("evidence_model")
                 if evidence.model.get("effort") != current_effort:
                     drift.append("evidence_effort")
+            # The deployment qualification key excludes per-run model, but the
+            # agent source itself must stay exact for auth-bearing runs. After
+            # the stable-source fix, a model-only profile version bump no
+            # longer changes the agent source; however, stale evidence
+            # published with the old volatile (version-digest) source, or a
+            # genuine upstream/bundle content change, still leaves admission
+            # failing with "agentSourceRef differs". Detect that here so
+            # startup reconciliation requalifies instead of stranding the
+            # default launch behind a manual retry.
+            if active_version is not None:
+                try:
+                    _doc = getattr(active_version, "document", None)
+                    _snap_digest = str(
+                        getattr(active_version, "digest", "") or ""
+                    ).strip()
+                    _upstream_snap = getattr(
+                        active_version, "upstream_snapshot", None
+                    )
+                    # SQLAlchemy rows expose upstream_snapshot; test doubles
+                    # may carry it as upstreamSnapshot.
+                    if _upstream_snap is None:
+                        _upstream_snap = getattr(
+                            active_version, "upstreamSnapshot", None
+                        )
+                    expected_agent_ref = _expected_stable_agent_source_ref(
+                        _doc,
+                        snapshot_digest=_snap_digest,
+                        upstream_snapshot=_upstream_snap,
+                    )
+                    attested_agent_ref = ""
+                    try:
+                        attested_agent_ref = str(
+                            evidence.support_identity.agentSourceRef or ""
+                        ).strip()
+                    except Exception:
+                        raw_identity = evidence.support_identity
+                        if isinstance(raw_identity, dict):
+                            attested_agent_ref = str(
+                                raw_identity.get("agentSourceRef") or ""
+                            ).strip()
+                        else:
+                            attested_agent_ref = str(
+                                getattr(raw_identity, "agentSourceRef", "") or ""
+                            ).strip()
+                    if expected_agent_ref and attested_agent_ref:
+                        if attested_agent_ref != expected_agent_ref:
+                            drift.append("evidence_agent_source")
+                except Exception:
+                    # Drift detection is best-effort; admission still fails
+                    # closed with the exact mismatch when evidence is stale.
+                    pass
 
         # Materializer qualification is independent of whether the default
         # bootstrap record remains current. In particular, a launch-ready Zen
@@ -504,6 +626,66 @@ class BootstrapController:
             )
         except ValueError:
             primary_evidence = None
+
+        # Migration guard: evidence published with the old volatile
+        # (version-digest) agent source must not pin the shared identity for
+        # new qualifications. When the current active Agent Profile expects a
+        # different stable agent source, drop the old reference so every
+        # launch-ready materializer requalifies against the stable identity
+        # admission will actually compile. For credentialless none@1 the
+        # deployment key already ignores the agent source, so the refreshed
+        # entry simply replaces the old one.
+        try:
+            from api_service.db.models import (
+                OmnigentAgentProfile,
+                OmnigentAgentProfileVersion,
+            )
+
+            async with self._session_factory() as _agent_session:
+                _agent_profile = await _agent_session.get(
+                    OmnigentAgentProfile, "omnigent-opencode-default"
+                )
+                _active = None
+                if (
+                    _agent_profile is not None
+                    and _agent_profile.active_version is not None
+                ):
+                    _active = await _agent_session.scalar(
+                        select(OmnigentAgentProfileVersion).where(
+                            OmnigentAgentProfileVersion.profile_id
+                            == _agent_profile.profile_id,
+                            OmnigentAgentProfileVersion.version
+                            == _agent_profile.active_version,
+                        )
+                    )
+                if _active is not None and primary_evidence is not None:
+                    _expected = _expected_stable_agent_source_ref(
+                        getattr(_active, "document", None),
+                        snapshot_digest=str(getattr(_active, "digest", "") or ""),
+                        upstream_snapshot=getattr(
+                            _active, "upstream_snapshot", None
+                        )
+                        or getattr(_active, "upstreamSnapshot", None),
+                    )
+                    _attested = ""
+                    try:
+                        _attested = str(
+                            primary_evidence.support_identity.agentSourceRef or ""
+                        ).strip()
+                    except Exception:
+                        _attested = ""
+                    if _expected and _attested and _attested != _expected:
+                        logger.info(
+                            "Dropping stale primary deployment evidence after "
+                            "agent source stabilization: attested=%s expected=%s",
+                            _attested[:32],
+                            _expected[:32],
+                        )
+                        primary_evidence = None
+        except Exception:
+            # Best-effort migration guard; qualification still fails closed
+            # with the exact mismatch when evidence is stale.
+            pass
 
         async with self._session_factory() as session:
             result = await session.execute(
@@ -710,48 +892,9 @@ class BootstrapController:
                         "Run: docker build -f services/omnigent/opencode-host/Dockerfile "
                         "or set OMNIGENT_OPENCODE_HOST_IMAGE_REF to a digest-pinned image."
                     )
-            # Update record resolved
-            # Resolve model for image selection. Credentialless opencode/*
-            # qualified IDs require the exact observed catalog for execution
-            # selection, but image selection must not fail closed before
-            # catalog sync/qualification: defer exact-ID validation to
-            # _qualify_and_publish (exact-host authority via
-            # resolve_model_exact). Friendly display aliases remain valid
-            # here for image resolution only.
-            # Execution qualification still requires the exact catalog (step 7
-            # of OpenCodeHost §8) via resolve_model_exact before launch.
-            try:
-                model_info = resolve_bootstrap_model(display)
-            except ValueError as exc:
-                text = display.strip()
-                prefix, sep, provider_model_id = text.partition("/")
-                if sep and prefix.strip() == "opencode" and provider_model_id.strip():
-                    # MoonLadderStudios/MoonMind#4021 P1: fresh
-                    # opencode-zen-free default stores its qualified
-                    # opencode/... model in desired with no catalog yet.
-                    # Use the qualified ID directly for image selection and
-                    # let _qualify_and_publish enforce exact-catalog
-                    # authority before launch.
-                    logger.info(
-                        "Deferring exact catalog validation for %r to "
-                        "qualification; using qualified ID for image "
-                        "selection.",
-                        text,
-                    )
-                    model_info = {
-                        "displayName": display,
-                        "providerModelId": provider_model_id.strip(),
-                        "qualifiedId": text,
-                    }
-                else:
-                    record = record.model_copy(
-                        update={
-                            "state": BootstrapState.failed,
-                            "failure": {"code": "model_unavailable", "message": str(exc)},
-                        }
-                    )
-                    save_bootstrap_record(record)
-                    raise
+            model_info = resolve_bootstrap_model(
+                display, provider_id=record.desired.provider
+            )
 
             qualified = model_info["qualifiedId"]
             provider_model = model_info["providerModelId"]
@@ -910,15 +1053,10 @@ class BootstrapController:
                     RuntimeMaterializationMode,
                 )
 
-                # Scope to requesting user unless principal is superuser
+                # Single-user (#4349): provider profiles are instance
+                # resources; no human-owner scoping. Legacy owner values
+                # persist as provenance only.
                 owner_id = None
-                if principal is not None:
-                    principal_id = getattr(principal, "id", None)
-                    is_super = bool(getattr(principal, "is_superuser", False))
-                    if not is_super and principal_id is not None:
-                        owner_id = principal_id
-                    elif is_super:
-                        owner_id = None
 
                 profile = ManagedAgentProviderProfile(
                     profile_id=profile_id,
@@ -1387,10 +1525,7 @@ class BootstrapController:
             )
             catalog_evidence: dict[str, Any] = (
                 dict(
-                    getattr(
-                        evidence_profile, "model_catalog_evidence_json", None
-                    )
-                    or {}
+                    getattr(evidence_profile, "model_catalog_evidence_json", None) or {}
                 )
                 if evidence_profile is not None
                 else {}

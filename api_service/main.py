@@ -104,9 +104,9 @@ from api_service.api.routers.system_operations import (
 )
 from api_service.api.routers.proxy import router as proxy_router
 from api_service.api.routers.auth_advanced_4124 import router as auth_advanced_4124_router
+from api_service.api.routers.accounts_4122 import router as accounts_4122_router
 from api_service.api.routers.issue_lifecycle import router as issue_lifecycle_router
 from api_service.api.websockets import router as websockets_router
-from api_service.api.schemas import UserProfileUpdate
 from api_service.db.base import get_async_session_context
 from api_service.services.presets.catalog import PresetCatalogService
 from api_service.ui_assets import resolve_dashboard_dist_root
@@ -227,6 +227,116 @@ async def _sync_env_managed_secrets() -> int:
             redacted_error,
         )
         return 0
+
+
+async def _sweep_secret_invalidation_outbox() -> int:
+    """Deliver leftover secret invalidation outbox rows (restart recovery).
+
+    Registers a process-level logging subscriber so the sweep can mark rows
+    delivered instead of leaving them permanently pending, then replays the
+    outbox through :meth:`SecretsService.sweep_invalidations`. Acquisition
+    always checks the authoritative revision, so this only repairs cache
+    freshness after restarts or delivery failures.
+    """
+    try:
+        from api_service.services.secrets import (
+            SecretsService,
+            subscribe_secret_invalidations,
+        )
+        from api_service.db.base import get_async_session_context
+
+        async def _log_invalidation(event: dict) -> None:
+            logger.info(
+                "secret_invalidation_replayed",
+                slug=event.get("slug"),
+                credential_revision=event.get("credential_revision"),
+                policy_revision=event.get("policy_revision"),
+                cause=event.get("cause"),
+            )
+
+        try:
+            subscribe_secret_invalidations(_log_invalidation)
+        except Exception:
+            # Startup replay is idempotent; a duplicate subscriber
+            # registration is safe to ignore and continue the sweep.
+            pass
+        async with get_async_session_context() as session:
+            swept = await SecretsService.sweep_invalidations(session)
+            if swept:
+                logger.info(
+                    "Replayed secret invalidation outbox on startup: swept=%s",
+                    swept,
+                )
+            return swept
+    except Exception as exc:
+        logger.warning(
+            "Secret invalidation sweep deferred: %s",
+            type(exc).__name__,
+        )
+        return 0
+
+
+async def _convert_legacy_profile_secrets() -> dict:
+    """Run the gated #4349 legacy profile-secret conversion on startup.
+
+    Single-user design, sections 6 and 9: eligible legacy ``UserProfile``-held
+    secrets are converted into managed-secret references exactly once; reruns
+    converge without duplicating or changing slugs. Multi-operator databases
+    are blocked without mutation (attribution stays owned by #4346's guarded
+    migration). Resilient by design: conversion must never fail startup, so
+    every failure (including the multi-operator block) is logged and startup
+    continues. Returns the metadata-only conversion summary.
+    """
+    try:
+        from api_service.services.profile_secret_migration import (
+            MultiOperatorAttributionError,
+            run_single_operator_profile_secret_conversion,
+        )
+
+        async with get_async_session_context() as session:
+            try:
+                summary = await run_single_operator_profile_secret_conversion(
+                    session
+                )
+            except MultiOperatorAttributionError as exc:
+                logger.warning(
+                    "Legacy profile secret conversion deferred: %s",
+                    exc,
+                )
+                logger.warning(
+                    "Multi-operator legacy database: provider profiles stay "
+                    "visible as instance resources pending #4346 guarded "
+                    "migration; resolve attribution before relying on "
+                    "single-operator access cutover."
+                )
+                return {"deferred": True, "reason": "multi_operator_attribution"}
+            if summary.get("migration", {}).get("migrated"):
+                # Metadata counts are intentionally not logged: the
+                # migration summary is tainted by secret handling and
+                # CodeQL flags any logged derived value as clear-text
+                # sensitive data. Conversion outcome stays observable via
+                # the returned summary, not log arguments.
+                logger.info("Converted legacy profile secrets on startup")
+                # Single-user (#4349): the startup upgrade path migrates
+                # eligible legacy secrets without implicit profile rewires
+                # (no UserProfile->provider-profile mapping exists). The
+                # new ProfileAuthProvider requires an explicit
+                # provider-profile secret_ref, so converted secrets stay
+                # unreferenced until the operator (or #4346's guarded
+                # migration) publishes transactional rewires via
+                # rewire_provider_profile_secret_refs.
+                logger.warning(
+                    "Legacy profile secrets converted without profile rewires: "
+                    "publish explicit provider-profile secret_refs to restore "
+                    "effective access."
+                )
+            return summary
+    except Exception as exc:  # pragma: no cover - bounded startup conversion
+        logger.warning(
+            "Legacy profile secret conversion deferred: %s",
+            type(exc).__name__,
+        )
+        return {"deferred": True, "reason": type(exc).__name__}
 
 
 async def _sync_omnigent_bootstrap_agent_profile() -> bool:
@@ -1356,6 +1466,11 @@ app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
 # through the shared auth boundary. Endpoints fail closed when the classified
 # production mode does not select them.
 app.include_router(auth_advanced_4124_router)
+# Built-in accounts lifecycle (#4122): protected first-owner setup,
+# invitation-only enrollment, password recovery, and administrator member
+# management through the shared #4121 session authority. Endpoints fail
+# closed unless the classified production mode is `accounts`.
+app.include_router(accounts_4122_router)
 if _ENABLE_TEST_UI_ROUTE:
     app.include_router(test_ui_router)
 
@@ -3012,25 +3127,33 @@ async def startup_event():
     # external services or leases held by active workflows. None may hold the
     # HTTP listener closed; execution admission still requires their evidence.
     await _sync_env_managed_secrets()
+    await _sweep_secret_invalidation_outbox()
+    await _convert_legacy_profile_secrets()
     # MoonLadderStudios/MoonMind#3955 retired the experimental embedded host
     # transport: startup no longer runs an embedded host-auth preflight or
     # gates on it. Proxy mode is the only supported transport; retained
     # embedded sessions drain through the janitor-owned terminal-cleanup
     # probes after startup instead of blocking it.
 
-    # Ensure default user and profile exist if auth is disabled
+    # Ensure default user exists if auth is disabled.
+    # Single-user (#4349): the default User row lifecycle stays owned by
+    # #4346/#4347 (disabled local mode). Legacy UserProfile seeding from
+    # env keys was removed here: provider credentials resolve from
+    # explicit provider profiles + managed-secret references, and legacy
+    # UserProfile-held values are converted by
+    # api_service.services.profile_secret_migration. This startup path
+    # must not create or update a UserProfile row.
     from moonmind.security.auth_modes_4120 import is_disabled_local_mode as _is_disabled
 
     if getattr(app.state, "auth_production_mode", "") == "disabled" or _is_disabled():
         logger.info(
-            "Auth provider is 'disabled'. Ensuring default user and profile exist on startup."
+            "Auth provider is 'disabled'. Ensuring default user exists on startup."
         )
         from api_service.auth import (
             _DEFAULT_USER_ID,
             get_or_create_default_user,
             get_user_manager_context,
         )
-        from api_service.services.profile_service import ProfileService
 
         async with get_async_session_context() as db_session:
             async with get_user_manager_context(db_session) as user_manager:
@@ -3052,30 +3175,6 @@ async def startup_event():
                         logger.info(
                             f"Default user {default_user.email} (ID: {default_user.id}) ensured."
                         )
-                        profile_service = ProfileService()
-                        existing_profile = (
-                            await profile_service.get_sanitized_profile_by_user_id(
-                                db_session=db_session, user_id=default_user.id
-                            )
-                        )
-                        if existing_profile:
-                            logger.info(
-                                f"Profile for default user {default_user.email} already exists (Profile ID: {existing_profile.id})."
-                            )
-                        else:
-                            profile_update = UserProfileUpdate(
-                                google_api_key=settings.google.google_api_key,
-                                openai_api_key=settings.openai.openai_api_key,
-                                anthropic_api_key=settings.anthropic.anthropic_api_key,
-                            )
-                            profile = await profile_service.update_profile(
-                                db_session=db_session,
-                                user_id=default_user.id,
-                                profile_data=profile_update,
-                            )
-                            logger.info(
-                                f"Created profile for default user {default_user.email} (Profile ID: {profile.id}) from env keys."
-                            )
                     else:
                         logger.error("Failed to get or create default user on startup.")
                 except ValueError as ve:

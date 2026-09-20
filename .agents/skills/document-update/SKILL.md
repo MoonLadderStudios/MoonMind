@@ -97,7 +97,7 @@ An authorized proposed design needs no pre-existing implementation to be written
 
  8. Provider-neutral escalation for misaligned updates.
    - If step 5 determined that the document update is not aligned with the project's direction, do not edit the document. Escalate instead.
-   - When an authorized tracker integration exists, use its actual metadata and verified receipt: read `.agents/skills/jira-issue-creator/SKILL.md` and follow its workflow when the authorized integration is Jira. The issue must include:
+   - When an authorized tracker integration exists, use its actual metadata and verified receipt: read the `jira-issue-creator` skill from the resolved active bundle (`$MOONMIND_ACTIVE_SKILLS_DIR/jira-issue-creator/SKILL.md` inside MoonMind; the installed skills directory outside MoonMind) and follow its workflow when the authorized integration is Jira. The issue must include:
      - A clear summary naming the document and the planned update.
      - A description that explains the drift found in the drift ledger.
      - An explicit statement of why the update may conflict with the constitution, README, or main architecture document.

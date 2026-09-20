@@ -19,10 +19,12 @@ from pathlib import Path
 
 _MAX_DIAGNOSTIC_CHARS = 4000
 _MAX_COMMAND_CHARS = 1000
+_MAX_PUBLISHED_ANCESTOR_SEARCH = 20
 
-# Bounded wait for an in-flight image publish: only `manifest unknown`-style
-# pull failures are retried. The fetched commit is immutable, so waiting cannot
-# change which artifact is selected. ~10 minutes covers normal publish latency.
+# Bounded wait for the fetched tip's in-flight image publish, tried before
+# selection falls back to a published ancestor so the exact requested commit
+# still wins when its publish is merely late. ~10 minutes covers normal
+# publish latency.
 _PULL_RETRY_INTERVAL_SECONDS = 30
 _PULL_RETRY_MAX_ATTEMPTS = 20
 
@@ -137,34 +139,63 @@ def run(args, *, cwd, env=None):
     return (getattr(result, "stdout", "") or "").strip()
 
 
-def _pull_release_image(image, *, repo, branch, revision):
-    """Pull the pinned release image, waiting out an in-flight publish.
+def _select_release_image(*, repo, branch, tip_revision, image_repository):
+    """Select the newest published image on the fetched branch history.
 
-    Only unpublished-image failures are retried: the fetched commit is
-    immutable, so waiting cannot change which artifact is selected, pinned,
-    or verified downstream. Auth, daemon, and unknown failures fail fast.
+    The fetched tip is preferred: an unpublished pull failure means its publish
+    workflow is still running, so the tip is retried for a bounded interval
+    before selection falls back to its newest published first-parent ancestor.
+    Commits are immutable, so waiting cannot change which artifact a candidate
+    names. Auth, daemon and unknown failures propagate immediately instead of
+    masking a broken registry as an unpublished release.
+
+    Returns the selected ``(revision, image, skipped_unpublished)``.
     """
+    try:
+        candidates = run(
+            [
+                "git",
+                "rev-list",
+                "--first-parent",
+                "-n",
+                str(_MAX_PUBLISHED_ANCESTOR_SEARCH),
+                tip_revision,
+            ],
+            cwd=repo,
+        ).split()
+    except RuntimeError:
+        candidates = []
+    if tip_revision not in candidates:
+        candidates = [tip_revision, *candidates]
+    skipped = []
     last_error = None
-    for attempt in range(1, _PULL_RETRY_MAX_ATTEMPTS + 1):
-        try:
-            run(["docker", "pull", image], cwd=repo)
-            return
-        except DockerPullError as exc:
-            if exc.category != "unpublished":
-                raise
-            last_error = exc
-        if attempt < _PULL_RETRY_MAX_ATTEMPTS:
-            print(
-                f"Published image {image} not yet available "
-                f"(attempt {attempt}/{_PULL_RETRY_MAX_ATTEMPTS}); "
-                f"waiting {_PULL_RETRY_INTERVAL_SECONDS}s for the image "
-                "publish workflow...",
-                flush=True,
-            )
-            _sleep(_PULL_RETRY_INTERVAL_SECONDS)
+    for candidate in candidates:
+        image = f"{image_repository}:sha-{candidate}"
+        # Only the tip can still be publishing; older ancestors have settled.
+        attempts = _PULL_RETRY_MAX_ATTEMPTS if candidate == tip_revision else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                run(["docker", "pull", image], cwd=repo)
+                return candidate, image, skipped
+            except DockerPullError as exc:
+                if exc.category != "unpublished":
+                    raise
+                last_error = exc
+            if attempt < attempts:
+                print(
+                    f"Published image {image} not yet available "
+                    f"(attempt {attempt}/{attempts}); waiting "
+                    f"{_PULL_RETRY_INTERVAL_SECONDS}s for the image publish "
+                    "workflow...",
+                    flush=True,
+                )
+                _sleep(_PULL_RETRY_INTERVAL_SECONDS)
+        skipped.append(candidate)
     raise RuntimeError(
-        f"Published image {image} for origin/{branch} revision "
-        f"{revision} is unavailable; {last_error}"
+        f"Published image {image_repository}:sha-{tip_revision} for "
+        f"origin/{branch} revision {tip_revision} is unavailable; checked "
+        f"{len(candidates)} commit(s) ({', '.join(skipped)}) with no published "
+        f"image; {last_error}"
     ) from last_error
 
 
@@ -235,11 +266,22 @@ def main(argv=None):
             )
             return 0
         run(["git", "fetch", "origin", args.branch], cwd=repo)
-        revision = run(
+        tip_revision = run(
             ["git", "rev-parse", "--verify", "FETCH_HEAD^{commit}"], cwd=repo
         )
-        image = f"{args.image_repository}:sha-{revision}"
-        _pull_release_image(image, repo=repo, branch=args.branch, revision=revision)
+        revision, image, skipped_unpublished = _select_release_image(
+            repo=repo,
+            branch=args.branch,
+            tip_revision=tip_revision,
+            image_repository=args.image_repository,
+        )
+        if revision != tip_revision:
+            print(
+                f"Tip revision {tip_revision[:12]} has no published image yet; "
+                f"using newest published ancestor {revision[:12]} "
+                f"(skipped {len(skipped_unpublished)} unpublished commit(s))",
+                flush=True,
+            )
         observed = json.loads(run(["docker", "image", "inspect", image], cwd=repo))[0]
         if (
             observed.get("Config", {})
@@ -264,24 +306,29 @@ def main(argv=None):
         )
         project = args.compose_project or rendered["name"]
         submission_id = str(uuid.uuid4())
+        operator_urls = list(args.operator_url)
+        inputs = {
+            "stack": "moonmind",
+            "image": {
+                "repository": args.image_repository,
+                "reference": digests[0].split("@", 1)[1],
+            },
+            "sourceRevision": revision,
+            "reason": "Update to selected branch snapshot",
+        }
+        if revision != tip_revision:
+            inputs["requestedTipRevision"] = tip_revision
+            inputs["skippedUnpublishedRevisions"] = list(skipped_unpublished)
         record = {
             "repo": str(repo),
             "project": project,
             "image": digests[0],
-            "inputs": {
-                "stack": "moonmind",
-                "image": {
-                    "repository": args.image_repository,
-                    "reference": digests[0].split("@", 1)[1],
-                },
-                "sourceRevision": revision,
-                "reason": "Update to selected branch snapshot",
-            },
+            "inputs": inputs,
             "context": {
                 "idempotency_key": f"host-update:{submission_id}",
                 "operator": "local-operator",
                 "operator_role": "operator",
-                **({"deployment_operator_urls": args.operator_url} if args.operator_url else {}),
+                **({"deployment_operator_urls": operator_urls} if operator_urls else {}),
             },
         }
         submissions.mkdir(parents=True, exist_ok=True)
@@ -340,6 +387,12 @@ def main(argv=None):
                 f"MOONMIND_DEPLOYMENT_PROJECT_NAME={record['project']}",
                 "-e",
                 f"MOONMIND_DEPLOYMENT_PROJECT_DIR={repo}",
+                # Same substrate protection as the process environment below,
+                # stated explicitly: `run -e` wins over service interpolation,
+                # so the deployment-control submitter and everything it
+                # launches inherit the exclusion even if interpolation drifts.
+                "-e",
+                "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=docker-proxy,sandbox-egress-proxy,postgres",
                 "temporal-worker-deployment-control",
                 "-m",
                 "moonmind.workflows.skills.deployment_release",
@@ -350,7 +403,23 @@ def main(argv=None):
         return subprocess.run(
             command,
             cwd=repo,
-            env={**os.environ, "MOONMIND_IMAGE": record["image"]},
+                env={
+                    **os.environ,
+                    "MOONMIND_IMAGE": record["image"],
+                    "MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES": "docker-proxy,sandbox-egress-proxy,postgres",
+                    # The updater reaches Docker through docker-proxy, and
+                    # postgres/sandbox-egress-proxy are stateful substrate:
+                    # recreating them through a rewritten-bind render on every
+                    # release caused repeated proxy suicide (killing all
+                    # later docker calls) and a postgres removal. Host-
+                    # initiated updates still exclude that substrate from the
+                    # main pull/reconcile/verify stage while leaving it
+                    # running, so the controller never recreates its own
+                    # transport mid-update. The controller then reconciles
+                    # release-owned substrate whose definition drifted in a
+                    # staged pass after the main stack verifies, and fails
+                    # the release when that substrate does not converge.
+                },
             check=False,
         ).returncode
 

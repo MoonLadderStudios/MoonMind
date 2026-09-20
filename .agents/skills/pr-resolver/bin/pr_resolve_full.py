@@ -137,6 +137,18 @@ def evaluate_full_state(snapshot: dict[str, Any]) -> dict[str, str]:
             "next_step": "run_finalize",
         }
 
+    if action == "approving_review_required":
+        # This helper has no finish mode, and the terminal differs by it:
+        # `fix_only` is clean here, `merge` is blocked. Hand the decision to the
+        # finalizer that knows the mode instead of guessing one.
+        return {
+            "status": "ready_for_finalize",
+            "merge_outcome": "skipped",
+            "decision": "ready for finalize; merge gate awaits a human approving review",
+            "reason": reason or "merge_gate_requires_human_approval",
+            "next_step": "run_finalize",
+        }
+
     if reason in FULL_REMEDIATION_REASONS:
         return {
             "status": "needs_remediation",

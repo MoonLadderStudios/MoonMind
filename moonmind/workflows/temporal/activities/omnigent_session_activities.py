@@ -19,6 +19,18 @@ from uuid import NAMESPACE_URL, uuid5
 from moonmind.omnigent.control_plane.cleanup_authority import (
     CanonicalCleanupAuthority,
 )
+from moonmind.omnigent.harness_platform.agent_profile import (
+    accepted_imported_content_digests,
+    accepted_upstream_snapshot_digests,
+)
+from moonmind.omnigent.harness_platform.credential_bindings import (
+    assert_worker_supports_binding_set,
+    create_binding_set,
+    is_repository_authority,
+    model_bindings_of,
+    plan_bindings_have_repository_authority,
+    required_worker_authority_kinds,
+)
 from moonmind.omnigent.harness_platform.harness_registry import (
     canonical_harness_id,
     find_harness_registration,
@@ -204,6 +216,65 @@ def _bind_terminal_plan_authority(
     )
 
 
+def _enforce_session_worker_authority_barrier(plan: Any) -> None:
+    """Reject repository authority on the model-only session supervisor.
+
+    MoonLadderStudios/MoonMind#4009 REQ-08/REQ-09: the legacy session
+    supervisor worker advertises model authority only, so a plan carrying
+    repository authority fails closed here without global-credential
+    fallback. The check rebuilds the binding set through the versioned
+    constructor and compares the worker's advertised kinds against the
+    set's required kinds; model-only history passes unchanged.
+    """
+
+    from pydantic import BaseModel
+
+    from moonmind.omnigent.harness_platform.credential_bindings import (
+        SCHEMA_V1,
+        SCHEMA_V2,
+        parse_binding_set_ref,
+    )
+
+    raw_bindings = dict(plan.payload.credentialBindings or {})
+    if not plan_bindings_have_repository_authority(
+        getattr(plan.payload, "credentialBindings", None)
+    ):
+        # Model-only history and minimal test doubles pass unchanged; the
+        # barrier only rebuilds when repository authority is suspected.
+        return
+    normalized: dict[str, Any] = {}
+    for slot, binding in raw_bindings.items():
+        if isinstance(binding, BaseModel):
+            normalized[slot] = binding.model_dump(by_alias=True, mode="json")
+        elif isinstance(binding, Mapping):
+            normalized[slot] = dict(binding)
+        else:
+            normalized[slot] = binding
+    has_repo = any(
+        is_repository_authority(binding) for binding in normalized.values()
+    )
+    try:
+        binding_set_id, version, _digest = parse_binding_set_ref(
+            str(plan.payload.credentialBindingSetRef)
+        )
+    except Exception:
+        binding_set_id, version = "session-admission-bindings", 1
+    binding_set = create_binding_set(
+        bindingSetId=binding_set_id,
+        version=version,
+        bindings=normalized,
+        schema_version=SCHEMA_V2 if has_repo else SCHEMA_V1,
+    )
+    try:
+        assert_worker_supports_binding_set(("model",), binding_set)
+    except Exception as exc:
+        raise ValueError(
+            "session supervisor supports model authority only and cannot "
+            f"consume repository authority (requires "
+            f"{required_worker_authority_kinds(binding_set)}): {exc}"
+        ) from exc
+
+
 async def omnigent_evaluate_session_admission_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -217,7 +288,9 @@ async def omnigent_evaluate_session_admission_activity(
         plan = await _load_verified_execution_plan(request.omnigent_execution_plan)
         selected_profiles = {
             binding.providerProfileRef
-            for binding in plan.payload.credentialBindings.values()
+            for binding in model_bindings_of(
+                plan.payload.credentialBindings
+            ).values()
         }
         if request.execution_profile_ref not in selected_profiles:
             raise ValueError(
@@ -227,6 +300,7 @@ async def omnigent_evaluate_session_admission_activity(
 
         get_default_registry().require(plan.payload.executionRealizerRef)
         _validate_plan_support_authority(plan)
+        _enforce_session_worker_authority_barrier(plan)
         from moonmind.omnigent.session_supervisor_rollback import (
             SessionRollbackContext,
             resolve_rollback_effect,
@@ -364,7 +438,9 @@ async def _plan_capacity_authority(
     selected = sorted(
         {
             binding.providerProfileRef
-            for binding in plan.payload.credentialBindings.values()
+            for binding in model_bindings_of(
+                plan.payload.credentialBindings
+            ).values()
         }
     )
     if len(selected) != 1:
@@ -713,7 +789,9 @@ async def _reconstruct_plan_bound_request(
 
     profile_refs = {
         item.providerProfileRef
-        for item in plan.payload.credentialBindings.values()
+        for item in model_bindings_of(
+            plan.payload.credentialBindings
+        ).values()
     }
     if len(profile_refs) != 1:
         raise ValueError("execution plan has ambiguous Provider Profile authority")
@@ -887,7 +965,9 @@ def _bind_request_to_execution_plan(
 
     selected_profiles = {
         binding.providerProfileRef
-        for binding in plan.payload.credentialBindings.values()
+        for binding in model_bindings_of(
+            plan.payload.credentialBindings
+        ).values()
     }
     if request.execution_profile_ref not in selected_profiles:
         raise ValueError(
@@ -1026,7 +1106,9 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
         raise ValueError("Agent Profile snapshot artifact is invalid")
     planned_profiles = {
         value.providerProfileRef
-        for value in persisted.payload.credentialBindings.values()
+        for value in model_bindings_of(
+            persisted.payload.credentialBindings
+        ).values()
     }
     if str(profile_snapshot.get("providerProfileRef") or "") not in planned_profiles:
         raise ValueError("Agent Profile artifact conflicts with Provider Profile plan")
@@ -1041,14 +1123,23 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
     if not isinstance(profile_source, Mapping):
         raise ValueError("Agent Profile artifact lacks source authority")
     planned_source = persisted.payload.agentSource
+    # Recompute the source identity a compiler pins from this very document,
+    # rather than assuming the Agent Profile version digest is it. The version
+    # digest covers per-run model/tool selections, so a profile bump would
+    # otherwise look like a source conflict and reject the launch. Both
+    # compiler generations are accepted so durable plans compiled before the
+    # stable-source change keep admitting after a worker upgrade.
+    snapshot_version_digest = str(profile_snapshot.get("digest") or "")
     if planned_source.get("kind") == "upstream":
         if (
             str(profile_source.get("upstreamId") or "")
             != str(planned_source.get("upstreamId") or "")
             or str(profile_source.get("upstreamVersion") or "0.0.0")
             != str(planned_source.get("upstreamVersion") or "")
-            or str(profile_snapshot.get("digest") or "")
-            != str(planned_source.get("upstreamSnapshotDigest") or "")
+            or str(planned_source.get("upstreamSnapshotDigest") or "")
+            not in accepted_upstream_snapshot_digests(
+                profile_source, snapshot_version_digest
+            )
         ):
             raise ValueError(
                 "Agent Profile artifact conflicts with planned source identity"
@@ -1059,8 +1150,10 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
             != str(planned_source.get("bundleArtifactRef") or "")
             or str(profile_source.get("bundleDigest") or "")
             != str(planned_source.get("bundleDigest") or "")
-            or str(profile_snapshot.get("digest") or "")
-            != str(planned_source.get("importedContentDigest") or "")
+            or str(planned_source.get("importedContentDigest") or "")
+            not in accepted_imported_content_digests(
+                profile_source, snapshot_version_digest
+            )
         ):
             raise ValueError(
                 "Agent Profile artifact conflicts with planned source identity"
@@ -2625,7 +2718,9 @@ async def omnigent_ensure_provider_profile_lease_activity(
     if execution_plan is not None:
         selected_profiles = {
             binding.providerProfileRef
-            for binding in execution_plan.payload.credentialBindings.values()
+            for binding in model_bindings_of(
+                execution_plan.payload.credentialBindings
+            ).values()
         }
         if len(selected_profiles) != 1:
             raise ValueError(
@@ -2744,7 +2839,11 @@ async def omnigent_ensure_provider_profile_lease_activity(
         )
 
         provider_leases: dict[str, dict[str, Any]] = {}
-        for slot, binding in execution_plan.payload.credentialBindings.items():
+        # Model leases only (MoonLadderStudios/MoonMind#4009): repository
+        # slots are served by issuance, never by Provider Profile leases.
+        for slot, binding in model_bindings_of(
+            execution_plan.payload.credentialBindings
+        ).items():
             credential_runtime_ref = (
                 f"credential-runtime:{lease.lease_id}:"
                 f"{int(profile.credential_generation)}"
@@ -3554,7 +3653,31 @@ async def omnigent_ensure_provider_session_activity(
                 workflow_id=str(session.moonmind_workflow_id or ""),
                 state=runtime_binding_state,
             )
-        settled = await _settle_command(request)
+    settled = await _settle_command(request)
+    # REQ-08/ACC-06 observability (MoonLadderStudios/MoonMind#4009): report
+    # the repository issuance that cleanup leaves unused. The narrowed
+    # binding computation is ownership-scoped (only named slots, never
+    # another consumer's model lease); actual issuance release stays with
+    # the issuance owner (#4007), so this step records refs without
+    # mutating the durable binding.
+    if runtime_state is not None:
+        try:
+            from moonmind.omnigent.harness_platform.runtime_binding import (
+                release_unused_repository_issuance,
+            )
+
+            issuance = dict(
+                getattr(runtime_state.binding, "repositoryIssuance", {}) or {}
+            )
+            if issuance:
+                _narrowed, _released = release_unused_repository_issuance(
+                    runtime_state.binding, sorted(issuance.keys())
+                )
+                settled["releasedRepositoryIssuanceRefs"] = list(_released)
+            else:
+                settled["releasedRepositoryIssuanceRefs"] = []
+        except Exception:
+            settled["releasedRepositoryIssuanceRefs"] = []
         settled["revision"] = session.revision
         if runtime_binding is not None and runtime_binding_state is not None:
             settled.update(

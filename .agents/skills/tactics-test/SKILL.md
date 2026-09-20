@@ -12,11 +12,22 @@ metadata:
 
 Run Linux Unreal build and targeted automation tests for `Tactics.uproject`. Inside a MoonMind managed session, submit typed container jobs so every workflow uses the deployment daemon's shared image cache. Outside MoonMind, use the portable direct-Docker fallback. Capture build and test logs in timestamped artifact folders inside the Tactics repository, and emit a machine-readable gate file for publish blocking.
 
+**Inside a managed session there is no Docker CLI, by design.** The sandbox
+reaches the deployment daemon through `moonmind container`, and
+`run_dood_unreal_tactics.sh` dispatches to it automatically. Do not probe
+`docker`, `docker info`, or `docker --version` to decide whether Unreal tests
+can run: `docker: command not found` is the expected state and says nothing
+about Unreal availability. Run the script and read its diagnostic. If it
+reports an incomplete managed handoff or an image-source failure, that is a
+deployment defect to report, not evidence that UE testing is unavailable.
+
 ## Inputs
 
 - Repository path (defaults to the active managed workspace inside MoonMind and
   `/mnt/d/Unreal/Tactics` in the direct-Docker fallback)
-- Inside MoonMind: `docker` capability and an operator-provisioned `tactics-unreal` image source
+- Inside MoonMind: the `docker` capability (which means container-job service
+  access, not a sandbox Docker binary) and an operator-provisioned
+  `tactics-unreal` image source with a registry credential for its image
 - Outside MoonMind: Docker CLI access and a reachable daemon
 - Container image with the Unreal toolchain in the selected execution substrate
 
@@ -81,6 +92,30 @@ scripts/run_dood_unreal_tactics.sh \
 scripts/run_dood_unreal_tactics.sh --dry-run
 ```
 
+## Terminal outcomes
+
+A run is complete only when its reported outcome names the requested phase
+(`build`, `test`, or both), the current candidate under test (repository path
+plus exact toolchain image reference when an explicit image was supplied), and
+the gate-file evidence it was read from. Report per-phase status separately;
+never report a test verdict when only the build phase ran, and never report a
+build verdict when only the test phase ran.
+
+- Read the gate result only from the explicit `--gate-file` path or
+  `.artifacts/dood-unreal-tactics/latest/gate.json` written by the current run.
+  A gate file from a previous timestamp, a different repository path, or a
+  different image reference is stale evidence: re-run the requested phase
+  instead of reporting it.
+- Sequence safely: run the build phase before the test phase when both were
+  requested; do not run tests against a build that did not succeed in the same
+  run.
+- `--dry-run` is strictly non-mutating: it previews the intended container
+  operation without building, testing, fetching, or writing gate output. Never
+  report a dry-run preview as a build or test result.
+- Preserve existing artifacts: the script writes a new timestamped folder and
+  refreshes the `latest` link; it never deletes or overwrites prior timestamped
+  evidence.
+
 ## Notes
 
 - The script runs build and test in separate ephemeral containers to keep worker and toolchain isolation clear.
@@ -91,3 +126,18 @@ scripts/run_dood_unreal_tactics.sh --dry-run
   portable direct-Docker fallback outside MoonMind.
 - Use `--pull always` when you need to force-refresh the container image.
 - Gate contract: publish gating consumes the JSON gate output and requires `status="PASS"`.
+
+## Terminal outcomes
+
+- A `--dry-run` preview reports `status="SKIPPED"` on stdout and never satisfies publish
+  gating. It submits no build or test work, writes no gate artifact, and
+  preserves any prior verified gate result. It proves nothing about the target.
+- Completion requires the current run's gate artifact with `status="PASS"`,
+  its recorded `resultsDir` timestamped artifact folder, and the build/test
+  log paths it names. Only logs for phases marked `pass` are required: a
+  `--phase build` gate omits `testLog` and a `--phase test` gate omits
+  `buildLog`. A process exit, a submitted job identifier, or a
+  successful container start alone does not establish completion.
+- A stale `latest/gate.json` from an earlier run must not be reused: always
+  read the gate written by the current run and confirm its `resultsDir`
+  matches the timestamped folder just produced.

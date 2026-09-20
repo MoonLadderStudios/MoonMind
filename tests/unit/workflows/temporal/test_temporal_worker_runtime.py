@@ -1319,74 +1319,36 @@ def test_deployment_update_executor_returns_none_when_detection_fails(
     assert _build_deployment_update_executor() is None
 
 
-def test_detect_host_project_dir_retries_transient_failures(
+def test_detect_host_project_dir_delegates_with_the_bootstrap_retry_budget(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A transient ``docker inspect`` failure must retry before disabling."""
+    """Mount-table evidence has one owner; bootstrap only adds its retries.
 
-    import subprocess
+    A transient ``docker inspect`` failure while ``docker-proxy`` starts must
+    not permanently disable deployment updates.
+    """
 
     from moonmind.workflows.temporal import worker_runtime
 
-    monkeypatch.setattr(
-        worker_runtime,
-        "_read_self_container_id",
-        lambda: "abc123",
-    )
-    import time as _time
+    recorded: dict[str, object] = {}
 
-    monkeypatch.setattr(_time, "sleep", lambda _seconds: None)
-
-    attempts = {"count": 0}
-
-    def _fake_run(*args, **kwargs):
-        attempts["count"] += 1
-        if attempts["count"] == 1:
-            raise subprocess.TimeoutExpired(cmd=args[0] if args else "docker", timeout=10)
-        mounts = json.dumps(
-            [
-                {
-                    "Source": "/host/repo",
-                    "Destination": "/workspace/host_project",
-                }
-            ]
-        )
-        return SimpleNamespace(stdout=mounts, stderr="", returncode=0)
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-
-    detected = worker_runtime._detect_host_project_dir("/workspace/host_project")
-    assert detected == "/host/repo"
-    assert attempts["count"] == 2
-
-
-def test_detect_host_project_dir_returns_none_after_exhausting_retries(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    import subprocess
-
-    from moonmind.workflows.temporal import worker_runtime
+    def _fake_daemon_bind_source(local_mount, **kwargs):
+        recorded["local_mount"] = local_mount
+        recorded.update(kwargs)
+        return "/host/repo"
 
     monkeypatch.setattr(
-        worker_runtime,
-        "_read_self_container_id",
-        lambda: "abc123",
+        worker_runtime, "daemon_bind_source", _fake_daemon_bind_source
     )
-    import time as _time
 
-    monkeypatch.setattr(_time, "sleep", lambda _seconds: None)
-
-    calls = {"count": 0}
-
-    def _always_fail(*args, **kwargs):
-        calls["count"] += 1
-        raise FileNotFoundError("docker missing")
-
-    monkeypatch.setattr(subprocess, "run", _always_fail)
-
-    detected = worker_runtime._detect_host_project_dir("/workspace/host_project")
-    assert detected is None
-    assert calls["count"] == worker_runtime._DETECT_HOST_PROJECT_DIR_RETRIES
+    assert worker_runtime._detect_host_project_dir("/workspace/host_project") == (
+        "/host/repo"
+    )
+    assert recorded == {
+        "local_mount": "/workspace/host_project",
+        "attempts": worker_runtime._DETECT_HOST_PROJECT_DIR_RETRIES,
+        "backoff_seconds": worker_runtime._DETECT_HOST_PROJECT_DIR_BACKOFF_SECONDS,
+    }
 
 
 @pytest.mark.parametrize(

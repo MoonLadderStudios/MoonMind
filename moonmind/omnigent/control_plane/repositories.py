@@ -81,6 +81,43 @@ _POST_TERMINAL_MUTABLE_FIELDS: frozenset[str] = frozenset(
 )
 
 
+def _is_check_violation(exc: IntegrityError) -> bool:
+    """Return whether ``exc`` is a CHECK violation rather than a unique conflict.
+
+    The turn-attempt insert translates unique conflicts into
+    :class:`TurnIdempotencyConflictError`. A CHECK violation (e.g. a turn source
+    outside the durable vocabulary) must not be masked as
+    ``Idempotency key ... already exists``; it must propagate as the original
+    integrity error so the operator sees the real constraint.
+    """
+
+    parts: list[str] = [str(exc)]
+    seen: set[int] = set()
+    queue: list[Any] = [exc]
+    while queue:
+        current = queue.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        for attr in ("orig", "__cause__", "__context__"):
+            try:
+                nxt = getattr(current, attr, None)
+            except Exception:  # noqa: BLE001 - diagnostic inspection only
+                continue
+            if nxt is None or id(nxt) in seen:
+                continue
+            try:
+                parts.append(str(nxt))
+            except Exception:  # noqa: BLE001 - diagnostic inspection only
+                continue
+            queue.append(nxt)
+    haystack = " ".join(parts).lower()
+    return (
+        "check constraint" in haystack
+        or "ck_omnigent_turn_attempts_lineage_kind" in haystack
+    )
+
+
 def _raise_for_session_conflict(session_id: str, result: CasResult) -> None:
     """Translate a fail-closed session CAS outcome into a typed exception.
 
@@ -300,6 +337,12 @@ class _RepositoryBase:
                 self._session.add(obj)
                 await self._session.flush()
         except IntegrityError as exc:  # pragma: no cover - exercised via tests
+            # Only uniqueness violations establish an identity conflict. A
+            # CHECK, foreign-key, or NOT NULL failure must retain its cause.
+            if getattr(exc.orig, "sqlstate", None) != "23505" and getattr(
+                exc.orig, "sqlite_errorname", None
+            ) not in {"SQLITE_CONSTRAINT_UNIQUE", "SQLITE_CONSTRAINT_PRIMARYKEY"}:
+                raise
             raise on_conflict(exc) from exc
         await self._session.refresh(obj)
         return obj
@@ -1351,7 +1394,9 @@ class TurnAttemptRepository(_RepositoryBase):
         )
         await self._insert(
             row,
-            on_conflict=lambda exc: TurnIdempotencyConflictError(
+            on_conflict=lambda exc: exc
+            if _is_check_violation(exc)
+            else TurnIdempotencyConflictError(
                 f"Idempotency key {idempotency_key!r} already exists"
             ),
         )

@@ -563,6 +563,37 @@ class ExecutionDependencySummary:
     state: str | None
     close_status: str | None
     workflow_type: str | None
+    attention_required: bool = False
+
+def _validate_publish_authority(initial_parameters: Mapping[str, Any] | None) -> None:
+    """Reject a publish mode the authored plan can never satisfy."""
+
+    from moonmind.workflows.executions.execution_contract import (
+        WorkflowContractError,
+        validate_publish_mode_repository_authority,
+    )
+
+    parameters = initial_parameters if isinstance(initial_parameters, Mapping) else {}
+    workflow_payload = parameters.get("workflow")
+    if not isinstance(workflow_payload, Mapping):
+        workflow_payload = parameters.get("task")
+    if not isinstance(workflow_payload, Mapping):
+        return
+    publish = workflow_payload.get("publish")
+    publish_mode = publish.get("mode") if isinstance(publish, Mapping) else None
+    if publish_mode is None:
+        publish_mode = workflow_payload.get("publishMode") or parameters.get(
+            "publishMode"
+        )
+    steps = workflow_payload.get("steps")
+    try:
+        validate_publish_mode_repository_authority(
+            publish_mode=publish_mode,
+            steps=steps if isinstance(steps, list) else None,
+        )
+    except WorkflowContractError as exc:
+        raise TemporalExecutionValidationError(str(exc)) from exc
+
 
 class TemporalExecutionService:
     """Canonical execution store for Temporal workflows."""
@@ -1931,6 +1962,10 @@ class TemporalExecutionService:
                     "value",
                     record.workflow_type,
                 ),
+                attention_required=bool(
+                    getattr(record, "attention_required", False)
+                    or (record.memo or {}).get("attention_required")
+                ),
             )
             for record in records
         }
@@ -2092,6 +2127,12 @@ class TemporalExecutionService:
                     f"{first_error.path}: {first_error.message}"
                 )
             initial_parameters = skill_validation.parameters
+            # A publish mode no authored step can satisfy is admitted here for
+            # rerun, continuation, checkpoint branching, and deployment routes
+            # that never pass the router's task-shaped check. Enforce the one
+            # invariant at the handoff every launch converges on so no route
+            # can queue a run that is guaranteed to fail finalizing.
+            _validate_publish_authority(initial_parameters)
 
         # Provider Profiles are runtime-owned launch contracts, so the
         # runtime/profile pair has to be valid at the boundary every
@@ -2197,18 +2238,6 @@ class TemporalExecutionService:
         params = dict(initial_parameters or {})
         if failure_policy is not None:
             params.setdefault("failurePolicy", failure_policy)
-        if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
-            action = str(
-                getattr(
-                    settings.workflow,
-                    "moonspec_environment_blocked_publish_action",
-                    "fail",
-                )
-                or "fail"
-            ).strip().lower()
-            if action not in {"fail", "draft_pr"}:
-                action = "fail"
-            params["moonspecEnvironmentBlockedPublishAction"] = action
         task_params = dict(_workflow_payload(params))
         legacy_task_params = params.get("task")
         if isinstance(legacy_task_params, Mapping):
@@ -3228,6 +3257,31 @@ class TemporalExecutionService:
                     self._update_summary(record, "Clarification reply sent to agent.")
                 else:
                     self._update_summary(record, "Execution resumed.")
+                # A pending integration wait survives the operator-pause
+                # overlay: resuming clears operator_paused but must restore
+                # the underlying integration wait reason (e.g.
+                # external_callback with attention_required=False) so the
+                # execution stays visibly awaiting_external until the
+                # provider poll/callback completes.
+                integration_state = self._integration_state(record)
+                try:
+                    integration_pending = integration_state is not None and (
+                        self._parse_integration_status(
+                            str(integration_state.get("normalized_status") or "")
+                        )
+                        not in TERMINAL_INTEGRATION_STATUSES
+                    )
+                except TemporalExecutionValidationError:
+                    integration_pending = False
+                if integration_pending and integration_state is not None:
+                    self._set_waiting_metadata(
+                        record,
+                        waiting_reason=self._integration_waiting_reason(
+                            integration_state
+                        ),
+                        attention_required=False,
+                    )
+                    self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
             elif signal_name == "SkipDependencyWait":
                 record.paused = False
                 self._clear_waiting_metadata(record)
@@ -3868,6 +3922,7 @@ class TemporalExecutionService:
         error_category: str | None = None,
         finish_outcome_code: str | None = None,
         finish_summary: dict[str, Any] | None = None,
+        attention_required: bool | None = None,
     ) -> TemporalExecutionRecord | TemporalExecutionCanonicalRecord:
         normalized_state = canonicalize_workflow_state_alias(
             str(state or "").strip().lower(),
@@ -3918,6 +3973,11 @@ class TemporalExecutionService:
                 self._set_state(record, target_state, close_status=target_close_status)
                 if isinstance(record, TemporalExecutionCanonicalRecord):
                     await self._sync_integration_correlation_record(record)
+            self._preserve_terminal_attention(
+                record,
+                attention_required=attention_required,
+                finish_summary=finish_summary,
+            )
             await self._session.commit()
             await self._session.refresh(record)
             if isinstance(record, TemporalExecutionRecord):
@@ -3932,6 +3992,11 @@ class TemporalExecutionService:
             finish_summary=finish_summary,
         )
         self._attach_terminal_governance_report(record)
+        self._preserve_terminal_attention(
+            record,
+            attention_required=attention_required,
+            finish_summary=finish_summary,
+        )
         if summary:
             if target_state is MoonMindWorkflowState.FAILED:
                 category = str(error_category or "execution_error").strip()
@@ -5620,6 +5685,14 @@ class TemporalExecutionService:
         self, record: TemporalExecutionCanonicalRecord
     ) -> str | None:
         if record.state is MoonMindWorkflowState.COMPLETED:
+            # MoonLadderStudios/MoonMind#4446: a completed-with-attention draft
+            # PR is not successful evidence for dependents. Keep the
+            # disposition distinguishable so the dependency gate stays blocked
+            # instead of releasing the prerequisite.
+            if bool(getattr(record, "attention_required", False)) or bool(
+                (record.memo or {}).get("attention_required")
+            ):
+                return "dependency_attention_required"
             return None
         error_category = str((record.memo or {}).get("error_category") or "").strip()
         if error_category:
@@ -5860,6 +5933,34 @@ class TemporalExecutionService:
         record.awaiting_external = False
         record.waiting_reason = None
         record.attention_required = False
+
+    def _preserve_terminal_attention(
+        self,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
+        *,
+        attention_required: bool | None,
+        finish_summary: dict[str, Any] | None,
+    ) -> None:
+        """Persist the completed-with-attention marker across the terminal boundary.
+
+        MoonLadderStudios/MoonMind#4446: ``_set_state`` clears waiting metadata
+        for every terminal state. A verification-incomplete draft PR completes
+        with ``attention_required`` set on the workflow, so re-apply it here
+        from the explicit activity input (or the durable finish summary) to
+        keep the canonical execution and API projection honest.
+        """
+        wants_attention = bool(attention_required)
+        if not wants_attention and isinstance(finish_summary, dict):
+            for key in ("attentionRequired", "attention_required"):
+                if key in finish_summary:
+                    wants_attention = bool(finish_summary.get(key))
+                    break
+        if not wants_attention:
+            return
+        record.attention_required = True
+        memo = dict(record.memo or {})
+        memo["attention_required"] = True
+        record.memo = memo
 
     def _clean_text(self, value: Any) -> str | None:
         if value is None:

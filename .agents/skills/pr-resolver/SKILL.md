@@ -59,8 +59,9 @@ inputSchema:
       default: merge
       description: >-
         "merge" finishes by merging the pull request once the merge gate opens.
-        "fix_only" keeps remediating comments, CI, and conflicts but stops at an
-        open merge gate and reports review_clean instead of merging.
+        "fix_only" keeps remediating comments, CI, and conflicts but stops once
+        nothing resolver-owned is left to address and reports review_clean
+        instead of merging.
   anyOf:
     - required:
         - pr
@@ -85,10 +86,20 @@ and continue the agent, but must not reclassify CI or choose fixes themselves.
 
 `inputs.finishMode = fix_only` is the one exception, and it narrows only the
 final side effect: every remediation, push, verification, and gate check still
-applies, but when the merge gate opens with nothing left to address the resolver
-reports `review_clean` and stops instead of merging. `fix_only` never relaxes a
-blocker, never merges, and never reports success while comments, CI, or
-conflicts remain actionable.
+applies, but once nothing is left to address the resolver reports `review_clean`
+and stops instead of merging. `fix_only` never relaxes a blocker, never merges,
+and never reports success while comments, CI, or conflicts remain actionable.
+
+Because `fix_only` never merges, merge *authorization* is not its blocker. A
+merge gate held closed only by a missing human approving review
+(`reviewDecision=REVIEW_REQUIRED`) does not stand between `fix_only` and
+`review_clean`: no automated action can produce an approval, and the run was
+never going to use one. That terminal records
+`final_reason=finish_mode_fix_only_awaiting_human_approval` so it stays
+distinguishable from a genuinely open gate, and it still requires confirmed
+mergeability -- an approval requirement never substitutes for the conflict
+check. Under `finishMode=merge` the same state is a durable
+`merge_gate_requires_human_approval` blocker, never a transient wait to retry.
 
 ## Inputs (skill args)
 - inputs.repo (optional)
@@ -109,10 +120,12 @@ conflicts remain actionable.
   non-retryable blocker is reached first.
 - `ci_running` finalize waits use at least 60 seconds before the next check,
   even when `finalizeBackoffSeconds` is lower.
-- If the only visible PR comment/review is from `gemini-code-assist`, the
-  resolver treats that as a Codex-review grace window and polls for up to 10
-  minutes before merging. Any additional visible comment/review ends the grace
-  wait immediately.
+- Provider-specific review protocols (bot message text, reaction kinds,
+  grace windows) are adapter data owned by the portable bundle's provider
+  adapter/helper, not model-specific reasoning in this workflow. The resolver
+  applies the configured provider's freshness/observation rules exactly as
+  the adapter reports them for the current head, without hardcoding any
+  provider's text or timing in this file.
 
 ## Skill authority and host boundary
 
@@ -176,9 +189,11 @@ metadata flag.
    non-agent automation.
 
 3. Read `var/pr_resolver/result.json` and perform exactly the indicated action:
-   - `review_clean`: `finishMode` is `fix_only`, the merge gate opened, and
-     nothing is left to address. Publish terminal evidence for the verified
-     branch head and stop without merging.
+   - `review_clean`: `finishMode` is `fix_only` and nothing resolver-owned is
+     left to address -- no conflicts, no CI failures, no actionable or deferred
+     comments, and a fresh automated review for this head. Publish terminal
+     evidence for the verified branch head and stop without merging, whether or
+     not the merge gate would authorize a merge.
    - `merged` or independently verified `already_merged`: publish terminal
      evidence and stop. A successful `gh pr merge` request is not terminal
      evidence until a fresh `gh pr view` reports `state=MERGED`; merge-queue or
@@ -205,23 +220,29 @@ metadata flag.
    - `deferred_comments`: the comment ledger deferred or could not fix at least
      one comment that is still present. Publish `manual_review` and stop; a
      repeated remediation pass cannot clear a deferred disposition.
-   - `ci_running`, `codex_review_grace_wait`, or another documented transient:
-     wait with the bounded backoff configured by the Skill inputs, then return to
-     step 2.
+    - `ci_running`, provider-grace waits reported by the portable adapter (for
+      example the snapshot's review-grace classification), or another
+      documented transient: wait with the bounded backoff configured by the
+      Skill inputs, then return to step 2.
    - any unavailable, ambiguous, permission-sensitive, or non-retryable state:
      publish `manual_review` or `failed` evidence and stop without merging.
 4. After every remediation, verify the exact local `HEAD` is visible on the PR
    branch, then return to step 2. Never reuse a pre-remediation snapshot.
-   Completion accepts a submitted provider review, a provider-authored clean
-   response (`Codex Review: Didn't find any major issues. 🚀`) after the request
-   on its unchanged head, or the provider's qualified clean-review reaction.
-   A PR-level reaction must be newer than the request; an eyes reaction is
-   never completion. Read all pages and refresh the comment inventory after
-   observing completion and revalidate the remote head before accepting the
-   snapshot. Merge with the verified head as an expected-head guard. A clean
-   response satisfies review freshness; it does
+   Completion accepts only the configured provider adapter's qualified
+   signals for the current head: a submitted provider review or the adapter's
+   qualified clean-review signal observed after the request on its unchanged
+   head, as defined by the portable bundle's provider adapter/helper (which
+   owns message-text and reaction interpretation). Read all pages and refresh
+   the comment inventory after observing completion and revalidate the remote
+   head before accepting the snapshot. Merge with the verified head as an
+   expected-head guard. A clean review signal satisfies review freshness; it does
    not erase independent actionable findings, CI failures, or conflicts. When
    those gates are clear, finish on the same head without another request.
+   Forward `finishMode`, review provider/policy, and freshness settings
+   through every resolver invocation, delegated step, retry, and documented
+   command: a requested review result must match the current head, and
+   `fix_only` must never gain merge authority from an omitted flag or
+   default.
 5. Enforce `maxIterations`, `finalizeMaxRetries`, and
    `finalizeMaxElapsedSeconds`. Retryable/no-progress states receive at least five
    finalize checks unless the elapsed-time limit or a hard failure is reached.
@@ -232,18 +253,21 @@ metadata flag.
 Allowed successful terminal states:
 - `var/pr_resolver/result.json` has `status=merged`, `merge_outcome=merged`, and `mergeAutomationDisposition=merged`.
 - The PR is independently confirmed as already merged after a snapshot/finalize race, with `mergeAutomationDisposition=already_merged`.
-- `finishMode=fix_only` reached an open merge gate: `status=review_clean`,
-  `merge_outcome=skipped`, and `mergeAutomationDisposition=review_clean`. This
-  state is allowed only when the same gate that authorizes a merge is fully
-  open; it is never a way to report an unresolved blocker as success.
+- `finishMode=fix_only` cleared every resolver-owned blocker:
+  `status=review_clean`, `merge_outcome=skipped`, and
+  `mergeAutomationDisposition=review_clean`. This state requires no conflicts, no
+  CI failures, no actionable or deferred comments, and a fresh automated review
+  for the verified head; it is never a way to report an unresolved blocker as
+  success. A merge gate awaiting a human approving review is not a resolver-owned
+  blocker, because `fix_only` never merges.
 
 ## Merge Automation Result Contract
 Every terminal `var/pr_resolver/result.json` MUST include `mergeAutomationDisposition`:
 - `merged`: the resolver merged the PR.
 - `already_merged`: the PR was independently confirmed as already merged.
-- `review_clean`: `finishMode` is `fix_only` and the merge gate opened with no
-  actionable comments, CI failures, or conflicts left. The resolver did not
-  merge and must not claim a merge.
+- `review_clean`: `finishMode` is `fix_only` and no actionable comments, CI
+  failures, or conflicts are left for the freshly reviewed head. The resolver did
+  not merge and must not claim a merge.
 - `request_review`: the current head SHA needs one fresh automated review from
   the configured provider before merge is allowed. Include a
   `gated-continuation/v2` `gatedContinuation` naming only the provider, the
@@ -255,8 +279,8 @@ Every terminal `var/pr_resolver/result.json` MUST include `mergeAutomationDispos
 - `reenter_gate`: the current resolver child completed a typed handoff to its
   validated `MoonMind.MergeAutomation` parent. Include `gatedContinuation` with
   the reason and an absolute UTC `notBefore` deadline when the next cycle must
-  wait. For Codex review grace, the direct finalizer copies the snapshot's
-  original `codexReviewGrace.expiresAt`; it never restarts that deadline.
+  wait. For provider review-grace waits, the direct finalizer copies the
+  snapshot's original provider-grace `expiresAt`; it never restarts that deadline.
   Standalone resolvers cannot use this disposition successfully. Provider,
   authentication, rate-limit, infrastructure, timeout, cancellation, stale
   evidence, and malformed evidence failures are never cleared by continuation
@@ -282,7 +306,9 @@ Never start detached polling, emit the final agent response, and claim the poll
 will continue after the managed CLI exits. Background task identifiers in output
 have no lifecycle authority.
 
-After any local commit-producing remediation, verify the exact current `HEAD` is visible on the remote PR branch before continuing. If `git push`, `gh`, or any GitHub connector path cannot publish the commit, stop as blocked with reason `publish_unavailable`; do not proceed to finalize and do not report success.
+After any local commit-producing remediation, verify the exact current `HEAD` is visible on the remote PR branch before continuing. If `git push`, `gh`, or any GitHub connector path cannot publish the commit, stop as blocked with reason `publish_unavailable`; do not proceed to finalize and do not report success. Before repeating a push or merge whose outcome is uncertain, reconcile first: re-read the remote branch head and PR merge state and continue from the reconciled state instead of repeating the write blindly. An accepted merge request, queued check, local commit, missing auth, or stale snapshot is not success: only a fresh `gh pr view` reporting `state=MERGED` for the verified head is terminal merge evidence. Auxiliary output failures never erase a verified primary effect and never cause another push/merge on their own.
+
+Resolve the selected PR's exact repository, head, base, and allowed finish mode from authoritative inputs before any mutation. Preserve source authority for fork or otherwise unsupported combinations and stop before unsafe mutation. Revalidate relevant identity changes before writes, using only existing authorized identity configuration.
 
 Never print raw environment variables while diagnosing GitHub auth or publish failures. Use targeted checks such as `test -n "$GITHUB_TOKEN"` or trusted-tool health calls; do not run `printenv`, `env`, `set`, or equivalent commands that can expose secrets.
 
@@ -304,16 +330,22 @@ outer-loop success based on local commits, process output, or its own artifact
 alone.
 
 ## Lightweight Commands
-- Finalize-only gate checker:
+- Finalize-only gate checker (pass finish/review options exactly as supplied;
+  omitting `--finish-mode` defaults to `merge` and omitting review flags
+  disables the fresh-review requirement):
 
 ```bash
-python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_finalize.py" --pr <pr_number_or_branch> --merge-method <merge|squash|rebase>
+python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_finalize.py" --pr <pr_number_or_branch> --merge-method <merge|squash|rebase> --review-provider <provider or ""> --require-fresh-review --finish-mode <merge|fix_only>
 ```
 
-- Full gate classifier (no merge, deterministic state classification):
+Use `--no-require-fresh-review` when fresh reviews are not required.
+
+- Full gate classifier (no merge, deterministic state classification; pass
+  the review inputs exactly as supplied so classification matches the merge
+  gate):
 
 ```bash
-python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_full.py" --pr <pr_number_or_branch> --merge-method <merge|squash|rebase> --max-iterations <maxIterations>
+python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_full.py" --pr <pr_number_or_branch> --merge-method <merge|squash|rebase> --max-iterations <maxIterations> --review-provider <provider or ""> --require-fresh-review
 ```
 
 ## Constraints

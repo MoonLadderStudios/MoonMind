@@ -924,11 +924,21 @@ def _count_retry_evidence(entries: Sequence[Mapping[str, Any]]) -> tuple[int, in
     handoff carrying retained history cannot silently reset the budget, while
     visible chain entries are never double-counted.
     """
+    from moonmind.workflows.temporal.github_issue_attempts import (
+        OUTCOME_RUNTIME_UNAVAILABLE,
+    )
+
     failed_ids: set[str] = set()
     no_progress_ids: set[str] = set()
     for index, entry in enumerate(entries):
         attempt_id = _string(entry.get("attemptId")) or f"__entry_{index}"
-        if _string(entry.get("outcome")) in {"failed", "blocked"} or bool(entry.get("failed")):
+        outcome = _string(entry.get("outcome"))
+        if outcome == OUTCOME_RUNTIME_UNAVAILABLE:
+            # The deployment never started a runtime, so this attempt is
+            # evidence about the deployment, not about the issue. It stays
+            # visible in the chain but is not charged to the allowance.
+            continue
+        if outcome in {"failed", "blocked"} or bool(entry.get("failed")):
             failed_ids.add(attempt_id)
         if bool(entry.get("noProgress")):
             no_progress_ids.add(attempt_id)

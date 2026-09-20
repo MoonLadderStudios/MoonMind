@@ -1214,6 +1214,9 @@ def test_catalog_filters_persisted_policies_not_visible_to_caller(monkeypatch):
 
 
 def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
+    # Single-user (#4349): provider profiles are instance resources; legacy
+    # ``owner_user_id`` is provenance, never visibility. Both profiles are
+    # eligible for the operator.
     visible = _profile(profile_id="visible", owner_user_id=None)
     hidden = _profile(profile_id="hidden", owner_user_id="other-user")
     app = _app(monkeypatch, session=_Session([visible, hidden]))
@@ -1227,11 +1230,22 @@ def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
     assert [item["profileId"] for item in body["eligibleProviderProfiles"]] == [
-        "visible"
+        "visible",
+        "hidden",
     ]
 
 
-def test_catalog_admits_the_credentialless_opencode_zen_profile(monkeypatch):
+@pytest.mark.parametrize(
+    "provider_id,credential_source",
+    [
+        ("opencode", "none"),
+        ("openrouter", "secret_ref"),
+        ("vendor.v2_test", "secret_ref"),
+    ],
+)
+def test_catalog_admits_the_credentialless_opencode_zen_profile(
+    monkeypatch, provider_id, credential_source
+):
     """MoonLadderStudios/MoonMind#3877: eligibility is capability-derived.
 
     OpenCode's built-in Zen Contributor Free route uses the ``none@1``
@@ -1244,9 +1258,9 @@ def test_catalog_admits_the_credentialless_opencode_zen_profile(monkeypatch):
         profile_id="opencode-zen-free",
         account_label="OpenCode Zen Contributor Free",
         provider_label="OpenCode Zen",
-        provider_id="opencode",
+        provider_id=provider_id,
         runtime_id="opencode",
-        credential_source=SimpleNamespace(value="none"),
+        credential_source=SimpleNamespace(value=credential_source),
         runtime_materialization_mode=SimpleNamespace(value="composite"),
     )
     app = _app(monkeypatch, session=_Session([zen]))

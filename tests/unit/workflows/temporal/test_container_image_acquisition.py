@@ -176,12 +176,19 @@ class FakeDaemon:
         self.pulls: list[str] = []
         self.pull_fails_with: bytes | None = None
         self._pull_hook = None
+        # Every argv the backend issued, so a test can tell an anonymous pull
+        # from one carrying a per-job ``--config`` auth directory.
+        self.commands: list[tuple[str, ...]] = []
 
     def set_pull_hook(self, hook) -> None:
         self._pull_hook = hook
 
     async def runner(self, args):
         args = tuple(args)
+        self.commands.append(args)
+        if args[:1] == ("--config",):
+            # Authorized transport: same semantics, different argv.
+            args = args[2:]
         if args[:2] == ("image", "inspect"):
             image = args[-1]
             if image in self.present:
@@ -507,3 +514,231 @@ async def test_activity_preserves_image_diagnostics_reference() -> None:
     with pytest.raises(ApplicationError) as excinfo:
         await activities.container_job_acquire_image(payload)
     assert excinfo.value.details == ({"diagnosticsRef": "artifact://pull-diagnostics"},)
+
+
+@pytest.mark.asyncio
+async def test_anonymous_denial_on_declared_source_names_the_credential_gap(
+    tmp_path,
+) -> None:
+    """A denied anonymous pull says which source needs a credential.
+
+    A deployment source that points at a private repository with no
+    ``registryCredentialRef`` takes the public path and is denied at the
+    registry. The generic pull message left an operator with
+    "docker pull failed", so the remedy has to name the source ref, the
+    registry, and the setting that fixes it.
+    """
+    daemon = FakeDaemon()
+    daemon.pull_fails_with = (
+        b"Error response from daemon: denied: denied\n"
+        b"unauthorized: authentication required\n"
+    )
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(_declared_image_source_env()),
+    )
+
+    with pytest.raises(ImageAcquisitionError) as excinfo:
+        await backend.acquire_image(
+            _request(None, image_source_ref=DECLARED_IMAGE_SOURCE_REF)
+        )
+
+    error = excinfo.value
+    assert error.failure_class is ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+    message = str(error)
+    assert DECLARED_IMAGE_SOURCE_REF in message
+    assert "registry.invalid" in message
+    assert "registryCredentialRef" in message
+
+
+@pytest.mark.asyncio
+async def test_anonymous_denial_without_a_declared_source_stays_generic(
+    tmp_path,
+) -> None:
+    """A job-supplied image has no deployment source to point the operator at."""
+    daemon = FakeDaemon()
+    daemon.pull_fails_with = b"unauthorized: authentication required\n"
+    backend = _backend(daemon, tmp_path)
+
+    with pytest.raises(ImageAcquisitionError) as excinfo:
+        await backend.acquire_image(_request(DECLARED_IMAGE))
+
+    assert excinfo.value.failure_class is (
+        ContainerJobFailureClass.IMAGE_PULL_AUTH_FAILED
+    )
+    assert "registryCredentialRef" not in str(excinfo.value)
+
+
+GHCR_SOURCE_REF = "tactics-unreal"
+GHCR_IMAGE = "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
+
+
+def _ghcr_source_env() -> dict[str, str]:
+    return {
+        "MOONMIND_CONTAINER_BACKEND_IMAGE_SOURCES": json.dumps(
+            [{"sourceRef": GHCR_SOURCE_REF, "image": GHCR_IMAGE}]
+        )
+    }
+
+
+@pytest.mark.asyncio
+async def test_declared_ghcr_source_pulls_with_the_github_identity(
+    tmp_path, monkeypatch
+) -> None:
+    """A deployment ghcr.io source with no credential uses the GitHub token.
+
+    The deployment already holds a GitHub credential that can read its own
+    packages, so declaring the image is enough; a second registry secret is not
+    required to pull an image the deployment itself declared.
+    """
+    daemon = FakeDaemon()
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(_ghcr_source_env()),
+    )
+
+    async def _derived(*_a, **_k):
+        return ("octocat", "gh-token-value")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.container_job_backend."
+        "github_derived_ghcr_credentials",
+        _derived,
+    )
+
+    result = await backend.acquire_image(
+        _request(None, image_source_ref=GHCR_SOURCE_REF)
+    )
+
+    assert result.resolved_image_ref
+    # The pull went through an authorized per-job transport, not anonymously.
+    assert any("--config" in cmd for cmd in daemon.commands)
+    # The token never appears in argv.
+    assert "gh-token-value" not in " ".join(" ".join(c) for c in daemon.commands)
+
+
+@pytest.mark.asyncio
+async def test_declared_non_ghcr_source_stays_anonymous(tmp_path, monkeypatch) -> None:
+    """A GitHub token is only ever presented to ghcr.io."""
+    daemon = FakeDaemon()
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(_declared_image_source_env()),
+    )
+
+    async def _unexpected(*_a, **_k):
+        raise AssertionError("GitHub identity must not be derived for this registry")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.container_job_backend."
+        "github_derived_ghcr_credentials",
+        _unexpected,
+    )
+
+    await backend.acquire_image(
+        _request(None, image_source_ref=DECLARED_IMAGE_SOURCE_REF)
+    )
+    assert all("--config" not in cmd for cmd in daemon.commands)
+
+
+@pytest.mark.asyncio
+async def test_job_supplied_ghcr_image_never_borrows_the_github_identity(
+    tmp_path, monkeypatch
+) -> None:
+    """Only deployment-declared images get the derived identity.
+
+    A job-supplied reference is workflow input, which is exactly the exposure
+    #4012 step 5 guards against, so it stays anonymous.
+    """
+    daemon = FakeDaemon()
+    backend = _backend(daemon, tmp_path)
+
+    async def _unexpected(*_a, **_k):
+        raise AssertionError("workflow input must not select a registry identity")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.container_job_backend."
+        "github_derived_ghcr_credentials",
+        _unexpected,
+    )
+
+    await backend.acquire_image(_request(GHCR_IMAGE))
+    assert all("--config" not in cmd for cmd in daemon.commands)
+
+
+@pytest.mark.asyncio
+async def test_derived_pull_preserves_non_auth_failure_classes(
+    tmp_path, monkeypatch
+) -> None:
+    """An authorized pull keeps the real failure class and its diagnostics.
+
+    Routing the derived-credential pull through a dedicated authorized helper
+    collapsed every nonzero exit into REGISTRY_AUTH_FAILED, hiding a missing
+    tag, backend outage, or timeout behind an authentication error.
+    """
+    daemon = FakeDaemon()
+    daemon.pull_fails_with = b"Error response from daemon: manifest unknown\n"
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(_ghcr_source_env()),
+    )
+
+    async def _derived(*_a, **_k):
+        return ("octocat", "gh-token-value")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.container_job_backend."
+        "github_derived_ghcr_credentials",
+        _derived,
+    )
+
+    with pytest.raises(ImageAcquisitionError) as excinfo:
+        await backend.acquire_image(
+            _request(None, image_source_ref=GHCR_SOURCE_REF)
+        )
+
+    assert excinfo.value.failure_class is ContainerJobFailureClass.IMAGE_NOT_FOUND
+    assert "gh-token-value" not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_derived_pull_redacts_the_token_from_diagnostics(
+    tmp_path, monkeypatch
+) -> None:
+    daemon = FakeDaemon()
+    daemon.pull_fails_with = b"failed using token gh-token-value\n"
+    published: list[bytes] = []
+
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(_ghcr_source_env()),
+    )
+
+    async def _capture(_request, stdout, stderr):
+        published.append(stdout + stderr)
+        return "art_x"
+
+    monkeypatch.setattr(backend, "_publish_pull_diagnostics", _capture)
+
+    async def _derived(*_a, **_k):
+        return ("octocat", "gh-token-value")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.container_job_backend."
+        "github_derived_ghcr_credentials",
+        _derived,
+    )
+
+    with pytest.raises(ImageAcquisitionError):
+        await backend.acquire_image(
+            _request(None, image_source_ref=GHCR_SOURCE_REF)
+        )
+
+    assert published
+    assert b"gh-token-value" not in b"".join(published)
+    assert b"[redacted]" in b"".join(published)

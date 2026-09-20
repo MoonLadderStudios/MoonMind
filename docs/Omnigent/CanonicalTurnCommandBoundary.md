@@ -3,7 +3,7 @@
 Status: Implemented
 Document Class: System / Feature Design View
 Owners: MoonMind Platform
-Last updated: 2026-08-29
+Last updated: 2026-09-16
 
 **Issue:** [MoonLadderStudios/MoonMind#3707](https://github.com/MoonLadderStudios/MoonMind/issues/3707) ([Omnigent control plane 7/11]).
 
@@ -37,11 +37,12 @@ mutates the old session and never selects another harness or realizer.
 ## Canonical turn sources
 
 `moonmind/omnigent/control_plane/turn_sources.py` owns the closed, versioned
-vocabulary (`TURN_SOURCE_VOCABULARY_VERSION = 1`):
+vocabulary (`TURN_SOURCE_VOCABULARY_VERSION = 2`):
 
 ```text
 initial
 repository_continuation
+terminal_contract_continuation
 remediation
 workflow_chat
 steering
@@ -54,6 +55,14 @@ The source is durable on `omnigent_turn_attempts.lineage_kind`, enforced by a
 database `CHECK` constraint and by `coerce_turn_source`, which fails closed. The
 source changes authorization, evidence, and policy; it never changes the command,
 idempotency, fencing, observation, or terminality model.
+
+The database constraint admits the same vocabulary, including bounded Skill
+terminal-contract continuations. Migration `383_terminal_contract_source` expands
+the existing constraint without rewriting any turn. Downgrade refuses while
+retained turns use the new source, preserving their lineage. Repository inserts
+translate only uniqueness violations into identity conflicts; other integrity
+errors retain the database cause so a schema mismatch is not reported as a
+duplicate request.
 
 ### Where a producer's source comes from
 
@@ -79,6 +88,9 @@ request authority at the boundary the producer already uses:
   `repository_continuation` for each repository-output continuation, and
   `api_service/services/checkpoint_branch_turn_execution.py` claims
   `checkpoint_resume`.
+- `moonmind/omnigent/realizers/generic_host.py` claims
+  `terminal_contract_continuation` for each bounded same-session continuation
+  driven by the resolved Skill's incomplete terminal contract.
 
 The instruction that bootstraps a canonical session journals its own source on
 the bootstrap attempt, so a remediation attempt that opens its own session is

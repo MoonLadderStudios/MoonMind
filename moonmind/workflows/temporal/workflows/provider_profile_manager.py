@@ -123,6 +123,20 @@ LEASE_TRANSITION_CONTRACT_PATCH = (
     "provider-profile-manager-lease-transition-contract-v1"
 )
 
+# MoonLadderStudios/MoonMind#1089 (#4330): the redrive of outstanding cleanup
+# obligations and the automatic completion of direct cleanup obligations are
+# versioned independently of the transition contract. Pre-#4330 histories
+# recorded only request-cleanup + retry-unresolved per loop; post-#4330
+# histories add deliver-cleanup + complete-direct per loop. Without an
+# independent marker the two generations are indistinguishable and replay
+# wedges with Activity-vs-Timer nondeterminism, blocking the
+# credential-maintenance lease and thus deployment requalification
+# (no admissible execution evidence for opencode-go-default).
+LEASE_CLEANUP_REDRIVE_PATCH = "provider-profile-manager-lease-cleanup-redrive-v1"
+ORPHANED_VALIDATION_CLEANUP_PATCH = (
+    "provider-profile-manager-orphaned-validation-cleanup-v1"
+)
+
 # Deterministic sort sentinel for pending requests whose scheduled queue order
 # cannot be resolved (missing scheduled_for / created_at). ISO-8601 strings sort
 # lexically, so this value sorts after any real UTC timestamp.
@@ -1032,6 +1046,9 @@ class MoonMindProviderProfileManagerWorkflow:
         self._pending_grant_handoffs: set[str] = set()
         # MoonLadderStudios/MoonMind#3883 durable transition contract state.
         self._lease_transition_contract: bool = False
+        # MoonLadderStudios/MoonMind#1089 redrive state (#4330). False replays
+        # pre-#4330 histories with only request-cleanup + retry-unresolved.
+        self._lease_cleanup_redrive: bool = False
         # Releases whose durable outcome is still unresolved, keyed by lease
         # ID. Their capacity stays unavailable until the ledger answers, so a
         # logged warning can never announce reuse.
@@ -2648,6 +2665,9 @@ class MoonMindProviderProfileManagerWorkflow:
         self._lease_transition_contract = workflow.patched(
             LEASE_TRANSITION_CONTRACT_PATCH
         )
+        self._lease_cleanup_redrive = workflow.patched(
+            LEASE_CLEANUP_REDRIVE_PATCH
+        )
         self._restore_state(
             input_payload,
             repair_legacy_codex_oauth=repair_legacy_codex_oauth,
@@ -2733,14 +2753,26 @@ class MoonMindProviderProfileManagerWorkflow:
                 # stable claim so a lost request ack is recovered and the
                 # existing owner polling manager_state/DB keeps seeing one
                 # claim per owed slot. Escalation below remains the overdue
-                # path, not the only path.
-                await self._deliver_cleanup_requests()
-                # Direct in-workflow leases whose exact admitted run is
-                # terminal have a durable automatic owner: the manager
-                # itself completes them with exact-run teardown evidence.
-                # Host-attached and run-unknown obligations stay spent for
-                # their janitor, realizer, or operator.
-                await self._complete_direct_cleanup_obligations()
+                # path, not the only path. Versioned independently (#4330):
+                # pre-redrive histories stop here to preserve their recorded
+                # Activity-vs-Timer order.
+                if self._lease_cleanup_redrive:
+                    await self._deliver_cleanup_requests()
+                    # Direct in-workflow leases whose exact admitted run is
+                    # terminal have a durable automatic owner: the manager
+                    # itself completes them with exact-run teardown evidence.
+                    # Host-attached and run-unknown obligations stay spent for
+                    # their janitor, realizer, or operator.
+                    await self._complete_direct_cleanup_obligations()
+                    # Bounded validation probes whose owner process is gone
+                    # cannot still hold their ephemeral docker probe: reclaim
+                    # them so a wedged revalidation cannot block enrollment
+                    # behind an exclusive maintenance lease forever.
+                    # This verification/release sequence was added after the
+                    # redrive marker. Reusing that marker changes commands in
+                    # retained histories that already have validation claims.
+                    if workflow.patched(ORPHANED_VALIDATION_CLEANUP_PATCH):
+                        await self._complete_orphaned_validation_cleanup_obligations()
             else:
                 # Evict leases that exceed the max duration (safety net for
                 # cancelled/terminated workflows that failed to release).
@@ -4537,6 +4569,112 @@ class MoonMindProviderProfileManagerWorkflow:
                     self._get_logger().warning(
                         "Reclaimed direct lease %s on profile %s after "
                         "exact-run termination of %s",
+                        lease_id,
+                        profile_id,
+                        workflow_id,
+                    )
+            else:
+                self._record_unresolved_release(
+                    lease_id,
+                    profile_id=profile_id,
+                    fencing_generation=int(claim.get("fencing_generation") or 0),
+                    outcome=outcome,
+                    kind="verified_cleanup",
+                    teardown_evidence=evidence,
+                )
+
+    async def _complete_orphaned_validation_cleanup_obligations(self) -> None:
+        """Reclaim expired validation probes whose owner process is gone.
+
+        A ``credential_validation`` lease is a bounded ephemeral probe
+        (``docker run --rm ... opencode models --refresh`` with a 120s
+        backend timeout and a 900s purpose lease cap), not a persistent
+        host/container. When such an ``activity_owned`` obligation is
+        expired past its escalation horizon and its recorded owner
+        workflow is terminal or missing, the probe cannot still be
+        running: the activity process that spawned the ``docker run``
+        is gone with its owner. The manager is then the durable
+        automatic owner, mirroring
+        :meth:`_complete_direct_cleanup_obligations` for the direct
+        class. Execution and host-attached purposes, live owners,
+        fresh leases, and run-bound claims stay spent for their
+        janitor, realizer, or operator.
+        """
+
+        if not self._lease_transition_contract:
+            return
+        if not self._cleanup_requested_leases:
+            return
+        claims = [
+            claim
+            for claim in self._pending_cleanup_claims()
+            if str(claim.get("purpose") or "")
+            == CredentialLeasePurpose.CREDENTIAL_VALIDATION.value
+            and str(claim.get("consumer") or "") == "activity_owned"
+            and str(claim.get("workflowId") or "").strip()
+            and not str(claim.get("runId") or "").strip()
+            and int(claim.get("fencing_generation") or 0) > 0
+        ]
+        if not claims:
+            return
+        workflow_ids = list(
+            dict.fromkeys(str(claim["workflowId"]) for claim in claims)
+        )
+        statuses = await self._verify_workflow_statuses(workflow_ids)
+        if not statuses:
+            return
+        now = workflow.now()
+        for claim in claims:
+            lease_id = str(claim["lease_id"])
+            workflow_id = str(claim["workflowId"])
+            status_info = statuses.get(workflow_id, {})
+            if status_info.get("running", True):
+                continue
+            profile_id = str(claim.get("profile_id") or "")
+            profile = self._profiles.get(profile_id)
+            if profile is None or lease_id not in profile.current_leases:
+                continue
+            # Re-check the admitted evidence identity before completing:
+            # a replacement holder under the same owner ID must never be
+            # freed from a stale claim.
+            metadata = profile.lease_metadata.get(lease_id) or {}
+            if str(metadata.get("evidenceIdentity") or "") != str(
+                claim.get("evidenceIdentity") or ""
+            ):
+                continue
+            max_duration = (
+                getattr(profile, "max_lease_duration_seconds", None)
+                or _MAX_LEASE_DURATION_SECONDS
+            )
+            deadline = self._lease_duration_limit(
+                profile, lease_id, max_duration
+            ) + _LEASE_CLEANUP_ESCALATION_SECONDS
+            age = self._lease_age_seconds(profile, lease_id, now)
+            if age is None or age <= deadline:
+                continue
+            evidence = {
+                "consumer_stopped": True,
+                "verified_by": "provider-profile-manager-validation-reclamation",
+                "evidence_identity": str(claim.get("evidenceIdentity") or ""),
+                "owner_status": str(status_info.get("status") or "NOT_FOUND"),
+            }
+            outcome = await self._release_verified_cleanup(
+                lease_id,
+                profile_id=profile_id,
+                fencing_generation=int(claim.get("fencing_generation") or 0),
+                teardown_evidence=evidence,
+                _reason="cleanup_verified_validation_owner_terminal",
+            )
+            if outcome in RELEASING_LEASE_OUTCOMES:
+                self._unresolved_releases.pop(lease_id, None)
+                self._forget_cleanup_obligation(lease_id)
+                current = self._profiles.get(profile_id)
+                if current is not None and current.release(lease_id):
+                    self._unindex_lease(lease_id)
+                    self._has_new_events = True
+                    self._get_logger().warning(
+                        "Reclaimed orphaned validation lease %s on profile %s "
+                        "after owner terminal %s",
                         lease_id,
                         profile_id,
                         workflow_id,

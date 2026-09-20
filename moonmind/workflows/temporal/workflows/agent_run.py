@@ -974,6 +974,57 @@ def structured_manager_slot_wait(manager_state: Mapping[str, Any]) -> dict[str, 
         "revision": normalized_revision,
     }
 
+
+_MANAGER_HEALTH_ERROR_BOUND = 300
+
+
+def manager_slot_wait_health(manager_state: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Bounded health evidence for a running-but-unqueryable manager.
+
+    MoonLadderStudios/MoonMind#4363: when the singleton keeps running while
+    its ``get_state`` query fails, waiters must see the manager's identity
+    and inspection failure instead of only the generic
+    ``awaiting_provider_capacity`` reason. Returns None unless the snapshot
+    shows the wedge signature (running with a failed inspection), so
+    healthy and absent managers never gain a health attachment. Only the
+    workflow id, the inspection status, and a bounded error excerpt travel —
+    never lease identities or credential material.
+    """
+
+    if not isinstance(manager_state, Mapping):
+        return None
+    if manager_state.get("running") is not True:
+        return None
+    if manager_state.get("inspection_succeeded") is not False:
+        return None
+    workflow_id = str(manager_state.get("workflow_id") or "").strip()
+    status = str(
+        manager_state.get("inspection_status") or manager_state.get("status") or ""
+    ).strip()
+    error = str(manager_state.get("error") or "")
+    if len(error) > _MANAGER_HEALTH_ERROR_BOUND:
+        error = error[:_MANAGER_HEALTH_ERROR_BOUND] + "...[truncated]"
+    return {
+        "workflow_id": workflow_id,
+        "inspection_status": status,
+        "error": error,
+    }
+
+
+def manager_slot_wait_health_suffix(manager_state: Mapping[str, Any]) -> str:
+    """Display suffix naming an unqueryable manager, or empty when healthy."""
+
+    health = manager_slot_wait_health(manager_state)
+    if health is None:
+        return ""
+    parts = ["manager_unqueryable"]
+    if health["workflow_id"]:
+        parts.append(f"workflow_id={health['workflow_id']}")
+    if health["inspection_status"]:
+        parts.append(f"inspection={health['inspection_status']}")
+    return " ".join(parts)
+
+
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
     @staticmethod
@@ -4440,11 +4491,19 @@ class MoonMindAgentRun:
                 execution_profile_ref=request.execution_profile_ref,
             )
             if manager_state.get("running") is True:
-                waiting_reason = self._build_manager_slot_waiting_reason(
-                    runtime_id=runtime_id,
-                    request=request,
-                    manager_state=manager_state,
-                )
+                health_suffix = manager_slot_wait_health_suffix(manager_state)
+                if health_suffix:
+                    # The singleton is running but its state cannot be read
+                    # (MoonLadderStudios/MoonMind#4363 wedge signature): name
+                    # it on the display summary instead of reporting only the
+                    # generic capacity reason.
+                    waiting_reason = f"{waiting_reason} {health_suffix}"
+                else:
+                    waiting_reason = self._build_manager_slot_waiting_reason(
+                        runtime_id=runtime_id,
+                        request=request,
+                        manager_state=manager_state,
+                    )
         except CancelledError:
             raise
         except Exception as exc:
@@ -4486,6 +4545,7 @@ class MoonMindAgentRun:
             "next_check": None,
             "revision": None,
         }
+        manager_health: dict[str, Any] | None = None
         try:
             manager_state = await self._manager_state_for_slot_wait(
                 runtime_id=runtime_id,
@@ -4493,6 +4553,10 @@ class MoonMindAgentRun:
                 execution_profile_ref=request.execution_profile_ref,
             )
             if manager_state.get("running") is True:
+                # MoonLadderStudios/MoonMind#4363: name a running-but-
+                # unqueryable singleton on the observation instead of leaving
+                # only the generic capacity reason.
+                manager_health = manager_slot_wait_health(manager_state)
                 waiting_reason = self._build_manager_slot_waiting_reason(
                     runtime_id=runtime_id,
                     request=request,
@@ -4517,6 +4581,7 @@ class MoonMindAgentRun:
             "next_check": structured.get("next_check"),
             "revision": structured.get("revision"),
             "profile_ref": profile_ref,
+            "manager_health": manager_health,
         }
 
     async def _evaluate_omnigent_session_admission(

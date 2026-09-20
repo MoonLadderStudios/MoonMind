@@ -75,6 +75,7 @@ from moonmind.workflows.skills.deployment_execution import (
     HostDockerComposeRunner,
     InMemoryDesiredStateStore,
     InMemoryEvidenceWriter,
+    daemon_bind_source,
     register_deployment_update_tool_handler,
 )
 from moonmind.workflows.skills.ops_diagnostics_execution import (
@@ -428,16 +429,6 @@ _TOOLS_WITH_AUTO_PR_CREATION = frozenset({"jules", "jules_api"})
 _DEFAULT_DEPLOYMENT_LOCAL_PROJECT_DIR = "/workspace/host_project"
 
 
-def _read_self_container_id() -> str | None:
-    hostname = os.environ.get("HOSTNAME") or os.environ.get("CONTAINER_ID")
-    if hostname:
-        return hostname.strip() or None
-    try:
-        return Path("/etc/hostname").read_text(encoding="utf-8").strip() or None
-    except OSError:
-        return None
-
-
 _DETECT_HOST_PROJECT_DIR_RETRIES = 3
 _DETECT_HOST_PROJECT_DIR_BACKOFF_SECONDS = 2.0
 
@@ -445,73 +436,25 @@ _DETECT_HOST_PROJECT_DIR_BACKOFF_SECONDS = 2.0
 def _detect_host_project_dir(local_mount: str) -> str | None:
     """Resolve ``local_mount`` to its host filesystem path via ``docker inspect``.
 
-    The worker reaches the host daemon through ``docker-proxy`` (DOCKER_HOST),
-    which exposes the ``CONTAINERS`` API. Inspecting our own container yields
-    the ``Mounts`` array; the entry whose ``Destination`` matches the local
-    bind-mount has ``Source`` set to the host path.
-
-    Retries a small number of times with linear backoff so transient bootstrap
-    races (e.g. ``docker-proxy`` is still coming up) don't permanently disable
-    deployment updates. Returns ``None`` when detection still fails after the
-    final attempt so the caller can fall back to explicit configuration.
+    The deployment executor owns reading that evidence from the worker's own
+    container mount table; bootstrap only supplies the retry budget so a
+    transient ``docker-proxy`` startup race does not permanently disable
+    deployment updates. Returns ``None`` when detection still fails, so the
+    caller can fall back to explicit configuration.
     """
 
-    container_id = _read_self_container_id()
-    if not container_id:
-        return None
-    import subprocess  # local import — only needed at worker bootstrap.
-    import time
-
-    last_error: Exception | None = None
-    for attempt in range(_DETECT_HOST_PROJECT_DIR_RETRIES):
-        try:
-            result = subprocess.run(
-                [
-                    "docker",
-                    "inspect",
-                    "--format",
-                    "{{json .Mounts}}",
-                    container_id,
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=10,
-            )
-        except (
-            subprocess.TimeoutExpired,
-            subprocess.CalledProcessError,
-            FileNotFoundError,
-            OSError,
-        ) as exc:
-            last_error = exc
-            if attempt + 1 < _DETECT_HOST_PROJECT_DIR_RETRIES:
-                time.sleep(_DETECT_HOST_PROJECT_DIR_BACKOFF_SECONDS * (attempt + 1))
-            continue
-        try:
-            mounts = json.loads(result.stdout)
-        except (ValueError, TypeError):
-            return None
-        if not isinstance(mounts, list):
-            return None
-        target = local_mount.rstrip("/") or "/"
-        for mount in mounts:
-            if not isinstance(mount, Mapping):
-                continue
-            destination = str(mount.get("Destination") or "").rstrip("/") or "/"
-            if destination != target:
-                continue
-            source = str(mount.get("Source") or "").strip()
-            if source:
-                return source
-        return None
-    if last_error is not None:
+    detected = daemon_bind_source(
+        local_mount,
+        attempts=_DETECT_HOST_PROJECT_DIR_RETRIES,
+        backoff_seconds=_DETECT_HOST_PROJECT_DIR_BACKOFF_SECONDS,
+    )
+    if detected is None:
         logger.debug(
-            "Failed to detect host project dir after %d attempts: %s",
+            "No daemon mount evidence for %s after %d attempts",
+            local_mount,
             _DETECT_HOST_PROJECT_DIR_RETRIES,
-            last_error,
         )
-    return None
+    return detected
 
 
 def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:

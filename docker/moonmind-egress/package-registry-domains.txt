@@ -1,0 +1,3 @@
+pypi.org
+files.pythonhosted.org
+registry.npmjs.org
