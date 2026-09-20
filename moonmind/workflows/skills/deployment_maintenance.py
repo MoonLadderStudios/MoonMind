@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from moonmind.workflows.skills.deployment_execution import (
     DEPLOYMENT_MAINTENANCE_PASS_TIMEOUT_SECONDS,
@@ -13,6 +14,8 @@ from moonmind.workflows.skills.deployment_release import (
     state_root,
     write_record,
 )
+
+logger = logging.getLogger(__name__)
 
 # Containers a pre-recreate-in-place release or availability owner created
 # beside the installed fleet. They reuse the deployment's own Compose project
@@ -122,9 +125,7 @@ async def reconcile_releases():
                     result["errors"].append(error)
                     write_record(directory / "maintenance.json", error)
     if result["legacyCohorts"]:
-        import logging
-
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "Leftover blue/green cohort containers block deployment updates "
             "until they are removed: %s",
             ", ".join(result["legacyCohorts"]),
