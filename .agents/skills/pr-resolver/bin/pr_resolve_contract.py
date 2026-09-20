@@ -256,6 +256,10 @@ def remediation_next_step(reason: str) -> str:
         return "wait_for_automated_review_and_retry_finalize"
     if normalized == "deferred_comments":
         return "manual_review"
+    if normalized == "merge_gate_requires_human_approval":
+        # No automated action produces an approving review, so this never
+        # becomes a retry or a wait.
+        return "manual_review"
     if normalized == "merge_pending":
         return "retry_finalize_after_backoff"
     if normalized == "comment_policy_not_enforced":

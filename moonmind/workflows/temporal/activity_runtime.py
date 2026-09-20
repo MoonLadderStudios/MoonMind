@@ -12617,6 +12617,9 @@ class TemporalAgentRuntimeActivities:
         /,
     ) -> AgentRunResult:
         """Apply an execution-bound terminal contract above provider adapters."""
+        from moonmind.workflows.adapters.managed_agent_adapter import (
+            _PR_RESOLVER_HUMAN_APPROVAL_REASON,
+        )
         from moonmind.workflows.terminal_evidence import (
             PR_RESOLVER_VERDICT_FAILURE_CODES,
             evaluate_terminal_evidence,
@@ -12894,8 +12897,24 @@ class TemporalAgentRuntimeActivities:
                 or evaluation.failure_code,
                 "metadata": metadata,
             }
-            if result.failure_class is None:
+            # A merge gate awaiting a required human approving review is the
+            # merge-automation parent's terminal to route, not an agent
+            # execution failure. Failing here would discard a complete,
+            # validated verdict and hand the parent its generic exception path.
+            merge_gate_human_approval = (
+                evaluation.failure_code == "PR_RESOLVER_MANUAL_REVIEW"
+                and metadata.get("prResolverMergeGateOwned") is True
+                and str(metadata.get("prResolverReason") or "")
+                .strip()
+                .lower()
+                .replace("-", "_")
+                .replace(" ", "_")
+                == _PR_RESOLVER_HUMAN_APPROVAL_REASON
+            )
+            if result.failure_class is None and not merge_gate_human_approval:
                 update["failure_class"] = "execution_error"
+                update["summary"] = verdict_summary
+            elif result.failure_class is None:
                 update["summary"] = verdict_summary
             else:
                 # An earlier runtime failure keeps its own summary; the verdict
