@@ -565,6 +565,36 @@ class ExecutionDependencySummary:
     workflow_type: str | None
     attention_required: bool = False
 
+def _validate_publish_authority(initial_parameters: Mapping[str, Any] | None) -> None:
+    """Reject a publish mode the authored plan can never satisfy."""
+
+    from moonmind.workflows.executions.execution_contract import (
+        WorkflowContractError,
+        validate_publish_mode_repository_authority,
+    )
+
+    parameters = initial_parameters if isinstance(initial_parameters, Mapping) else {}
+    workflow_payload = parameters.get("workflow")
+    if not isinstance(workflow_payload, Mapping):
+        workflow_payload = parameters.get("task")
+    if not isinstance(workflow_payload, Mapping):
+        return
+    publish = workflow_payload.get("publish")
+    publish_mode = publish.get("mode") if isinstance(publish, Mapping) else None
+    if publish_mode is None:
+        publish_mode = workflow_payload.get("publishMode") or parameters.get(
+            "publishMode"
+        )
+    steps = workflow_payload.get("steps")
+    try:
+        validate_publish_mode_repository_authority(
+            publish_mode=publish_mode,
+            steps=steps if isinstance(steps, list) else None,
+        )
+    except WorkflowContractError as exc:
+        raise TemporalExecutionValidationError(str(exc)) from exc
+
+
 class TemporalExecutionService:
     """Canonical execution store for Temporal workflows."""
 
@@ -2097,6 +2127,12 @@ class TemporalExecutionService:
                     f"{first_error.path}: {first_error.message}"
                 )
             initial_parameters = skill_validation.parameters
+            # A publish mode no authored step can satisfy is admitted here for
+            # rerun, continuation, checkpoint branching, and deployment routes
+            # that never pass the router's task-shaped check. Enforce the one
+            # invariant at the handoff every launch converges on so no route
+            # can queue a run that is guaranteed to fail finalizing.
+            _validate_publish_authority(initial_parameters)
 
         # Provider Profiles are runtime-owned launch contracts, so the
         # runtime/profile pair has to be valid at the boundary every
