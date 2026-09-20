@@ -173,3 +173,69 @@ async def test_new_plan_reaches_registered_admission_without_writer_reader_sha_m
             await admission._load_verified_execution_plan(compiled.binding)
     finally:
         await engine.dispose()
+
+
+async def test_stable_upstream_agent_source_survives_admission(tmp_path, monkeypatch):
+    """Writer-pinned stable agent source must admit at launch.
+
+    The plan compiler pins the Agent Profile document's own upstream
+    projection digest so a model-only profile version bump does not change
+    ``agentSourceRef``. The admission reader has to verify that same identity;
+    comparing the profile *version* digest instead rejects every launch whose
+    document carries a genuine upstream snapshot digest.
+    """
+
+    stable_projection = "sha256:" + "a" * 64
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/plans.db")
+    try:
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        artifacts = _ArtifactService()
+        monkeypatch.setattr(
+            service,
+            "resolve_execution_evidence",
+            lambda plan, **_: (_protected_support_evidence(plan), "supported"),
+        )
+        compiled = await _compile_opencode_plan(
+            monkeypatch,
+            artifacts=artifacts,
+            launch_policy_ref="omnigent-on-demand@1",
+            plan_store=stores.DbExecutionPlanStore(maker),
+            document_source={
+                "upstreamId": "opencode-native-agent",
+                "upstreamVersion": "174",
+                "upstreamSnapshotDigest": stable_projection,
+            },
+        )
+        planned_source = compiled.envelope.payload.agentSource
+        profile_ref = compiled.envelope.payload.agentProfileSnapshotRef.removeprefix(
+            "artifact:"
+        )
+        profile_snapshot = json.loads(artifacts.payloads[profile_ref])
+        # The incident's precondition: the stable source digest and the
+        # profile version digest are different values.
+        assert planned_source["upstreamSnapshotDigest"] == stable_projection
+        assert profile_snapshot["digest"] != stable_projection
+
+        monkeypatch.setattr(base, "async_session_maker", maker)
+
+        async def read_artifact(ref):
+            return json.loads(artifacts.payloads[ref])
+
+        monkeypatch.setattr(admission, "_read_json_artifact", read_artifact)
+        loaded = await admission._load_verified_execution_plan(compiled.binding)
+        assert loaded.payload.agentSource["upstreamSnapshotDigest"] == (
+            stable_projection
+        )
+
+        # A genuinely different upstream projection must still be rejected.
+        conflicting = json.loads(artifacts.payloads[profile_ref])
+        conflicting["document"]["source"]["upstreamSnapshotDigest"] = (
+            "sha256:" + "b" * 64
+        )
+        artifacts.payloads[profile_ref] = json.dumps(conflicting).encode()
+        with pytest.raises(ValueError, match="conflicts with planned source identity"):
+            await admission._load_verified_execution_plan(compiled.binding)
+    finally:
+        await engine.dispose()

@@ -19,6 +19,10 @@ from uuid import NAMESPACE_URL, uuid5
 from moonmind.omnigent.control_plane.cleanup_authority import (
     CanonicalCleanupAuthority,
 )
+from moonmind.omnigent.harness_platform.agent_profile import (
+    stable_imported_content_digest,
+    stable_upstream_snapshot_digest,
+)
 from moonmind.omnigent.harness_platform.credential_bindings import (
     assert_worker_supports_binding_set,
     create_binding_set,
@@ -1119,13 +1123,18 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
     if not isinstance(profile_source, Mapping):
         raise ValueError("Agent Profile artifact lacks source authority")
     planned_source = persisted.payload.agentSource
+    # Recompute the source identity the plan compiler pins from this very
+    # document, rather than assuming the Agent Profile version digest is it.
+    # The version digest covers per-run model/tool selections, so a profile
+    # bump would otherwise look like a source conflict and reject the launch.
+    snapshot_version_digest = str(profile_snapshot.get("digest") or "")
     if planned_source.get("kind") == "upstream":
         if (
             str(profile_source.get("upstreamId") or "")
             != str(planned_source.get("upstreamId") or "")
             or str(profile_source.get("upstreamVersion") or "0.0.0")
             != str(planned_source.get("upstreamVersion") or "")
-            or str(profile_snapshot.get("digest") or "")
+            or stable_upstream_snapshot_digest(profile_source, snapshot_version_digest)
             != str(planned_source.get("upstreamSnapshotDigest") or "")
         ):
             raise ValueError(
@@ -1137,7 +1146,7 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
             != str(planned_source.get("bundleArtifactRef") or "")
             or str(profile_source.get("bundleDigest") or "")
             != str(planned_source.get("bundleDigest") or "")
-            or str(profile_snapshot.get("digest") or "")
+            or stable_imported_content_digest(profile_source, snapshot_version_digest)
             != str(planned_source.get("importedContentDigest") or "")
         ):
             raise ValueError(
