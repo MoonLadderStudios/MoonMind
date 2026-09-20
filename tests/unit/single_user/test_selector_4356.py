@@ -102,6 +102,9 @@ def test_compose_and_worker_binding_changes_select_integration(
 def test_conformance_mapping_changes_stay_visible(changed_path: str) -> None:
     outputs = _outputs([changed_path])
     assert outputs["unit_fast"] == "true"
+    # The mapping owns required-CI selection, so its change must also run
+    # the hermetic integration foundation rather than unit-only shards.
+    assert outputs["integration_ci"] == "true"
     assert outputs["full_backend"] == "false"
 
 
