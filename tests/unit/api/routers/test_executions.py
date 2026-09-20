@@ -19725,3 +19725,141 @@ def test_completion_disposition_does_not_change_terminal_lifecycle(
     assert payload["completionDisposition"] == expected
     assert payload["temporalStatus"] == "completed"
     assert payload["state"] == state.value
+
+
+def test_create_execution_rejects_branch_publish_for_read_only_plan(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """Reproduces mm:df00c049: a read-only plan admitted with publishMode branch.
+
+    The run executed its single read step and then failed finalizing with
+    "branch publish outcome unknown". Contract source:
+    docs/Workflows/WorkflowPublishing.md PUBLISH-004.
+    """
+
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publishMode": "branch",
+                "workflow": {
+                    "instructions": "Resolve the target pull request.",
+                    "runtime": {"mode": "codex"},
+                    "publish": {"mode": "branch"},
+                    "steps": [
+                        {
+                            "id": "tpl:pr-review-resolve:01",
+                            "title": "Resolve target pull request",
+                            "type": "tool",
+                            "repositoryOperation": "read",
+                            "instructions": "Resolve the target pull request.",
+                            "tool": {
+                                "id": "github.resolve_pull_request_target",
+                                "inputs": {"pullRequest": "831"},
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_execution_request"
+    assert "repositoryOperation" in detail["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_execution_allows_read_only_plan_without_managed_publish(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """The preset's declared publish policy still admits the same plan."""
+
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publishMode": "none",
+                "workflow": {
+                    "instructions": "Resolve the target pull request.",
+                    "runtime": {"mode": "codex"},
+                    "publish": {"mode": "none"},
+                    "steps": [
+                        {
+                            "id": "tpl:pr-review-resolve:01",
+                            "title": "Resolve target pull request",
+                            "type": "tool",
+                            "repositoryOperation": "read",
+                            "instructions": "Resolve the target pull request.",
+                            "tool": {
+                                "id": "github.resolve_pull_request_target",
+                                "inputs": {"pullRequest": "831"},
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.call_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["publishMode"] == "none"
+
+
+def test_create_execution_rejects_recurring_read_only_plan_with_branch_publish(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """A recurring schedule returns before the task-shaped check.
+
+    Left unguarded it would repeat the guaranteed late failure on every tick.
+    """
+
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publishMode": "branch",
+                "schedule": {"mode": "recurring", "cron": "0 3 * * *"},
+                "workflow": {
+                    "instructions": "Resolve the target pull request.",
+                    "runtime": {"mode": "codex"},
+                    "publish": {"mode": "branch"},
+                    "steps": [
+                        {
+                            "id": "tpl:pr-review-resolve:01",
+                            "title": "Resolve target pull request",
+                            "type": "tool",
+                            "repositoryOperation": "read",
+                            "instructions": "Resolve the target pull request.",
+                            "tool": {
+                                "id": "github.resolve_pull_request_target",
+                                "inputs": {"pullRequest": "831"},
+                            },
+                        }
+                    ],
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "repositoryOperation" in response.json()["detail"]["message"]

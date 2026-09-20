@@ -1126,6 +1126,74 @@ def resolve_publish_mode_for_skill(
     return publish_mode
 
 
+# Publication is bound to step outputs: the step compiler forces
+# ``publishMode='none'`` on every step that declares ``repositoryOperation:
+# read``, so a plan made only of read steps can never produce publish evidence.
+# ``auto`` belongs here too -- an agent-owned policy with no publishing step
+# ends in ``auto_publish_evidence_missing`` for the same reason.
+EVIDENCE_REQUIRING_PUBLISH_MODES = frozenset({"branch", "pr", "auto"})
+# Retained name for existing importers.
+MANAGED_REPOSITORY_PUBLISH_MODES = EVIDENCE_REQUIRING_PUBLISH_MODES
+
+
+def _step_repository_operation(step: Mapping[str, Any]) -> str:
+    """Return a step's declared repository authority, nested bindings included.
+
+    The runtime planner copies a tool/skill binding's inputs into the compiled
+    node before ``_compile_repository_operation`` reads ``repositoryOperation``,
+    so a nested declaration carries exactly the same authority as a top-level
+    one and admission has to see both.
+    """
+
+    declared = _clean_optional_str(step.get("repositoryOperation")) or ""
+    if declared:
+        return declared.lower()
+    for binding_key in ("tool", "skill"):
+        binding = step.get(binding_key)
+        if not isinstance(binding, Mapping):
+            continue
+        for inputs_key in ("inputs", "args"):
+            inputs = binding.get(inputs_key)
+            if not isinstance(inputs, Mapping):
+                continue
+            nested = _clean_optional_str(inputs.get("repositoryOperation")) or ""
+            if nested:
+                return nested.lower()
+    return ""
+
+
+def validate_publish_mode_repository_authority(
+    *,
+    publish_mode: object,
+    steps: Sequence[Mapping[str, Any]] | None,
+) -> None:
+    """Reject a managed publish selection no authored step can fulfill.
+
+    ``docs/Workflows/WorkflowPublishing.md`` PUBLISH-004 requires unsupported
+    combinations to fail before mutation instead of reporting a late failure.
+    A plan whose every step declares ``repositoryOperation: read`` carries no
+    repository mutation authority, so ``branch`` and ``pr`` would run the plan
+    and then fail finalization with a missing publish outcome.
+    """
+
+    mode = (_clean_optional_str(publish_mode) or "").lower()
+    if mode not in EVIDENCE_REQUIRING_PUBLISH_MODES:
+        return
+    authored_steps = [step for step in (steps or []) if isinstance(step, Mapping)]
+    if not authored_steps:
+        return
+    if not all(
+        _step_repository_operation(step) == "read" for step in authored_steps
+    ):
+        return
+    raise WorkflowContractError(
+        f"publish.mode '{mode}' requires a step with repository mutation "
+        "authority, but every authored step declares "
+        "repositoryOperation 'read'. Select publish mode 'none' or author a "
+        "step that writes to the repository."
+    )
+
+
 def _publish_mode_precedence(mode: str) -> int:
     if mode == "auto":
         return 3
@@ -3235,6 +3303,8 @@ __all__ = [
     "reject_retired_vector_fields",
     "strip_absent_vector_fields",
     "resolve_publish_mode_for_skill",
+    "validate_publish_mode_repository_authority",
+    "EVIDENCE_REQUIRING_PUBLISH_MODES",
     "reject_workflow_capability_identity_versions",
     "strip_workflow_capability_identity_versions",
 ]

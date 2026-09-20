@@ -27,6 +27,10 @@ from moonmind.omnigent.bootstrap.store import (
     load_bootstrap_record,
     save_bootstrap_record,
 )
+from moonmind.omnigent.harness_platform.agent_profile import (
+    stable_imported_content_digest,
+    stable_upstream_snapshot_digest,
+)
 from moonmind.omnigent.harness_platform.harness_registry import harness_registration
 from moonmind.omnigent.harness_platform.support import compute_support_combination_key
 
@@ -56,28 +60,15 @@ def _resolve_profile_model_effort(profile: Any) -> tuple[str, str]:
     return model, effort
 
 
-def _stable_digest(value: Any) -> str:
-    """Return a normalized sha256 digest or empty when unavailable."""
-    text = str(value or "").strip()
-    if len(text) == 71 and text.startswith("sha256:"):
-        hexpart = text[len("sha256:") :]
-        if len(hexpart) == 64 and all(
-            c in "0123456789abcdefABCDEF" for c in hexpart
-        ):
-            return "sha256:" + hexpart.lower()
-    return ""
-
-
 def _expected_stable_agent_source_ref(
     document: Any, *, snapshot_digest: str = "", upstream_snapshot: Any = None
 ) -> str:
     """Compute the stable agentSourceRef admission will compile.
 
-    Mirrors ``_build_v2_profile``: upstream uses the stable projection digest
-    from the document, bundle uses the stable bundle/content digests. The
-    profile version digest (which includes per-run model/tools) must never
-    leak into the agent source, otherwise every model-only version bump
-    invalidates deployment evidence.
+    Shares ``stable_upstream_snapshot_digest`` /
+    ``stable_imported_content_digest`` with the plan compiler and with
+    launch-time plan verification, so qualification here cannot drift from the
+    identity those two pin.
     """
     import hashlib as _hashlib
     import json as _json
@@ -88,9 +79,7 @@ def _expected_stable_agent_source_ref(
     if not isinstance(source, dict):
         return ""
     if source.get("upstreamId"):
-        stable = _stable_digest(source.get("upstreamSnapshotDigest")) or str(
-            snapshot_digest or ""
-        ).strip()
+        stable = stable_upstream_snapshot_digest(source, snapshot_digest)
         if not stable.startswith("sha256:"):
             return ""
         payload = {
@@ -109,12 +98,7 @@ def _expected_stable_agent_source_ref(
             ).strip()
         if not bundle_ref or not bundle_digest or not import_receipt:
             return ""
-        stable_content = (
-            _stable_digest(source.get("importedContentDigest"))
-            or _stable_digest(source.get("bundleDigest"))
-            or _stable_digest(bundle_digest)
-            or str(snapshot_digest or "").strip()
-        )
+        stable_content = stable_imported_content_digest(source, snapshot_digest)
         if not stable_content.startswith("sha256:"):
             return ""
         payload = {
