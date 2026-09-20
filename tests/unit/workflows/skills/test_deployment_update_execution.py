@@ -2921,14 +2921,10 @@ async def test_update_skips_substrate_stage_when_already_converged(monkeypatch) 
 
     assert result.status == "COMPLETED"
     # Converged substrate still runs no staged pass. The egress gateway is
-    # aligned unconditionally before the main up; Compose leaves it alone when
-    # it already matches the incoming configuration.
-    assert [command[0] for command in runner.commands] == [
-        "pull",
-        "pull",
-        "up",
-        "up",
-    ]
+    # recreated unconditionally before the main up, with no pull of its own;
+    # Compose leaves it alone when it already matches the incoming
+    # configuration.
+    assert [command[0] for command in runner.commands] == ["pull", "up", "up"]
     gateway_up, main_up = (command[1] for command in runner.commands if command[0] == "up")
     assert "sandbox-egress-proxy" in tuple(gateway_up)
     assert "sandbox-egress-proxy" not in tuple(main_up)
@@ -3067,9 +3063,14 @@ async def test_egress_gateway_is_aligned_under_the_documented_default_exclusions
     Selecting the gateway from the exclusion list made the pre-worker
     alignment a no-op on exactly that supported default, so an ordinary A-to-B
     update could still recreate workers against the old gateway. The gateway
-    is chosen from the configured services instead, and is then kept out of
-    the main recreation so it is not restarted underneath the workers that
-    attest it.
+    is chosen from the configured services instead.
+
+    It stays in the main recreation afterwards: the
+    deployment-update-infrastructure-reconciliation replay records the
+    incident that holding it out causes, where the restricted-egress network
+    it defines went absent and the worker restarted with exit code 1. Compose
+    leaves the already-aligned gateway alone, so aligning first and
+    reconciling again is harmless.
     """
     monkeypatch.setenv("HOSTNAME", "deploy123")
     events: list[str] = []
@@ -3084,8 +3085,14 @@ async def test_egress_gateway_is_aligned_under_the_documented_default_exclusions
 
     assert result.status == "COMPLETED"
     ups = [tuple(command[1]) for command in runner.commands if command[0] == "up"]
-    gateway_ups = [command for command in ups if "sandbox-egress-proxy" in command]
-    assert len(gateway_ups) == 1, ups
-    assert "--no-deps" in gateway_ups[0]
-    main_up = next(command for command in ups if "sandbox-egress-proxy" not in command)
-    assert ups.index(gateway_ups[0]) < ups.index(main_up)
+    gateway_only = [
+        command
+        for command in ups
+        if "sandbox-egress-proxy" in command and "api" not in command
+    ]
+    assert len(gateway_only) == 1, ups
+    main_up = next(command for command in ups if "api" in command)
+    assert ups.index(gateway_only[0]) < ups.index(main_up)
+    # The recorded infrastructure-reconciliation incident: the main up must
+    # still reconcile the gateway, or the network it defines goes absent.
+    assert "sandbox-egress-proxy" in main_up
