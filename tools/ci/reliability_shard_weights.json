@@ -1,7 +1,6 @@
 {
   "_comment": "Advisory file-level duration seeds for reliability sharding (MoonLadderStudios/MoonMind#4366). Consumed only by tools/ci/refresh_reliability_durations.py, which distributes each file's seed evenly across its collected test nodes into tests/.reliability-test-durations.json (the pytest-split least_duration input). Files missing here (including newly added tests) carry no hint and still run via the plugin fallback. Never gate on exact counts, file names, or freshness of this file. Estimates below seed from CI run #14404 (616 tests in 1219.12s; ~14m23s across eight slow cases) and are refined from the per-shard durations snapshots uploaded by tools/ci/write_backend_matrix_summary.py.",
   "weights": {
-    "test_automatic_release_availability.py": 280,
     "test_release_routing_journey.py": 260,
     "test_cancel_unserved_worker_version.py": 110,
     "test_interrupted_host_admission_journey.py": 110,

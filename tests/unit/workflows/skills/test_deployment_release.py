@@ -716,7 +716,7 @@ async def test_recorded_release_failure_keeps_the_line_that_names_it(
 ):
     """A bounded diagnosis must not discard the exception it ends with.
 
-    ``preserve_previous`` reports the retained worker's log tail, and a Python
+    A release failure record ends in a worker log tail, and a Python
     traceback names its cause on its last line. Keeping only the head of a long
     failure published frame stacks and dropped ``RuntimeError:
     restricted-egress gateway is not healthy``, so every operator surface fed
