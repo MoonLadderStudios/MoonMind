@@ -480,3 +480,27 @@ def test_fix_only_finish_mode_preserves_the_review_loop_instructions() -> None:
     assert task["skill"]["args"]["requireFreshReview"] is True
     assert "--review-provider codex" in task["instructions"]
     assert "--finish-mode fix_only" in task["instructions"]
+
+
+def test_fix_only_prompt_does_not_require_an_open_merge_gate() -> None:
+    """The managed prompt must match the Skill's fix_only stop condition.
+
+    Telling the resolver to report review_clean only "once the merge gate
+    opens" contradicts the contract on a base branch that requires a human
+    approving review: that gate never opens, so the child would receive
+    mutually exclusive completion criteria.
+    """
+
+    request = build_resolver_run_request(
+        parent_workflow_id="mm:parent",
+        pull_request=_pull_request(),
+        jira_issue_key=None,
+        merge_method="squash",
+        finish_mode="fix_only",
+    )
+
+    instructions = request["initial_parameters"]["task"]["instructions"]
+
+    assert "review_clean" in instructions
+    assert "merge gate opens" not in instructions
+    assert "nothing left to address" in instructions
