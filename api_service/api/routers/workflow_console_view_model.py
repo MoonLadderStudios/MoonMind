@@ -1623,7 +1623,13 @@ def build_runtime_config(
         "statusMaps": status_maps(),
         "sources": {
             "schedules": {
-                "list": "/api/recurring-workflows?scope=personal",
+                # Backend-owned scope contract (MoonMind#4350 owns the unified
+                # list policy): GET /api/recurring-workflows defaults to
+                # scope=personal. The account-free Recurring page sends no
+                # human scope input; global/legacy-user schedules migrate
+                # under #4350. Removal condition: point at the unified list
+                # surface when #4350 lands.
+                "list": "/api/recurring-workflows",
                 "create": "/api/recurring-workflows",
                 "detail": "/api/recurring-workflows/{definitionId}",
                 "update": "/api/recurring-workflows/{definitionId}",
