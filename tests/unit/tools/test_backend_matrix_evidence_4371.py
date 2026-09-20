@@ -247,3 +247,65 @@ def test_redact_helper_execution_is_fast(tmp_path: Path) -> None:
     )
     assert proc.returncode == 0
     assert (time.monotonic() - start) < 20
+
+
+def test_xdist_rows_use_live_node_level_verbosity() -> None:
+    """R1: xdist lanes must show live node IDs, not quiet dots."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = {step["name"]: step for step in workflow["jobs"]["backend-matrix"]["steps"]}
+    for name in (
+        "Run selected unit suite",
+        "Run API/component suite",
+        "Run Temporal boundary suite",
+    ):
+        run = steps[name]["run"]
+        assert "-n auto" in run, name
+        assert "--durations=25" in run, name
+        assert "--tb=short" in run, name
+        # Live node-level output: verbose mode, never quiet-dot mode.
+        assert " -v " in f" {run} " or " -v\n" in f" {run}\n", name
+        assert " -q " not in f" {run} ", name
+
+
+def test_summary_extracts_last_active_case_on_interrupted_run(tmp_path: Path) -> None:
+    """R4/A3: killed worker without JUnit gets an explicit last-case section."""
+    from tools.ci.write_backend_matrix_summary import build_evidence
+
+    log = tmp_path / "pytest.log"
+    log.write_text(
+        "tests/integration/reliability/test_x.py::test_slow_case PASSED\n"
+        "tests/integration/reliability/test_x.py::test_killed_case RUNNING (killed)\n",
+        encoding="utf-8",
+    )
+    markdown, _ = build_evidence(
+        _args(tmp_path, junit=tmp_path / "missing.xml", test_outcome="failure")
+    )
+    assert "Last active case" in markdown
+    assert "test_killed_case" in markdown
+    assert "interrupted" in markdown
+
+
+def test_summary_extracts_last_active_case_on_success(tmp_path: Path) -> None:
+    """R4/A3: successful runs also record the trailing live node."""
+    from tools.ci.write_backend_matrix_summary import build_evidence
+
+    _junit_file(tmp_path)
+    log = tmp_path / "pytest.log"
+    log.write_text(
+        "tests/unit/test_x.py::test_a PASSED\n"
+        "tests/unit/test_x.py::test_b PASSED\n",
+        encoding="utf-8",
+    )
+    markdown, _ = build_evidence(_args(tmp_path))
+    assert "Last active case" in markdown
+    assert "test_b" in markdown
+
+
+def test_workflow_cancellation_context_extracts_last_active_case() -> None:
+    """R4/A3: artifact-side cancellation context derives the trailing node."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "cancellation-context.txt" in text
+    assert "attempted-cancellation.txt" in text
+    # Bounded extraction from the known streamed log into both records.
+    assert "pytest-backend-${{ matrix.suite }}.log" in text
+    assert "last-active-case" in text.lower() or "last active case" in text.lower()

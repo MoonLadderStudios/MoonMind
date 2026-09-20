@@ -182,8 +182,8 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   small `tools/ci/write_backend_matrix_summary.py` hook from standard
   pytest/JUnit output). Reliability rows run
   `-vv --tb=short --durations=25` so the active node ID is visible before a
-  stall; other lanes keep lower-noise console verbosity with duration
-  output. A missing final JUnit file is reported as unavailable/interrupted
+  stall; xdist lanes run `-v --tb=short --durations=25` so live node IDs
+  stream through `tee` before a stall instead of quiet dots. A missing final JUnit file is reported as unavailable/interrupted
   in the per-job `$GITHUB_STEP_SUMMARY`, never as zero tests or a pass.
 - Each row uploads a stable suite/shard/run-attempt artifact
   (`pytest-<suite>-attempt-<attempt>`) containing only the known diagnostic
@@ -206,7 +206,8 @@ only fixed trusted pytest commands with ordinary quoted parameters.
   `unavailable`), measured test-step wall time plus JUnit suite time, setup /
   collection / cleanup reported as separate lines (explicitly unavailable as
   separate measurements when not instrumented, never folded into a passing
-  total), top slowest cases, evidence paths, and a small reporting-overhead
+  total), top slowest cases, last active case extracted from the streamed
+  log (explicitly interrupted when JUnit is missing), evidence paths, and a small reporting-overhead
   note (hook seconds plus retained evidence bytes; rich bundles stay
   failure-gated so the normal successful-run path stays small). The
   hook always exits 0 so a parsing problem never hides an unsuccessful job
