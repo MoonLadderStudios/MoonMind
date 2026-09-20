@@ -95,15 +95,15 @@ def test_compose_and_worker_binding_changes_select_integration(
 @pytest.mark.parametrize(
     "changed_path",
     [
-        "moonmind/single_user/conformance_4356.py",
-        "tests/unit/single_user/test_conformance_mapping_4356.py",
+        "api_service/services/profile_secret_migration.py",
     ],
 )
-def test_conformance_mapping_changes_stay_visible(changed_path: str) -> None:
+def test_credential_migration_changes_select_integration(changed_path: str) -> None:
     outputs = _outputs([changed_path])
     assert outputs["unit_fast"] == "true"
-    # The mapping owns required-CI selection, so its change must also run
-    # the hermetic integration foundation rather than unit-only shards.
+    # The credential-conversion service owns its PostgreSQL migration
+    # boundary, so its change must also run the hermetic integration
+    # foundation rather than unit-only shards.
     assert outputs["integration_ci"] == "true"
     assert outputs["full_backend"] == "false"
 

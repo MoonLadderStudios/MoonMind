@@ -186,8 +186,12 @@ INTEGRATION_CI_EXACT = {
     "frontend/src/lib/api/client.ts",
     # Worker binding determines which deployment executes admitted work.
     "moonmind/workflows/temporal/worker_runtime.py",
-    # The machine-readable ten-row mapping owns required-CI selection.
-    "moonmind/single_user/conformance_4356.py",
+    # MoonLadderStudios/MoonMind#4356: single-operator credential conversion
+    # owns the eligible PostgreSQL migration boundary
+    # (tests/integration/services/test_profile_secret_migration_postgres_4349.py);
+    # a change must run the hermetic integration foundation, not only the
+    # in-process component suite.
+    "api_service/services/profile_secret_migration.py",
 }
 
 INTEGRATION_CI_PREFIXES = (

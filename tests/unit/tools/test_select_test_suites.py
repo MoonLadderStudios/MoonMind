@@ -901,7 +901,7 @@ def test_shared_resource_changes_require_real_docker_journey():
 @pytest.mark.parametrize(
     "changed_path",
     [
-        "moonmind/single_user/conformance_4356.py",
+        "api_service/services/profile_secret_migration.py",
         "tests/unit/single_user/test_first_run_4356.py",
         "tests/integration/single_user/test_first_run_4356.py",
         "tests/integration/single_user/test_protected_ingress_4356.py",
@@ -913,9 +913,9 @@ def test_shared_resource_changes_require_real_docker_journey():
 def test_single_user_taxonomy_selects_integration_ci(changed_path: str) -> None:
     """MoonLadderStudios/MoonMind#4356 R8: single-user rows own integration_ci.
 
-    Canonical taxonomy pin: a change to the conformance mapping, its unit
-    or integration suites, or the machine-authority/worker-binding seams
-    must run the hermetic integration foundation. Aggregation needs no
+    Canonical taxonomy pin: a change to the credential-conversion service,
+    its unit or integration suites, or the machine-authority/worker-binding
+    seams must run the hermetic integration foundation. Aggregation needs no
     workflow change: .github/workflows/pytest-unit-tests.yml already runs
     the integration-ci job whenever integration_ci=true.
     """
