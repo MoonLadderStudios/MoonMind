@@ -525,6 +525,17 @@ def load_deployment_evidence(
     path: str | Path | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
+    """Admit the current qualification this deployment published for one class.
+
+    The publisher appends one signed document per qualification run and
+    replaces only entries sharing the *current* projection, so a projection
+    change leaves several documents describing one deployment class. That is
+    publication history, not ambiguity: every candidate is schema-checked,
+    secret-scanned, HMAC-verified, and freshness-checked, and the admitted one
+    must still match the plan. Admission therefore takes the most recently
+    generated admissible document and still fails closed when none is.
+    """
+
     candidates = _load_deployment_evidence_candidates(path)
     requested_qualification_key = compute_deployment_qualification_key(
         plan_payload.supportIdentity
@@ -535,11 +546,30 @@ def load_deployment_evidence(
         if isinstance(value, Mapping)
         and _candidate_qualification_key(value) == requested_qualification_key
     ]
-    if len(matching) != 1:
+    admissible: list[DeploymentExecutionEvidence] = []
+    conflict: ValueError | None = None
+    for candidate in matching:
+        try:
+            parsed = validate_deployment_evidence(candidate, now=now)
+        except ValueError:
+            # Expired, superseded-generation, or unverifiable history. The
+            # requested class may still hold a current document.
+            continue
+        try:
+            assert_deployment_evidence_matches_plan(parsed, plan_payload)
+        except ValueError as exc:
+            # A verified document for this class that the plan contradicts is
+            # the actionable failure; keep it rather than reporting the class
+            # as simply unqualified.
+            conflict = conflict or exc
+            continue
+        admissible.append(parsed)
+    if not admissible:
+        if conflict is not None:
+            raise conflict
         raise ValueError(_unqualified_combination_message(plan_payload, candidates))
-    parsed = validate_deployment_evidence(matching[0], now=now)
-    assert_deployment_evidence_matches_plan(parsed, plan_payload)
-    return parsed.model_dump(mode="json", by_alias=True)
+    current = max(admissible, key=lambda entry: entry.generated_at)
+    return current.model_dump(mode="json", by_alias=True)
 
 
 __all__ = [
