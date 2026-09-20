@@ -928,21 +928,24 @@ class DockerContainerJobBackend:
         enumeration and the ``docker start`` that follows are one serialized
         operation: two workers racing for the final slot cannot both observe
         it free. A retry never acquires a second slot for the same job — a
-        job whose own container is already running already holds its slot and
-        is admitted unconditionally. A job whose container is only created has
-        not yet claimed a slot, so it is admitted on the same basis as a job
-        with no container yet; the lock serializes competing created waiters
-        so exactly one starts per free slot. Agent hosts and their
-        subordinate test jobs use separate counts (host leases vs this job
-        ledger), so an agent occupying the final host slot can still launch
-        the test job it is waiting for.
+        job whose own container already holds a slot (restarting, running,
+        paused, or being removed) is admitted unconditionally. A job whose
+        container is only created has not yet claimed a slot, so it is
+        admitted on the same basis as a job with no container yet; the lock
+        serializes competing created waiters so exactly one starts per free
+        slot. Agent hosts and their subordinate test jobs use separate counts
+        (host leases vs this job ledger), so an agent occupying the final
+        host slot can still launch the test job it is waiting for.
         """
 
         holders = await self._slot_holders()
         own_state = holders.get(container_name)
-        if own_state == "running":
+        if own_state in self._SLOT_HOLDING_STATES:
             # A retry after an uncertain start: the container provably holds
             # this job's slot, so it must proceed, never wait or double-count.
+            # This covers every slot-holding daemon state, not just running:
+            # a paused/restarting/removing own container still occupies the
+            # slot and must not be parked behind other holders.
             return
         others = sum(1 for name in holders if name != container_name)
         if others < int(self._settings.max_active_jobs):

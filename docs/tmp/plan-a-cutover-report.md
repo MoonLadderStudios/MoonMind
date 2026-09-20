@@ -50,7 +50,54 @@ counts, so a full host count never blocks an agent's own test job.
    to fixed successors, resume dispatch.
 4. Post-cutover: drop the obsolete table in a forward migration.
 
-## Verification that could not run in this environment
+## Verification evidence (MoonLadderStudios/MoonMind#4457)
+
+Tested revision: `ea36e3d57b134ae50b6753796af0c3e3592445b2` plus the
+uncommitted Plan A qualification change in this working tree
+(`moonmind/workflows/temporal/container_job_backend.py` own-slot admission
+fix + `tests/integration/reliability/test_container_job_plan_a_qualification_journey.py`).
+
+Executed locally in this environment:
+
+- `python3 -m py_compile` on the touched backend, the new journey file, and
+  `moonmind/container_job_cli.py`: pass.
+- `printf '<changed files>' | python3 tools/select_test_suites.py`: selects
+  `integration_ci=true` and `reliability_journey=true` (plus
+  `temporal_boundary`, `api_component`, `exact_artifact`,
+  `omnigent_conformance`) for this change, so existing required CI runs the
+  new journeys. Full output recorded in the attempt log.
+- Standalone flock-serialization check (two lock instances sharing one root,
+  concurrent enumerate-then-start with a race-widening sleep): exactly one
+  winner, one parked (`FLOCK_SERIALIZES_OK`). This mirrors the R1 journey's
+  cross-worker shape, not the production code path itself.
+- Not run here (no Docker CLI, no Temporal/pytest runtime in this sandbox):
+  the new pytest journeys and the hermetic authority journey. Required CI
+  must run: `tests/integration/reliability` with `-m reliability_journey`
+  (includes the new Plan A qualification journeys and the preserved
+  `test_container_job_authority_journey.py`), the
+  `tests/unit/workflows/temporal/test_container_job_backend.py` unit suite,
+  and the Docker-backed `test_real_docker_inspect_shows_stock_fixed_limits`
+  case (skipped without a Docker CLI).
+
+New focused coverage (all in the new journey file, preserved hermetic suites
+untouched):
+
+- R1: free-slot race at limit 1 (exactly one start, peak overlap <= 1) and
+  created-waiter forward progress (one claims the slot, the other parks, then
+  proceeds after release).
+- R2: lost start acknowledgment reconciles with one real side effect; worker
+  death releases the shared lock; container finishing between observation and
+  retry frees its slot; own paused-holder retry keeps its slot (covers the
+  `_admit_job_slot` fix admitting any slot-holding own state, not just
+  running; `created` exclusion preserved).
+- R3: wait/release/restart, non-waitable refusal class, and agent-host vs
+  job-ledger separation.
+- R4: stock CLI submission asserts 2000 cpuMillis / 4096 memoryMiB / 512 pids
+  with no pool content, start path issues one `ps` and no `info` probe, and
+  the Docker-gated case inspects `NanoCpus`/`Memory`/`PidsLimit` on a
+  `moonmind-test-*` container.
+
+## Verification that could not run in this environment (prior status)
 
 No pytest, Docker, PostgreSQL, or Temporal here (offline sandbox), so suites
 were verified by compilation, targeted logic checks (slot parsing/admission,
