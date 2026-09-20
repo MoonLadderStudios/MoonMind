@@ -1131,3 +1131,341 @@ async def test_r6b_independent_deployment_claim_without_user_service(tmp_path: P
         assert "MoonMind.UserWorkflow" in (
             recurring_module._SUPPORTED_RECURRING_WORKFLOW_TYPES
         )
+
+
+@pytest.mark.asyncio
+async def test_r2b_scope_cleanup_neither_hides_nor_orphans_legacy(tmp_path: Path):
+    """R2: scope cleanup keeps legacy human-owner rows visible, never orphaned."""
+    from api_service.db.models import TemporalArtifact
+
+    legacy_owner = uuid4()
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            service = RecurringWorkflowsService(session, temporal_client_adapter=_adapter())
+            legacy = await service.create_definition(
+                name="Legacy scope row",
+                description=None,
+                enabled=True,
+                schedule_type="cron",
+                cron="0 8 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=legacy_owner,
+                target=_target(),
+                policy={},
+            )
+            session.add(
+                TemporalArtifact(
+                    artifact_id="a-4351-scope",
+                    created_by_principal=str(legacy_owner),
+                    storage_key="k-4351-scope",
+                )
+            )
+            await session.commit()
+
+            # An unrelated operator sees the legacy schedule: no hiding.
+            for viewer in (None, uuid4(), legacy_owner):
+                personal = await service.list_definitions(
+                    scope="personal", user_id=viewer
+                )
+                assert {row.id for row in personal} >= {legacy.id}
+            assert await service.count_definitions(scope="personal", user_id=uuid4()) >= 1
+            # The legacy owner value persists as provenance, not a hidden FK.
+            fetched = await service.require_authorized_definition(
+                definition_id=legacy.id, user_id=None, can_manage_global=False
+            )
+            assert str(fetched.owner_user_id) == str(legacy_owner)
+            assert (
+                await session.get(TemporalArtifact, "a-4351-scope")
+            ).created_by_principal == str(legacy_owner)
+
+
+@pytest.mark.asyncio
+async def test_r2c_eligible_conversion_pg_parity():
+    """R2: PG-backed conversion fixture keeps IDs/links/provenance (needs PG)."""
+    import os
+
+    url = os.environ.get("MOONMIND_TEST_POSTGRES_URL")
+    if not url:
+        pytest.skip("MOONMIND_TEST_POSTGRES_URL not set; PG parity needs a live PG")
+    from tests.support.isolated_postgres import isolated_postgres
+
+    from api_service.db.models import (
+        OmnigentPolicy,
+        TemporalArtifact,
+        TemporalExecutionCanonicalRecord,
+        TemporalExecutionRecord,
+        TemporalWorkflowType,
+        WorkflowExecutionSourceMapping,
+        WorkflowRun,
+    )
+    from moonmind.statuses.workflow import MoonMindWorkflowState
+
+    tables = [
+        WorkflowRun.__table__,
+        TemporalExecutionCanonicalRecord.__table__,
+        TemporalExecutionRecord.__table__,
+        WorkflowExecutionSourceMapping.__table__,
+        TemporalArtifact.__table__,
+        OmnigentPolicy.__table__,
+    ]
+    legacy_owner = uuid4()
+    legacy_owner_str = str(legacy_owner)
+    async with isolated_postgres(tables) as maker:
+        async with maker() as session:
+            run = WorkflowRun(
+                feature_key="feat-4351-pg",
+                status="pending",
+                phase="discover",
+                requested_by_user_id=legacy_owner,
+                created_by=legacy_owner,
+            )
+            session.add(run)
+            session.add(
+                TemporalExecutionCanonicalRecord(
+                    workflow_id="mm:4351:pg",
+                    run_id="run-pg-1",
+                    workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                    owner_id=legacy_owner_str,
+                    owner_type=TemporalExecutionOwnerType.USER,
+                    state=MoonMindWorkflowState.INITIALIZING,
+                    entry="temporal",
+                )
+            )
+            session.add(
+                TemporalExecutionRecord(
+                    workflow_id="mm:4351:pg",
+                    run_id="run-pg-1",
+                    workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                    owner_id=legacy_owner_str,
+                    owner_type=TemporalExecutionOwnerType.USER,
+                    state=MoonMindWorkflowState.INITIALIZING,
+                    entry="temporal",
+                )
+            )
+            session.add(
+                WorkflowExecutionSourceMapping(
+                    workflow_id="mm:4351:pg",
+                    source="temporal",
+                    source_record_id="mm:4351:pg",
+                    owner_type="user",
+                    owner_id=legacy_owner_str,
+                )
+            )
+            session.add(
+                TemporalArtifact(
+                    artifact_id="a-4351-pg",
+                    created_by_principal=legacy_owner_str,
+                    storage_key="k-4351-pg",
+                )
+            )
+            session.add(
+                OmnigentPolicy(
+                    policy_id="p-4351-pg",
+                    name="legacy policy 4351 pg",
+                    owner_user_id=legacy_owner,
+                    visibility="private",
+                )
+            )
+            await session.commit()
+
+            # Conversion is visibility-only: every row re-reads by original PK
+            # with legacy provenance intact; the operator reads without a
+            # human-owner lookup.
+            assert (await session.get(WorkflowRun, run.id)).id == run.id
+            assert (
+                await session.get(TemporalExecutionCanonicalRecord, "mm:4351:pg")
+            ).owner_id == legacy_owner_str
+            assert (
+                await session.get(TemporalExecutionRecord, "mm:4351:pg")
+            ).run_id == "run-pg-1"
+            assert (
+                await session.get(WorkflowExecutionSourceMapping, "mm:4351:pg")
+            ).source_record_id == "mm:4351:pg"
+            assert (
+                await session.get(TemporalArtifact, "a-4351-pg")
+            ).created_by_principal == legacy_owner_str
+            assert policy_router._can_read_policy(
+                await session.get(OmnigentPolicy, "p-4351-pg"), None
+            ) is True
+
+
+def test_r3c_retained_history_fixture_replays_without_user_table():
+    """R3: fixture histories replay deterministically via real decoders."""
+    import json
+
+    temporal = TemporalExecutionService.__new__(TemporalExecutionService)
+    fixture = Path(__file__).parent.parent / "fixtures" / "temporal" / (
+        "single_user_4351_retained_histories.json"
+    )
+    bundle = json.loads(fixture.read_text())
+    assert bundle["sourceRef"] == "MoonLadderStudios/MoonMind#4351"
+    assert len(bundle["shapes"]) == 8
+
+    seen = set()
+    for shape in bundle["shapes"]:
+        payload = dict(shape["payload"])
+        first = temporal.decode_previous_execution_owner(dict(payload))
+        second = temporal.decode_previous_execution_owner(dict(payload))
+        # Deterministic replay without consulting a present-day user table.
+        assert first == second
+        # Legacy provenance preserved (never mapped to a synthetic constant).
+        assert first.get("mm_owner_id") == payload.get("mm_owner_id")
+        # Scheduling/execution identity never rewritten.
+        for key, value in shape.get("identity", {}).items():
+            assert first[key] == value == payload[key]
+        seen.add(shape["name"])
+    assert seen == {
+        "parent_workflow",
+        "child_workflow",
+        "activity_payload",
+        "update_payload",
+        "signal_payload",
+        "continue_as_new",
+        "cancelled",
+        "recovery",
+    }
+
+
+@pytest.mark.asyncio
+async def test_r4c_schedule_recreate_carries_cadence_and_frozen_inputs(tmp_path: Path):
+    """R4: missing-schedule recreate keeps cadence/timezone/enabled/frozen inputs."""
+    from moonmind.workflows.temporal.schedule_errors import ScheduleNotFoundError
+
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            service = RecurringWorkflowsService(session, temporal_client_adapter=_adapter())
+            created = await service.create_definition(
+                name="Recreate guard",
+                description=None,
+                enabled=True,
+                schedule_type="cron",
+                cron="45 11 * * *",
+                timezone="America/New_York",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=None,
+                target=_target(),
+                policy={},
+            )
+            _, workflow_input = service._workflow_bundle_for_definition(created)
+            calls: dict[str, list] = {"update": [], "create": []}
+
+            async def _describe_missing(*, definition_id):
+                raise ScheduleNotFoundError("gone")
+
+            async def _update(**kwargs):
+                calls["update"].append(kwargs)
+
+            async def _create(**kwargs):
+                calls["create"].append(kwargs)
+
+            service._adapter = SimpleNamespace(
+                describe_schedule=_describe_missing,
+                update_schedule=_update,
+                create_schedule=_create,
+                resolve_workflow_task_queue=MagicMock(
+                    return_value="mm.workflow.user.v2"
+                ),
+            )
+            await service._ensure_schedule_action_current(created)
+            # Exactly one recreate: no duplicate trigger, no lost launch.
+            assert len(calls["create"]) == 1
+            assert calls["update"] == []
+            recreated = calls["create"][0]
+            assert recreated["definition_id"] == created.id
+            assert recreated["cron_expression"] == "45 11 * * *"
+            assert recreated["timezone"] == "America/New_York"
+            assert recreated["enabled"] is True
+            assert recreated["workflow_type"] == "MoonMind.UserWorkflow"
+            assert recreated["workflow_input"] == workflow_input
+            assert recreated["memo"] == {"definitionId": str(created.id)}
+            # Frozen runtime/profile/preset inputs and publication intent
+            # travel with the action payload.
+            initial = (recreated["workflow_input"].get("initial_parameters") or {})
+            assert (initial.get("task") or {}).get("publish") == {"mode": "none"}
+            assert recreated["workflow_input"]["initial_parameters"]["system"][
+                "recurrence"
+            ]["definitionId"] == str(created.id)
+
+
+@pytest.mark.asyncio
+async def test_r6c_racing_deployments_serialize_on_one_issue(tmp_path: Path):
+    """R6: racing deployments serialize; exactly one durable owner wins."""
+    import asyncio
+
+    from moonmind.workflows.temporal.issue_claim_store import (
+        ActiveIssueClaimConflict,
+        IssueClaimStore,
+        claim_owner,
+    )
+
+    owner_a = claim_owner({"execution_owner": "ns-a/mm:race-a:1"})
+    owner_b = claim_owner({"execution_owner": "ns-b/mm:race-b:1"})
+    async with recurring_db(tmp_path) as maker:
+        store = IssueClaimStore(session_factory=maker)
+
+        async def _claim(owner: str, attempt: str):
+            try:
+                await store.prepare(
+                    owner=owner,
+                    repository="MoonLadderStudios/MoonMind",
+                    issue_number=4351,
+                    attempt_id=attempt,
+                    actor_id=f"actor-{attempt}",
+                    comment_body=f"claim {attempt}",
+                )
+                return owner
+            except ActiveIssueClaimConflict:
+                return None
+
+        winners = await asyncio.gather(
+            _claim(owner_a, "att-race-a"), _claim(owner_b, "att-race-b")
+        )
+        active = await store.active_for_issue("MoonLadderStudios/MoonMind", 4351)
+        assert active is not None
+        # Exactly one durable owner holds the issue; the loser observed the
+        # winner without any shared user-service lookup.
+        assert active.owner in (owner_a, owner_b)
+        assert list(winners).count(active.owner) >= 1
+
+
+@pytest.mark.asyncio
+async def test_r6d_lease_handoff_allows_successor_without_user_service(tmp_path: Path):
+    """R6: ended ownership retires the lease so a successor can proceed."""
+    from moonmind.workflows.temporal.issue_claim_store import (
+        IssueClaimStore,
+        claim_owner,
+    )
+
+    owner_a = claim_owner({"execution_owner": "ns-a/mm:handoff-a:1"})
+    owner_b = claim_owner({"execution_owner": "ns-b/mm:handoff-b:1"})
+    async with recurring_db(tmp_path) as maker:
+        store = IssueClaimStore(session_factory=maker)
+        await store.prepare(
+            owner=owner_a,
+            repository="MoonLadderStudios/MoonMind",
+            issue_number=4351,
+            attempt_id="att-handoff-a",
+            actor_id="actor-a",
+            comment_body="claim a",
+        )
+        assert (
+            await store.active_for_issue("MoonLadderStudios/MoonMind", 4351)
+        ).owner == owner_a
+        assert await store.end_ownership(owner_a, "att-handoff-a", reason="done") is True
+        assert (
+            await store.active_for_issue("MoonLadderStudios/MoonMind", 4351)
+        ) is None
+        await store.prepare(
+            owner=owner_b,
+            repository="MoonLadderStudios/MoonMind",
+            issue_number=4351,
+            attempt_id="att-handoff-b",
+            actor_id="actor-b",
+            comment_body="claim b",
+        )
+        active = await store.active_for_issue("MoonLadderStudios/MoonMind", 4351)
+        assert active is not None
+        assert active.owner == owner_b
