@@ -158,8 +158,11 @@ services:
       # MoonLadderStudios/MoonMind#3878 invariant 7: on-demand generic hosts
       # are admitted against an aggregate host count and a separately bounded
       # cold-launch rate. Fixed per-container limits are enforced by Docker;
-      # size the host count so the configured concurrency fits its host.
-      - MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY=${MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY:-8}
+      # size the host count so the configured concurrency fits its host. The
+      # fallback is the conservative fresh-install default of one host
+      # (#4458), not a capacity guarantee; existing deployments keep whatever
+      # value they already export.
+      - MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY=${MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY:-1}
       - MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST=${MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST:-2}
       - MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS=${MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS:-30}
       # The pooled Omnigent HTTP client is sized for that host ceiling: each
@@ -824,8 +827,11 @@ services:
       # MoonLadderStudios/MoonMind#3878 invariant 7: on-demand generic hosts
       # are admitted against an aggregate host count and a separately bounded
       # cold-launch rate. Fixed per-container limits are enforced by Docker;
-      # size the host count so the configured concurrency fits its host.
-      - MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY=${MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY:-8}
+      # size the host count so the configured concurrency fits its host. The
+      # fallback is the conservative fresh-install default of one host
+      # (#4458), not a capacity guarantee; existing deployments keep whatever
+      # value they already export.
+      - MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY=${MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY:-1}
       - MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST=${MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST:-2}
       - MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS=${MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS:-30}
       # The pooled Omnigent HTTP client is sized for that host ceiling: each
