@@ -119,8 +119,9 @@ existing installation's access.
 The host update scripts require Python 3.10+ and Docker Compose V2. Run
 `bash tools/update-moonmind.sh --branch main` to fetch a source snapshot and
 qualify its newest published `sha-<commit>` image without modifying the checkout.
-When the fetched tip has no published image yet, the script uses the newest
-published ancestor automatically.
+When the fetched tip has no published image yet, the script waits a bounded
+interval for that commit's publish, then uses the newest published ancestor
+automatically.
 The selected image owns application code, migrations, Compose and the release
 controller. Its durable updater qualifies all worker queues and the candidate
 API, promotes Temporal routing, and replaces the normal fleet. Previous workers
