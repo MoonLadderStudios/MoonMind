@@ -56,6 +56,7 @@ from moonmind.schemas.temporal_payload_policy import compact_temporal_ref_metada
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ManagedProfileLaunchContext,
+    _PR_RESOLVER_HUMAN_APPROVAL_SUMMARY,
     _derive_pr_resolver_failure,
     _derive_pr_resolver_metadata,
     _current_time,
@@ -1427,6 +1428,23 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                                 "summary": (
                                     "pr-resolver requested merge automation re-entry."
                                 ),
+                                "metadata": metadata,
+                            }
+                        )
+                        updated_result = True
+                    elif (
+                        resolver_disposition == "manual_review"
+                        and pr_resolver_merge_gate_owned
+                        # Only the human-approval gate reaches here: any other
+                        # manual_review reason derives a failure class above.
+                        and record.status == "failed"
+                        and failure_class in {None, "execution_error"}
+                        and _is_generic_process_exit_summary(summary)
+                    ):
+                        result = result.model_copy(
+                            update={
+                                "failure_class": None,
+                                "summary": _PR_RESOLVER_HUMAN_APPROVAL_SUMMARY,
                                 "metadata": metadata,
                             }
                         )

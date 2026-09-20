@@ -116,8 +116,16 @@ _PR_RESOLVER_RESULT_PATH_LIST = ", ".join(
     str(path) for path in _PR_RESOLVER_RESULT_PATHS
 )
 _PR_RESOLVER_CONTRACT_ID = "pr-resolver.v1"
+# A merge gate that stays closed only on a required human approving review is
+# the operator's action, not an engine fault: the resolver has already cleared
+# every blocker it owns and no automated action can produce an approval.
+_PR_RESOLVER_HUMAN_APPROVAL_REASON = "merge_gate_requires_human_approval"
 _PR_RESOLVER_USER_ACTIONABLE_REASONS: frozenset[str] = frozenset(
-    {"actionable_comments"}
+    {"actionable_comments", _PR_RESOLVER_HUMAN_APPROVAL_REASON}
+)
+_PR_RESOLVER_HUMAN_APPROVAL_SUMMARY = (
+    "pr-resolver stopped at a merge gate that requires a human approving "
+    f"review ({_PR_RESOLVER_HUMAN_APPROVAL_REASON}); next_step=manual_review."
 )
 _AUTO_PUBLISH_SCHEMA_VERSION = "moonmind.publish.auto.v1"
 _AUTO_PUBLISH_ALLOWED_STATUSES = frozenset(
@@ -834,11 +842,6 @@ def _derive_pr_resolver_failure(
         payload,
         merge_gate_owned=merge_gate_owned,
     )
-    if merge_gate_owned and disposition in {"reenter_gate", "request_review"}:
-        return None, None
-    if status not in _PR_RESOLVER_FAILURE_STATUSES:
-        return None, None
-
     final = _pr_resolver_final_payload(payload)
     reason = _first_stripped_text(
         payload.get("final_reason"),
@@ -846,8 +849,23 @@ def _derive_pr_resolver_failure(
         final.get("final_reason"),
         final.get("reason"),
     )
-    next_step = _pr_resolver_next_step(payload)
     normalized_reason = reason.lower().replace("-", "_").replace(" ", "_")
+    if merge_gate_owned and disposition in {"reenter_gate", "request_review"}:
+        return None, None
+    # The merge-gate parent owns every terminal it can act on. A closed gate
+    # awaiting a required human approving review is one of those: the resolver
+    # finished its own work and cannot supply an approval, so failing the child
+    # here hides a complete result behind an agent-runtime error.
+    if (
+        merge_gate_owned
+        and disposition == "manual_review"
+        and normalized_reason == _PR_RESOLVER_HUMAN_APPROVAL_REASON
+    ):
+        return None, None
+    if status not in _PR_RESOLVER_FAILURE_STATUSES:
+        return None, None
+
+    next_step = _pr_resolver_next_step(payload)
     # User fault is intentionally allow-listed and can only come from a terminal
     # artifact that passed identity, freshness, and terminal-shape validation.
     failure_class = "user_error" if (
@@ -1389,6 +1407,18 @@ class ManagedAgentAdapter:
                     ):
                         failure_class = None
                         summary = "pr-resolver requested merge automation re-entry."
+                    elif (
+                        resolver_disposition == "manual_review"
+                        and pr_resolver_merge_gate_owned
+                        # Only the human-approval gate reaches here: any other
+                        # manual_review reason still derives a failure class
+                        # above and is applied instead.
+                        and record.status == "failed"
+                        and failure_class in {None, "execution_error"}
+                        and _is_generic_process_exit_summary(summary)
+                    ):
+                        failure_class = None
+                        summary = _PR_RESOLVER_HUMAN_APPROVAL_SUMMARY
                 return AgentRunResult(
                     summary=summary,
                     output_refs=output_refs,
