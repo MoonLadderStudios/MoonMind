@@ -327,6 +327,15 @@ Review and reaction collection must read every page with the supported GitHub
 CLI. A command failure, malformed page, or incomplete response is an evidence
 collection failure, never an empty review inventory or a pending review.
 
+A `manual_review` whose reason is `merge_gate_requires_human_approval` is a gate
+decision the parent owns, not an agent-runtime failure. The resolver has cleared
+every blocker it owns and cannot supply a required approving review, so the host
+adapter passes the validated verdict through instead of failing the resolver child;
+the parent then reports that verdict and its `manual_review` blocker. Failing the
+child there would replace a complete result with a generic execution error and a
+false "failed before returning a result" summary. Every other `manual_review`
+reason remains an agent failure.
+
 Both `request_review` and `reenter_gate` consume the existing review loop's
 `maxConsecutiveNoProgressCycles` budget when their progress signature repeats.
 Historical handoffs without a signature use their head and reason to bound
