@@ -923,3 +923,212 @@ async def test_historical_workflow_keeps_fixed_admission_path(monkeypatch):
         "state"
     ] == "succeeded"
     assert all(not item.wait_for_capacity for item in requests)
+
+
+def _legacy_workflow_input() -> ContainerJobWorkflowInput:
+    """An already-admitted pre-upgrade request: shared-pool CPU + memory range."""
+
+    raw = _input().model_dump(mode="json", by_alias=True)
+    raw["request"]["spec"]["resources"] = {
+        "cpuMillis": 0,
+        "memoryMiB": 4096,
+        "minimumMemoryMiB": 2048,
+    }
+    return ContainerJobWorkflowInput.model_validate(raw)
+
+
+@pytest.mark.asyncio
+async def test_legacy_successor_reconcile_none_reaches_real_terminal_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4456: reconcile-none executes the successor.
+
+    The workflow reconciles before create; when no container exists, create
+    resolves the deterministic fixed-resource successor and the waiter
+    receives that execution's real terminal result, not a replan message.
+    """
+
+    from moonmind.schemas.container_job_models import ResourceLimits
+
+    job = MoonMindContainerJobWorkflow()
+    calls: list[str] = []
+    create_requests: list[ContainerJobActivityRequest] = []
+
+    async def activity(name, request):
+        calls.append(name)
+        if name == "container_job.reconcile_container":
+            return ContainerJobActivityResult(running=False)
+        if name == "container_job.create_container":
+            create_requests.append(request.model_copy(deep=True))
+            return ContainerJobActivityResult(
+                containerRef="owned:legacy-successor",
+                resolvedResources=ResourceLimits(cpuMillis=2000, memoryMiB=4096),
+            )
+        if name == "container_job.start_container":
+            return ContainerJobActivityResult(
+                running=True,
+                resolvedResources=ResourceLimits(cpuMillis=2000, memoryMiB=4096),
+            )
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(
+        _legacy_workflow_input().model_dump(mode="json", by_alias=True)
+    )
+
+    assert result["state"] == "succeeded"
+    assert result["terminal"].get("failureClass") is None
+    assert calls.index("container_job.reconcile_container") < calls.index(
+        "container_job.create_container"
+    )
+    assert create_requests, "create must run when reconcile found no container"
+    # The original historical request is preserved at the workflow boundary;
+    # only the resolved successor resources become explicit.
+    assert create_requests[0].request.spec.resources.cpu_millis == 0
+    assert create_requests[0].request.spec.resources.minimum_memory_mib == 2048
+
+
+@pytest.mark.asyncio
+async def test_legacy_successor_reconciled_container_skips_create_and_observes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4456: a completed container is observed, not rerun."""
+
+    job = MoonMindContainerJobWorkflow()
+
+    async def activity(name, request):
+        if name == "container_job.create_container":
+            raise AssertionError("create must be skipped for a reconciled container")
+        if name == "container_job.reconcile_container":
+            return ContainerJobActivityResult(
+                containerRef="owned:legacy-successor",
+                running=True,
+            )
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(
+        _legacy_workflow_input().model_dump(mode="json", by_alias=True)
+    )
+    assert result["state"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_legacy_successor_cancellation_follows_active_continuation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MoonLadderStudios/MoonMind#4456: cancel follows the successor continuation."""
+
+    job = MoonMindContainerJobWorkflow()
+    calls: list[str] = []
+
+    async def activity(name, request):
+        calls.append(name)
+        if name == "container_job.observe_container":
+            await job.cancel()
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    result = await job.run(
+        _legacy_workflow_input().model_dump(mode="json", by_alias=True)
+    )
+
+    assert result["state"] == "canceled"
+    assert calls.count("container_job.stop_container") == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_and_explicit_histories_stay_decodable_for_replay() -> None:
+    """MoonLadderStudios/MoonMind#4456: old and new histories replay.
+
+    Representative retained documents (zero CPU, memory range, explicit) all
+    validate through the same workflow-input contract, so replay never needs
+    to rewrite historical evidence to look current.
+    """
+
+    legacy = _legacy_workflow_input()
+    assert legacy.request.spec.resources.cpu_millis == 0
+    assert legacy.request.spec.resources.minimum_memory_mib == 2048
+
+    explicit = _input()
+    assert explicit.request.spec.resources.cpu_millis == 1000
+    assert explicit.request.spec.resources.minimum_memory_mib is None
+
+    round_tripped = ContainerJobWorkflowInput.model_validate(
+        legacy.model_dump(mode="json", by_alias=True)
+    )
+    assert (
+        round_tripped.request.spec.resources.minimum_memory_mib == 2048
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_successor_executes_through_real_backend_activities(
+    tmp_path,
+) -> None:
+    """MoonLadderStudios/MoonMind#4456: real activity composition for a legacy retry.
+
+    Resolve/acquire/reconcile/create/start/observe run against the real
+    Docker backend (recording runner). Reconcile finds no container, create
+    executes the fixed-resource successor, and observe reports the real
+    terminal result delivered to the waiting parent.
+    """
+
+    from moonmind.workflows.temporal.activity_runtime import (
+        TemporalAgentRuntimeActivities,
+    )
+    from moonmind.workflows.temporal.container_job_backend import (
+        DockerContainerJobBackend,
+    )
+
+    workspace = tmp_path / "art_workspace"
+    workspace.mkdir()
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[:2] == ("image", "inspect"):
+            return 0, b"sha256:" + b"a" * 64, b""
+        if args[0] == "info":
+            return 0, f"{10 * 1024**3}\t16".encode(), b""
+        if args[0] == "ps":
+            return 0, b"", b""
+        if args[:2] == ("inspect", "--format"):
+            if args[2] == "{{json .Config.Labels}}":
+                if "--type" not in args or args[args.index("--type") + 1] != "container":
+                    return 1, b"", b"Error response from daemon: 403 Forbidden"
+                return 1, b"", b"Error: No such object: moonmind-container-job"
+            if args[2] == "{{json .State}}":
+                return 0, b'{"Running":false,"ExitCode":0}', b""
+            return 1, b"", b"missing"
+        if args[0] == "logs":
+            return 0, b"completed", b""
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(workspace_root=tmp_path, command_runner=runner)
+    activities = TemporalAgentRuntimeActivities(container_job_backend=backend)
+    legacy = _legacy_workflow_input()
+    payload = {
+        "jobId": legacy.job_id,
+        "ownershipToken": legacy.ownership_token,
+        "request": legacy.request.model_dump(mode="json", by_alias=True),
+    }
+    resolved = await activities.container_job_resolve_workspace(payload)
+    payload["resolvedWorkspaceRef"] = resolved["resolvedWorkspaceRef"]
+    image = await activities.container_job_acquire_image(payload)
+    payload["resolvedImageRef"] = image["resolvedImageRef"]
+    reconciliation = await activities.container_job_reconcile_container(payload)
+    assert "containerRef" not in reconciliation
+    created = await activities.container_job_create_container(payload)
+    assert created["containerRef"]
+    assert created["resolvedResources"]["cpuMillis"] == 2000
+    assert "minimumMemoryMiB" not in created["resolvedResources"]
+    # The persisted original is never rewritten to look current.
+    assert payload["request"]["spec"]["resources"]["cpuMillis"] == 0
+    payload["containerRef"] = created["containerRef"]
+    await activities.container_job_start_container(payload)
+    observed = await activities.container_job_observe_container(payload)
+    assert observed["terminalState"] == "succeeded"
+    create = next(c for c in commands if c[0] == "create")
+    assert create[create.index("--cpus") + 1] == "2.0"
