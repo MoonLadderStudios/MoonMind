@@ -31,6 +31,21 @@ reinterpreted (an aggregate memory value never becomes a per-container limit):
 - Container jobs (new): `MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_JOBS`, default 1.
 - Stock policy/image defaults: 2 CPUs / 4 GiB, no probe.
 
+## Legacy container-job successor behavior (MoonLadderStudios/MoonMind#4456)
+
+An already-admitted, unstarted legacy job (shared-pool `cpuMillis: 0` or a
+retired `minimumMemoryMiB` range) is not re-planned by hand. An exact retry of
+the persisted request keeps the original job identity and serialized request;
+when reconcile finds no existing container, the launch boundary executes the
+deterministic fixed-resource successor (stock 2 CPUs for a zero value, the
+persisted `memoryMiB` as the fixed limit, other explicit fields preserved) and
+records it as the resolved resources next to the untouched original. Repeated
+retries converge on the same successor, existing or uncertain containers are
+reconciled rather than recreated, cancellation follows the same continuation,
+and the waiting parent receives the successor's real terminal result. A
+successor the deployment ceiling cannot admit still fails closed with an
+explicit replan disposition.
+
 ## Sizing risk carried forward
 
 Fixed limits and concurrency reduce exposure but do not guarantee fit: eight

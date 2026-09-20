@@ -817,9 +817,17 @@ New container-job requests must carry explicit positive limits
 never selects a fallback, and never reaches a pool implementation, and
 `minimumMemoryMiB` ranges are retired — new jobs set one fixed `memoryMiB`.
 Historical zero-valued and memory-range requests remain decodable so persisted
-jobs and Temporal histories replay; unstarted legacy jobs are cancelled and
-re-planned as successor attempts with explicit limits, and already-running
-containers are observed and cleaned up under their recorded ownership rather
+jobs and Temporal histories replay; an already-admitted, unstarted legacy job
+keeps an executable continuation under its own identity instead of a terminal
+replan message. When reconcile finds no existing container, the launch
+boundary resolves the deterministic fixed-resource successor
+(`legacy_fixed_successor_resources`): stock 2 CPUs for a zero `cpuMillis`
+value, the persisted `memoryMiB` as the single fixed limit with the retired
+`minimumMemoryMiB` range dropped, and every other explicit field preserved.
+The original serialized request is never rewritten, repeated retries converge
+on the same successor, and a successor the deployment ceiling cannot admit
+still fails closed for an operator replan. Already-running containers are
+observed and cleaned up under their recorded ownership rather
 than recreated for new defaults. Both Python-test entrypoints submit the same
 static product default — 2 CPUs and 4 GiB — qualified through the real
 test-container path.

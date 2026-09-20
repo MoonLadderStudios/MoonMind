@@ -1836,44 +1836,65 @@ async def test_create_applies_explicit_cpu_memory_and_pid_limits(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_create_rejects_a_zero_cpu_request_for_new_jobs(tmp_path):
-    """A new zero-valued request never means unlimited CPU or a pool."""
+async def test_create_executes_a_zero_cpu_legacy_request_through_its_successor(
+    tmp_path,
+):
+    """MoonLadderStudios/MoonMind#4456: a zero CPU value never means unlimited CPU.
+
+    The retired shared-pool interpretation is not re-executed and no pool is
+    consulted; an already-admitted legacy request launches through its
+    deterministic fixed-resource successor instead. New zero-valued jobs are
+    still gated at submission (``ContainerJobService`` requires explicit
+    resources for new identities).
+    """
 
     (tmp_path / "art_workspace").mkdir()
+    commands: list = []
     backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=_recording_runner([])
+        workspace_root=tmp_path, command_runner=_recording_runner(commands)
     )
-    with pytest.raises(ContainerJobBackendError) as raised:
-        await backend.create_container(
-            _request(tmp_path, resources={"cpuMillis": 0, "memoryMiB": 4096}),
-        )
-    assert (
-        raised.value.failure_class is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+    result = await backend.create_container(
+        _request(tmp_path, resources={"cpuMillis": 0, "memoryMiB": 4096}),
     )
+    create = next(c for c in commands if c[0] == "create")
+    assert create[create.index("--cpus") + 1] == "2.0"
+    assert result.resolved_resources is not None
+    assert result.resolved_resources.cpu_millis == 2000
+    assert result.resolved_resources.minimum_memory_mib is None
 
 
 @pytest.mark.asyncio
-async def test_create_rejects_a_memory_range_for_new_jobs(tmp_path):
-    """Adaptive memory negotiation is retired; new jobs set one fixed limit."""
+async def test_create_executes_a_memory_range_legacy_request_through_its_successor(
+    tmp_path,
+):
+    """MoonLadderStudios/MoonMind#4456: adaptive negotiation is retired, not re-run.
+
+    A legacy memory range launches through its fixed-resource successor with
+    the persisted ``memoryMiB`` as the single fixed limit. New jobs carrying a
+    range are still gated at submission.
+    """
 
     (tmp_path / "art_workspace").mkdir()
+    commands: list = []
     backend = DockerContainerJobBackend(
-        workspace_root=tmp_path, command_runner=_recording_runner([])
+        workspace_root=tmp_path, command_runner=_recording_runner(commands)
     )
-    with pytest.raises(ContainerJobBackendError) as raised:
-        await backend.create_container(
-            _request(
-                tmp_path,
-                resources={
-                    "cpuMillis": 2000,
-                    "memoryMiB": 4096,
-                    "minimumMemoryMiB": 2048,
-                },
-            ),
-        )
-    assert (
-        raised.value.failure_class is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+    result = await backend.create_container(
+        _request(
+            tmp_path,
+            resources={
+                "cpuMillis": 2000,
+                "memoryMiB": 4096,
+                "minimumMemoryMiB": 2048,
+            },
+        ),
     )
+    create = next(c for c in commands if c[0] == "create")
+    assert create[create.index("--memory") + 1] == "4096m"
+    assert result.resolved_resources is not None
+    assert result.resolved_resources.cpu_millis == 2000
+    assert result.resolved_resources.memory_mib == 4096
+    assert result.resolved_resources.minimum_memory_mib is None
 
 
 @pytest.mark.asyncio
@@ -1891,3 +1912,89 @@ async def test_historical_resource_requests_remain_decodable():
     assert is_historical_shared_or_adaptive(historical) is True
     explicit = ResourceLimits.model_validate({"cpuMillis": 2000, "memoryMiB": 4096})
     assert is_historical_shared_or_adaptive(explicit) is False
+
+
+@pytest.mark.asyncio
+async def test_create_executes_a_legacy_successor_with_fixed_resources(tmp_path):
+    """MoonLadderStudios/MoonMind#4456: an unstarted legacy job keeps a path.
+
+    Reconcile found no container, so the historical request (shared-pool CPU,
+    adaptive memory range) launches through its deterministic fixed-resource
+    successor instead of dead-ending with a replan message. The original
+    request is preserved; the successor is recorded as the resolved resources.
+    """
+
+    (tmp_path / "art_workspace").mkdir()
+    commands: list = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner(commands)
+    )
+    request = _request(
+        tmp_path,
+        resources={
+            "cpuMillis": 0,
+            "memoryMiB": 4096,
+            "minimumMemoryMiB": 2048,
+            "pids": 512,
+        },
+    )
+    result = await backend.create_container(request)
+
+    create = next(c for c in commands if c[0] == "create")
+    assert create[create.index("--cpus") + 1] == "2.0"
+    assert create[create.index("--memory") + 1] == "4096m"
+    assert create[create.index("--pids-limit") + 1] == "512"
+    assert result.resolved_resources is not None
+    assert result.resolved_resources.cpu_millis == 2000
+    assert result.resolved_resources.memory_mib == 4096
+    assert result.resolved_resources.minimum_memory_mib is None
+    # The persisted original is never rewritten to look current.
+    assert request.request.spec.resources.cpu_millis == 0
+    assert request.request.spec.resources.minimum_memory_mib == 2048
+
+    # A repeated attempt converges on the same successor launch.
+    repeat_commands: list = []
+    repeat_backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=_recording_runner(repeat_commands),
+    )
+    repeat = await repeat_backend.create_container(
+        _request(
+            tmp_path,
+            resources={
+                "cpuMillis": 0,
+                "memoryMiB": 4096,
+                "minimumMemoryMiB": 2048,
+                "pids": 512,
+            },
+        )
+    )
+    repeat_create = next(c for c in repeat_commands if c[0] == "create")
+    assert repeat_create == create
+    assert repeat.resolved_resources == result.resolved_resources
+
+
+@pytest.mark.asyncio
+async def test_legacy_successor_beyond_the_deployment_ceiling_stays_rejected(
+    tmp_path,
+):
+    """A successor the ceiling cannot admit still fails closed for the operator."""
+
+    (tmp_path / "art_workspace").mkdir()
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner([])
+    )
+    with pytest.raises(ContainerJobBackendError) as raised:
+        await backend.create_container(
+            _request(
+                tmp_path,
+                resources={
+                    "cpuMillis": 0,
+                    "memoryMiB": 1048576,
+                    "minimumMemoryMiB": 524288,
+                },
+            ),
+        )
+    assert (
+        raised.value.failure_class is ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED
+    )
