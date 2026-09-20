@@ -2929,3 +2929,33 @@ async def test_update_fails_when_substrate_does_not_converge(monkeypatch) -> Non
 
     assert result.status == "FAILED"
     assert "substrate" in str(result.outputs.get("failure", {}).get("reason", "")).lower()
+
+
+class _ForbiddenReleaseCohort:
+    """Any cohort interaction is a blue/green regression.
+
+    MoonLadderStudios/MoonMind#4363 and its successors trace to running a
+    candidate fleet beside the installed one on a shared Temporal task queue.
+    An update recreates the installed fleet in place; it never qualifies,
+    preserves, or promotes a parallel cohort.
+    """
+
+    def __getattr__(self, name: str):
+        raise AssertionError(
+            f"deployment update consulted a release cohort ({name}); "
+            "updates recreate the installed fleet in place"
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_recreates_in_place_without_a_release_cohort():
+    executor, store, evidence, runner, _ = _executor()
+    result = await executor.execute(
+        _inputs(), {"release_cohort": _ForbiddenReleaseCohort()}
+    )
+    assert result.status == "COMPLETED"
+    phases = [phase for phase, _ in runner.commands]
+    assert "up" in phases
+    logs = next(payload for kind, payload in evidence.records if kind == "command-log")
+    assert "releaseRouting" not in logs
+    assert store.records[0]["resolvedDigest"] == "sha256:" + "a" * 64
