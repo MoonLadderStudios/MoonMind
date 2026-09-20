@@ -1,0 +1,78 @@
+# Test-only operator-admission bypass topology (#4347).
+#
+# Renders (and, in CI with Docker, runs) the isolation argument behind the
+# single-user operator boundary: the operator backend admits only loopback
+# transport (fresh local operation) or the audited trusted ingress
+# (remote operation). An isolated agent-like container shares no network
+# with the backend, so it cannot reach an unprotected operator route
+# through the Docker bridge, the host gateway, or a shared network.
+#
+# - `operator-test-backend` holds the API only (internal). The API still
+#   publishes on 127.0.0.1 for the host operator; inside `agent-like-probe`
+#   that same 127.0.0.1 is the probe's own loopback, not the backend.
+# - `agent-like-probe` attempts bypass from its isolated network:
+#   (a) the host-published path via the host gateway, and
+#   (b) the internal path via the backend hostname.
+#   Both attempts must fail: (a) hits its own loopback, (b) has no route
+#   and no DNS entry, and any forged-header / worker-credential / query
+#   material it presents is ignored by the boundary (unit-proven in
+#   tests/unit/security/test_operator_admission_4347.py).
+#
+# This file is test-only: it is never part of deployment Compose wiring.
+
+services:
+  operator-test-api:
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    init: true
+    ports:
+      - "${MOONMIND_API_PUBLISH_HOST:-127.0.0.1}:${MOONMIND_API_HOST_PORT:-7000}:8000"
+    environment:
+      - PYTHONPATH=/app
+      - MOONMIND_PUBLIC_BASE_URL=${MOONMIND_PUBLIC_BASE_URL:-}
+      - MOONMIND_TRUSTED_INGRESS=${MOONMIND_TRUSTED_INGRESS:-}
+      - MOONMIND_TRUSTED_PROXIES=${MOONMIND_TRUSTED_PROXIES:-}
+    networks:
+      operator-test-backend:
+        aliases:
+          - operator-test-backend
+    # No host network mode: the backend never shares a namespace with probes.
+
+  agent-like-probe:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      - operator-test-api
+    # No `network_mode: host`, no shared network with the backend.
+    networks:
+      - operator-test-agent
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        echo "--- bypass attempt (a): host-published path via loopback ---"
+        if curl -fsS -m 5 http://127.0.0.1:7000/api/v1/operator/status; then
+          echo "UNEXPECTED: reached an operator route via container loopback"
+          exit 1
+        else
+          echo "expected: container loopback does not reach the backend"
+        fi
+        echo "--- bypass attempt (b): internal backend hostname path ---"
+        if curl -fsS -m 5 http://operator-test-backend:8000/api/v1/operator/status; then
+          echo "UNEXPECTED: reached the backend over the agent network"
+          exit 1
+        else
+          echo "expected: no internal path from the isolated agent network"
+        fi
+        echo "--- bypass attempt (c): forged headers must not admit ---"
+        if curl -fsS -m 5 -H 'X-Moonmind-User: operator' -H 'X-Forwarded-For: 127.0.0.1' http://operator-test-backend:8000/api/v1/operator/status; then
+          echo "UNEXPECTED: forged headers admitted"
+          exit 1
+        else
+          echo "expected: forged headers do not confer operator access"
+        fi
+
+networks:
+  operator-test-backend:
+    internal: true
+  operator-test-agent:
+    internal: true

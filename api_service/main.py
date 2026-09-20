@@ -107,6 +107,10 @@ from api_service.api.routers.auth_advanced_4124 import router as auth_advanced_4
 from api_service.api.routers.accounts_4122 import router as accounts_4122_router
 from api_service.api.routers.issue_lifecycle import router as issue_lifecycle_router
 from api_service.api.websockets import router as websockets_router
+from api_service.api.routers.operator_boundary_4347 import (
+    router as operator_boundary_router,
+    ws_router as operator_boundary_ws_router,
+)
 from api_service.db.base import get_async_session_context
 from api_service.services.presets.catalog import PresetCatalogService
 from api_service.ui_assets import resolve_dashboard_dist_root
@@ -1462,6 +1466,13 @@ app.include_router(workflow_console_router)
 app.include_router(presets_router)
 app.include_router(temporal_artifacts_router)
 app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
+# Single-user operator-admission boundary (#4347): one shared admission
+# path (loopback for fresh local operation, the configured trusted
+# ingress for remote operation) across HTTP queries/mutations, artifact
+# previews/downloads, SSE, WebSocket handshake/reconnects, and control
+# actions. No User table, seeded identity, or app-login service on path.
+app.include_router(operator_boundary_router)
+app.include_router(operator_boundary_ws_router, prefix="/ws/v1/operator")
 # Advanced identity sources (#4124): generic OIDC + trusted-proxy journeys
 # through the shared auth boundary. Endpoints fail closed when the classified
 # production mode does not select them.
