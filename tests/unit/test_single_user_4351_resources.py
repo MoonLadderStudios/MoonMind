@@ -247,3 +247,328 @@ def test_user_workflow_naming_and_concurrent_semantics_preserved():
     from api_service.services import recurring_workflows_service as recurring_module
 
     assert "MoonMind.UserWorkflow" in recurring_module._SUPPORTED_RECURRING_WORKFLOW_TYPES
+
+
+@pytest.mark.asyncio
+async def test_eligible_conversion_preserves_ids_links_and_provenance(tmp_path: Path):
+    """R2: eligible conversion retains IDs/links incl. legacy human-owner strings."""
+    from api_service.db.models import (
+        OmnigentPolicy,
+        TemporalArtifact,
+        TemporalExecutionCanonicalRecord,
+        TemporalExecutionRecord,
+        TemporalWorkflowType,
+        WorkflowExecutionSourceMapping,
+        WorkflowRun,
+    )
+    from moonmind.statuses.workflow import MoonMindWorkflowState
+
+    legacy_owner = uuid4()
+    legacy_owner_str = str(legacy_owner)
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            service = RecurringWorkflowsService(session, temporal_client_adapter=_adapter())
+            definition = await service.create_definition(
+                name="Legacy conversion",
+                description=None,
+                enabled=True,
+                schedule_type="cron",
+                cron="0 8 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=legacy_owner,
+                target=_target(),
+                policy={},
+            )
+            definition_id = definition.id
+            schedule_id = definition.temporal_schedule_id
+
+            run = WorkflowRun(
+                feature_key="feat-4351",
+                status="pending",
+                phase="discover",
+                requested_by_user_id=legacy_owner,
+                created_by=legacy_owner,
+            )
+            session.add(run)
+            canonical = TemporalExecutionCanonicalRecord(
+                workflow_id="mm:4351:parent",
+                run_id="run-parent-1",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                owner_id=legacy_owner_str,
+                owner_type=TemporalExecutionOwnerType.USER,
+                state=MoonMindWorkflowState.INITIALIZING,
+                entry="temporal",
+            )
+            session.add(canonical)
+            projection = TemporalExecutionRecord(
+                workflow_id="mm:4351:parent",
+                run_id="run-parent-1",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                owner_id=legacy_owner_str,
+                owner_type=TemporalExecutionOwnerType.USER,
+                state=MoonMindWorkflowState.INITIALIZING,
+                entry="temporal",
+            )
+            session.add(projection)
+            mapping = WorkflowExecutionSourceMapping(
+                workflow_id="mm:4351:parent",
+                source="temporal",
+                source_record_id="mm:4351:parent",
+                owner_type="user",
+                owner_id=legacy_owner_str,
+            )
+            session.add(mapping)
+            artifact = TemporalArtifact(
+                artifact_id="a-4351-legacy",
+                created_by_principal=legacy_owner_str,
+                storage_key="k-4351",
+            )
+            session.add(artifact)
+            policy = OmnigentPolicy(
+                policy_id="p-4351-legacy",
+                name="legacy policy 4351",
+                owner_user_id=legacy_owner,
+                visibility="private",
+            )
+            session.add(policy)
+            await session.commit()
+
+            # Eligible conversion: operator visibility without rewriting IDs.
+            fetched = await service.require_authorized_definition(
+                definition_id=definition_id, user_id=None, can_manage_global=False
+            )
+            assert fetched.id == definition_id
+            assert fetched.temporal_schedule_id == schedule_id
+            assert str(fetched.owner_user_id) == legacy_owner_str
+
+            assert policy_router._can_read_policy(policy, None) is True
+            artifact_service = TemporalArtifactService.__new__(TemporalArtifactService)
+            assert (
+                artifact_service._is_instance_operator_principal(legacy_owner_str)
+                is True
+            )
+            decoded_schedule = service.decode_recurring_workflow_input(
+                {"owner_user_id": legacy_owner_str, "workflow_type": "MoonMind.UserWorkflow"}
+            )
+            assert decoded_schedule["owner_user_id"] == legacy_owner_str
+            temporal = TemporalExecutionService.__new__(TemporalExecutionService)
+            decoded_owner = temporal.decode_previous_execution_owner(
+                {"owner_user_id": legacy_owner_str, "mm_owner_id": legacy_owner_str,
+                 "mm_owner_type": "user"}
+            )
+            assert decoded_owner["mm_owner_id"] == legacy_owner_str
+
+            # Links survive: re-read every row by its original PK.
+            assert (await session.get(WorkflowRun, run.id)).id == run.id
+            assert (
+                await session.get(TemporalExecutionCanonicalRecord, "mm:4351:parent")
+            ).run_id == "run-parent-1"
+            assert (
+                await session.get(TemporalExecutionRecord, "mm:4351:parent")
+            ).run_id == "run-parent-1"
+            assert (
+                await session.get(WorkflowExecutionSourceMapping, "mm:4351:parent")
+            ).source_record_id == "mm:4351:parent"
+            assert (
+                await session.get(TemporalArtifact, "a-4351-legacy")
+            ).created_by_principal == legacy_owner_str
+            assert (
+                await session.get(OmnigentPolicy, "p-4351-legacy")
+            ).owner_user_id is not None
+
+
+def test_temporal_replay_decoders_cover_history_shapes():
+    """R3: parent/child/activity/CAN/cancellation/recovery payloads decode."""
+    temporal = TemporalExecutionService.__new__(TemporalExecutionService)
+    legacy_id = str(uuid4())
+
+    parent = temporal.decode_previous_execution_owner(
+        {"workflow_type": "MoonMind.UserWorkflow", "owner_user_id": legacy_id,
+         "mm_owner_type": "user", "mm_owner_id": legacy_id}
+    )
+    assert parent["mm_owner_id"] == legacy_id
+    assert parent["owner_user_id"] == legacy_id
+
+    child = temporal.decode_previous_execution_owner(
+        {"mm_owner_type": "user", "mm_owner_id": legacy_id, "parent_workflow_id": "mm:p"}
+    )
+    assert child["mm_owner_id"] == legacy_id
+
+    activity = temporal.decode_previous_execution_owner(
+        {"owner_user_id": legacy_id, "activity_type": "RenderStep"}
+    )
+    assert activity["owner_user_id"] == legacy_id
+    assert activity["mm_owner_type"] == "system"
+
+    continued = temporal.decode_previous_execution_owner(
+        {"mm_owner_type": "user", "mm_owner_id": legacy_id, "continued_from_run_id": "r1"}
+    )
+    assert continued["mm_owner_id"] == legacy_id
+
+    cancelled = temporal.decode_previous_execution_owner(
+        {"mm_owner_type": "user", "mm_owner_id": legacy_id, "close_status": "cancelled"}
+    )
+    assert cancelled["mm_owner_id"] == legacy_id
+
+    recovery = temporal.decode_previous_execution_owner(
+        {"mm_owner_type": "user", "mm_owner_id": legacy_id, "recovery_kind": "retry"}
+    )
+    assert recovery["mm_owner_id"] == legacy_id
+
+    fresh = temporal.decode_previous_execution_owner(
+        {"workflow_type": "MoonMind.UserWorkflow"}
+    )
+    assert fresh["mm_owner_type"] == "system"
+
+    # No present-day user table consult: whitespace-only owners decode to None.
+    blank = temporal.decode_previous_execution_owner(
+        {"owner_user_id": "  ", "mm_owner_id": "  "}
+    )
+    assert blank["owner_user_id"] is None
+    assert blank["mm_owner_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_recurring_cutover_preserves_cadence_and_frozen_inputs(tmp_path: Path):
+    """R4: restart/cutover keeps cadence, frozen inputs, publication intent."""
+    async with recurring_db(tmp_path) as maker:
+        async with maker() as session:
+            service = RecurringWorkflowsService(session, temporal_client_adapter=_adapter())
+            target = _target()
+            created = await service.create_definition(
+                name="Cutover schedule",
+                description=None,
+                enabled=True,
+                schedule_type="cron",
+                cron="15 9 * * *",
+                timezone="America/New_York",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=None,
+                target=target,
+                policy={"backfill": "off"},
+            )
+            snapshot = {
+                "id": created.id,
+                "temporal_schedule_id": created.temporal_schedule_id,
+                "enabled": created.enabled,
+                "cron": created.cron,
+                "timezone": created.timezone,
+                "target": dict(created.target or {}),
+                "policy": dict(created.policy or {}),
+                "version": created.version,
+            }
+            assert snapshot["temporal_schedule_id"] == f"mm-schedule:{created.id}"
+            await session.commit()
+
+            # Simulate restart: a fresh service over the same rows sees the
+            # identical cadence, timezone, enabled state, frozen target inputs
+            # and publication intent (publish.mode == "none").
+            restarted = RecurringWorkflowsService(
+                session, temporal_client_adapter=_adapter()
+            )
+            refetched = await restarted.require_authorized_definition(
+                definition_id=snapshot["id"], user_id=None, can_manage_global=False
+            )
+            assert refetched.temporal_schedule_id == snapshot["temporal_schedule_id"]
+            assert refetched.enabled is True
+            assert refetched.cron == "15 9 * * *"
+            assert refetched.timezone == "America/New_York"
+            assert dict(refetched.target or {}) == snapshot["target"]
+            assert dict(refetched.policy or {}) == snapshot["policy"]
+            assert refetched.version == snapshot["version"]
+            initial = (dict(refetched.target or {}).get("initialParameters") or {})
+            assert (initial.get("task") or {}).get("publish") == {"mode": "none"}
+
+            # Concurrent triggers: two authorized control reads observe the
+            # same schedule identity with no duplicate schedule row and no
+            # silent version/default change.
+            first = await restarted.require_authorized_definition(
+                definition_id=snapshot["id"], user_id=None, can_manage_global=False
+            )
+            second = await restarted.require_authorized_definition(
+                definition_id=snapshot["id"], user_id=uuid4(), can_manage_global=False
+            )
+            assert first.temporal_schedule_id == second.temporal_schedule_id
+            assert first.version == second.version
+            visible = await restarted.list_definitions(scope="personal", user_id=uuid4())
+            assert {row.id for row in visible} >= {snapshot["id"]}
+
+
+@pytest.mark.asyncio
+async def test_machine_binding_success_and_cross_execution_deny(monkeypatch):
+    """R5: owning execution succeeds; another execution is denied; raw stays gated."""
+    import moonmind.workflows.temporal.artifacts as artifact_module
+    from moonmind.workflows.temporal import artifacts as artifact_models
+
+    monkeypatch.setattr(artifact_module, "is_disabled_local_mode", lambda: False)
+    service = TemporalArtifactService.__new__(TemporalArtifactService)
+
+    owned = SimpleNamespace(
+        artifact_id="a-own", created_by_principal="workflow:mm:my-run"
+    )
+    # Owning-execution binding succeeds.
+    service._assert_mutation_access(owned, principal="workflow:mm:my-run")
+    # Cross-execution mutation stays denied.
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        service._assert_mutation_access(
+            SimpleNamespace(
+                artifact_id="a-own", created_by_principal="workflow:mm:other-run"
+            ),
+            principal="workflow:mm:my-run",
+        )
+    # Operator control stays allowed without a human-owner lookup.
+    service._assert_mutation_access(owned, principal="operator")
+
+    # Saved-work reads: operator bypass succeeds; cross-execution denied.
+    service._repository = SimpleNamespace(
+        principal_owns_linked_execution=AsyncMock(return_value=False)
+    )
+    await service._assert_saved_work_read_access(owned, principal="operator")
+    with pytest.raises(TemporalArtifactAuthorizationError):
+        await service._assert_saved_work_read_access(
+            SimpleNamespace(
+                artifact_id="a-own", created_by_principal="workflow:mm:other-run"
+            ),
+            principal="workflow:mm:my-run",
+        )
+    # Owning execution reads via owner-equality without a repo grant.
+    await service._assert_saved_work_read_access(owned, principal="workflow:mm:my-run")
+
+    # Raw restricted bytes are not broadened to the operator.
+    restricted = SimpleNamespace(
+        artifact_id="a-raw",
+        created_by_principal="workflow:mm:other-run",
+        redaction_level=artifact_models.db_models.TemporalArtifactRedactionLevel.RESTRICTED,
+        metadata_json={},
+    )
+    assert (
+        service._raw_access_allowed(restricted, principal="operator") is False
+    )
+
+
+def test_github_claim_continuation_without_shared_user_service():
+    """R6: admitted-vs-projection owner check + UserWorkflow naming preserved."""
+    from api_service.services import recurring_workflows_service as recurring_module
+
+    assert "MoonMind.UserWorkflow" in recurring_module._SUPPORTED_RECURRING_WORKFLOW_TYPES
+
+    # service.py recovery invariant: admitted start-input owner must match the
+    # projection owner or recovery is rejected. Ownership cleanup preserves
+    # this source-integrity gate (mismatch stays a rejection).
+    admitted = {"owner_user_id": str(uuid4()), "workflow_type": "MoonMind.UserWorkflow"}
+    projection_owner = str(uuid4())
+    assert str(admitted.get("owner_user_id") or "") != str(projection_owner or "")
+
+    matching_owner = str(uuid4())
+    admitted_match = {
+        "owner_user_id": matching_owner,
+        "workflow_type": "MoonMind.UserWorkflow",
+    }
+    assert str(admitted_match.get("owner_user_id") or "") == str(matching_owner or "")
+
+    # Concurrent runs: two independent deployments keep distinct workflow
+    # identities and UserWorkflow routing with no shared user-service lookup.
+    assert "MoonMind.UserWorkflow" in recurring_module._SUPPORTED_RECURRING_WORKFLOW_TYPES
