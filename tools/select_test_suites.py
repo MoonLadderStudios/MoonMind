@@ -172,6 +172,26 @@ INTEGRATION_CI_EXACT = {
     "tools/export_openapi.py",
     "tools/generate_openapi_types.py",
     "frontend/src/generated/openapi.ts",
+    # MoonLadderStudios/MoonMind#4356: single-user conformance impact.
+    # Settings/secrets/presets routers persist instance configuration and
+    # credential bindings; a change must run the hermetic integration
+    # foundation, not only the in-process component suite.
+    "api_service/api/routers/settings.py",
+    "api_service/api/routers/secrets.py",
+    "api_service/api/routers/presets.py",
+    # Frontend transport carries operator session/credential material; the
+    # shared API client joins the generated OpenAPI client as an
+    # integration qualification boundary (exact entry also makes the
+    # frontend path a backend path for selection).
+    "frontend/src/lib/api/client.ts",
+    # Worker binding determines which deployment executes admitted work.
+    "moonmind/workflows/temporal/worker_runtime.py",
+    # MoonLadderStudios/MoonMind#4356: single-operator credential conversion
+    # owns the eligible PostgreSQL migration boundary
+    # (tests/integration/services/test_profile_secret_migration_postgres_4349.py);
+    # a change must run the hermetic integration foundation, not only the
+    # in-process component suite.
+    "api_service/services/profile_secret_migration.py",
 }
 
 INTEGRATION_CI_PREFIXES = (
@@ -180,6 +200,17 @@ INTEGRATION_CI_PREFIXES = (
     "api_service/migrations/",
     "migrations/",
     "alembic/",
+    # MoonLadderStudios/MoonMind#4356: single-user impact prefixes.
+    # Settings/secrets/preset services, machine-authority security helpers,
+    # the single-user conformance package, and its unit tests all own the
+    # hermetic integration boundary so a touched boundary cannot silently
+    # skip its required tests.
+    "api_service/services/presets/",
+    "api_service/services/secrets",
+    "api_service/services/settings_",
+    "moonmind/security/",
+    "moonmind/single_user/",
+    "tests/unit/single_user/",
 )
 
 INTEGRATION_CI_EXCLUDED_PREFIXES = ("tests/integration/reliability/",)
