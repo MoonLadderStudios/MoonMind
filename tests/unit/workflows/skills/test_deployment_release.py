@@ -1777,3 +1777,158 @@ async def test_qualify_restores_previous_gateway_only_after_upgrade(
         )
     else:
         restore.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retry_attempts_do_not_erase_the_error_that_started_the_failure(
+    tmp_path, monkeypatch
+):
+    """The first attempt's cause must survive the attempts that follow it.
+
+    Regression: attempt one did the real work - recording routing and
+    retaining the previous cohort - and failed for its own reason. Attempts
+    two and three lost a race for the stack lock within seconds and rewrote
+    ``last-error.json``, so the Temporal failure, the run summary and the
+    operator's incident reconstruction all reported ``DEPLOYMENT_LOCKED``
+    while the cause was unrecoverable.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(tmp_path / "desired.json")
+    )
+    directory = release.state_root() / "job"
+    directory.mkdir(parents=True)
+    request_file = directory / "request.json"
+    release.write_record(
+        request_file,
+        {"authored": {"owner": "owner"}, "deadline": release.time.time() + 300},
+    )
+    original = "Previous release could not retain compatible pollers (fleet=llm)"
+    contention = "DEPLOYMENT_LOCKED: Deployment update for stack 'moonmind'"
+    errors = [original, contention, contention]
+
+    async def body(path):
+        raise RuntimeError(errors.pop(0))
+
+    async def no_wait(*args):
+        pass
+
+    monkeypatch.setattr(release, "_run_job_body", body)
+    monkeypatch.setattr(release.asyncio, "sleep", no_wait)
+    await release.run_job(request_file)
+
+    last_error = json.loads((directory / "last-error.json").read_text())
+    attempts = [entry["error"] for entry in last_error["attempts"]]
+    assert attempts[0] == original
+    assert attempts[-1] == contention
+    assert last_error["error"] == contention
+
+    outcome = json.loads((directory / "result.json").read_text())["error"]
+    assert original in outcome
+    assert contention in outcome
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_diagnosis_names_the_first_attempt_error(
+    tmp_path, monkeypatch
+):
+    """Delivery exhaustion must surface the cause, not only the last noise."""
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(tmp_path / "desired.json")
+    )
+    owner = "mm:5578e7af:execute"
+    digest = "sha256:" + "a" * 64
+    inputs = {
+        "stack": "moonmind",
+        "image": {"repository": "example/moonmind", "reference": "candidate"},
+    }
+    context = {"idempotency_key": owner}
+    key = hashlib.sha256(owner.encode()).hexdigest()[:32]
+    directory = release.state_root() / key
+    directory.mkdir(parents=True)
+    original = "Previous release could not retain compatible pollers (fleet=llm)"
+    release.write_record(
+        directory / "last-error.json",
+        {
+            "owner": owner,
+            "attempt": 3,
+            "error": "DEPLOYMENT_LOCKED: already running",
+            "attempts": [
+                {"attempt": 1, "error": original},
+                {"attempt": 3, "error": "DEPLOYMENT_LOCKED: already running"},
+            ],
+        },
+    )
+    release.write_record(directory / "deliveries.json", {"count": 3})
+
+    class Runner:
+        async def pull(self, **kwargs):
+            return {"exitCode": 0}
+
+        async def inspect_image(self, requested):
+            return {"Id": "image-id", "RepoDigests": [f"example/moonmind@{digest}"]}
+
+        async def _run_compose_command(self, command, **kwargs):
+            return {"exitCode": 0, "stdout": json.dumps({"services": {}})}
+
+    async def inspect_owned(name, job_owner):
+        return {"Image": "image-id", "State": {"Running": False, "ExitCode": 1}}
+
+    async def docker(*args):
+        return ""
+
+    async def logs_tail(name, tail_lines=30, timeout_seconds=60):
+        return "updater log tail"
+
+    async def coherent(*args):
+        return {}
+
+    async def no_sleep(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(release, "inspect_owned", inspect_owned)
+    monkeypatch.setattr(release, "docker", docker)
+    monkeypatch.setattr(release, "docker_logs_tail", logs_tail)
+    monkeypatch.setattr(release, "require_coherent_images", coherent)
+    monkeypatch.setattr(release.asyncio, "sleep", no_sleep)
+
+    with pytest.raises(RuntimeError, match="exhausted three deliveries") as exc_info:
+        await release.execute_detached(SimpleNamespace(runner=Runner()), inputs, context)
+
+    assert original in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_legacy_error_record_is_carried_into_the_attempt_history(
+    tmp_path, monkeypatch
+):
+    """An in-flight release keeps its original error across this update.
+
+    A job already running when the attempt history was introduced has a
+    ``last-error.json`` carrying only the top-level ``attempt`` and ``error``.
+    Seeding an empty history from that record would erase the original failure
+    during the schema transition - the exact diagnostic loss the history
+    exists to prevent.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE", str(tmp_path / "desired.json")
+    )
+    directory = release.state_root() / "job"
+    directory.mkdir(parents=True)
+    original = "Previous release could not retain compatible pollers (fleet=llm)"
+    release.write_record(
+        directory / "last-error.json",
+        {"owner": "owner", "attempt": 1, "error": original},
+    )
+
+    history = release.record_attempt_error(
+        directory, "owner", 2, "DEPLOYMENT_LOCKED: already running"
+    )
+
+    assert [entry["error"] for entry in history] == [
+        original,
+        "DEPLOYMENT_LOCKED: already running",
+    ]
+    assert history[0]["attempt"] == 1
+    recorded = json.loads((directory / "last-error.json").read_text())
+    assert recorded["attempts"] == history
+    assert original in release.release_failure_summary(history)

@@ -51,6 +51,59 @@ def bounded_diagnosis(text, limit=DIAGNOSIS_BOUND):
     return text[:head] + _DIAGNOSIS_ELISION + text[len(text) - (keep - head) :]
 
 
+def record_attempt_error(directory, owner, attempt, error):
+    """Keep every attempt's error, so later noise cannot erase the first one.
+
+    An attempt that did real work and failed for its own reason is followed by
+    attempts that can fail for unrelated, transient reasons - losing a race for
+    the stack lock takes seconds. Overwriting the record left
+    ``last-error.json``, the terminal receipt, the Temporal failure and the
+    operator's incident reconstruction naming only that last reason, with the
+    cause unrecoverable. The latest error stays at the top level, so existing
+    readers of this record are unchanged.
+    """
+    path = directory / "last-error.json"
+    history = []
+    if path.exists():
+        try:
+            previous = json.loads(path.read_text())
+        except (OSError, ValueError):
+            previous = {}
+        recorded = previous.get("attempts")
+        if isinstance(recorded, list) and recorded:
+            history = list(recorded)
+        elif previous.get("error"):
+            # A release already running when this history was introduced has a
+            # record carrying only the top-level attempt and error. Seed the
+            # history from it so the update that adds the history does not
+            # erase the failure the history exists to preserve.
+            history = [
+                {
+                    "attempt": previous.get("attempt") or 1,
+                    "error": previous["error"],
+                }
+            ]
+    history.append({"attempt": attempt, "error": error})
+    write_record(
+        path,
+        {"owner": owner, "attempt": attempt, "error": error, "attempts": history},
+    )
+    return history
+
+
+def release_failure_summary(history):
+    """Name the failure that started the release, not only the last one."""
+    if not history:
+        return "Release update exhausted its durable retry budget"
+    first, last = history[0], history[-1]
+    if first["error"] == last["error"]:
+        return first["error"]
+    return bounded_diagnosis(
+        f"attempt {first['attempt']}: {first['error']}"
+        f" (final attempt {last['attempt']}: {last['error']})"
+    )
+
+
 # Polls one gateway recreate keeps to itself before another may replace it.
 # The gateway healthcheck runs every 10s after a 10s start period and needs
 # three passes, so a recreate that is going to work reports healthy well
@@ -577,6 +630,16 @@ async def execute_detached(executor, inputs, context):
                         last_error_file = directory / "last-error.json"
                         if last_error_file.exists():
                             last_error = json.loads(last_error_file.read_text())
+                            history = list(last_error.get("attempts") or [])
+                            if history and history[0].get("error") != last_error.get(
+                                "error"
+                            ):
+                                diagnosis.append(
+                                    "first-error="
+                                    + redact_sensitive_text(
+                                        str(history[0].get("error"))
+                                    )[:500]
+                                )
                             diagnosis.append(
                                 "last-error="
                                 + redact_sensitive_text(
@@ -1746,10 +1809,10 @@ async def run_job(request_file):
                 error = bounded_diagnosis(
                     redact_sensitive_text(str(exc) or type(exc).__name__)
                 )
-                write_record(
-                    request_file.parent / "last-error.json",
-                    {"owner": owner, "attempt": attempts, "error": error},
+                history = record_attempt_error(
+                    request_file.parent, owner, attempts, error
                 )
+                error = release_failure_summary(history)
                 if isinstance(exc, ValueError) or (
                     isinstance(exc, ToolFailure) and not exc.retryable
                 ):
