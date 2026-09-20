@@ -565,3 +565,106 @@ async def test_incomplete_or_missing_evidence_raises_stable_error(session_factor
             await service.logs(owner=owner, job_id=accepted.job_id)
         with pytest.raises(ContainerJobEvidenceUnavailableError):
             await service.artifacts(owner=owner, job_id=accepted.job_id)
+
+
+def legacy_submission(*, key: str = "legacy-key") -> ContainerJobSubmitRequest:
+    """An already-admitted pre-upgrade request: shared-pool CPU, adaptive memory."""
+
+    return ContainerJobSubmitRequest(
+        idempotencyKey=key,
+        source={"source": "mcp", "callerRequestId": "legacy"},
+        spec={
+            "image": "alpine",
+            "workspaceRef": {"kind": "sandbox", "workspaceId": "run"},
+            "resources": {
+                "cpuMillis": 0,
+                "memoryMiB": 4096,
+                "minimumMemoryMiB": 2048,
+            },
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_exact_retry_of_legacy_job_preserves_original_and_restarts_temporal(
+    session_factory,
+) -> None:
+    """MoonLadderStudios/MoonMind#4456: a legacy retry keeps a continuation.
+
+    An exact replay of a persisted legacy job with a prior Temporal-start
+    failure is accepted, keeps the original serialized request (historical
+    zero-valued CPU and memory range intact), and resubmits that original
+    request to Temporal so the workflow/backend composition can resolve the
+    fixed-resource successor. A duplicate retry converges on the same job.
+    """
+
+    from unittest.mock import AsyncMock
+
+    owner = OwnerIdentity(principalId="legacy-owner", principalType="user")
+    temporal = AsyncMock()
+    temporal.start_container_job.side_effect = [
+        RuntimeError("temporal unavailable"),
+        None,
+        None,
+    ]
+
+    with pytest.raises(RuntimeError, match="temporal unavailable"):
+        async with session_factory() as first_session:
+            await ContainerJobService(
+                first_session,
+                temporal=temporal,
+            ).submit(owner=owner, request=legacy_submission())
+
+    async with session_factory() as retry_session:
+        accepted = await ContainerJobService(
+            retry_session,
+            temporal=temporal,
+        ).submit(owner=owner, request=legacy_submission())
+    assert accepted.replayed is True
+
+    restarted = temporal.start_container_job.await_args_list[-1].args[0]
+    assert restarted.request.spec.resources.cpu_millis == 0
+    assert restarted.request.spec.resources.minimum_memory_mib == 2048
+
+    async with session_factory() as status_session:
+        service = ContainerJobService(status_session, temporal=AsyncMock())
+        persisted = await service.status(owner=owner, job_id=accepted.job_id)
+        record = await service.repository.find_exact_replay(
+            owner=owner, request=legacy_submission()
+        )
+    assert persisted.state == "queued"
+    assert persisted.terminal is None
+    assert record is not None
+    assert record.request_json["spec"]["resources"]["cpuMillis"] == 0
+    assert record.request_json["spec"]["resources"]["minimumMemoryMiB"] == 2048
+
+    # A lost acknowledgment retried exactly converges on the same job identity.
+    async with session_factory() as duplicate_session:
+        duplicate = await ContainerJobService(
+            duplicate_session,
+            temporal=temporal,
+        ).submit(owner=owner, request=legacy_submission())
+    assert duplicate.job_id == accepted.job_id
+    assert duplicate.replayed is True
+
+
+@pytest.mark.asyncio
+async def test_new_legacy_shaped_submissions_require_explicit_resources(
+    session_factory, temporal
+) -> None:
+    """New jobs never inherit the legacy successor path at submission.
+
+    The fixed-resource successor is reserved for exact replays of
+    already-admitted jobs; a new identity carrying retired semantics is
+    rejected before any durable record or Temporal handoff exists.
+    """
+
+    owner = OwnerIdentity(principalId="new-job-owner", principalType="user")
+    async with session_factory() as session:
+        service = ContainerJobService(session, temporal=temporal)
+        with pytest.raises(ValueError, match="must be explicit"):
+            await service.submit(owner=owner, request=legacy_submission(key="new-key"))
+        assert await service.repository.find_exact_replay(
+            owner=owner, request=legacy_submission(key="new-key")
+        ) is None
+    assert temporal.start_container_job.await_count == 0
