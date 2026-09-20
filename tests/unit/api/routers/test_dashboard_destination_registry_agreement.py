@@ -162,7 +162,7 @@ def test_configuration_group_membership_matches_the_three_canonical_destinations
     assert _scalar(group, "triggerIconKey") == "settings"
     assert _string_list(group, "destinationKeys") == [
         "settings-providers-secrets",
-        "settings-user-workspace",
+        "settings-instance",
         "settings-operations",
     ]
 
@@ -173,7 +173,7 @@ def test_configuration_group_membership_matches_the_three_canonical_destinations
     ]
     assert server_configuration == [
         "settings-providers-secrets",
-        "settings-user-workspace",
+        "settings-instance",
         "settings-operations",
     ]
     for destination in DASHBOARD_DESTINATIONS:

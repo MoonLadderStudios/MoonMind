@@ -2719,7 +2719,12 @@ _SUBSTRATE_EXCLUDED = (
 )
 
 
-def _substrate_ps(*, postgres_image: str, proxy_image: str) -> list[dict[str, str]]:
+def _substrate_ps(
+    *,
+    postgres_image: str,
+    proxy_image: str,
+    egress_image: str = "tecnativa/docker-socket-proxy:0.1.1",
+) -> list[dict[str, str]]:
     return [
         {
             "ID": "api1",
@@ -2747,7 +2752,7 @@ def _substrate_ps(*, postgres_image: str, proxy_image: str) -> list[dict[str, st
             "Name": "moonmind-sandbox-egress-proxy-1",
             "Service": "sandbox-egress-proxy",
             "State": "running",
-            "Image": "tecnativa/docker-socket-proxy:0.1.1",
+            "Image": egress_image,
         },
     ]
 
@@ -2869,13 +2874,22 @@ async def test_update_reconciles_and_verifies_drifted_substrate_before_completio
     result = await executor.execute(_inputs())
 
     assert result.status == "COMPLETED"
-    kinds = [command[0] for command in runner.commands]
-    assert kinds[:2] == ["pull", "up"]
-    main_up = runner.commands[1][1]
+    # The egress gateway is aligned between the main pull and the main up, so
+    # select the staged substrate commands by content rather than position.
+    ups = [command[1] for command in runner.commands if command[0] == "up"]
+    main_up = next(
+        command for command in ups if "sandbox-egress-proxy" not in tuple(command)
+    )
     assert "postgres" not in main_up
     assert "docker-proxy" not in main_up
-    substrate_pull = runner.commands[2][1]
-    substrate_up = runner.commands[3][1]
+    substrate_pull = next(
+        command[1]
+        for command in runner.commands
+        if command[0] == "pull" and "postgres" in tuple(command[1])
+    )
+    substrate_up = next(
+        command for command in ups if "postgres" in tuple(command)
+    )
     assert tuple(substrate_pull[-1:]) == ("postgres",)
     assert "--no-deps" in substrate_up
     assert "postgres" in substrate_up
@@ -2906,7 +2920,14 @@ async def test_update_skips_substrate_stage_when_already_converged(monkeypatch) 
     result = await executor.execute(_inputs())
 
     assert result.status == "COMPLETED"
-    assert [command[0] for command in runner.commands] == ["pull", "up"]
+    # Converged substrate still runs no staged pass. The egress gateway is
+    # recreated unconditionally before the main up, with no pull of its own;
+    # Compose leaves it alone when it already matches the incoming
+    # configuration.
+    assert [command[0] for command in runner.commands] == ["pull", "up", "up"]
+    gateway_up, main_up = (command[1] for command in runner.commands if command[0] == "up")
+    assert "sandbox-egress-proxy" in tuple(gateway_up)
+    assert "sandbox-egress-proxy" not in tuple(main_up)
     assert "runner:capture:substrate" not in events
 
 
@@ -2929,3 +2950,158 @@ async def test_update_fails_when_substrate_does_not_converge(monkeypatch) -> Non
 
     assert result.status == "FAILED"
     assert "substrate" in str(result.outputs.get("failure", {}).get("reason", "")).lower()
+
+
+class _RecordingReleaseCohort:
+    """Records any cohort interaction; any at all is a blue/green regression.
+
+    MoonLadderStudios/MoonMind#4363 and its successors trace to running a
+    candidate fleet beside the installed one on a shared Temporal task queue.
+    An update recreates the installed fleet in place; it never qualifies,
+    preserves, or promotes a parallel cohort.
+
+    ``__getattr__`` records the name and then raises ``AttributeError``, which
+    is what a missing attribute is supposed to raise. The assertion lives in
+    the test, so a reintroduced cohort call fails on the recorded name rather
+    than on whatever the caller did with the exception.
+    """
+
+    def __init__(self) -> None:
+        self.touched: list[str] = []
+
+    def __getattr__(self, name: str):
+        self.touched.append(name)
+        raise AttributeError(name)
+
+
+@pytest.mark.asyncio
+async def test_update_recreates_in_place_without_a_release_cohort():
+    executor, store, evidence, runner, _ = _executor()
+    cohort = _RecordingReleaseCohort()
+    result = await executor.execute(_inputs(), {"release_cohort": cohort})
+    assert cohort.touched == [], (
+        f"deployment update consulted a release cohort ({cohort.touched}); "
+        "updates recreate the installed fleet in place"
+    )
+    assert result.status == "COMPLETED"
+    phases = [phase for phase, _ in runner.commands]
+    assert "up" in phases
+    logs = next(payload for kind, payload in evidence.records if kind == "command-log")
+    assert "releaseRouting" not in logs
+    assert store.records[0]["resolvedDigest"] == "sha256:" + "a" * 64
+
+
+class EgressGatewayRunner(RecordingRunner):
+    """Replays a stale egress gateway that converges once it is recreated."""
+
+    def __init__(self, events: list[str]) -> None:
+        super().__init__(events)
+        self.aligned = False
+
+    async def up(self, *, stack, command, requested_image=None):
+        if "sandbox-egress-proxy" in tuple(command):
+            self.aligned = True
+        return await super().up(
+            stack=stack, command=command, requested_image=requested_image
+        )
+
+    async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
+        self.events.append(f"runner:capture:{phase}")
+        egress = "tecnativa/docker-socket-proxy:0.1.1"
+        return {
+            "stack": stack,
+            "phase": phase,
+            "configuredServices": list(_SUBSTRATE_CONFIGURED),
+            "configuredServiceImages": dict(_SUBSTRATE_IMAGES),
+            "services": _substrate_ps(
+                postgres_image="postgres:17",
+                proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+                egress_image=egress,
+            ),
+            "images": [],
+        }
+
+
+@pytest.mark.asyncio
+async def test_egress_gateway_is_aligned_before_workers_are_recreated(
+    monkeypatch,
+) -> None:
+    """Workers attest the gateway at startup, so it cannot lag their recreation.
+
+    The gateway is excluded from the main update. Recreating workers against a
+    stale gateway fails their startup attestation, which fails `up --wait`
+    before the staged substrate pass -- gated on the main stack verifying --
+    could ever repair it.
+
+    The alignment is unconditional: the pre-update snapshot renders the
+    installed image, so a gateway on the old release reads as converged even
+    though it must move. Compose compares against the incoming configuration
+    and leaves a converged service alone.
+    """
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    runner = EgressGatewayRunner(events)
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner, events=events, excluded_services=_SUBSTRATE_EXCLUDED
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    kinds = [command[0] for command in runner.commands]
+    gateway_up = next(
+        index
+        for index, command in enumerate(runner.commands)
+        if command[0] == "up" and "sandbox-egress-proxy" in tuple(command[1])
+    )
+    main_up = next(
+        index
+        for index, command in enumerate(runner.commands)
+        if command[0] == "up" and "sandbox-egress-proxy" not in tuple(command[1])
+    )
+    assert gateway_up < main_up, kinds
+    assert "--no-deps" in runner.commands[gateway_up][1]
+
+
+@pytest.mark.asyncio
+async def test_egress_gateway_is_aligned_under_the_documented_default_exclusions(
+    monkeypatch,
+) -> None:
+    """The default `.env` excludes only the deployment-control runner.
+
+    Selecting the gateway from the exclusion list made the pre-worker
+    alignment a no-op on exactly that supported default, so an ordinary A-to-B
+    update could still recreate workers against the old gateway. The gateway
+    is chosen from the configured services instead.
+
+    It stays in the main recreation afterwards: the
+    deployment-update-infrastructure-reconciliation replay records the
+    incident that holding it out causes, where the restricted-egress network
+    it defines went absent and the worker restarted with exit code 1. Compose
+    leaves the already-aligned gateway alone, so aligning first and
+    reconciling again is harmless.
+    """
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    runner = EgressGatewayRunner(events)
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner,
+        events=events,
+        excluded_services=("temporal-worker-deployment-control",),
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    ups = [tuple(command[1]) for command in runner.commands if command[0] == "up"]
+    gateway_only = [
+        command
+        for command in ups
+        if "sandbox-egress-proxy" in command and "api" not in command
+    ]
+    assert len(gateway_only) == 1, ups
+    main_up = next(command for command in ups if "api" in command)
+    assert ups.index(gateway_only[0]) < ups.index(main_up)
+    # The recorded infrastructure-reconciliation incident: the main up must
+    # still reconcile the gateway, or the network it defines goes absent.
+    assert "sandbox-egress-proxy" in main_up
