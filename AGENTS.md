@@ -24,6 +24,10 @@ Acceptance should prove the supported behavior, not freeze every legacy class, f
 
 Use available tools to resolve ordinary implementation and verification problems. Check the supported execution path before declaring a tool unavailable. Work within existing authority, continue independent safe work, and report concrete blockers without inventing success or repeatedly retrying a known environment limitation.
 
+**Keep acceptance automation-completable.** Do not introduce mandatory manual review, human visual signoff, or operator execution as the default completion path for an implementation issue or PR. Name the existing test, scenario, validator, or artifact-based agent evaluation that proves each required claim. Missing local tools call for an authorized CI, container, or workstation route, not a human-review placeholder. Preserve the candidate and valid evidence while obtaining the missing proof. Do not waive required evidence or replace an explicit user approval with automation.
+
+An incomplete verification handoff must identify the same issue/PR, candidate, concrete gap, evidence, consumed budget, and next authorized automated action. Distinguish report repair, evidence collection, implementation repair, and genuine human-only decisions. A draft can preserve work or enable CI without becoming operator-owned. Do not claim a continuation is scheduled unless its existing owner actually accepted it. Keep separately owned release or physical-event qualification out of unrelated implementation acceptance. The [review and continuation contract](docs/Workflows/StepReviewGateSystem.md) defines these boundaries without adding another scheduler or approval system.
+
 Keep owning documentation current and distinguish implemented behavior from proposals. Remove contradictory guidance rather than appending exceptions. Temporary plans belong in `docs/tmp/` or run-local artifacts, not in this file.
 
 ## Current Architectural Direction

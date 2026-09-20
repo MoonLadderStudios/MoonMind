@@ -1,647 +1,221 @@
 # Step Approval Policy System
 
-Status: **Design Draft**
-Owners: MoonMind Engineering
-Last Updated: 2026-03-18
-Related: `docs/Workflows/SkillAndPlanContracts.md`, `docs/Workflows/WorkflowStepSystem.md`, `docs/Workflows/WorkflowArchitecture.md`
-
----
-
-## 1. Summary
-
-An optional **approval policy** that, when enabled, injects an automated validation step after every plan-node execution in `MoonMind.UserWorkflow`. An LLM-powered reviewer agent evaluates whether the step's output satisfies the aims described in its inputs. If the review fails, the gate first returns structured feedback and a bounded adaptation path, then applies the configured terminal policy only after safe adaptation options are exhausted or unavailable.
-
-The feature is designed as a **toggle** — when enabled, the system automatically wraps every eligible step in a review-retry loop without requiring any changes to the plan itself. Non-idempotent tools (e.g., publish steps that create PRs) are exempt by default to prevent duplicate side effects.
-
----
-
-## 2. Goals & Non-Goals
-
-### Goals
-
-- **Automatic injection**: Operators toggle the feature on; the approval policy appears after every step transparently.
-- **LLM-powered review**: A dedicated review activity evaluates step outputs against step inputs/aims using an LLM.
-- **Retry with feedback**: Failed reviews feed structured diagnostics back to the step, allowing it to self-correct.
-- **Adaptive gate behavior**: Failed gates distinguish hard security blockers from readiness blockers that can be retried, remediated, degraded, or published as a draft handoff.
-- **Bounded retries**: Configurable max review attempts per step to prevent runaway cost.
-- **Observable**: Review verdicts, retries, and feedback are visible in the dashboard and workflow history.
-- **Composable with existing policy**: Works alongside `failure_mode` (`FAIL_FAST` / `CONTINUE`), approval gates, and `MoonMind.AgentRun`.
-
-### Non-Goals
-
-- Human-in-the-loop review (already exists via approval signals).
-- Replacing Temporal's native activity retry policy (approval policy operates at a higher semantic level).
-- Conditional plan branching based on review output (reserved for future conditional-edge support).
-
----
-
-## 3. Architecture Overview
-
-```mermaid
-flowchart TD
-    subgraph MoonMind.UserWorkflow Execution Loop
-        A[Plan Node N] -->|execute| B[Activity / AgentRun]
-        B --> C{Approval Policy Enabled?}
-        C -->|No| D[Record Result & Continue]
-        C -->|Yes| E[Review Activity]
-        E --> F{Review Verdict}
-        F -->|FULLY_IMPLEMENTED or acceptable NO_DETERMINATION| D
-        F -->|ADDITIONAL_WORK_NEEDED or blocker NO_DETERMINATION & retries remaining| G[Inject Feedback]
-        G --> B
-        F -->|ADDITIONAL_WORK_NEEDED or blocker NO_DETERMINATION & max retries reached| H{Adaptive path available?}
-        H -->|Yes| I[Execute or schedule adaptive action]
-        H -->|No| J[Apply failure_mode Policy]
-        I --> K{Adaptation outcome}
-        K -->|Remediated or verified| B
-        K -->|Degraded or draft handoff recorded| D
-        K -->|Blocked| J
-        J --> D
-    end
-```
-
----
-
-## 4. Data Model Changes
-
-### 4.1 PlanPolicy Extension
-
-Add optional approval policy configuration to the existing `PlanPolicy` contract.
-
-```python
-@dataclass(frozen=True, slots=True)
-class ApprovalPolicyPolicy:
-    """Per-plan approval policy configuration."""
-
-    enabled: bool = False
-    max_review_attempts: int = 2          # retries per step (excluding initial)
-    reviewer_model: str = "default"       # LLM model for the reviewer
-    review_timeout_seconds: int = 120     # timeout for each review activity
-    skip_tool_types: tuple[str, ...] = DEFAULT_SKIP_TOOL_TYPES  # tool types to exempt
-
-# Default skip list — non-idempotent tools that must not be blindly retried
-DEFAULT_SKIP_TOOL_TYPES = ("repo.publish", "codex.execute")
-```
-
-Add to `PlanPolicy`:
-
-```python
-@dataclass(frozen=True, slots=True)
-class PlanPolicy:
-    failure_mode: str = "FAIL_FAST"
-    max_concurrency: int = 1
-    approval_policy: ApprovalPolicyPolicy | None = None  # None = not specified in plan
-```
-
-### 4.2 Plan JSON Schema Extension
-
-```json
-{
-  "policy": {
-    "failure_mode": "FAIL_FAST",
-    "max_concurrency": 1,
-    "approval_policy": {
-      "enabled": true,
-      "max_review_attempts": 2,
-      "reviewer_model": "default",
-      "review_timeout_seconds": 120,
-      "skip_tool_types": []
-    }
-  }
-}
-```
-
-When `approval_policy` is absent or `enabled` is `false`, behavior is identical to today.
-
-### Reviewer execution authority
-
-The `step.review` worker binding executes `ConfiguredStepReviewer` on the LLM
-fleet. Provider, enablement, credential and default model come from the existing
-chat settings (`DEFAULT_CHAT_PROVIDER` and that provider's settings). Omitted
-`reviewer_model` and `default` resolve identically; an explicit model passes
-through unchanged. Disabled, unsupported or uncredentialed providers do not
-fall back to another provider. Credentials never come from workflow payloads.
-
-The reviewer receives the supplied bounded step evidence, with per-section
-64 KB input ceilings plus a 256 KB final prompt budget, secret redaction of
-secret-shaped fields before provider send, and the requested timeout clamped
-to the 1–600 second deployment ceiling. OpenAI/Google requests carry a 4096
-output-token budget (Anthropic `max_tokens` 4096); provider responses are
-read under a 64 KB byte ceiling before JSON parsing, and oversized findings,
-feedback, non-finite confidence, or malformed fields return
-`NO_DETERMINATION` instead of a positive verdict. Its response is parsed through the canonical
-step-gate contract, including recorded `PASS` compatibility. Unknown/malformed
-results, timeouts and missing reviewer authority return `NO_DETERMINATION`.
-Every returned payload — positive and unavailable — carries
-`reviewProvenance` (`provider`, `model`, `evidenceDigest`,
-`reviewAttemptIdentity`, `reviewAttempt`, `policy.timeoutSeconds`).
-An explicitly different route or evidence set is a new review attempt;
-retries of the same admitted review reuse the attempt identity and may reuse
-only the same committed decision, which the calling workflow persists as a
-gate-result artifact and step-ledger check before acknowledging completion.
-Execution completion alone is not a review verdict. Unavailable auxiliary review
-must preserve completed outputs and cannot authorize publication or an
-unnecessary implementation retry. Artifact refs alone do not establish that the
-referenced content was reviewed.
-
-### 4.3 Review Activity Input / Output Contracts
-
-**ReviewRequest** — input to the review activity:
-
-```json
-{
-  "node_id": "n1",
-  "step_index": 1,
-  "total_steps": 5,
-  "review_attempt": 1,
-  "tool": { "type": "skill", "name": "repo.apply_patch" },
-  "inputs": { "...original step inputs..." },
-  "execution_result": {
-    "status": "COMPLETED",
-    "outputs": { "...step outputs..." },
-    "output_artifacts": []
-  },
-  "workflow_context": {
-    "workflow_id": "...",
-    "run_id": "...",
-    "plan_title": "Fix failing tests"
-  },
-  "previous_feedback": null
-}
-```
-
-**ReviewVerdict** — output from the review activity (new writes use canonical verdicts):
-
-```json
-{
-  "verdict": "FULLY_IMPLEMENTED",
-  "confidence": 0.92,
-  "feedback": null,
-  "issues": []
-}
-```
-
-```json
-{
-  "verdict": "ADDITIONAL_WORK_NEEDED",
-  "confidence": 0.85,
-  "feedback": "The patch was applied but the test suite still has 3 failing tests. The step outputs show all files were changed, but the error in stderr_tail indicates a missing import.",
-  "issues": [
-    {
-      "severity": "error",
-      "description": "Missing import statement for 'datetime' in utils.py",
-      "evidence": "stderr_tail: ImportError: cannot import name 'datetime'"
-    }
-  ]
-}
-```
-
-Canonical verdict values for new writes: `FULLY_IMPLEMENTED`, `ADDITIONAL_WORK_NEEDED`, `NO_DETERMINATION`, `BLOCKED`, `FAILED_UNRECOVERABLE`.
-
-- `FULLY_IMPLEMENTED` → step is accepted; proceed.
-- `ADDITIONAL_WORK_NEEDED` → step should be retried with feedback (if retries remain).
-- `NO_DETERMINATION` → accepted only when the review does not identify missing required evidence, unsafe ambiguity, or another gate blocker. Reviews missing validation evidence, credential/provider access, or source-authority certainty follow the same hard/adaptive gate path as failed reviews.
-- `BLOCKED` / `FAILED_UNRECOVERABLE` → terminal stop; never retried automatically.
-
-Compatibility: the canonical parser still accepts the legacy draft values
-`PASS` → `FULLY_IMPLEMENTED`, `FAIL` → `ADDITIONAL_WORK_NEEDED`, and
-`INCONCLUSIVE` → `NO_DETERMINATION` for recorded histories only. New code,
-payload examples, prompts, and docs must emit canonical values. Recorded
-histories are preserved: serialized decisions keep their stored verdict and
-gain `downgradeReason`/`invalid`/`degraded` fields only through the
-fail-closed parser, never by rewriting history in place.
-
----
-
-## 5. Execution Flow
-
-### 5.1 Modified Execution Loop (in `_run_execution_stage`)
-
-The existing node-iteration loop in `MoonMind.UserWorkflow._run_execution_stage()` wraps each node in a review-retry cycle when the gate is enabled.
-
-**Pseudocode:**
-
-```python
-for index, node in enumerate(ordered_nodes, start=1):
-    approval_policy = plan_definition.policy.approval_policy
-    gate_active = (
-        approval_policy.enabled
-        and node_tool_type not in approval_policy.skip_tool_types
-    )
-
-    previous_feedback = None
-    max_attempts = (approval_policy.max_review_attempts + 1) if gate_active else 1
-
-    for attempt in range(1, max_attempts + 1):
-        # Build step input, injecting feedback from prior review if present
-        step_input = build_step_input(node, previous_feedback)
-
-        # Execute the step (activity or child workflow)
-        execution_result = await execute_node(step_input)
-
-        if not gate_active:
-            break  # No review — accept result as-is
-
-        # Run the review activity (including on the final attempt)
-        review_verdict = await execute_review_activity(
-            node=node,
-            inputs=step_input,
-            result=execution_result,
-            attempt=attempt,
-            previous_feedback=previous_feedback,
-        )
-
-        if review_verdict["verdict"] == "FULLY_IMPLEMENTED":
-            break  # Step accepted
-
-        if (
-            review_verdict["verdict"] == "NO_DETERMINATION"
-            and not has_gate_blocker(review_verdict)
-        ):
-            break  # Step accepted; no blocker evidence was found
-
-        # ADDITIONAL_WORK_NEEDED or blocker NO_DETERMINATION — retry with
-        # feedback only inside the configured review budget.
-        if attempt < max_attempts:
-            previous_feedback = review_verdict["feedback"]
-            self._summary = (
-                f"Step {index}/{len(ordered_nodes)} review failed "
-                f"(attempt {attempt}), retrying with feedback."
-            )
-        else:
-            # Final attempt still has a failed or blocker-inconclusive review.
-            # Record evidence and execute or schedule an allowed adaptation
-            # before applying terminal failure_mode. Same-step review-feedback
-            # retries are exhausted here and must not be reopened by adaptation.
-            gate_outcome = classify_gate_outcome(node, execution_result, review_verdict)
-            if gate_outcome.adaptive_path is not None:
-                adaptation_result = execute_or_schedule_gate_adaptation(
-                    node,
-                    gate_outcome,
-                )
-                if adaptation_result.requires_reexecution:
-                    continue
-                if adaptation_result.allows_progress:
-                    record_gate_adaptation(node, gate_outcome, adaptation_result)
-                    break
-            self._handle_step_failure(
-                node, execution_result, review_verdict,
-                f"Step {index} failed review after {max_attempts} attempts"
-            )
-```
-
-### 5.2 Feedback Injection
-
-When a step is retried after a failed review, the feedback is injected into the step inputs as an additional context field:
-
-```json
-{
-  "...original inputs...",
-  "_review_feedback": {
-    "attempt": 1,
-    "feedback": "The patch was applied but tests still fail...",
-    "issues": [...]
-  }
-}
-```
-
-For **skill-type** steps, the `_review_feedback` is passed as an additional input field. The skill executor can use it to augment the LLM prompt.
-
-For **agent_runtime** steps (`MoonMind.AgentRun`), the feedback is appended to the instruction text:
-
-```
-[Original instruction]
-
----
-REVIEW FEEDBACK (attempt 1): The previous execution did not fully succeed.
-[Feedback text]
-Please address the above issues in this attempt.
-```
-
-### 5.3 Step-Level vs. Agent-Internal Review
-
-This system operates at the **orchestration level** (between plan steps). It does not interfere with agent-internal reasoning loops within a `MoonMind.AgentRun` execution. The review evaluates the final output of each plan step against the aims expressed in that step's inputs.
-
-### 5.4 Failed Gate Classification
-
-After bounded review retries are exhausted, the gate classifies the remaining failure before applying `failure_mode`.
-
-Hard security blockers fail closed. They include unauthorized, untrusted, or ambiguous side effects, authority-sensitive operations, credential or provider-profile problems, provider authorization or scope failures, billing-relevant runtime changes, source-authority uncertainty, and any path that would substitute a less-constrained execution mode. These outcomes must not be silently rerouted, downgraded, or published as ready.
-
-Adaptive/readiness blockers may keep the workflow moving when operator intent and security boundaries are preserved. Examples include missing local dependencies, temporary non-credential environmental unavailability during non-mutating checks, or a verifier payload that needs bounded corrective feedback. Supported adaptations include inserting remediation or verification steps where the plan model allows them, choosing degraded mode with explicit evidence, or publishing a draft handoff when the downstream side effect is bounded, reviewable, and explicitly allowed by publish policy. Same-step retries with review feedback occur only inside the configured review attempt budget and are not available after that budget is exhausted.
-
-Every failed gate outcome records actionable evidence:
-
-- the failed check and bounded evidence refs
-- whether the blocker is hard-security or adaptive/readiness
-- the adaptation attempted or why no adaptation is allowed
-- missing validation and concrete next steps for an operator or follow-up workflow
-- the terminal `failure_mode` result when no adaptive path is available
-
----
-
-## 6. Review Activity
-
-### 6.1 Activity Registration
-
-```yaml
-name: "step.review"
-version: "1.0.0"
-type: "skill"
-description: "LLM-powered review of step execution output against input aims."
-executor:
-  activity_type: "mm.tool.execute"
-  selector:
-    mode: "by_capability"
-requirements:
-  capabilities:
-    - "llm"
-policies:
-  timeouts:
-    start_to_close_seconds: 120
-    schedule_to_close_seconds: 300
-  retries:
-    max_attempts: 2
-    backoff: "exponential"
-    non_retryable_error_codes:
-      - "INVALID_INPUT"
-```
-
-### 6.2 Activity Implementation
-
-The `step.review` activity:
-
-1. Constructs a review prompt from the `ReviewRequest` payload.
-2. Calls the configured reviewer LLM model.
-3. Parses the LLM response into a structured `ReviewVerdict`.
-4. Returns the verdict.
-
-When reviewer execution is unavailable, the activity returns
-`NO_DETERMINATION` with zero confidence, explicit unavailability feedback, and
-`recommendedNextAction: needs_human`. A completed step's result is not proof
-that a review occurred. The gate records an inconclusive check and preserves
-the step's output and checkpoint evidence; it does not spend implementation
-retries on an unavailable reviewer or authorize publication. The worker must
-bind an actual reviewer before this activity can return review approval.
-
-**Review Prompt Template (simplified):**
-
-```
-You are a code review agent for MoonMind. Your job is to evaluate whether a 
-workflow step achieved its intended outcome.
-
-## Step Information
-- Tool: {tool_name}
-- Step {step_index} of {total_steps} in plan "{plan_title}"
-
-## Step Inputs (what the step was asked to do)
-{json_inputs}
-
-## Step Outputs (what the step produced)  
-{json_result}
-
-## Previous Feedback (if retrying)
-{previous_feedback or "N/A"}
-
-## Your Task
-Evaluate whether the step output satisfies the aims described in the inputs.
-
-Respond with JSON (new writes must use canonical verdicts):
-{
-  "verdict": "FULLY_IMPLEMENTED" | "ADDITIONAL_WORK_NEEDED" | "NO_DETERMINATION" | "BLOCKED" | "FAILED_UNRECOVERABLE",
-  "confidence": <0.0-1.0>,
-  "feedback": "<explanation if ADDITIONAL_WORK_NEEDED>",
-  "issues": [{"severity": "error|warning", "description": "...", "evidence": "..."}]
-}
-```
-
-Legacy recorded histories may contain `PASS` / `FAIL` / `INCONCLUSIVE`;
-the parser maps them to the canonical values above. Do not emit legacy
-values in new prompts, payloads, or docs.
-
-### 6.3 Routing
-
-The review activity routes to the **LLM activity fleet** (`mm.activity.llm`), leveraging the existing model routing infrastructure. The `reviewer_model` policy controls which model is used (allowing a cheaper, faster model for reviews vs. the agent's primary model).
-
-Worker configuration: provider, enablement, credential, and default model
-come from the existing chat settings (`DEFAULT_CHAT_PROVIDER` and that
-provider's `*_ENABLED` / `*_API_KEY` / `*_CHAT_MODEL` values). Omitted and
-`default` reviewer models resolve identically; explicit models pass through
-unchanged. Disabled, unsupported, or uncredentialed providers never fall back.
-The admitted route is bound into `reviewProvenance` on the returned payload,
-and the calling workflow persists the gate-result artifact plus step-ledger
-`checks[]` entry before acknowledging completion, so a lost completion
-acknowledgment can reuse the committed decision instead of repeating work.
-
-UI provenance: the dashboard renders `gateVerdict` from the step row's
-`checks[]` entry and links the persisted gate-result artifact (`gateResultRef`)
-for full `reviewProvenance` (provider/model/evidence digest/attempt identity).
-
----
-
-## 7. Configuration & Toggle Points
-
-### 7.1 Plan-Level (Primary)
-
-The `policy.approval_policy` block in the plan JSON. This is the most precise control.
-
-### 7.2 Workflow-Level (API Parameter)
-
-The `initialParameters` payload when starting a `MoonMind.UserWorkflow` can include a approval policy override:
-
-```json
-{
-  "initialParameters": {
-    "approvalPolicy": {
-      "enabled": true,
-      "maxReviewAttempts": 3
-    }
-  }
-}
-```
-
-**Precedence**: Plan-level `approval_policy` configuration takes full precedence when **present** in the plan JSON (regardless of value). Workflow-level and env-var defaults only apply when the plan **omits** the `approval_policy` block entirely.
-
-- Plan has `approval_policy` → use plan's config (even if `enabled: false`)
-- Plan omits `approval_policy` + workflow has `approvalPolicy` → use workflow config
-- Both omit → use `MOONMIND_APPROVAL_POLICY_DEFAULT_ENABLED` env var
-- All omit → approval policy is disabled
-
-> **Implementation note**: The plan parser must distinguish "plan omitted `approval_policy`" (→ `None`) from "plan explicitly set `approval_policy`" (→ `ApprovalPolicyPolicy`). Use `Optional[ApprovalPolicyPolicy]` on `PlanPolicy.approval_policy` with `None` meaning "not specified".
-
-### 7.3 Environment Variable (Default)
-
-`MOONMIND_APPROVAL_POLICY_DEFAULT_ENABLED=false` — sets the system-wide default when neither plan nor workflow-level configuration is present. Off by default.
-
-### 7.4 MoonMind dashboard Toggle
-
-The workflow creation form gains a toggle:
-
-- **"Enable Step Approval Policy"** checkbox (off by default)
-- Expanding section with optional overrides (max attempts, reviewer model)
-
-The toggle maps to the `approvalPolicy` field in `initialParameters`.
-
----
-
-## 8. Observability
-
-### 8.1 Memo Updates
-
-During review cycles, the workflow memo updates to reflect:
-
-```
-"Executing plan step 2/5: repo.apply_patch (review attempt 2/3)"
-```
-
-This memo update is a compact execution summary only. The canonical per-step review state belongs on the step ledger.
-
-### 8.2 Search Attributes
-
-Add `mm_approval_policy_active` (bool) search attribute for filtering in Temporal Visibility and the dashboard.
-
-### 8.3 Step ledger `checks[]`
-
-Review verdicts should attach to the reviewed step as structured `checks[]` entries.
-
-Representative shape:
-
-```json
-{
-  "kind": "approval_policy",
-  "status": "failed",
-  "summary": "Missing import statement for datetime in utils.py",
-  "retryCount": 1,
-  "artifactRef": "art:..."
-}
-```
-
-Rules:
-
-- review state must be visible without parsing logs
-- verdict summaries should be bounded and operator-safe
-- large review feedback and issue detail belong in the linked artifact
-- committed checks carry `reviewProvenance` with `reviewAttemptIdentity` and
-  `evidenceDigest` so a duplicate delivery or lost-acknowledgment retry reuses
-  the same committed decision instead of persisting a divergent redelivery
-- The dashboard should render review evidence inside the expanded step row, not as a terminal-widget-only affordance
-
-### 8.4 Finish Summary Integration
-
-The `reports/run_summary.json` includes approval policy metrics:
-
-```json
-{
-  "approvalPolicy": {
-    "enabled": true,
-    "stepsReviewed": 5,
-    "totalReviewAttempts": 8,
-    "passedFirstAttempt": 3,
-    "passedAfterRetry": 1,
-    "failedAfterMaxRetries": 1
-  }
-}
-```
-
----
-
-## 9. Cost & Security Controls
-
-### 9.1 Budget Guardrails
-
-- `max_review_attempts` bounds retry cost per step (default: 2 retries).
-- `review_timeout_seconds` prevents runaway reviews.
-- The reviewer uses a configurable model — operators can choose a cheaper model (e.g., `gemini-flash`) for reviews.
-- Total review activity count is bounded by `max_review_attempts × number_of_steps`.
-
-### 9.2 Interaction with Existing Policies
-
-| Existing Policy | Interaction |
-|---|---|
-| `failure_mode: FAIL_FAST` | If a step fails all review attempts and no safe adaptive path is available, `FAIL_FAST` halts the workflow with blocker evidence and next steps. |
-| `failure_mode: CONTINUE` | If a step fails all review attempts and no safe adaptive path is available, execution continues to the next step only after recording blocker evidence and next steps. |
-| Temporal retry policy | Temporal retries handle transient infrastructure errors. Review gate handles semantic/correctness failures. They operate at different levels. |
-| Approval gates | Review gate runs before any approval gate. A step must pass review before reaching an approval checkpoint. |
-| `MoonMind.AgentRun` 429 retry | The 429 retry in `AgentRun` is internal to that workflow. The approval policy evaluates the final output of the child workflow. |
-
-`failure_mode` is a terminal policy, not the first response to a failed gate. A failed review should first consume bounded retry or remediation opportunities. If the remaining blocker is readiness-related and the side effect is bounded and reviewable, the gate may choose a degraded or draft handoff path and must annotate it with the missing validation. Hard security blockers always fail closed.
-
-### 9.3 Skip List
-
-`skip_tool_types` allows exempting certain tool types from review.
-
-**Default skip list** (always exempt unless explicitly removed):
-
-- `repo.publish` — creates branches/PRs; retrying would create duplicates
-- `codex.execute` — publishes PRs via `publishMode: pr`; non-idempotent
-
-**Common additional exemptions**:
-
-- Infrastructure tools (`artifact.read`, `artifact.write`)
-- Planning tools (`plan.generate`) — the plan itself is validated separately
-- Quick utility steps where review overhead exceeds step cost
-
----
-
-## 10. Determinism & Temporal Integrity
-
-### 10.1 Determinism Compliance
-
-The review activity is a standard Temporal Activity — all nondeterministic behavior (LLM calls) runs inside the activity, not in workflow code.
-
-### 10.2 Replay Compatibility
-
-The review-retry loop is fully deterministic:
-- Loop bounds are derived from `approval_policy.max_review_attempts` (frozen in the plan policy).
-- Review verdicts are recorded in Temporal workflow history as activity results.
-- Feedback strings are deterministic (they come from recorded activity results).
-
-### 10.3 History Size
-
-Each review adds one activity result to the workflow history. With a default of 2 review attempts per step, worst case adds `2 × N` activities (where N is step count). For most plans (< 20 steps), this is well within Temporal's recommended history limits.
-
----
-
-## 11. Implementation Layers
-
-### Layer 1: Data Model (contracts + parsing)
-
-| File | Change |
-|---|---|
-| `moonmind/workflows/skills/tool_plan_contracts.py` | Add `ApprovalPolicyPolicy` dataclass, extend `PlanPolicy`, update `parse_plan_definition()` |
-
-### Layer 2: Review Activity
-
-| File | Change |
-|---|---|
-| `moonmind/workflows/temporal/activities/step_review.py` | **[NEW]** `step.review` activity implementation |
-| `moonmind/workflows/temporal/activity_catalog.py` | Register `step.review` route |
-
-### Layer 3: Workflow Execution Loop
-
-| File | Change |
-|---|---|
-| `moonmind/workflows/temporal/workflows/run.py` | Wrap node loop in review-retry cycle in `_run_execution_stage()` |
-
-### Layer 4: API & UI
-
-| File | Change |
-|---|---|
-| `api_service/api/routers/executions.py` | Accept `approvalPolicy` in create-run payload, merge into `initialParameters` |
-| `frontend/src/entrypoints/workflow-start.tsx` | Add approval policy toggle to workflow creation form |
-
-### Layer 5: Observability
-
-| File | Change |
-|---|---|
-| `moonmind/workflows/temporal/workflows/run.py` | Emit review verdicts to memo and terminal output |
-| Finish summary logic | Include `approvalPolicy` metrics in `run_summary.json` |
-
----
-
-## 12. Future Extensions
-
-- **Per-node review overrides**: Allow individual plan nodes to opt in/out of review.
-- **Review criteria customization**: Custom review prompts per step or per skill type.
-- **Conditional edges post-review**: Use review output to drive plan branching (depends on conditional-edge support — §Q2 in SkillAndPlanContracts).
-- **Review result caching**: Skip re-review on retry if only feedback injection changed (hash-based).
-- **Human review escalation**: If `NO_DETERMINATION` confidence is below a threshold, escalate to a human approval gate. (Legacy histories may record this state as `INCONCLUSIVE`.)
+**Document Class:** Canonical declarative  
+**Viewpoint:** Module Contract Specification  
+**Owners:** MoonMind Engineering  
+**Updated:** 2026-09-20  
+**Related:** [Workflow Publishing](WorkflowPublishing.md), [Workflow Step System](WorkflowStepSystem.md), [Workflow Architecture](WorkflowArchitecture.md), [PR Resolver](../Steps/SkillGithubPrResolver.md), [Skill System](../Steps/SkillSystem.md)
+
+## Purpose and ownership
+
+An enabled step approval policy evaluates a completed plan step against its
+original inputs using the configured reviewer. The review does not redefine the
+requested outcome, provide new execution authority, or replace the selected
+Skill's acceptance policy. MoonSpec owns implementation verification semantics.
+MoonMind owns execution, artifacts, budgets, publication, and continuation.
+
+The existing `step.review` Activity owns reviewer invocation and response repair.
+The workflow owns the step ledger, semantic remediation, committed decisions,
+and terminal policy. Existing PR-resolution and issue-finalization owners keep
+those responsibilities. Do not add another approval service, retry controller,
+status registry, or certification engine.
+
+This is a desired-state contract. Its continuation requirements do not establish
+that every runtime, publication path, or deployed Skill already implements them.
+Execution evidence and implementation gaps belong in PRs and run artifacts.
+
+## Configuration
+
+An omitted plan `policy.approval_policy` remains distinct from an explicit policy,
+including `enabled: false`. Plan policy takes precedence when present. Otherwise,
+the workflow's `initialParameters.approvalPolicy` applies, followed by
+`MOONMIND_APPROVAL_POLICY_DEFAULT_ENABLED`, defaulting to disabled. Do not turn an
+explicit disabled policy into an enabled default.
+
+The existing policy carries `enabled`, `max_review_attempts`, `reviewer_model`,
+`review_timeout_seconds`, and `skip_tool_types`. `max_review_attempts` counts
+retries after the initial review, not total executions. Workflow/API projections
+retain their existing camelCase field names. No extra report-repair toggle is
+needed.
+
+`repo.publish` and `codex.execute` remain default exclusions from blind step
+re-execution. Exempting a step from auxiliary review does not waive its own
+publication evidence, approval, or side-effect requirements.
+
+## Reviewer authority and evidence
+
+`ConfiguredStepReviewer` uses the existing deployment chat provider, enablement,
+credential, and model settings. Omitted and `default` models resolve through that
+route. An explicit model is not silently replaced. A disabled, unsupported,
+uncredentialed, or changed route does not authorize fallback to another provider.
+Credentials never come from workflow payloads.
+
+The Activity sends bounded supplied evidence, not unrestricted artifact references
+that it pretends to have fetched. A successful process, a completed step, a model
+claim, or a report URL alone does not prove acceptance. The owning reader must
+supply the actual required evidence before a reviewer can evaluate it.
+
+Original issue scope and constraints control implementation acceptance. Related
+epics, old assessments, and previous reports are context. They do not add unrelated
+acceptance obligations. Separate production operations and physical-event release
+qualification from implementation unless the selected scope explicitly owns them.
+Required runtime, rendered, or other tests cannot be waived merely because the
+current agent lacks their toolchain. An AI visual judgment must use the actual
+images and rubric through the repository's declared proof owner.
+
+Input sections remain bounded to 64,000 bytes, the complete prompt to 256,000
+bytes, and responses to 64,000 bytes. Feedback and finding limits stay enforced
+before acceptance. Secret-shaped input fields are redacted before provider send.
+The supported review timeout is 1 through 120 seconds; out-of-range requests are
+rejected, not silently clamped. Provider output-token ceilings remain unchanged.
+
+## Structured report repair
+
+A malformed reviewer response is a report-production defect, not proof that the
+business step failed or that a person must review it.
+
+After a bounded malformed response, the Activity may make one report-only repair
+request to the same configured reviewer. Both calls share one total timeout and
+one review-attempt/evidence identity. The second request does not replenish the
+semantic implementation budget or enable another business-step execution. A valid
+non-passing report is not retried here to shop for approval.
+
+Use the existing canonical gate parser. Reject ambiguous duplicate JSON fields,
+non-finite values, malformed booleans, invalid verdict/action combinations, and
+oversized evidence without silently inferring a passing verdict. Preserve any
+recognized non-passing verdict and explicit stop during repair. The repair prompt
+carries the original evidence and bounded prior response as untrusted data, not
+instructions. It cannot authorize changing code, dropping requirements, inventing
+evidence, weakening assertions, or changing the reviewer route.
+
+Oversized responses, provider/permission failures, and requests that cannot fit the
+repair prompt budget remain non-passing. Do not truncate required evidence or
+reset the timeout to force another attempt. Cancellation propagates normally.
+An unsuccessful repair retains a distinct report diagnostic and the candidate.
+
+`reviewProvenance.reportRepair` records the count, original response digest, reason,
+and outcome when repair is attempted. It does not store raw provider responses or
+credentials. The workflow's existing gate-result artifact remains the durable
+owner; this is additional evidence, not a parallel receipt store.
+
+## Verdicts and continuation
+
+Use the existing canonical verdict and action vocabulary:
+
+| Evidence result | Continuation |
+| --- | --- |
+| `FULLY_IMPLEMENTED` | `advance` for the verified scope only |
+| `ADDITIONAL_WORK_NEEDED` with actionable implementation work | Existing bounded remediation owner |
+| `NO_DETERMINATION` with obtainable new evidence | Evidence collection/review against the preserved candidate |
+| Required capability currently unavailable | `blocked`, with the prerequisite and resumption check |
+| Actual human-only information or authorization | Explicit `needs_human`, naming that decision |
+| `FAILED_UNRECOVERABLE` | Preserve evidence and stop under existing policy |
+
+New unavailable-review Activity results use `NO_DETERMINATION`, zero confidence,
+and explicit `blocked`, rather than manufacturing `needs_human`. A fresh valid
+inconclusive report without an action supplies `reattempt_current_step` only when
+its current-runtime recovery flag is true; otherwise it supplies `blocked`.
+Explicit valid human and blocked decisions remain intact.
+
+Missing evidence is not accepted because confidence is low or no assertion ran.
+Optional diagnostics remain optional according to the selected acceptance policy,
+not by relabeling a mandatory missing check. Neither `failure_mode: CONTINUE` nor
+a draft PR turns incomplete verification into successful acceptance.
+
+Blocked means the current attempt must not repeat an unchanged prerequisite. It
+does not mean that the candidate is abandoned to a human. An authorized later
+continuation may resume when the prerequisite or controlling evidence changes.
+A timeout or unavailable reviewer must not rerun a completed mutation merely to
+obtain another review. User cancellation, denied authority, and explicit holds
+remain stops and are not converted into automatic continuations.
+
+## Automation-owned candidate and PR continuation
+
+Every incomplete verification handoff identifies the original issue/scope, exact
+candidate, last truthful verdict, completed and missing checks, evidence references,
+consumed budgets, current owner, and smallest next authorized action. Preserve the
+complete report in the existing artifact store and include a bounded actionable
+summary in GitHub. An opaque artifact ID or “operator review required” is not a
+sufficient next step.
+
+Before declaring execution unavailable, discover the repository's supported
+CI, container, or qualified workstation path. Inspect terminal evidence from an
+already-submitted job before launching a duplicate. A container in another service
+can satisfy an authorized execution requirement even when the agent has no local
+Docker executable. Do not grant new credentials or broaden runtime capabilities.
+
+When publication is authorized and required to start CI, the publication owner may
+preserve a coherent candidate on the existing PR under the admitted draft policy.
+This is a checkpoint/evidence handoff, not completion, permission to merge, or a
+request for mandatory manual review. Explicit publication `none` stays `none`.
+Continue the same PR from its validated current head; never create another PR to
+escape a failed gate or exhausted budget. Keep its actual issue/change title.
+
+The existing continuation owner consumes new post-publication check and artifact
+results, distinguishes code failures from reporting or infrastructure failures,
+and re-enters only the necessary implementation or verification phase. CI success
+alone cannot satisfy unexecuted rendered, packaged, or other source requirements.
+The selected verifier decides coverage from actual evidence.
+
+Bind evidence to the candidate content, original scope, required tests and target,
+plus relevant locked content, package, topology, or render surface when the source
+requires them. A moved PR head invalidates affected evidence. A duplicate event for
+the same job/attempt is idempotent, not another implementation attempt. Resume from
+the retained source/PR/candidate, not a fresh issue search or a default branch.
+
+Use the existing workflow and issue-attempt budgets, cooldowns, and stopped-writer
+checks. Report repair, evidence retrieval, semantic remediation, and transport
+retry are distinct work. None may reset another's exhaustion counter. A new
+continuation is authorized through the existing owner, not implied by prose or
+merely renaming an exhausted attempt. When no safe continuation exists, preserve
+an actionable blocked handoff without claiming it has been scheduled.
+
+Successful re-verification updates the same PR's verification summary and may
+remove its automation-owned draft state under the existing publication policy.
+It does not remove an explicit user hold, satisfy branch-protection approvals,
+authorize deployment, or merge without separate merge authority. Issue completion
+continues to require the actual intended target evidence, not candidate approval.
+
+## Durable evidence and replay
+
+Review provenance binds provider/model, `evidenceDigest`, `reviewAttemptIdentity`,
+review attempt, and timeout policy. Record large evidence in the existing artifact
+store and expose a bounded step-ledger check and artifact link in the dashboard.
+Diagnostics must remain readable without another LLM invocation. Distinguish
+implementation failures, report defects, missing evidence, infrastructure failures,
+and real human decisions rather than displaying all as manual review.
+
+The Activity's bounded in-process committed-review cache is only a duplicate-delivery
+hint. The persisted workflow gate and step ledger own durable decisions. Worker
+loss before the first result is committed may repeat the review; it must not repeat
+the business mutation or claim an exactly-once provider call. Reuse only a matching
+committed decision. Unavailable results are not accepted cache entries.
+
+Keep nondeterministic calls, clocks, filesystem operations, and network access in
+Activities or existing external services. Historical results retain their recorded
+meaning. New producer results can carry explicit recovery decisions without
+changing historical parser defaults. Changes to workflow command scheduling require
+replay coverage or the existing versioned migration mechanism.
+
+## Consumer adoption and validation
+
+MoonSpec assets are owned upstream. Adopt them through the existing pinned bundle
+and projection process, not independent edits of generated Skills. Refresh the
+active Skill snapshot and verify the normal runtime resolver uses the intended
+instructions and helper. Loaded path/digest evidence is diagnostic provenance,
+not another exact-version compatibility gate. A merged upstream PR alone does not
+update a running deployment.
+
+Test the production review Activity and configured provider adapter with isolated
+wire fixtures: malformed-to-valid repair, repeated malformed responses, preserved
+non-pass/stop decisions, changed routes, size limits, shared timeout, cancellation,
+redaction, duplicate delivery, and unavailable reviewer outcomes. Preserve tests
+that reject empty or stale evidence and unauthorized advancement.
+
+At the workflow boundary, exercise candidate publication followed by later CI
+completion, evidence-only resumption on the same PR, moved-head rejection, duplicate
+completion events, bounded exhaustion, and cancellation. The same-PR journey must
+execute the actual publisher, evidence reader, and continuation owner; a helper
+unit test or descriptive policy does not prove that end-to-end behavior. Broader
+validation belongs in existing GitHub Actions lanes. No human-review checkpoint is
+added to implementation acceptance.

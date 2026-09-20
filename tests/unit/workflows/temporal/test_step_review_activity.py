@@ -35,7 +35,7 @@ async def test_step_review_activity_does_not_infer_review_from_completed_executi
     )
     assert result["verdict"] == "NO_DETERMINATION"
     assert result["confidence"] == 0.0
-    assert result["recommendedNextAction"] == "needs_human"
+    assert result["recommendedNextAction"] == "blocked"
     assert result["recoverableInCurrentRuntime"] is False
     assert result["issues"][0]["code"] == "reviewer_unavailable"
     assert "no reviewer implementation is configured" in result["feedback"]
@@ -76,10 +76,11 @@ async def test_step_review_activity_with_previous_feedback():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("repair_first", [False, True])
 @pytest.mark.parametrize("provider_verdict", ["PASS", "FAIL"])
 @pytest.mark.parametrize("provider", ["google", "openai", "anthropic", "Google", "OpenAI", "ANTHROPIC"])
 @pytest.mark.parametrize("model", [None, "default", "explicit-review-model"])
-async def test_configured_reviewer_crosses_worker_wrapper_and_provider_wire(provider, model, provider_verdict):
+async def test_configured_reviewer_crosses_worker_wrapper_and_provider_wire(provider, model, provider_verdict, repair_first):
     import json
     from fastapi import FastAPI
     from httpx import ASGITransport
@@ -110,6 +111,8 @@ async def test_configured_reviewer_crosses_worker_wrapper_and_provider_wire(prov
             prompt = body["messages"][0]["content"]
         assert "actual execution evidence" in prompt
         response = json.dumps({"verdict": provider_verdict, "confidence": 0.8, "feedback": "Reviewed supplied execution evidence."})
+        if repair_first and len(requests) == 1:
+            response = "{}"
         if provider == "google":
             return {"candidates": [{"content": {"parts": [{"text": response}]}}]}
         if provider == "openai":
@@ -122,7 +125,7 @@ async def test_configured_reviewer_crosses_worker_wrapper_and_provider_wire(prov
     if model is not None:
         payload["reviewer_model"] = model
     result = await ActivityEnvironment().run(handler, payload)
-    assert requests
+    assert len(requests) == (2 if repair_first else 1)
     assert result["verdict"] == ("FULLY_IMPLEMENTED" if provider_verdict == "PASS" else "ADDITIONAL_WORK_NEEDED")
     assert result["confidence"] == 0.8
 
