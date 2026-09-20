@@ -3291,22 +3291,47 @@ async def main_async() -> None:
             "Temporal executable worker specification: %s",
             json.dumps(spec.readiness_payload(), sort_keys=True),
         )
+        routing_task = None
+
         async def mark_ready():
-            from moonmind.workflows.temporal.release_routing import bootstrap_version_routing
-            health_state.readiness_metadata["releaseRouting"] = await bootstrap_version_routing(client, spec)
+            nonlocal routing_task
+            from moonmind.workflows.temporal.release_routing import (
+                bootstrap_version_routing,
+                reconcile_parked_routing,
+            )
+            routing = await bootstrap_version_routing(client, spec)
+            health_state.readiness_metadata["releaseRouting"] = routing
+            if routing.get("status") == "awaiting_promotion":
+                # The outgoing fleet can drain for longer than the route-death
+                # wait, so readiness must not depend on it disappearing. Keep
+                # a bounded reconciler instead of leaving routing parked on a
+                # version that is going away; nothing else retries now that
+                # the availability supervisor is gone.
+                routing_task = asyncio.create_task(
+                    reconcile_parked_routing(
+                        client, spec, health_state.readiness_metadata
+                    ),
+                    name="release-routing-reconcile",
+                )
             health_state.pollers_started = True
             logger.info(
                 "Worker ready, polling task queues: %s",
                 ", ".join(topology.task_queues),
             )
+
         # Recreate-in-place serves one fleet at one version, so there is no
         # retained cohort to relaunch and no route to restore. A fleet that is
         # down is started by Compose, not by a background supervisor.
-        await serve_workers(
-            workers,
-            ready=mark_ready,
-            stopping=lambda: setattr(health_state, "pollers_started", False),
-        )
+        try:
+            await serve_workers(
+                workers,
+                ready=mark_ready,
+                stopping=lambda: setattr(health_state, "pollers_started", False),
+            )
+        finally:
+            if routing_task is not None:
+                routing_task.cancel()
+                await asyncio.gather(routing_task, return_exceptions=True)
     except Exception as exc:
         health_state.startup_error = exc.__class__.__name__
         raise

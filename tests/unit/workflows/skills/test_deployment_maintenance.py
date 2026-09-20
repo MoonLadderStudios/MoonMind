@@ -77,18 +77,18 @@ async def test_missing_updater_resumes_immutable_request_without_resetting_budge
     monkeypatch.setattr(maintenance, "inspect_owned", AsyncMock(return_value=None))
     launch = AsyncMock()
     monkeypatch.setattr(maintenance, "launch_updater", launch)
-    result = await maintenance.reconcile_release(directory, "runner", None)
+    result = await maintenance.reconcile_release(directory, "runner")
     assert result["resumed"] is True
     launch.assert_awaited_once_with("runner", directory, request)
     assert json.loads((directory / "deliveries.json").read_text())["count"] == 3
     assert json.loads((directory / "request.json").read_text()) == request
     launch.reset_mock()
-    result = await maintenance.reconcile_release(directory, "runner", None)
+    result = await maintenance.reconcile_release(directory, "runner")
     assert result["pending"] == ["execution_budget_exhausted"]
     launch.assert_not_awaited()
     terminal = {"owner": "exact-owner", "error": "original terminal failure"}
     release.write_record(directory / "result.json", terminal)
-    await maintenance.reconcile_release(directory, "runner", None)
+    await maintenance.reconcile_release(directory, "runner")
     launch.assert_not_awaited()
     assert json.loads((directory / "result.json").read_text()) == terminal
 

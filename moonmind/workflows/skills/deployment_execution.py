@@ -1909,6 +1909,120 @@ class DeploymentUpdateExecutor:
         command_log["substrate"] = report
         return report
 
+    async def _align_attested_substrate(
+        self,
+        *,
+        stack: str,
+        parsed: Mapping[str, Any],
+        command_plan: ComposeCommandPlan,
+        before_state: Mapping[str, Any],
+        execution_image: str,
+        progress_events: list[dict[str, str]],
+        command_log: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Align the egress gateway before workers are recreated against it.
+
+        Workers attest the restricted-egress gateway at startup, and the
+        gateway is excluded from the main update, so a release that changes
+        its policy would recreate workers against the old gateway: their
+        attestation fails, ``compose up --wait`` fails, and the staged
+        substrate pass that would have fixed the gateway never runs because
+        it is gated on the main stack verifying. The blue/green path avoided
+        this by aligning the candidate gateway before starting candidate
+        workers; recreate-in-place needs the same ordering.
+
+        Only the egress gateway moves here. The controller's own transport
+        (docker-proxy) and stateful substrate stay with the staged pass so
+        the updater never recreates its own transport mid-update.
+        """
+        from moonmind.security.egress import EGRESS_GATEWAY_SERVICE
+
+        targets = tuple(
+            service
+            for service in _substrate_reconciliation_targets(
+                before_state=before_state,
+                excluded_services=self.excluded_services,
+            )
+            if _service_name_matches(service, EGRESS_GATEWAY_SERVICE)
+        )
+        if not targets:
+            return None
+        configured_images = before_state.get("configuredServiceImages")
+        expected_images = (
+            configured_images if isinstance(configured_images, Mapping) else {}
+        )
+        pending = _substrate_service_mismatches(
+            state=before_state,
+            targets=targets,
+            expected_images=expected_images,
+        )
+        pending_services = [str(item["service"]) for item in pending]
+        report: dict[str, Any] = {
+            "targets": list(targets),
+            "pendingBefore": list(pending_services),
+            "reconciled": [],
+            "remaining": [],
+        }
+        if not pending_services:
+            command_log["attestedSubstrate"] = report
+            return report
+        _add_progress(
+            progress_events,
+            "ALIGNING_EGRESS_GATEWAY",
+            "Aligning the restricted-egress gateway before recreation.",
+        )
+        gateway_plan = build_compose_command_plan(
+            mode=str(parsed["mode"]),
+            remove_orphans=bool(parsed["removeOrphans"]),
+            wait=bool(parsed["wait"]),
+            runner_mode=command_plan.runner_mode,
+        )
+        pull_command = (*gateway_plan.pull_args, *pending_services)
+        pull_result = await self.runner.pull(
+            stack=stack, command=pull_command, requested_image=execution_image
+        )
+        command_log["attestedSubstratePull"] = {
+            "command": list(pull_command),
+            "result": dict(pull_result)
+            if isinstance(pull_result, Mapping)
+            else pull_result,
+        }
+        _ensure_command_succeeded("egress-gateway-pull", pull_result)
+        up_command = (*gateway_plan.up_args, "--no-deps", *pending_services)
+        up_result = await self.runner.up(
+            stack=stack, command=up_command, requested_image=execution_image
+        )
+        command_log["attestedSubstrateUp"] = {
+            "command": list(up_command),
+            "result": dict(up_result) if isinstance(up_result, Mapping) else up_result,
+        }
+        _ensure_command_succeeded("egress-gateway-up", up_result)
+        gateway_state = await self.runner.capture_state(
+            stack=stack, phase="egress-gateway"
+        )
+        remaining = _substrate_service_mismatches(
+            state=gateway_state,
+            targets=tuple(pending_services),
+            expected_images=expected_images,
+        )
+        remaining_services = {str(item["service"]) for item in remaining}
+        report["reconciled"] = [
+            service for service in pending_services if service not in remaining_services
+        ]
+        report["remaining"] = remaining
+        command_log["attestedSubstrate"] = report
+        if remaining:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_EGRESS_GATEWAY_UNALIGNED",
+                message=(
+                    "The restricted-egress gateway did not converge to the "
+                    "selected release before worker recreation."
+                ),
+                retryable=False,
+                details={"failureClass": "egress_gateway_unaligned", "remaining": remaining},
+            )
+        return report
+
     async def execute(
         self,
         inputs: Mapping[str, Any],
@@ -2110,6 +2224,16 @@ class DeploymentUpdateExecutor:
                     )
 
                 await self.desired_state_store.persist(desired_payload)
+
+                await self._align_attested_substrate(
+                    stack=parsed["stack"],
+                    parsed=parsed,
+                    command_plan=command_plan,
+                    before_state=before_state,
+                    execution_image=execution_image,
+                    progress_events=progress_events,
+                    command_log=command_log,
+                )
 
                 _add_progress(
                     progress_events,

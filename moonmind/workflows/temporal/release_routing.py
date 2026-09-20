@@ -573,3 +573,52 @@ async def bootstrap_version_routing(client, spec):
                 raise
             await _routing_sleep(1)
     raise RuntimeError("Release routing initialization did not converge")
+
+
+# A recreated worker can observe the outgoing fleet's pollers for as long as
+# Compose lets it drain (stop_grace_period: 6m), which outlasts the route-death
+# wait above. Reconciliation must therefore outlast the stop grace with margin
+# rather than leaving routing parked on a version that is going away.
+_PARKED_RECONCILE_TIMEOUT_SECONDS = 900
+_PARKED_RECONCILE_POLL_SECONDS = 30
+
+
+async def reconcile_parked_routing(client, spec, readiness_metadata=None):
+    """Finish a promotion that startup had to park, without a supervisor.
+
+    ``bootstrap_version_routing`` parks when the recorded current version
+    still has live pollers, because a live route must never be displaced.
+    During recreate-in-place that route is the outgoing fleet, which is
+    draining and will disappear. Nothing else retries now that the
+    availability supervisor is gone, so a parked startup would leave
+    Temporal's current version pointing at a version with no workers and
+    ordinary workflows would stall.
+
+    Retry the same canary-gated promotion on a bounded schedule until it
+    reports current, the deadline passes, or the task is cancelled at
+    shutdown. Promotion authority is unchanged: a route that is still live
+    keeps parking, so this only converges once the old fleet is actually
+    gone.
+    """
+    deadline = _routing_monotonic() + _PARKED_RECONCILE_TIMEOUT_SECONDS
+    while _routing_monotonic() < deadline:
+        await _routing_sleep(_PARKED_RECONCILE_POLL_SECONDS)
+        try:
+            result = await bootstrap_version_routing(client, spec)
+        except (RPCError, RuntimeError, ValueError) as exc:
+            logger.info("Parked release routing retry did not converge: %s", exc)
+            continue
+        if result.get("status") != "awaiting_promotion":
+            if readiness_metadata is not None:
+                readiness_metadata["releaseRouting"] = result
+            logger.info(
+                "Parked release routing converged to %s",
+                result.get("currentVersion"),
+            )
+            return result
+    logger.warning(
+        "Parked release routing did not converge within %ss; the installed "
+        "fleet is serving but Temporal still routes elsewhere",
+        _PARKED_RECONCILE_TIMEOUT_SECONDS,
+    )
+    return None

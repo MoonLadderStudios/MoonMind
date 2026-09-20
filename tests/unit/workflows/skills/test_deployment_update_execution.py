@@ -2719,7 +2719,12 @@ _SUBSTRATE_EXCLUDED = (
 )
 
 
-def _substrate_ps(*, postgres_image: str, proxy_image: str) -> list[dict[str, str]]:
+def _substrate_ps(
+    *,
+    postgres_image: str,
+    proxy_image: str,
+    egress_image: str = "tecnativa/docker-socket-proxy:0.1.1",
+) -> list[dict[str, str]]:
     return [
         {
             "ID": "api1",
@@ -2747,7 +2752,7 @@ def _substrate_ps(*, postgres_image: str, proxy_image: str) -> list[dict[str, st
             "Name": "moonmind-sandbox-egress-proxy-1",
             "Service": "sandbox-egress-proxy",
             "State": "running",
-            "Image": "tecnativa/docker-socket-proxy:0.1.1",
+            "Image": egress_image,
         },
     ]
 
@@ -2959,3 +2964,74 @@ async def test_update_recreates_in_place_without_a_release_cohort():
     logs = next(payload for kind, payload in evidence.records if kind == "command-log")
     assert "releaseRouting" not in logs
     assert store.records[0]["resolvedDigest"] == "sha256:" + "a" * 64
+
+
+class EgressGatewayRunner(RecordingRunner):
+    """Replays a stale egress gateway that converges once it is recreated."""
+
+    def __init__(self, events: list[str]) -> None:
+        super().__init__(events)
+        self.aligned = False
+
+    async def up(self, *, stack, command, requested_image=None):
+        if "sandbox-egress-proxy" in tuple(command):
+            self.aligned = True
+        return await super().up(
+            stack=stack, command=command, requested_image=requested_image
+        )
+
+    async def capture_state(self, *, stack: str, phase: str) -> Mapping[str, Any]:
+        self.events.append(f"runner:capture:{phase}")
+        egress = (
+            "tecnativa/docker-socket-proxy:0.1.1"
+            if self.aligned
+            else "tecnativa/docker-socket-proxy:0.0.9"
+        )
+        return {
+            "stack": stack,
+            "phase": phase,
+            "configuredServices": list(_SUBSTRATE_CONFIGURED),
+            "configuredServiceImages": dict(_SUBSTRATE_IMAGES),
+            "services": _substrate_ps(
+                postgres_image="postgres:17",
+                proxy_image="tecnativa/docker-socket-proxy:0.1.1",
+                egress_image=egress,
+            ),
+            "images": [],
+        }
+
+
+@pytest.mark.asyncio
+async def test_drifted_egress_gateway_is_aligned_before_workers_are_recreated(
+    monkeypatch,
+) -> None:
+    """Workers attest the gateway at startup, so it cannot lag their recreation.
+
+    The gateway is excluded from the main update. Recreating workers against a
+    stale gateway fails their startup attestation, which fails `up --wait`
+    before the staged substrate pass -- gated on the main stack verifying --
+    could ever repair it.
+    """
+    monkeypatch.setenv("HOSTNAME", "deploy123")
+    events: list[str] = []
+    runner = EgressGatewayRunner(events)
+    executor, _store, _evidence, _runner, _events = _executor(
+        runner=runner, events=events, excluded_services=_SUBSTRATE_EXCLUDED
+    )
+
+    result = await executor.execute(_inputs())
+
+    assert result.status == "COMPLETED"
+    kinds = [command[0] for command in runner.commands]
+    gateway_up = next(
+        index
+        for index, command in enumerate(runner.commands)
+        if command[0] == "up" and "sandbox-egress-proxy" in tuple(command[1])
+    )
+    main_up = next(
+        index
+        for index, command in enumerate(runner.commands)
+        if command[0] == "up" and "sandbox-egress-proxy" not in tuple(command[1])
+    )
+    assert gateway_up < main_up, kinds
+    assert "--no-deps" in runner.commands[gateway_up][1]
