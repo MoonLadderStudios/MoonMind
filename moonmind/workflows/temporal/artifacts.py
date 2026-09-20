@@ -1878,8 +1878,21 @@ class TemporalArtifactService:
         user/execution scope explicitly via ``admitted_principal``.
         Source-connection provenance, content-hash equality, and knowledge of
         an artifact/manifest id grant nothing on their own.
+
+        Single-user (#4351): the admitted operator inspects any instance
+        saved-work artifact without a human-owner lookup; legacy owner
+        strings stay as provenance. Machine (``workflow:``/``service:``)
+        readers remain execution-bound below; raw restricted bytes,
+        quarantine, and redaction checks keep their owning gates.
         """
         if is_disabled_local_mode():
+            return
+        # Single-user (#4351): instance-operator visibility, consistent with
+        # _assert_artifact_read_access. Never classifies machine principals
+        # as operators (see _is_instance_operator_principal).
+        if self._is_instance_operator_principal(
+            principal
+        ) or self._is_instance_operator_principal(admitted_principal):
             return
         owner = self._owner_principal(artifact)
         candidates = {principal, *( [admitted_principal] if admitted_principal else [])}
