@@ -78,6 +78,22 @@ MANAGER_ROLLOVER_ERROR_TYPE = "ProviderProfileManagerRollover"
 _MAX_MANAGER_UPDATE_ATTEMPTS = 3
 
 
+def _wedge_rpc_statuses() -> frozenset[Any]:
+    """RPC statuses Temporal returns for a manager that runs no workflow task.
+
+    ``FAILED_PRECONDITION`` is what a singleton wedged in a workflow-task
+    failure loop answers with; ``DEADLINE_EXCEEDED`` is the same condition
+    observed as a timeout. Both describe an execution that accepted nothing,
+    so both are safe to inspect for a replay wedge before failing.
+    """
+
+    from temporalio.service import RPCStatusCode
+
+    return frozenset(
+        {RPCStatusCode.FAILED_PRECONDITION, RPCStatusCode.DEADLINE_EXCEEDED}
+    )
+
+
 #: A Provider Profile whose credential source is ``none`` materializes no
 #: shared, mutable authentication state, so validating its model evidence
 #: cannot corrupt a concurrent execution.
@@ -268,6 +284,15 @@ class ProviderProfileLeaseClient:
             pass
         return workflow_id
 
+    async def ensure_manager(self, runtime_id: str) -> str:
+        """Start this runtime's manager unless it is already running.
+
+        Public because recovery needs a start step and must not own a second
+        definition of how a manager is launched.
+        """
+
+        return await self._ensure_manager(runtime_id)
+
     async def _acquire(
         self,
         *,
@@ -346,6 +371,8 @@ class ProviderProfileLeaseClient:
         runtime_id: str,
         update_name: str,
         payload: Mapping[str, Any],
+        *,
+        allow_recovery: bool = True,
     ) -> Mapping[str, Any]:
         """Retry an Update that races the manager's clean completion or rollover.
 
@@ -361,10 +388,20 @@ class ProviderProfileLeaseClient:
         and its position are durable across the rollover, so resubmitting the
         same owner request reattaches to the *same* pending request instead of
         losing its turn. This is the client half of that protocol.
+
+        The third case is not a race but a wedge. A manager whose recorded
+        history the running build cannot replay stays ``RUNNING`` while its
+        workflow task retries forever, and Temporal answers every Update with
+        an RPC-level failure. No number of resubmissions reaches a workflow
+        that completes no workflow task, so a wedge is handed to
+        :mod:`moonmind.provider_profiles.manager_recovery`, which replaces the
+        run from the durable ledger. ``allow_recovery`` bounds that to one
+        attempt per call: the retry after a replacement never recovers again.
         """
 
         from temporalio.client import WorkflowUpdateFailedError
         from temporalio.exceptions import ApplicationError
+        from temporalio.service import RPCError
 
         reattachable = {
             "AcceptedUpdateCompletedWorkflow",
@@ -377,6 +414,12 @@ class ProviderProfileLeaseClient:
                     workflow_id,
                     update_name,
                     dict(payload),
+                )
+            except RPCError as exc:
+                if not allow_recovery or exc.status not in _wedge_rpc_statuses():
+                    raise
+                return await self._recover_and_retry(
+                    runtime_id, update_name, payload, exc
                 )
             except WorkflowUpdateFailedError as exc:
                 cause = exc.cause
@@ -398,6 +441,56 @@ class ProviderProfileLeaseClient:
                     await self._withdraw_maintenance_waiter(runtime_id, payload)
                 raise
         raise AssertionError("bounded manager update retry did not terminate")
+
+    async def _recover_and_retry(
+        self,
+        runtime_id: str,
+        update_name: str,
+        payload: Mapping[str, Any],
+        cause: Exception,
+    ) -> Mapping[str, Any]:
+        """Replace a wedged manager run once, then resubmit the same request.
+
+        The owner request is idempotent, and a fresh manager restores held and
+        ``cleanup_requested`` rows from the authoritative ledger, so the
+        resubmission admits against the same capacity the wedged run had.
+        A refusal that names a real blocker is raised with its evidence instead
+        of being retried: a manager that must not be replaced will not become
+        replaceable by asking again. When no wedge was found at all, the run
+        that rejected this Update is gone or healthy — a clean completion, or
+        another caller's successful cutover — so re-ensure the canonical
+        workflow ID and resubmit the same idempotent payload once rather than
+        failing a caller whose manager has already been repaired. Only if that
+        bounded reattach also fails does Temporal's original error stand.
+        """
+
+        from temporalio.service import RPCError
+
+        from moonmind.provider_profiles.manager_recovery import (
+            ProviderManagerUnavailableError,
+            recover_wedged_provider_manager,
+        )
+
+        async def _start_manager() -> str:
+            return await self._ensure_manager(runtime_id)
+
+        recovery = await recover_wedged_provider_manager(
+            self._adapter,
+            runtime_id=runtime_id,
+            start_manager=_start_manager,
+        )
+        if not recovery.recovered and recovery.nondeterminism_failures > 0:
+            raise ProviderManagerUnavailableError(recovery) from cause
+        try:
+            return await self._update_manager(
+                runtime_id, update_name, payload, allow_recovery=False
+            )
+        except RPCError:
+            if recovery.recovered:
+                raise
+            # No wedge was found and the reattach did not help either, so the
+            # original failure is still the truthful account of this call.
+            raise cause
 
     async def _withdraw_maintenance_waiter(
         self, runtime_id: str, payload: Mapping[str, Any]

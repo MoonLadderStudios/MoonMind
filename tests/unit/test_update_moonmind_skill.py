@@ -230,12 +230,18 @@ def test_main_pull_failure_names_branch_revision_and_image(tmp_path, monkeypatch
         assert args[1] == "pull"
         return SimpleNamespace(returncode=1, stdout="", stderr="manifest unknown")
     monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(update, "_PULL_RETRY_MAX_ATTEMPTS", 2)
     with pytest.raises(RuntimeError) as excinfo:
         update.main(["--repo", str(repo)])
     message = str(excinfo.value)
     assert revision in message
     assert f":sha-{revision}" in message
     assert "origin/main" in message
+
+
+def _pull_failure(stderr):
+    return SimpleNamespace(returncode=1, stdout="", stderr=stderr)
 
 
 def _init_two_commit_repo(repo):
@@ -256,8 +262,152 @@ def _init_two_commit_repo(repo):
     return parent, tip
 
 
-def test_falls_back_to_newest_published_ancestor(tmp_path, monkeypatch):
-    """Default update uses newest published ancestor when tip has no image yet."""
+@pytest.mark.parametrize(
+    ("daemon_output", "category"),
+    [
+        (
+            "Error response from daemon: manifest for ghcr.io/moonladderstudios/moonmind:sha-abc not found: manifest unknown",
+            "unpublished",
+        ),
+        (
+            'Error response from daemon: Head "https://ghcr.io/v2/x": unauthorized: authentication required',
+            "auth",
+        ),
+        (
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+            "daemon",
+        ),
+        ("Error: something entirely unexpected", "unknown"),
+    ],
+)
+def test_run_marks_docker_pull_failure_category(tmp_path, monkeypatch, daemon_output, category):
+    monkeypatch.setattr(
+        update.subprocess, "run", lambda *args, **kwargs: _pull_failure(daemon_output)
+    )
+    with pytest.raises(update.DockerPullError) as excinfo:
+        update.run(["docker", "pull", "ghcr.io/moonladderstudios/moonmind:sha-abc"], cwd=tmp_path)
+    assert excinfo.value.category == category
+
+
+def test_select_waits_for_inflight_tip_publish_before_any_fallback(tmp_path, monkeypatch, capsys):
+    """A late tip publish is waited out, so no ancestor is substituted."""
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    parent, tip = _init_two_commit_repo(repo)
+    original_run = subprocess.run
+    pulls = []
+    responses = iter([_pull_failure("manifest unknown"), SimpleNamespace(returncode=0, stdout="")])
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        assert args[1] == "pull"
+        pulls.append(args[2])
+        return next(responses)
+    sleeps = []
+    monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update, "_sleep", lambda seconds: sleeps.append(seconds))
+    revision, image, skipped = update._select_release_image(
+        repo=repo,
+        branch="main",
+        tip_revision=tip,
+        image_repository="ghcr.io/moonladderstudios/moonmind",
+    )
+    assert revision == tip
+    assert image.endswith(f":sha-{tip}")
+    assert skipped == []
+    assert pulls == [f"ghcr.io/moonladderstudios/moonmind:sha-{tip}"] * 2
+    assert parent not in "".join(pulls)
+    assert sleeps == [update._PULL_RETRY_INTERVAL_SECONDS]
+    assert "waiting" in capsys.readouterr().out
+
+
+def test_select_falls_back_to_ancestor_only_after_the_tip_wait(tmp_path, monkeypatch):
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    parent, tip = _init_two_commit_repo(repo)
+    original_run = subprocess.run
+    pulls = []
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        pulls.append(args[2])
+        if args[2].endswith(tip):
+            return _pull_failure("manifest unknown")
+        return SimpleNamespace(returncode=0, stdout="pulled")
+    sleeps = []
+    monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update, "_sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(update, "_PULL_RETRY_MAX_ATTEMPTS", 3)
+    revision, image, skipped = update._select_release_image(
+        repo=repo,
+        branch="main",
+        tip_revision=tip,
+        image_repository="ghcr.io/moonladderstudios/moonmind",
+    )
+    assert revision == parent
+    assert image.endswith(f":sha-{parent}")
+    assert skipped == [tip]
+    # The tip exhausts its bounded wait; the ancestor is pulled once, not waited on.
+    assert pulls == [f"ghcr.io/moonladderstudios/moonmind:sha-{tip}"] * 3 + [
+        f"ghcr.io/moonladderstudios/moonmind:sha-{parent}"
+    ]
+    assert sleeps == [update._PULL_RETRY_INTERVAL_SECONDS] * 2
+
+
+def test_select_exhaustion_keeps_branch_and_tip_context(tmp_path, monkeypatch):
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    parent, tip = _init_two_commit_repo(repo)
+    original_run = subprocess.run
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        return _pull_failure("Error response from daemon: manifest unknown")
+    monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(update, "_PULL_RETRY_MAX_ATTEMPTS", 2)
+    with pytest.raises(RuntimeError) as excinfo:
+        update._select_release_image(
+            repo=repo,
+            branch="main",
+            tip_revision=tip,
+            image_repository="ghcr.io/moonladderstudios/moonmind",
+        )
+    message = str(excinfo.value)
+    assert tip in message
+    assert f":sha-{tip}" in message
+    assert parent in message
+    assert "origin/main" in message
+    assert "manifest unknown" in message
+
+
+def test_select_auth_failure_fails_fast_without_wait_or_fallback(tmp_path, monkeypatch):
+    repo = tmp_path / "installed"
+    repo.mkdir()
+    _parent, tip = _init_two_commit_repo(repo)
+    original_run = subprocess.run
+    pulls = []
+    def command(args, **kwargs):
+        if args[0] != "docker":
+            return original_run(args, **kwargs)
+        pulls.append(args[2])
+        return _pull_failure("unauthorized: authentication required")
+    sleeps = []
+    monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update, "_sleep", lambda seconds: sleeps.append(seconds))
+    with pytest.raises(RuntimeError, match="docker login"):
+        update._select_release_image(
+            repo=repo,
+            branch="main",
+            tip_revision=tip,
+            image_repository="ghcr.io/moonladderstudios/moonmind",
+        )
+    assert len(pulls) == 1
+    assert sleeps == []
+
+
+def test_main_records_the_published_ancestor_and_requested_tip(tmp_path, monkeypatch):
+    """Default update uses newest published ancestor when the tip stays unpublished."""
     repo = tmp_path / "installed"
     repo.mkdir()
     parent, tip = _init_two_commit_repo(repo)
@@ -298,10 +448,11 @@ def test_falls_back_to_newest_published_ancestor(tmp_path, monkeypatch):
         raise AssertionError(f"unexpected docker command: {args}")
 
     monkeypatch.setattr(update.subprocess, "run", command)
+    monkeypatch.setattr(update, "_sleep", lambda seconds: None)
+    monkeypatch.setattr(update, "_PULL_RETRY_MAX_ATTEMPTS", 2)
     assert update.main(["--repo", str(repo)]) == 0
-    assert len(pulls) == 2
     assert pulls[0].endswith(tip)
-    assert pulls[1].endswith(parent)
+    assert pulls[-1].endswith(parent)
     submission = next((repo / "deploy/state/release-submissions").glob("*.json"))
     record = json.loads(submission.read_text())
     assert record["inputs"]["sourceRevision"] == parent

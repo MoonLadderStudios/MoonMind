@@ -5,7 +5,7 @@
  * suggested frontend component split:
  *
  *   - ProvidersSecretsSettingsPage
- *   - UserWorkspaceSettingsPage
+ *   - InstanceSettingsPage
  *   - OperationsSettingsPage
  *   - SettingsCatalogSection (a.k.a. GeneratedSettingsSection)
  *   - SettingControlRenderer (lives inside GeneratedSettingsSection)
@@ -29,13 +29,13 @@ import { SecretManager } from '../secrets/SecretManager';
 import {
   OperationsSettingsPage,
   ProvidersSecretsSettingsPage,
-  UserWorkspaceSettingsPage,
+  InstanceSettingsPage,
 } from '../../entrypoints/settings';
 
 describe('Settings System §26 component split', () => {
   it('exposes three route-owned Settings pages without a shared page selector', () => {
     expect(typeof ProvidersSecretsSettingsPage).toBe('function');
-    expect(typeof UserWorkspaceSettingsPage).toBe('function');
+    expect(typeof InstanceSettingsPage).toBe('function');
     expect(typeof OperationsSettingsPage).toBe('function');
   });
 

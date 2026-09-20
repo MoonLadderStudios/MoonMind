@@ -403,6 +403,106 @@ async def test_unguarded_validation_cleanup_history_needs_migration_cutover(
         ).replay_workflow(history)
 
 
+@pytest.mark.asyncio
+async def test_unmarked_cleanup_redrive_history_is_refused_and_recovered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The production wedge: redrive commands recorded without the marker.
+
+    #4330 shipped the cleanup redrive enabled for every manager; #4425 then
+    added ``provider-profile-manager-lease-cleanup-redrive-v1`` to keep
+    pre-#4330 histories replayable. That leaves three generations, not two,
+    and the marker only separates the first from the third. A manager started
+    by a build between those two commits recorded the redrive's Activities
+    with no marker, so the current worker reads it as pre-#4330, skips the
+    recorded commands, and wedges the singleton — which is exactly what
+    happened to ``provider-profile-manager:opencode`` (event 1354:
+    ``sync_slot_leases`` where the worker commanded ``verify_lease_holders``),
+    taking every OpenCode credential operation down with it.
+
+    The marker cannot be made to distinguish that cohort after the fact: the
+    decision is taken at startup, before any redrive command exists in the
+    history to read. So this test does not ask for a replay that succeeds. It
+    pins the refusal — the worker must never silently skip recorded commands —
+    and leaves the cohort to the automatic replacement in
+    :mod:`moonmind.provider_profiles.manager_recovery`, which rebuilds the
+    ledger from the database instead of asking an operator to do it by hand.
+    """
+    from temporalio import workflow as workflow_module
+
+    real_patched = workflow_module.patched
+
+    def _pre_marker_patched(patch_id: str) -> bool:
+        # The #4425 parent ran the redrive unconditionally, so its histories
+        # carry the redrive commands and no redrive marker.
+        if patch_id == LEASE_CLEANUP_REDRIVE_PATCH:
+            return True
+        return real_patched(patch_id)
+
+    monkeypatch.setattr(workflow_module, "patched", _pre_marker_patched)
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        acquired_at = ((await env.get_current_time()) - timedelta(hours=5)).isoformat()
+        activities = _ValidationCleanupActivities(acquired_at)
+        async with Worker(
+            env.client,
+            task_queue="test-unmarked-cleanup-redrive",
+            workflows=[MoonMindProviderProfileManagerWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ), Worker(
+            env.client,
+            task_queue=ACTIVITY_TASK_QUEUE,
+            activities=[
+                activities.list_profiles,
+                activities.sync_leases,
+                activities.pending_order,
+                activities.verify,
+            ],
+        ):
+            manager = await env.client.start_workflow(
+                MoonMindProviderProfileManagerWorkflow.run,
+                {"runtime_id": "opencode"},
+                id="provider-profile-manager:opencode",
+                task_queue="test-unmarked-cleanup-redrive",
+            )
+            async with asyncio.timeout(30):
+                while "release_verified" not in activities.actions:
+                    await asyncio.sleep(0.05)
+            with env.auto_time_skipping_disabled():
+                await manager.signal("shutdown")
+                await manager.result()
+            history = await manager.fetch_history()
+
+    patch_ids = []
+    activity_names = []
+    for event in history.events:
+        if event.HasField("marker_recorded_event_attributes"):
+            attrs = event.marker_recorded_event_attributes
+            if attrs.marker_name == "core_patch":
+                marker = (
+                    await DataConverter.default.decode(
+                        attrs.details["patch-data"].payloads
+                    )
+                )[0]
+                patch_ids.append(marker["id"])
+        elif event.HasField("activity_task_scheduled_event_attributes"):
+            activity_names.append(
+                event.activity_task_scheduled_event_attributes.activity_type.name
+            )
+    # The cohort shape: redrive ran, its marker was never recorded.
+    assert LEASE_CLEANUP_REDRIVE_PATCH not in patch_ids
+    assert "request_cleanup" in activities.actions
+    assert "provider_profile.verify_lease_holders" in activity_names
+
+    # The current worker refuses the history rather than replaying past the
+    # commands it would now skip. Recovery, not a marker, owns this cohort.
+    monkeypatch.setattr(workflow_module, "patched", real_patched)
+    with pytest.raises(Exception):
+        await Replayer(
+            workflows=[MoonMindProviderProfileManagerWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(history)
+
+
 @workflow.defn(name="Test.CleanupSlotRequester")
 class _SlotRequester:
     def __init__(self) -> None:
