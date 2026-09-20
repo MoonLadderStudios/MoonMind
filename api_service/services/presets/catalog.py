@@ -3257,12 +3257,25 @@ class PresetCatalogService:
                 )
             )
         else:
-            self._session.add(
-                PresetRecent(
-                    user_id=user_id,
-                    template_id=template_id,
+            existing_recent = (
+                await self._session.execute(
+                    select(PresetRecent).where(
+                        PresetRecent.user_id == user_id,
+                        PresetRecent.template_id == template_id,
+                    )
                 )
-            )
+            ).scalar_one_or_none()
+            if existing_recent is None:
+                self._session.add(
+                    PresetRecent(
+                        user_id=user_id,
+                        template_id=template_id,
+                    )
+                )
+            else:
+                # Reapply refreshes recency on the existing row instead of
+                # violating the per-user/per-template uniqueness constraint.
+                existing_recent.applied_at = datetime.now(UTC)
         await self._session.flush()
         keep_recent_ids = (
             select(PresetRecent.id)

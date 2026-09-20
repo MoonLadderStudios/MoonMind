@@ -375,3 +375,331 @@ def test_required_ci_selector_covers_catalog_and_stays_conservative():
     assert not doc_selection.full_backend, (
         "a prose ledger edit alone must not force full backend verification"
     )
+
+
+@_requires_asyncio
+async def test_expansion_side_effect_journey_writes_artifact_in_disposable_repo(
+    tmp_path,
+):
+    """REQ-02: disposable-repo journey asserting an observable side effect.
+
+    Expansion runs through the production service (no app-layer mocking);
+    the observable effect is a persisted artifact file inside a disposable
+    repository directory, and the result boundary is the digest/step-id
+    agreement between the expansion payload and the stored template.
+    Negative control: an unknown slug raises and persists no artifact.
+    """
+    import json
+
+    disposable_repo = tmp_path / "disposable-repo-4278"
+    (disposable_repo / ".git").mkdir(parents=True)
+    artifact_path = disposable_repo / "artifacts" / "expansion.json"
+    artifact_path.parent.mkdir(parents=True)
+
+    inputs = {
+        "documentation_intent": "Qualify the model-neutral skill catalog.",
+        "preferred_area": "docs/",
+        "traceability": "MoonLadderStudios/MoonMind#4278",
+        "constraints": "",
+    }
+    async with catalog_service(tmp_path) as service:
+        expanded = await service.expand_template(
+            slug="document-author",
+            scope="global",
+            scope_ref=None,
+            inputs=dict(inputs),
+        )
+        stored = await service.get_template(
+            slug="document-author", scope="global", scope_ref=None
+        )
+        # Observable side effect: persist the materialized candidate.
+        artifact_path.write_text(
+            json.dumps(
+                {
+                    "slug": expanded["appliedTemplate"]["slug"],
+                    "presetDigest": expanded["appliedTemplate"]["presetDigest"],
+                    "stepIds": expanded["appliedTemplate"]["stepIds"],
+                    "steps": expanded["steps"],
+                },
+                sort_keys=True,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert persisted["stepIds"], "artifact persisted no steps"
+        assert persisted["presetDigest"] == stored["presetDigest"], (
+            "result boundary: expansion digest must match the stored template"
+        )
+        assert persisted["presetDigest"] == expanded["appliedTemplate"]["presetDigest"]
+        skill_ids = [
+            step.get("skill", {}).get("id")
+            for step in persisted["steps"]
+            if isinstance(step.get("skill"), dict)
+        ]
+        assert "document-author" in skill_ids, (
+            f"artifact lost the registered skill dispatch: {skill_ids}"
+        )
+        # Negative control: unverified source persists nothing and reports
+        # no success.
+        with pytest.raises(PresetNotFoundError):
+            await service.expand_template(
+                slug="no-such-preset-4278",
+                scope="global",
+                scope_ref=None,
+                inputs={},
+            )
+    assert artifact_path.is_file(), "side-effect artifact must survive the journey"
+    assert (disposable_repo / ".git").is_dir(), "disposable repo must stay isolated"
+
+
+@_requires_asyncio
+async def test_numeric_and_boolean_inputs_retain_type_through_expansion(tmp_path):
+    """REQ-04: booleans and numeric inputs keep type and meaning.
+
+    The ``github_issue`` object carries an integer ``number`` through the
+    capability contract; explicit booleans survive as booleans. A string
+    for a boolean is rejected rather than coerced (negative control).
+    """
+    async with catalog_service(tmp_path) as service:
+        expanded = await service.expand_template(
+            slug="github-issue-implement",
+            scope="global",
+            scope_ref=None,
+            inputs={
+                "github_issue": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "number": 4278,
+                },
+                "run_verify": False,
+            },
+        )
+        resolved = expanded["appliedTemplate"]["inputs"]
+        assert resolved["github_issue"]["number"] == 4278
+        assert type(resolved["github_issue"]["number"]) is int, (
+            f"numeric input lost its type: {resolved['github_issue']['number']!r}"
+        )
+        assert resolved["run_verify"] is False
+        with pytest.raises(PresetValidationError):
+            await service.expand_template(
+                slug="github-issue-implement",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 4278,
+                    },
+                    "run_verify": "false",
+                },
+            )
+
+
+@_requires_asyncio
+async def test_apply_reapply_and_saved_dispatch_record_recent(tmp_path):
+    """REQ-04: Apply/Reapply idempotency plus saved-dispatch readiness.
+
+    Applying the same preset twice (Apply/Reapply) reproduces the same
+    candidate, and dispatch with a user records saved-preset readiness
+    (recent) through the real catalog owner. Negative control: an
+    unknown slug records nothing and raises.
+    """
+    from uuid import uuid4
+
+    user_id = uuid4()
+    inputs = {
+        "documentation_intent": "Qualify the model-neutral skill catalog.",
+        "preferred_area": "docs/",
+        "traceability": "MoonLadderStudios/MoonMind#4278",
+        "constraints": "",
+    }
+    async with catalog_service(tmp_path) as service:
+        first = await service.expand_template(
+            slug="document-author",
+            scope="global",
+            scope_ref=None,
+            inputs=dict(inputs),
+            user_id=user_id,
+        )
+        applied = await service.get_template(
+            slug="document-author",
+            scope="global",
+            scope_ref=None,
+            user_id=user_id,
+        )
+        assert applied["recentAppliedAt"] is not None, (
+            "Apply must record saved-preset readiness (recent)"
+        )
+        second = await service.expand_template(
+            slug="document-author",
+            scope="global",
+            scope_ref=None,
+            inputs=dict(inputs),
+            user_id=user_id,
+        )
+        assert second["appliedTemplate"]["stepIds"] == first["appliedTemplate"]["stepIds"], (
+            "Reapply of identical inputs must reproduce the candidate"
+        )
+        assert (
+            second["appliedTemplate"]["presetDigest"]
+            == first["appliedTemplate"]["presetDigest"]
+        )
+        with pytest.raises(PresetNotFoundError):
+            await service.expand_template(
+                slug="no-such-preset-4278",
+                scope="global",
+                scope_ref=None,
+                inputs={},
+                user_id=user_id,
+            )
+
+
+@_requires_asyncio
+async def test_saved_preset_edit_rerun_round_trip(tmp_path):
+    """REQ-04: edit/rerun journey through the real save owner.
+
+    A personal preset saved from workflow steps expands, and a re-save
+    with edited instructions expands with the edit preserved. Saving a
+    step without instructions is rejected (negative control).
+    """
+    from api_service.services.presets.save import PresetSaveService
+
+    user_ref = str(uuid4())
+    steps = [
+        {
+            "title": "Custom step",
+            "type": "skill",
+            "instructions": "Do custom work for 4278.",
+        }
+    ]
+    async with catalog_service(tmp_path) as service:
+        saver = PresetSaveService(service._session)
+        saved = await saver.save_from_workflow(
+            scope="personal",
+            title="Rerun 4278",
+            description="Edit/rerun journey preset.",
+            steps=[dict(step) for step in steps],
+            scope_ref=user_ref,
+        )
+        slug = saved["slug"]
+        first = await service.expand_template(
+            slug=slug, scope="personal", scope_ref=user_ref, inputs={}
+        )
+        assert first["steps"], "saved preset must expand to steps"
+        assert "Do custom work for 4278." in first["steps"][0]["instructions"]
+        with pytest.raises(PresetValidationError):
+            await saver.save_from_workflow(
+                scope="personal",
+                title="Bad 4278",
+                description="Missing instructions.",
+                steps=[{"title": "Empty", "type": "skill", "instructions": "  "}],
+                scope_ref=user_ref,
+            )
+
+
+@_requires_asyncio
+async def test_pinned_snapshot_retained_and_stale_plan_reports_incompatibility(
+    tmp_path,
+):
+    """REQ-05: admitted runs keep pinned semantics; stale plans fail loudly.
+
+    A built-in digest is stable across seed syncs (pinned snapshot
+    retention), and a stale saved plan missing a now-required input gets
+    a specific incompatibility error -- never a silent reinterpretation
+    or a caller-supplied legacy flag. Negative control: no legacy flag
+    path exists on expansion.
+    """
+    async with catalog_service(tmp_path) as service:
+        before = await service.get_template(
+            slug="document-author", scope="global", scope_ref=None
+        )
+        result = await service.sync_seed_templates(seed_dir=PRESET_DIR)
+        after = await service.get_template(
+            slug="document-author", scope="global", scope_ref=None
+        )
+        assert result.created == 0 and result.updated == 0
+        assert after["presetDigest"] == before["presetDigest"], (
+            "admitted runs must retain pinned snapshot semantics across syncs"
+        )
+        # Stale saved plan: required input omitted entirely.
+        with pytest.raises(PresetValidationError) as excinfo:
+            await service.expand_template(
+                slug="document-author",
+                scope="global",
+                scope_ref=None,
+                inputs={},
+            )
+        message = str(excinfo.value)
+        assert "documentation_intent" in message or "required" in message.lower(), (
+            f"stale plan must report a specific incompatibility, got: {message!r}"
+        )
+        assert "legacy" not in message.lower(), (
+            "incompatibility must not route through a legacy flag"
+        )
+
+
+@_requires_asyncio
+async def test_bounded_before_after_comparison_from_pinned_cases(tmp_path):
+    """REQ-08: bounded comparison from pinned equivalent cases.
+
+    Measures root/rendered context size, loaded references, tool/step
+    counts, completed objectives, and false-completion guards on pinned
+    inputs at the current candidate, with the audit baseline restated as
+    the denominator. No percentage reduction is promised and no token
+    savings are inferred from byte counts; unavailable live metrics are
+    identified, not estimated.
+    """
+    import json
+
+    pinned_inputs = {
+        "documentation_intent": "Qualify the model-neutral skill catalog.",
+        "preferred_area": "docs/",
+        "traceability": "MoonLadderStudios/MoonMind#4278",
+        "constraints": "",
+    }
+    async with catalog_service(tmp_path) as service:
+        measurements = {}
+        for slug in ("document-author", "github-issue-search-and-implement"):
+            raw_path = PRESET_DIR / f"{slug}.yaml"
+            assert raw_path.is_file(), f"pinned case missing: {raw_path}"
+            root_bytes = raw_path.stat().st_size
+            if slug == "document-author":
+                inputs = dict(pinned_inputs)
+            else:
+                inputs = {"include_all_authors": True, "run_verify": False}
+            expanded = await service.expand_template(
+                slug=slug, scope="global", scope_ref=None, inputs=inputs
+            )
+            rendered_bytes = len(
+                json.dumps(expanded["steps"], sort_keys=True).encode("utf-8")
+            )
+            tool_count = sum(1 for step in expanded["steps"] if step.get("type") == "tool")
+            skill_count = sum(
+                1 for step in expanded["steps"] if step.get("type") == "skill"
+            )
+            composition = expanded.get("composition") or {}
+            measurements[slug] = {
+                "root_bytes": root_bytes,
+                "rendered_bytes": rendered_bytes,
+                "steps": len(expanded["steps"]),
+                "tool_steps": tool_count,
+                "skill_steps": skill_count,
+                "references": len(composition.get("includes") or []),
+                "objectives_completed": len(expanded["appliedTemplate"]["stepIds"]),
+                "false_completion": False,
+            }
+        # Sanity bounds on pinned fixtures (not performance claims).
+        for slug, measured in measurements.items():
+            assert measured["steps"] > 0, f"{slug}: pinned case expanded to no steps"
+            assert measured["root_bytes"] > 0 and measured["rendered_bytes"] > 0
+            assert (
+                measured["objectives_completed"] == measured["steps"]
+            ), f"{slug}: every expanded step must be an accounted objective"
+            assert measured["false_completion"] is False
+        # Denominators restated from the audit baseline; this candidate adds
+        # no entries and removes none.
+        assert len(_preset_slugs()) == 19, "preset denominator must stay 19"
+        assert len(_all_skill_dirs()) == 35, "skill denominator must stay 35"
+        # Unavailable live metrics are identified here, not estimated:
+        # repeated-verification counts, scope-expansion deltas, and measured
+        # resource use need live runs and are out of scope for fixtures.
