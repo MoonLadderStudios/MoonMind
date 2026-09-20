@@ -305,6 +305,13 @@ The selector enables `integration_ci=true` for changes under or matching:
 - `alembic/`
 - `pyproject.toml`
 - `uv.lock`
+- Single-user impact (MoonLadderStudios/MoonMind#4356): settings/secrets/preset
+  routers and services (`api_service/api/routers/settings.py`, `secrets.py`,
+  `presets.py`, `api_service/services/presets/`, `secrets*`, `settings_*`),
+  frontend transport (`frontend/src/lib/api/client.ts` alongside the generated
+  OpenAPI client), worker binding (`moonmind/workflows/temporal/worker_runtime.py`),
+  machine-authority helpers (`moonmind/security/`), and the single-user
+  conformance package (`moonmind/single_user/`, `tests/unit/single_user/`)
 
 This suite validates compose-backed local infrastructure seams and must remain free of external-provider credentials.
 Tests under `tests/integration/reliability/` are explicitly excluded because
