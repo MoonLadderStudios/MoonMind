@@ -3136,57 +3136,48 @@ async def startup_event():
     # probes after startup instead of blocking it.
 
     # Ensure default user exists if auth is disabled.
-    # Single-user (#4349): the default User row lifecycle stays owned by
-    # #4346/#4347 (disabled local mode). Legacy UserProfile seeding from
-    # env keys was removed here: provider credentials resolve from
-    # explicit provider profiles + managed-secret references, and legacy
-    # UserProfile-held values are converted by
-    # api_service.services.profile_secret_migration. This startup path
-    # must not create or update a UserProfile row.
+    # Single-user (#4346, parent #4345; design sections 9-10): the guarded
+    # conversion entrypoint in api_service.services.single_user_conversion
+    # owns upgrade eligibility and the default-User lifecycle (#4346/#4347,
+    # disabled local mode). This startup route consults that guard first
+    # and never seeds a default user or bypasses eligibility: fresh
+    # databases initialize without an account, eligible sources convert
+    # through the explicit entrypoint (preflight/apply_conversion), and
+    # refused sources keep serving unchanged. A restart therefore cannot
+    # seed a default user or publish a candidate on stale attribution.
     from moonmind.security.auth_modes_4120 import is_disabled_local_mode as _is_disabled
 
     if getattr(app.state, "auth_production_mode", "") == "disabled" or _is_disabled():
-        logger.info(
-            "Auth provider is 'disabled'. Ensuring default user exists on startup."
-        )
-        from api_service.auth import (
-            _DEFAULT_USER_ID,
-            get_or_create_default_user,
-            get_user_manager_context,
-        )
+        try:
+            from api_service.services.single_user_conversion import (
+                startup_guard_decision,
+            )
 
-        async with get_async_session_context() as db_session:
-            async with get_user_manager_context(db_session) as user_manager:
-                try:
-                    if (
-                        not settings.oidc.DEFAULT_USER_ID
-                        or not settings.oidc.DEFAULT_USER_EMAIL
-                    ):
-                        logger.warning(
-                            "DEFAULT_USER_ID or DEFAULT_USER_EMAIL not configured. Using built-in defaults."
-                        )
-                    logger.info(
-                        f"Attempting to get/create default user ID: {settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID} on startup."
-                    )
-                    default_user = await get_or_create_default_user(
-                        db_session=db_session, user_manager=user_manager
-                    )
-                    if default_user:
-                        logger.info(
-                            f"Default user {default_user.email} (ID: {default_user.id}) ensured."
-                        )
-                    else:
-                        logger.error("Failed to get or create default user on startup.")
-                except ValueError as ve:
-                    logger.error(
-                        f"Configuration error during default user setup on startup: {ve}"
-                    )
-                except Exception as e:
-                    redacted_error = SecretRedactor.from_environ().scrub(str(e))
-                    logger.error(
-                        "Error ensuring default user/profile on startup: %s",
-                        redacted_error,
-                    )
+            async with get_async_session_context() as guard_session:
+                guard_decision = await startup_guard_decision(guard_session)
+            logger.info(
+                "Single-user conversion guard: disposition=%s reason=%s (%s)",
+                guard_decision.disposition,
+                guard_decision.reason_code,
+                guard_decision.detail or "no further detail",
+            )
+            if not guard_decision.eligible:
+                logger.warning(
+                    "Single-user conversion blocked (%s); preserving source "
+                    "data, serving release, and operator access without "
+                    "conversion-side mutation.",
+                    guard_decision.reason_code,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Single-user conversion guard unreadable (%s); refusing to "
+                "seed a default user without eligibility evidence.",
+                type(exc).__name__,
+            )
+        logger.info(
+            "Skipping default user seeding on startup: User-row lifecycle "
+            "is owned by the #4346 guarded conversion entrypoint."
+        )
     else:
         logger.info(
             f"Auth provider is '{getattr(app.state, 'auth_production_mode', settings.oidc.AUTH_PROVIDER)}'. Skipping default user creation on startup."
