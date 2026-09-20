@@ -258,14 +258,14 @@ DASHBOARD_DESTINATIONS: tuple[DashboardDestination, ...] = (
         page="settings",
     ),
     DashboardDestination(
-        key="settings-user-workspace",
-        label="User / Workspace",
+        key="settings-instance",
+        label="Instance",
         icon_key="settings",
-        canonical_path="/settings/user-workspace",
-        path_patterns=("/settings/user-workspace",),
+        canonical_path="/settings/instance",
+        path_patterns=("/settings/instance",),
         navigation_group="system",
         page_classification="utility",
-        capability_key="settingsUserWorkspace",
+        capability_key="settingsInstance",
         endpoint_key="settings",
         menu_group_key="configuration",
         page="settings",
@@ -633,8 +633,8 @@ _SETTINGS_DESTINATION_PERMISSIONS: dict[
             }
         ),
     ),
-    "settings-user-workspace": (
-        "settingsUserWorkspace",
+    "settings-instance": (
+        "settingsInstance",
         frozenset({"settings.catalog.read"}),
         frozenset(
             {
@@ -692,17 +692,19 @@ def _settings_redirect_url(request: Request, user: User, preferred_destination_k
     Unknown legacy aliases fall back to the first authorized destination.
     """
     canonical = _settings_redirect_path(user, preferred_destination_key)
-    # Preserve safe filters (runtime, scope, q, status, etc.) but drop `section`
+    # Preserve safe filters (runtime, status, etc.) but drop `section`
     # which is retired as page identity (SettingsPage.md 5.3).
     if not request.query_params:
         return canonical
     preserved = [(k, v) for k, v in request.query_params.multi_items() if k != "section"]
     # Filter to page-relevant keys per target to avoid leaking irrelevant filters.
-    # Providers & Secrets owns `runtime`; User/Workspace owns `scope`+`q`; Operations owns `status`.
+    # Providers & Secrets owns `runtime`; Operations owns `status`. The Instance
+    # page keeps no URL-owned filters: stale human-scope params (scope, q) are
+    # dropped rather than reused after the account-free cutover (MoonMind#4353).
     if preserved:
         allow_by_target = {
             "/settings/providers-secrets": {"runtime"},
-            "/settings/user-workspace": {"scope", "q"},
+            "/settings/instance": set(),
             "/settings/operations": {"status"},
             "/settings": set(),
         }

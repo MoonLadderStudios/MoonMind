@@ -1623,7 +1623,7 @@ def build_runtime_config(
         "statusMaps": status_maps(),
         "sources": {
             "schedules": {
-                "list": "/api/recurring-workflows?scope=personal",
+                "list": "/api/recurring-workflows",
                 "create": "/api/recurring-workflows",
                 "detail": "/api/recurring-workflows/{definitionId}",
                 "update": "/api/recurring-workflows/{definitionId}",
