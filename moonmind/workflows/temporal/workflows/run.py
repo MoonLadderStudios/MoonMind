@@ -1278,7 +1278,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         # say which closed turn source a Step Execution launches under.
         self._canonical_turn_lineage_by_step: dict[str, dict[str, Any]] = {}
         self._original_input_payload: dict[str, Any] = {}
-        self._moonspec_environment_blocked_publish_action_snapshot: str = "fail"
         self._moonspec_draft_publication_reason: Optional[str] = None
         # A valid verifier can stop workflow routing without fabricating a
         # failed execution.  This compact evidence is added to incident output.
@@ -9040,9 +9039,9 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
 
     def _apply_blocking_moonspec_gate_to_publish(self) -> bool:
         if self._moonspec_draft_publication_reason is not None:
-            # Draft publication (operator policy draft_pr) supersedes the
-            # fail-closed block: the run publishes a draft PR annotated as
-            # verification-incomplete instead of blocking publication.
+            # Draft publication supersedes the fail-closed block: the run
+            # publishes a draft PR annotated as verification-incomplete
+            # instead of blocking publication.
             return False
         reason = self._blocking_moonspec_gate_reason()
         if not reason:
@@ -9052,16 +9051,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
         self._publish_reason = reason
         self._publish_context["publicationBlockedBy"] = "moonspec_verify"
         return True
-
-    @staticmethod
-    def _normalize_moonspec_environment_blocked_publish_action(value: Any) -> str:
-        action = str(value or "fail").strip().lower()
-        return action if action in {"fail", "draft_pr"} else "fail"
-
-    def _moonspec_environment_blocked_publish_action(self) -> str:
-        return self._normalize_moonspec_environment_blocked_publish_action(
-            self._moonspec_environment_blocked_publish_action_snapshot
-        )
 
     def _moonspec_gate_qualifies_for_draft_publish(self) -> bool:
         """Environment-class gate outcomes eligible for draft publication.
@@ -9102,7 +9091,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             return "draft_pr_on_additional_work_needed"
         if (
             environment_blocked_enabled
-            and self._moonspec_environment_blocked_publish_action() == "draft_pr"
             and self._moonspec_gate_qualifies_for_draft_publish()
         ):
             return "draft_pr_on_environment_blocked"
@@ -9169,9 +9157,8 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 )
         else:
             explanation = (
-                "the operator policy "
-                "`workflow.moonspec_environment_blocked_publish_action` is "
-                "`draft_pr`"
+                "the verification gate stopped with an environment-class "
+                "outcome before publication could be approved"
             )
         lines = [
             "## MoonSpec verification incomplete",
@@ -11285,12 +11272,6 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
             input_payload,
             "initialParameters",
             "initial_parameters",
-        )
-        self._moonspec_environment_blocked_publish_action_snapshot = (
-            self._normalize_moonspec_environment_blocked_publish_action(
-                parameters.get("moonspecEnvironmentBlockedPublishAction")
-                or parameters.get("moonspec_environment_blocked_publish_action")
-            )
         )
         recovery_source = self._mapping_value(
             parameters, "recoverySource", "recovery_source"
@@ -18728,21 +18709,18 @@ class MoonMindRunWorkflow(RunFailureDiagnostics):
                 self._pull_request_url or self._publish_context.get("pullRequestUrl"),
                 max_chars=500,
             )
-            if pull_request_url:
+            if not pull_request_url:
                 return (
                     "failed",
-                    "Workflow failed MoonSpec verification; incomplete work was "
-                    f"preserved in draft pull request {pull_request_url}. "
+                    "Workflow failed MoonSpec verification and draft pull request "
+                    "publication did not complete. "
                     f"{self._moonspec_draft_publication_reason}",
                     True,
                 )
-            return (
-                "failed",
-                "Workflow failed MoonSpec verification and draft pull request "
-                "publication did not complete. "
-                f"{self._moonspec_draft_publication_reason}",
-                True,
-            )
+            # MoonLadderStudios/MoonMind#4442: preserved work falls through to
+            # the normal published outcome. Finalization completes the run
+            # with attention_required and the verification reason instead of
+            # failing it.
         if self._publish_status == "skipped":
             if publish_mode == "pr":
                 self._publish_status = "failed"
