@@ -12,8 +12,10 @@ from moonmind.omnigent.bootstrap.evidence import (
 )
 from moonmind.omnigent.deployment_evidence import (
     assert_deployment_evidence_matches_plan,
+    find_deployment_evidence_entry,
     load_deployment_evidence,
     load_deployment_evidence_entries,
+    sign_deployment_evidence,
     validate_deployment_evidence,
 )
 from moonmind.omnigent.harness_platform.support import (
@@ -95,21 +97,22 @@ def test_publisher_preserves_independent_materializer_qualifications(
     }
     assert len(json.loads(path.read_text(encoding="utf-8"))["entries"]) == 2
 
-    replacement = _evidence(
+    # A new model digest is a different exact support combination. Publishing
+    # it qualifies that combination; it supersedes nothing, so the previous
+    # document survives and the other credential class is untouched.
+    added = _evidence(
         "opencode-auth-json@1",
         profile_ref="opencode-go-default",
         model_digest="sha256:" + "b" * 64,
     )
-    write_deployment_evidence(replacement, path=path)
+    write_deployment_evidence(added, path=path)
 
-    replaced = load_deployment_evidence_entries(path=path)
-    assert len(replaced) == 2
-    go_entry = next(
-        entry
-        for entry in replaced
-        if entry.support_identity.materializerRefs == ("opencode-auth-json@1",)
-    )
-    assert go_entry.support_identity.modelConfigDigest == "sha256:" + "b" * 64
+    published = load_deployment_evidence_entries(path=path)
+    assert {entry.support_combination_key for entry in published} == {
+        go_evidence["supportCombinationKey"],
+        zen_evidence["supportCombinationKey"],
+        added["supportCombinationKey"],
+    }
 
 
 def test_none_fast_path_tolerates_volatile_build_drift_but_blocks_isolation_drift(
@@ -263,6 +266,19 @@ def test_profile_drift_reports_closest_identity_without_historical_error_explosi
     # Diagnostics do not change admission: one valid exact row still works.
     path.write_text(json.dumps({"entries": [historical] * 300 + [evidence]}))
     assert load_deployment_evidence(exact_plan, path=path) == evidence
+
+
+def _variant(evidence: dict, *, agent_source: str) -> dict:
+    """One sibling document in the same deployment qualification class."""
+
+    identity = _identity("opencode-auth-json@1").model_copy(
+        update={"agentSourceRef": "agent-source:sha256:" + agent_source * 64}
+    )
+    return {
+        **evidence,
+        "supportIdentity": identity.model_dump(mode="json", by_alias=True),
+        "supportCombinationKey": compute_support_combination_key(identity),
+    }
 
 
 def _reissue(evidence: dict, *, generated_at: datetime, ttl_days: int = 30) -> dict:
@@ -452,3 +468,152 @@ def test_plan_match_selects_on_the_qualification_key_and_host_image(
         assert_deployment_evidence_matches_plan(
             auth, SimpleNamespace(supportIdentity=None, hostImageRef=image)
         )
+
+
+def test_readiness_probe_and_admission_select_the_same_document(
+    tmp_path, monkeypatch,
+) -> None:
+    """A rollout gate must not call a class expired that admission accepts.
+
+    ``find_deployment_evidence_entry`` reports readiness on the same
+    qualification key admission selects on. Once a class can hold more than one
+    published document, returning a different document than admission does lets
+    the gate reject a plan the loader would have qualified.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
+        str(tmp_path / "deployment_evidence_key"),
+    )
+    now = datetime.now(UTC)
+    current = _reissue(
+        _evidence("opencode-auth-json@1", profile_ref="opencode-go-default"),
+        generated_at=now - timedelta(days=1),
+    )
+    stale = _reissue(
+        _variant(current, agent_source="d"), generated_at=now - timedelta(days=60)
+    )
+    path = tmp_path / "deployment-evidence.json"
+    # Publication order deliberately puts the expired document first.
+    path.write_text(json.dumps({"entries": [stale, current]}))
+
+    identity = _identity("opencode-auth-json@1")
+    entry = find_deployment_evidence_entry(identity, path=path)
+    assert entry is not None
+    assert entry.generated_at.isoformat() == current["generatedAt"].replace(
+        "Z", "+00:00"
+    )
+    plan = SimpleNamespace(
+        supportIdentity=identity,
+        supportCombinationKey=current["supportCombinationKey"],
+        hostImageRef=current["hostImageRef"],
+    )
+    assert load_deployment_evidence(plan, path=path)["generatedAt"] == (
+        current["generatedAt"]
+    )
+
+
+def test_unusable_qualification_reports_a_bounded_reason(
+    tmp_path, monkeypatch,
+) -> None:
+    """Routine expiry must stay distinguishable from missing qualification.
+
+    A published class whose documents have all lapsed is an actionable,
+    different problem from a combination this deployment never qualified.
+    Candidate documents are untrusted until schema, secret scan, and HMAC pass,
+    so the reason must come from this module's own bounded vocabulary.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
+        str(tmp_path / "deployment_evidence_key"),
+    )
+    now = datetime.now(UTC)
+    evidence = _evidence("opencode-auth-json@1", profile_ref="opencode-go-default")
+    expired = _reissue(evidence, generated_at=now - timedelta(days=60))
+    path = tmp_path / "deployment-evidence.json"
+    path.write_text(json.dumps({"entries": [expired]}))
+
+    plan = SimpleNamespace(
+        supportIdentity=_identity("opencode-auth-json@1"),
+        supportCombinationKey=evidence["supportCombinationKey"],
+        hostImageRef=evidence["hostImageRef"],
+    )
+    with pytest.raises(ValueError) as failure:
+        load_deployment_evidence(plan, path=path)
+    message = str(failure.value)
+    assert "expired" in message
+    assert "not qualified" not in message
+    assert len(message) < 900
+
+    # An unverifiable document reports the bounded structural reason and never
+    # quotes the candidate it came from.
+    forged = {
+        **expired,
+        "signature": {**expired["signature"], "value": "0" * 64},
+        "provider": {**expired["provider"], "profileRef": "untrusted-private-value"},
+    }
+    path.write_text(json.dumps({"entries": [forged]}))
+    with pytest.raises(ValueError) as failure:
+        load_deployment_evidence(plan, path=path)
+    message = str(failure.value)
+    assert "verification" in message
+    assert "untrusted-private" not in message
+
+
+def test_publisher_supersedes_only_the_combination_it_requalifies(
+    tmp_path, monkeypatch,
+) -> None:
+    """Publication must not destroy valid evidence it did not supersede.
+
+    Two documents in one qualification class describe two exact support
+    combinations. Dropping the whole class on every publish deletes signed,
+    unexpired evidence — including the only document a retained or rolled-back
+    worker generation can still match — so a publish replaces the exact
+    combination it requalifies and nothing else.
+    """
+    monkeypatch.setenv(
+        "MOONMIND_DEPLOYMENT_EVIDENCE_KEY_PATH",
+        str(tmp_path / "deployment_evidence_key"),
+    )
+    path = tmp_path / "deployment-execution-evidence.json"
+    first = _evidence("opencode-auth-json@1", profile_ref="opencode-go-default")
+    write_deployment_evidence(first, path=path)
+
+    # Same deployment class, different exact combination (another agent source).
+    other_source = sign_deployment_evidence(
+        {
+            key: value
+            for key, value in _variant(first, agent_source="d").items()
+            if key != "signature"
+        }
+    )
+    write_deployment_evidence(other_source, path=path)
+    keys = {
+        entry.support_combination_key
+        for entry in load_deployment_evidence_entries(path=path)
+    }
+    assert keys == {
+        first["supportCombinationKey"],
+        other_source["supportCombinationKey"],
+    }
+
+    # Requalifying one exact combination replaces only that document.
+    requalified = sign_deployment_evidence(
+        {
+            key: value
+            for key, value in first.items()
+            if key != "signature"
+        }
+        | {"results": {"readQualification": "passed", "writeQualification": "passed"}}
+    )
+    write_deployment_evidence(requalified, path=path)
+    entries = load_deployment_evidence_entries(path=path)
+    assert {entry.support_combination_key for entry in entries} == keys
+    replaced = next(
+        entry
+        for entry in entries
+        if entry.support_combination_key == first["supportCombinationKey"]
+    )
+    assert replaced.results == {
+        "readQualification": "passed",
+        "writeQualification": "passed",
+    }
