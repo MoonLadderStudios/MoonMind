@@ -154,6 +154,10 @@ async def test_force_cancel_stale_terminal_parent_without_worker(tmp_path, monke
 
 @pytest.mark.parametrize("orphan", [False, True])
 async def test_force_cancel_absent_run_preserves_ownership(tmp_path, monkeypatch, orphan):
+    # Single-user (#4351): executions are instance resources. Any admitted
+    # operator controls any execution without a human-owner lookup; legacy
+    # owner_id strings persist as provenance. Wrong-execution machine denial
+    # stays covered by artifact/binding tests, not by operator 404s.
     client = await connect()
     async with temporal_db(tmp_path) as session:
         record = await add_record(session, "missing-" + uuid4().hex, str(uuid4()), orphan=orphan)
@@ -162,8 +166,13 @@ async def test_force_cancel_absent_run_preserves_ownership(tmp_path, monkeypatch
         monkeypatch.setattr(service, "_best_effort_terminate_workflow_scoped_managed_sessions", cleanup)
         async with api(service, monkeypatch, owner="different-owner") as http:
             response = await http.post(f"/api/executions/{record.workflow_id}/cancel", json={"graceful": False})
-            assert response.status_code == 404
-        assert record.state == MoonMindWorkflowState.EXECUTING
+            assert response.status_code == 202, response.text
+            assert response.json()["closeStatus"] == "canceled"
+            assert "Temporal execution not found" in response.json()["summary"]
+        await session.refresh(record)
+        assert record.state == MoonMindWorkflowState.CANCELED
+        assert record.closed_at is not None
+        # A second operator retry stays idempotent and safe.
         async with api(service, monkeypatch) as http:
             response = await http.post(f"/api/executions/{record.workflow_id}/cancel", json={"graceful": False})
             assert response.status_code == 202, response.text
