@@ -150,6 +150,37 @@ def _raise_if_probe_substrate_unavailable(
     )
 
 
+# A mounted-tool version probe attests the delivered build: that the pinned
+# executable is present and reports its manifest-declared version. It must not
+# inherit the host's runtime configuration, because a tool can be built exactly
+# right and still refuse to run under a broken credential projection -- `gh`
+# fails every command, including `--version`, while its config awaits the
+# network-dependent multi-account migration. Probing under a cleared
+# environment keeps that failure with its own owner instead of reporting a
+# healthy build as OMNIGENT_HARNESS_BUILD_MISMATCH.
+_PROBE_CLEARED_ENVIRONMENT = (
+    'exec env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/nonexistent "$@"'
+)
+
+
+def mounted_tool_probe_argv(
+    container_name: str, executable: str, probe: list[str]
+) -> list[str]:
+    """Return the exact-host command that attests one mounted tool build."""
+
+    return [
+        "docker",
+        "exec",
+        container_name,
+        "/bin/sh",
+        "-ceu",
+        _PROBE_CLEARED_ENVIRONMENT,
+        "--",
+        executable,
+        *probe,
+    ]
+
+
 def _model_ids(value: Any) -> set[str]:
     found: set[str] = set()
     if isinstance(value, str):
@@ -772,13 +803,9 @@ class DockerOmnigentHostAttestor:
                     actual_digest and actual_digest in expected_digests
                 )
                 code, observed, err = await self._backend.run(
-                    [
-                        "docker",
-                        "exec",
-                        launch_result["containerName"],
-                        executable,
-                        *probe,
-                    ],
+                    mounted_tool_probe_argv(
+                        launch_result["containerName"], executable, list(probe)
+                    ),
                     timeout_seconds=10.0,
                     check=False,
                 )
