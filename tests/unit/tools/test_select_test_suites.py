@@ -590,7 +590,6 @@ def test_profile_authoring_changes_run_renderer_and_admission_replay(path):
 @pytest.mark.parametrize(
     "path",
     [
-        "moonmind/workflows/skills/deployment_availability.py",
         "moonmind/workflows/skills/deployment_release.py",
         "moonmind/workflows/temporal/worker_runtime.py",
         "api_service/services/recurring_workflows_service.py",
@@ -817,6 +816,45 @@ def test_ci_required_aggregator_fails_on_bad_selected_results():
     assert subprocess.run(["bash", "--version"], capture_output=True).returncode == 0
 
 
+def test_ci_required_backend_matrix_states():
+    """MoonLadderStudios/MoonMind#4366 R7: every selected reliability shard
+    funnels through the backend-matrix aggregate, so a failed, timed-out,
+    canceled, or unexpectedly skipped matrix entry fails ci-required while
+    an intentionally unselected matrix stays an intentional skip."""
+    assert _run_aggregator([("backend-matrix", "true", "success")]) == 0
+    assert _run_aggregator([("backend-matrix", "true", "failure")]) == 1
+    assert _run_aggregator([("backend-matrix", "true", "cancelled")]) == 1
+    # A selected matrix that reports skipped did not run its shards.
+    assert _run_aggregator([("backend-matrix", "true", "skipped")]) == 1
+    assert _run_aggregator([("backend-matrix", "true", "")]) == 1
+    # An intentionally unselected matrix remains an intentional skip; any
+    # other result for an unselected matrix fails.
+    assert _run_aggregator([("backend-matrix", "false", "skipped")]) == 0
+    assert _run_aggregator([("backend-matrix", "false", "success")]) == 1
+    assert _run_aggregator([("backend-matrix", "false", "failure")]) == 1
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "tests/.reliability-test-durations.json",
+        "tools/ci/reliability_shard_weights.json",
+        "tools/ci/refresh_reliability_durations.py",
+        "tools/ci/write_backend_matrix_summary.py",
+    ],
+)
+def test_reliability_sharding_inputs_select_the_reliability_corpus(changed_path):
+    """MoonLadderStudios/MoonMind#4366 R8: dependency-adjacent timing-hint
+    and sharding-evidence changes select the reliability corpus (whose
+    shards consume them), without escalating to full verification or
+    pulling in unrelated suites."""
+    assert (REPO_ROOT / changed_path).exists(), changed_path
+    outputs = _outputs([changed_path])
+    assert outputs["reliability_journey"] == "true", changed_path
+    assert outputs["integration_ci"] == "false", changed_path
+    assert outputs["full_backend"] == "false", changed_path
+
+
 def test_selector_documents_qualified_infra_ownership():
     """MoonLadderStudios/MoonMind#3950 R6: the selector header must name the
     qualified #3885/#3832 owners of the PostgreSQL/Temporal/Docker boundaries
@@ -857,3 +895,36 @@ def test_shared_resource_changes_require_real_docker_journey():
         "tests/integration/reliability/test_container_job_authority_journey.py",
     ):
         assert select_suites([path]).reliability_journey, path
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "api_service/services/profile_secret_migration.py",
+        "tests/unit/single_user/test_first_run_4356.py",
+        "tests/integration/single_user/test_first_run_4356.py",
+        "tests/integration/single_user/test_protected_ingress_4356.py",
+        "tests/integration/single_user/test_machine_authority_4356.py",
+        "moonmind/security/container_job_capabilities.py",
+        "moonmind/workflows/temporal/worker_runtime.py",
+    ],
+)
+def test_single_user_taxonomy_selects_integration_ci(changed_path: str) -> None:
+    """MoonLadderStudios/MoonMind#4356 R8: single-user rows own integration_ci.
+
+    Canonical taxonomy pin: a change to the credential-conversion service,
+    its unit or integration suites, or the machine-authority/worker-binding
+    seams must run the hermetic integration foundation. Aggregation needs no
+    workflow change: .github/workflows/pytest-unit-tests.yml already runs
+    the integration-ci job whenever integration_ci=true.
+    """
+    outputs = _outputs([changed_path])
+    assert outputs["unit_fast"] == "true", changed_path
+    assert outputs["integration_ci"] == "true", changed_path
+
+
+def test_single_user_integration_never_selects_reliability_journey() -> None:
+    """Single-user integration suites stay out of the reliability corpus."""
+    outputs = _outputs(["tests/integration/single_user/test_first_run_4356.py"])
+    assert outputs["integration_ci"] == "true"
+    assert outputs["reliability_journey"] == "false"
