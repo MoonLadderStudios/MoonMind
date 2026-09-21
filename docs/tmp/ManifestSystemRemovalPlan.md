@@ -75,7 +75,7 @@ Use targeted development tests and current-candidate GitHub Actions for broader 
 
 Repository completion means the product is removed from actual supported admission, registration, implementation, packaging, persistence ownership, UI/CLI, and generated interfaces while retained behavior has relevant execution evidence. An absent page, passing grep, or closed-ticket count is insufficient.
 
-This can be reported independently of live rollout if any remaining deployment and retention obligations stay explicitly tracked in #4189. A unavailable live device is not a failed implementation test and must not consume repeated code-remediation attempts. No fixture, current-candidate CI run, or model verdict certifies a production inventory or cutover.
+This can be reported independently of live rollout if any remaining deployment and retention obligations stay explicitly tracked in #4189. An unavailable live device is not a failed implementation test and must not consume repeated code-remediation attempts. No fixture, current-candidate CI run, or model verdict certifies a production inventory or cutover.
 
 The operator uses three independent deployments. Each targeted deployment is observed separately when authorized. Evidence from one neither certifies another nor imposes an all-three readiness gate on a safe individual update or on repository CI. Do not claim the whole fleet migrated until all relevant observations actually exist.
 
