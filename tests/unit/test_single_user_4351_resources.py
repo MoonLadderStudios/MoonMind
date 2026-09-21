@@ -9,7 +9,6 @@ binding isolation, and GitHub claim continuation semantics.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -180,12 +179,13 @@ def test_policy_instance_visibility_preserves_versions_and_permissions():
 
 def test_artifact_operator_visibility_and_machine_isolation(monkeypatch):
     """R1/R5: operator sees instance artifacts; another execution is denied."""
-    import moonmind.workflows.temporal.artifacts as artifact_module
+    from moonmind.workflows.temporal import artifacts as artifact_module
 
     monkeypatch.setattr(artifact_module, "is_disabled_local_mode", lambda: False)
     service = TemporalArtifactService.__new__(TemporalArtifactService)
     assert service._is_instance_operator_principal("operator") is True
-    assert service._is_instance_operator_principal("system") is True
+    # The bare system owner value is machine scope, never the HTTP operator.
+    assert service._is_instance_operator_principal("system") is False
     assert service._is_instance_operator_principal(str(uuid4())) is True
     assert service._is_instance_operator_principal("workflow:mm:abc") is False
     assert service._is_instance_operator_principal("service:runner") is False
@@ -203,7 +203,7 @@ def test_artifact_operator_visibility_and_machine_isolation(monkeypatch):
 @pytest.mark.asyncio
 async def test_artifact_operator_read_bypasses_legacy_owner(monkeypatch):
     """R2: legacy human-owner strings do not hide artifacts from the operator."""
-    import moonmind.workflows.temporal.artifacts as artifact_module
+    from moonmind.workflows.temporal import artifacts as artifact_module
 
     monkeypatch.setattr(artifact_module, "is_disabled_local_mode", lambda: False)
     service = TemporalArtifactService.__new__(TemporalArtifactService)
@@ -500,7 +500,7 @@ async def test_recurring_cutover_preserves_cadence_and_frozen_inputs(tmp_path: P
 @pytest.mark.asyncio
 async def test_machine_binding_success_and_cross_execution_deny(monkeypatch):
     """R5: owning execution succeeds; another execution is denied; raw stays gated."""
-    import moonmind.workflows.temporal.artifacts as artifact_module
+    from moonmind.workflows.temporal import artifacts as artifact_module
     from moonmind.workflows.temporal import artifacts as artifact_models
 
     monkeypatch.setattr(artifact_module, "is_disabled_local_mode", lambda: False)
@@ -582,7 +582,6 @@ def test_r1_preserved_restrictions_boundary_assignment():
     profiles keep owner checks. The shared admission boundary
     (get_current_user) still owns operator access.
     """
-    import pytest as _pytest
     from fastapi import HTTPException
 
     from api_service.api.routers import provider_profiles as provider_router
@@ -590,7 +589,7 @@ def test_r1_preserved_restrictions_boundary_assignment():
     from api_service.services import settings_catalog
 
     # Credential transport: non-superuser import stays 403.
-    with _pytest.raises(HTTPException):
+    with pytest.raises(HTTPException):
         provider_router._require_privileged_credential_volume_import(
             SimpleNamespace(is_superuser=False)
         )
@@ -650,7 +649,7 @@ def test_r2_owner_columns_nullable_and_backend_agnostic():
 
 
 def test_r3_retained_history_replay_is_deterministic_without_user_table():
-    """R3: retained workflow/activity/update/signal payloads replay deterministically."""
+    """R3: retained payload examples decode deterministically (not event histories)."""
     temporal = TemporalExecutionService.__new__(TemporalExecutionService)
     legacy_id = str(uuid4())
     retained = [
@@ -760,7 +759,7 @@ async def test_r4_schedule_action_payload_cutover_uses_real_bundle(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_r5_artifact_control_and_raw_boundary(monkeypatch):
     """R5: owning-execution control succeeds; cross-execution control denied."""
-    import moonmind.workflows.temporal.artifacts as artifact_module
+    from moonmind.workflows.temporal import artifacts as artifact_module
 
     monkeypatch.setattr(artifact_module, "is_disabled_local_mode", lambda: False)
     service = TemporalArtifactService.__new__(TemporalArtifactService)
@@ -955,7 +954,7 @@ async def test_r1d_owned_execution_returns_foreign_record():
 
 
 def test_r3b_decoders_preserve_scheduling_identity():
-    """R3: history decoders never rewrite schedule/execution identity fields."""
+    """R3: payload decoders never rewrite schedule/execution identity fields."""
     temporal = TemporalExecutionService.__new__(TemporalExecutionService)
     payload = {
         "workflow_type": "MoonMind.UserWorkflow",
@@ -1292,7 +1291,7 @@ async def test_r2c_eligible_conversion_pg_parity():
 
 
 def test_r3c_retained_history_fixture_replays_without_user_table():
-    """R3: fixture histories replay deterministically via real decoders."""
+    """R3: fixture payload examples decode deterministically via real decoders."""
     import json
 
     temporal = TemporalExecutionService.__new__(TemporalExecutionService)

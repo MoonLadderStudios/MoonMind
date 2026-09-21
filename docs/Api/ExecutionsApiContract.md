@@ -85,7 +85,7 @@ All request/response bodies are JSON with camelCase external fields.
 
 All operations require an authenticated user except the exact create/describe operations authorized by section 6.5. Ownership is derived from authentication, never a caller-set create field.
 
-Non-admin list requests are scoped to the caller. Listing another owner returns 403. Non-admin direct describe/update/signal/cancel for a nonexistent or invisible workflow returns 404 to avoid disclosing another owner's execution. Admin access remains policy-controlled.
+Single-user operation (#4351) is instance-visible: the admitted operator lists, describes, and controls every execution without a human-owner lookup. Owner filters (`ownerType`/`ownerId`) pass through as provenance selectors, never 403 gates; direct describe/update/signal/cancel for a nonexistent workflow returns 404 without disclosing another execution. New executions default to the instance (`SYSTEM`) owner while retained human-owner values persist as non-authoritative provenance.
 
 A schema, required-capability token, selected preset, copied parent ID, or publication mode is not an authorization grant. Repository credentials, allowed operations, runtime/model authority, artifacts, and tracker effects are independently validated through their existing owners.
 
