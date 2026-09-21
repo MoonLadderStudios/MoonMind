@@ -235,18 +235,18 @@ files = [
 
 [[package]]
 name = "anthropic"
-version = "1.5.0"
+version = "1.6.0"
 description = "The official Python library for the anthropic API"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "anthropic-1.5.0-py3-none-any.whl", hash = "sha256:d9ce04b29ad1f7025dda3e3bc478cde8d2924d2de5417d2d4a4bb0378ecbc2a6"},
-    {file = "anthropic-1.5.0.tar.gz", hash = "sha256:b25f87f5758861f25993383a5c9bf274eb6e0f1b010c84019ad91854cb4e1bc6"},
+    {file = "anthropic-1.6.0-py3-none-any.whl", hash = "sha256:049434f013d3a874acdfee696ec626e19166d58f4277e8fa34e5d0a5ec250ad0"},
+    {file = "anthropic-1.6.0.tar.gz", hash = "sha256:ce3c032f940984f67c516db896375bff36959f8dc589973e386f8e6ea81bbec3"},
 ]
 
 [package.dependencies]
-anyio = ">=3.5.0,<5"
+anyio = ">=4.1.0,<5"
 docstring-parser = ">=0.15,<1"
 httpx2 = ">=2.0.0,<3"
 jiter = ">=0.4.0,<1"
@@ -4572,4 +4572,4 @@ tests = ["aiosqlite", "pytest", "pytest-asyncio", "pytest-mock", "pytest-split",
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "5dfec2c782e56c5598b4976c98b42dbdbb1d4375c49592d96113deacc09a9398"
+content-hash = "1f9e7fa272626596dc17742d867aa4bab2b8a059cc94cc55c27f77ef1a9bfdc2"
