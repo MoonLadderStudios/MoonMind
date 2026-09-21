@@ -31,7 +31,6 @@ from api_service.operator_admission import (
     require_operator,
 )
 from moonmind.security.operator_admission import (
-    STREAM_REVALIDATION_SECONDS,
     OperatorAdmission,
     OperatorAdmissionError,
     OperatorStreamPolicy,
@@ -186,7 +185,11 @@ async def operator_console(websocket: WebSocket) -> None:
                 return
             await websocket.send_text(f"echo via {admission.via}: {message}")
     except Exception:
+        # Best-effort close after an unexpected stream error: the socket may
+        # already be broken, so a failing close must not raise or mask the
+        # original failure.
         try:
             await websocket.close(code=1011, reason="operator_error")
         except Exception:
+            # The peer is gone or the socket never accepted; nothing to do.
             pass

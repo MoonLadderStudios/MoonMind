@@ -107,10 +107,16 @@ from api_service.api.routers.auth_advanced_4124 import router as auth_advanced_4
 from api_service.api.routers.accounts_4122 import router as accounts_4122_router
 from api_service.api.routers.issue_lifecycle import router as issue_lifecycle_router
 from api_service.api.websockets import router as websockets_router
-from api_service.api.routers.operator_boundary_4347 import (
-    router as operator_boundary_router,
-    ws_router as operator_boundary_ws_router,
-)
+# NOTE (#4347, #4455 review): the operator-boundary demonstration routers
+# (api_service.api.routers.operator_boundary_4347) are intentionally NOT
+# mounted in production. They are test scaffolding exercising the shared
+# admission primitive (moonmind.security.operator_admission) across HTTP,
+# artifact, SSE, and WebSocket shapes. Mounting them beside the product
+# routes would create a parallel /operator/* API instead of migrating the
+# real workflow, artifact, stream, and chat consumers through one shared
+# boundary. Real-consumer migration stays tracked in open #4347; this
+# deployment keeps the existing product routes on their current auth
+# until each consumer migrates with its machine-authority separation.
 from api_service.db.base import get_async_session_context
 from api_service.services.presets.catalog import PresetCatalogService
 from api_service.ui_assets import resolve_dashboard_dist_root
@@ -1466,13 +1472,12 @@ app.include_router(workflow_console_router)
 app.include_router(presets_router)
 app.include_router(temporal_artifacts_router)
 app.include_router(websockets_router, prefix="/ws/v1", tags=["WebSockets"])
-# Single-user operator-admission boundary (#4347): one shared admission
-# path (loopback for fresh local operation, the configured trusted
-# ingress for remote operation) across HTTP queries/mutations, artifact
-# previews/downloads, SSE, WebSocket handshake/reconnects, and control
-# actions. No User table, seeded identity, or app-login service on path.
-app.include_router(operator_boundary_router)
-app.include_router(operator_boundary_ws_router, prefix="/ws/v1/operator")
+# Single-user operator-admission boundary (#4347): the shared primitive lives
+# in moonmind.security.operator_admission with its FastAPI adapter in
+# api_service.operator_admission. Demonstration routers are test-only (see
+# tests/unit/api/test_operator_boundary_mount_4347.py) and are not mounted
+# here, so no parallel /operator/* production API is introduced before real
+# workflow, artifact, stream, and chat consumers migrate (open #4347).
 # Advanced identity sources (#4124): generic OIDC + trusted-proxy journeys
 # through the shared auth boundary. Endpoints fail closed when the classified
 # production mode does not select them.

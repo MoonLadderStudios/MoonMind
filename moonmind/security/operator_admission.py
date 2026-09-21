@@ -215,6 +215,95 @@ def _public_base_url(environ: Mapping | None = None) -> str:
         return ""
 
 
+def _is_loopback_base_url(base_url: str) -> bool:
+    """Whether a configured base URL is an explicit loopback URL (local path).
+
+    Reuses the existing base-URL authority
+    (``public_base_url_is_loopback``) so ``http://127.0.0.1:7000``,
+    ``http://localhost:7000``, and loopback IPv6 stay on the fresh-local
+    loopback path instead of forcing remote trusted-ingress proof.
+    Blank or unparseable values return False; callers keep blank handling.
+    """
+    text = (base_url or "").strip()
+    if not text:
+        return False
+    try:
+        from moonmind.security.auth_modes_4120 import (
+            public_base_url_is_loopback as _authority_is_loopback,
+        )
+
+        return bool(_authority_is_loopback(text))
+    except Exception:
+        try:
+            host = urlsplit(text).hostname or ""
+        except ValueError:
+            return False
+        return _is_loopback_host(host)
+
+
+def _local_origin_denied(*, candidate: str, host_header: str | None) -> bool:
+    """Whether a presented local Origin/Referer must be denied.
+
+    Compares the complete origin (scheme, hostname, effective port) and
+    rejects any presented value that cannot be parsed (including opaque
+    ``null``). Host-only comparison would accept ``http://localhost:3000``
+    for ``Host: localhost:7000`` despite different browser origins.
+    """
+    text = (candidate or "").strip()
+    if not text:
+        return False
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return True
+    candidate_host = (parts.hostname or "").lower()
+    if not candidate_host:
+        return True
+    scheme = (parts.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return True
+    host_text = (host_header or "").strip()
+    if not host_text:
+        return True
+    # Host header carries host[:port] without a scheme; compare hostname
+    # plus effective port. The request scheme is unknown here, so accept
+    # either http or https default only when the candidate port matches
+    # the Host port (or its scheme default).
+    request_host = _host_part(host_header)
+    if not request_host:
+        return True
+    if candidate_host != request_host:
+        return True
+    try:
+        host_port: int | None = None
+        raw_host = host_text.lower()
+        if raw_host.startswith("["):
+            end = raw_host.find("]")
+            rest = raw_host[end + 1 :] if end != -1 else ""
+            if rest.startswith(":"):
+                host_port = int(rest[1:].split("/")[0].strip() or 0) or None
+        elif ":" in raw_host:
+            tail = raw_host.rsplit(":", 1)[1].split("/")[0].strip()
+            try:
+                host_port = int(tail) or None
+            except ValueError:
+                host_port = None
+    except (ValueError, IndexError):
+        host_port = None
+    try:
+        candidate_port = parts.port
+    except ValueError:
+        return True
+    if host_port is not None:
+        return candidate_port != host_port and _effective_port(
+            scheme, candidate_port
+        ) != host_port and not (
+            candidate_port is None
+            and _effective_port(scheme, None) == host_port
+        )
+    return False
+
+
 def _check_host_and_origin(
     *,
     method: str,
@@ -266,15 +355,15 @@ def _check_host_and_origin(
         # Local-only deployment: still stop DNS-rebinding-style mutations
         # where a foreign page drives the loopback backend. Only deny when
         # a foreign Origin/Referer is actually presented; CLI/API clients
-        # without one are unaffected.
+        # without one are unaffected. The complete origin (scheme, host,
+        # effective port) must match the Host; opaque or unparsable values
+        # such as ``null`` are denied.
         if upper_method not in _SAFE_METHODS:
             candidate = (origin or "").strip() or (referer or "").strip()
-            if candidate and host_header:
-                try:
-                    candidate_host = (urlsplit(candidate).hostname or "").lower()
-                except ValueError:
-                    candidate_host = ""
-                if candidate_host and candidate_host != _host_part(host_header):
+            if candidate:
+                if _local_origin_denied(
+                    candidate=candidate, host_header=host_header
+                ):
                     raise OperatorAdmissionError(
                         "origin_forbidden",
                         "Cross-origin mutation is not admitted.",
@@ -300,8 +389,24 @@ def _trusted_proxies(environ: Mapping | None = None) -> tuple[str, ...]:
 
 
 def _client_matches_proxies(client_host: str | None, proxies: tuple[str, ...]) -> bool:
+    """Whether a connecting peer matches the configured trusted proxies.
+
+    Reuses the existing trusted-proxy matcher
+    (``moonmind.security.trusted_proxy_4124._peer_is_trusted``), which pins
+    configured hostnames against numeric peers via DNS. A divergent local
+    implementation would skip hostname entries for numeric peers and force
+    ``auth_required`` on supported reverse-proxy configurations.
+    """
     if not client_host or not proxies:
         return False
+    try:
+        from moonmind.security.trusted_proxy_4124 import (
+            _peer_is_trusted as _existing_peer_is_trusted,
+        )
+
+        return bool(_existing_peer_is_trusted(client_host, tuple(proxies)))
+    except Exception:
+        pass
     text = client_host.strip().strip("[]").split("%")[0]
     try:
         client_ip = ipaddress.ip_address(text)
@@ -336,6 +441,23 @@ def _client_matches_proxies(client_host: str | None, proxies: tuple[str, ...]) -
                 if client_ip == ipaddress.ip_address(entry_text.strip("[]")):
                     return True
             except ValueError:
+                # Configured hostname entries resolve against numeric peers;
+                # without DNS resolution every request through that supported
+                # proxy configuration would receive ``auth_required``.
+                try:
+                    import socket as _socket
+
+                    infos = _socket.getaddrinfo(entry_text, None)
+                except OSError:
+                    continue
+                for info in infos:
+                    try:
+                        if ipaddress.ip_address(
+                            str(info[4][0]).strip().strip("[]")
+                        ) == client_ip:
+                            return True
+                    except ValueError:
+                        continue
                 continue
     return False
 
@@ -347,6 +469,23 @@ def _proxy_identity_header_name(environ: Mapping | None = None) -> str:
     except Exception:
         raw = ""
     return (raw or _DEFAULT_PROXY_HEADER).lower()
+
+
+def _ensure_allowed_proxy_identity_header(name: str) -> None:
+    """Fail closed when the identity header itself is a forwarding header.
+
+    ``_IGNORED_IDENTITY_HEADERS`` declares forwarding and worker headers
+    that must never confer operator access. Accepting one of them as the
+    configured ``MOONMIND_PROXY_IDENTITY_HEADER`` would let an ordinary
+    well-formed address inserted by a trusted proxy become a valid
+    assertion even when the proxy supplied no authenticated identity.
+    """
+    if (name or "").strip().lower() in _IGNORED_IDENTITY_HEADERS:
+        raise OperatorAdmissionError(
+            "misconfigured",
+            "The configured proxy identity header must not be a forwarding "
+            "or worker header.",
+        )
 
 
 def _single_header(headers: Mapping, name: str) -> str | None:
@@ -411,19 +550,27 @@ def resolve_operator_admission(
     if isinstance(referer, (list, tuple)):
         referer = referer[0] if referer else None
 
+    # Explicit loopback base URLs stay on the fresh-local path: forcing
+    # trusted-ingress proof for http://127.0.0.1:7000 (or localhost/::1)
+    # would deny loopback-bound development while the equivalent omitted
+    # base works. Host/origin checks below use local rules for them.
+    loopback_base = _is_loopback_base_url(base_url)
     _check_host_and_origin(
         method=method,
         host_header=host_header,
         origin=str(origin) if origin is not None else None,
         referer=str(referer) if referer is not None else None,
-        base_url=base_url,
+        base_url="" if loopback_base else base_url,
     )
 
-    if not base_url:
-        # Fresh local operation: loopback transport is the boundary. The
-        # client address (never forwarding headers, never the Host text)
-        # decides; no new always-on service is required.
-        if _is_loopback_ip(client_host):
+    if not base_url or loopback_base:
+        # Fresh local operation: loopback transport plus a loopback Host is
+        # the boundary. The peer alone is not enough: during DNS rebinding
+        # a page from attacker.example can re-resolve to 127.0.0.1, so the
+        # server sees a loopback peer while Host/Origin stay attacker
+        # controlled. A loopback Host from a non-loopback peer (workload
+        # container over the Docker bridge) never admits either.
+        if _is_loopback_ip(client_host) and _is_loopback_host(host_header):
             logger.info("auth_event boundary=operator reason=admitted via=loopback")
             return OperatorAdmission(via="loopback")
         logger.info("auth_event boundary=operator reason=denial code=auth_required")
@@ -455,9 +602,11 @@ def resolve_operator_admission(
             "auth_required",
             "Operator access requires the configured trusted ingress.",
         )
-    asserted = _single_header(
-        header_map, _proxy_identity_header_name(source if isinstance(source, Mapping) else None)
+    identity_header = _proxy_identity_header_name(
+        source if isinstance(source, Mapping) else None
     )
+    _ensure_allowed_proxy_identity_header(identity_header)
+    asserted = _single_header(header_map, identity_header)
     if not _well_formed_proxy_identity(asserted):
         logger.info("auth_event boundary=operator reason=denial code=auth_invalid")
         raise OperatorAdmissionError(
