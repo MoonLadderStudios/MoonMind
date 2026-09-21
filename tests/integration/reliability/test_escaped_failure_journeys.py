@@ -6731,7 +6731,13 @@ async def test_exact_rerun_rejects_replaced_omnigent_server_before_launch(
 async def test_exact_rerun_rejects_replaced_opencode_host_before_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Replay mm:814cd965 at the exact-rerun authority boundary."""
+    """Replay mm:814cd965 at the exact-rerun authority boundary.
+
+    MoonLadderStudios/MoonMind#4503: same-repository host digest drift is a
+    compatible rebuild within the installed family and must proceed without a
+    new policy/version ladder. This replay therefore fences only a genuinely
+    different host image family (see manifest deployedHostImageRef).
+    """
 
     replay_id = "omnigent-stale-plan-host-image"
     manifest = load_replay(replay_id, "manifest.json")
