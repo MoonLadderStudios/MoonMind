@@ -8,7 +8,10 @@ import re
 from pathlib import Path
 from typing import Any, Awaitable, Protocol
 
-from moonmind.omnigent.git_identity import resolve_git_identity
+from moonmind.omnigent.git_identity import (
+    ensure_workspace_git_identity,
+    resolve_git_identity,
+)
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -326,6 +329,24 @@ class OmnigentWorkspaceMaterializer:
                 raise HarnessPlatformError(str(exc), code=exc.code) from exc
         paths_by_ref = {item["ref"]: item["path"] for item in attachment_evidence}
         named_paths = {name: paths_by_ref[ref] for name, ref in named_refs.items()}
+        # Clone-time commit identity does not survive workspace reconciliation:
+        # retries reuse the attempt workspace so no clone runs, an
+        # authoritative restore replaces ``.git/config``, and an additive
+        # restore can overwrite it with the imported config. Reapply the
+        # resolved identity to the final writable Git workspace without
+        # discarding the preserved work. Read-only mounts never commit, so
+        # they keep whatever the source carried.
+        writable = mutation != "read_only" and not (
+            source.kind == "existing_workspace"
+            and source.existing_grant is not None
+            and source.existing_grant.mode == "read_only"
+        )
+        if writable:
+            ensure_workspace_git_identity(
+                candidate,
+                runtime_uid=runtime_uid,
+                runtime_gid=runtime_gid,
+            )
         # An advanced selected directory is never permission for an arbitrary
         # host mount: the qualified locator/daemon mapping below is the only
         # path from a worker path to a daemon-resolvable mount authority.
