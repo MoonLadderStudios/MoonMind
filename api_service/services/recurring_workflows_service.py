@@ -441,17 +441,11 @@ class RecurringWorkflowsService:
         limit: int = 200,
         offset: int = 0,
     ) -> list[RecurringWorkflowDefinition]:
-        # Single-user (#4351): schedules are instance resources. ``user_id``
-        # remains accepted for caller compatibility but is never a visibility
-        # predicate; legacy ``owner_user_id`` values are provenance and stay
-        # readable. ``scope=None``/``"all"`` lists every scope (instance);
-        # an explicit personal/global value filters for history
-        # compatibility only.
+        # Single-user (#4351): schedules are instance resources. ``scope``
+        # and ``user_id`` remain accepted for caller compatibility but are
+        # never visibility predicates; legacy scope/``owner_user_id`` values
+        # are provenance and stay readable. Every scope is listed together.
         stmt: Select[tuple[RecurringWorkflowDefinition]] = select(RecurringWorkflowDefinition)
-        normalized = str(scope or "").strip().lower()
-        if normalized and normalized != "all":
-            scope_type = _normalize_scope_type(scope)
-            stmt = stmt.where(RecurringWorkflowDefinition.scope_type == scope_type)
         if not include_disabled:
             stmt = stmt.where(RecurringWorkflowDefinition.enabled.is_(True))
         stmt = stmt.order_by(
@@ -468,13 +462,9 @@ class RecurringWorkflowsService:
         user_id: UUID | None = None,
         include_disabled: bool = True,
     ) -> int:
-        # Single-user (#4351): instance visibility; ``user_id`` ignored.
-        # ``scope=None``/``"all"`` counts every scope.
+        # Single-user (#4351): instance visibility; ``scope``/``user_id``
+        # ignored. Every scope is counted together.
         stmt = select(func.count()).select_from(RecurringWorkflowDefinition)
-        normalized = str(scope or "").strip().lower()
-        if normalized and normalized != "all":
-            scope_type = _normalize_scope_type(scope)
-            stmt = stmt.where(RecurringWorkflowDefinition.scope_type == scope_type)
         if not include_disabled:
             stmt = stmt.where(RecurringWorkflowDefinition.enabled.is_(True))
         result = await self._session.execute(stmt)

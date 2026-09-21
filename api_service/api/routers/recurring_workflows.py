@@ -552,7 +552,7 @@ def _map_error(exc: Exception) -> HTTPException:
 @router.get("", response_model=RecurringWorkflowDefinitionListResponse)
 async def list_recurring_workflows(
     *,
-    scope: Literal["personal", "global", "all"] = Query("all"),
+    scope: Literal["personal", "global"] = Query("personal"),
     limit: int = Query(200, ge=1, le=500),
     cursor: Optional[str] = Query(None),
     sort: Literal[
@@ -580,12 +580,11 @@ async def list_recurring_workflows(
     service: RecurringWorkflowsService = Depends(_get_service),
     user: User = Depends(get_current_user()),
 ) -> RecurringWorkflowDefinitionListResponse:
-    # Single-user (#4351): instance listing. ``scope=all`` (default) returns
-    # every scope; explicit personal/global filters for history only and
-    # never gates on a human owner.
-    if scope != "all":
-        requested_scope = RecurringWorkflowScopeType(scope)
-        _require_operator_for_global_scope(scope=requested_scope, user=user)
+    # Single-user (#4351): instance listing. Scope is history-compatible
+    # provenance and never gates on a human owner; the service returns
+    # every scope for any requested value.
+    requested_scope = RecurringWorkflowScopeType(scope)
+    _require_operator_for_global_scope(scope=requested_scope, user=user)
     user_id = getattr(user, "id", None)
 
     offset = _offset_from_cursor(cursor)
