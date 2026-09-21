@@ -139,6 +139,7 @@ with deterministic workflow code, not Temporal Local Activities.
 | `checkpoint_branch.turn.mark_running` | `artifacts` | `mm.activity.artifacts` |
 | `checkpoint_branch.turn.persist_terminal` | `artifacts` | `mm.activity.artifacts` |
 | `checkpoint_branch.turn.persist_terminal_rejection` | `artifacts` | `mm.activity.artifacts` |
+| `codex.direct_drain_report` | `integrations` | `mm.activity.integrations` |
 | `container_job.acquire_image` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `container_job.cancel` | `agent_runtime` | `mm.activity.agent_runtime` |
 | `container_job.cleanup` | `agent_runtime` | `mm.activity.agent_runtime` |

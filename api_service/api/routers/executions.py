@@ -8773,7 +8773,15 @@ async def _resolve_step_runtime_selections(
             # without this check an allowed top-level runtime plus a legacy
             # ``steps[i].runtime.mode`` would keep creating new legacy work
             # after the direct strategy's retirement class stopped admitting it.
+            # The deployment-owned direct-retirement cutoff
+            # (MoonLadderStudios/MoonMind#3931) applies here too so a per-step
+            # direct runtime cannot bypass the cutoff after it passes.
             try:
+                from moonmind.omnigent.codex_cutover_drain import (
+                    assert_new_admission_allowed,
+                )
+
+                assert_new_admission_allowed(canonical_step_runtime)
                 assert_runtime_new_admission(canonical_step_runtime)
             except ValueError as exc:
                 raise _invalid_workflow_request(
