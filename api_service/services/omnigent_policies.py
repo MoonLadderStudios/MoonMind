@@ -267,8 +267,12 @@ class OmnigentPolicyService:
             OmnigentPolicyVersion.policy_id == policy_id
         ).order_by(OmnigentPolicyVersion.version.desc()))).scalars())
 
-    async def create(self, *, policy_id: str, name: str, owner_user_id: Any, visibility: str,
+    async def create(self, *, policy_id: str, name: str, owner_user_id: Any = None, visibility: str,
                      document: PolicyDocument, actor: str, clone_source_ref: str | None = None) -> OmnigentPolicyVersion:
+        # Single-user (#4351): ``owner_user_id``/``visibility`` are stored as
+        # provenance; instance access is enforced by callers via
+        # _can_read_policy (always True) plus settings permissions. Versions,
+        # compiled/runtime bindings, and operational restrictions unchanged.
         if await self.session.get(OmnigentPolicy, policy_id):
             raise PolicyConflict("policy identity already exists")
         if clone_source_ref is not None:

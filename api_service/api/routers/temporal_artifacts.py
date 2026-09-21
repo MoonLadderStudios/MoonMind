@@ -198,17 +198,20 @@ async def _get_temporal_artifact_service(
 async def _resolve_principal(
     user: Optional[User] = Depends(get_current_user_optional()),
 ) -> str:
+    # Single-user (#4351): operator artifact operations work without account
+    # ownership. The admitted operator uses a stable instance principal;
+    # legacy user-id-owned artifacts remain readable via instance visibility
+    # in TemporalArtifactService. Execution-bound isolation (workflow:/service:
+    # principals, linked-execution checks, raw-access policy) is unchanged.
     # Authenticated accounts/oidc/header modes never take the disabled
     # path: the mode gate above is the only disabled branch, so those
     # modes cannot be reinterpreted as local single-user access.
     if is_disabled_local_mode():
         user_id = getattr(user, "id", None)
-        if user_id is None:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="unavailable",
-            )
-        return str(user_id)
+        if user_id is not None:
+            return str(user_id)
+        # Local single-user admission without a persisted account row.
+        return "operator"
 
     if user is None or getattr(user, "id", None) is None:
         raise HTTPException(
