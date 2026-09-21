@@ -8,6 +8,7 @@
 **Application Model:** [Single-User Application Design](../SingleUserApplicationDesign.md)  
 **Deployment Owner:** [Docker Compose Update System](../Steps/DockerComposeUpdateSystem.md)  
 **Tracking:** [#4003](https://github.com/MoonLadderStudios/MoonMind/issues/4003)
+**Delete/Archive Trigger:** Archive or delete once the remaining implementation and bounded migration in Status are delivered, their references have a home in the canonical design and owning successor views, and no active consumer references this plan.
 
 This is temporary execution guidance under [AGENTS.md](../../AGENTS.md). The design owns desired behavior and providing modules own executable interfaces. This plan must not become a second authority, production registry, or approval workflow. Desired state is not a claim that a release implements it.
 
@@ -135,11 +136,11 @@ Rollback depends on actual schema/data/history compatibility and intervening wri
 
 ## 6. Owning-document reconciliation
 
-Feature changes update their actual providing contracts, generated clients, and relevant operator help. Workflow Publishing owns modes and remote evidence. Artifact/checkpoint and workspace documents own durable content and restore. Secrets and Provider Profiles own their distinct credential lifecycles. The single-user design owns application admission, not machine or repository scope.
+Feature changes update their actual providing contracts, generated clients, and relevant operator help. Workflow Publishing owns publication modes and remote intent/outcome semantics; the provider-neutral evidence schema remains owned by Lore VCS Integration. Artifact/checkpoint and workspace documents own durable content and restore. Secrets and Provider Profiles own their distinct credential lifecycles. The single-user design owns application admission, not machine or repository scope.
 
 The existing repository-access design remains the desired-state source. Its proposed status is not evidence of runtime readiness, nor permission to retain obsolete contradictory instructions. Reconcile a genuine conflict with the affected change rather than create another design approval gate or repeat AGENTS.md everywhere.
 
-The former Slice-0 document-wording, path-count, and 42-row checks are not acceptance obligations. The previously named `tests/unit/docs/test_repository_access_slice0_reconciliation.py` was not found at the reviewed revision. Do not recreate it. Real executable schema/parser/serialization fixtures remain with their code owners; prose and reference inventories are not a replacement for those tests.
+The former Slice-0 document-wording, path-count, and 42-row checks are not acceptance obligations. The previously named `tests/unit/docs/test_repository_access_slice0_reconciliation.py` was not found at the reviewed revision. Do not recreate it. Dependent records still referencing that test (`docs/tmp/repository-access-slice0-fixtures.yaml:9-10` and `docs/tmp/DocumentationAssertionReview3964.md:39`) remain to be retired separately and are not updated by this plan. Real executable schema/parser/serialization fixtures remain with their code owners; prose and reference inventories are not a replacement for those tests.
 
 ## 7. Test strategy and acceptance matrix
 
@@ -154,7 +155,7 @@ Use current AGENTS.md: targeted local/container tests for the changed behavior, 
 | Useful operator forms | Existing component/API/browser journeys covering current draft ownership, truthful evidence, and safe result/action association. |
 | Historical compatibility and default path | Relevant populated migrations, real replay only when needed, and the existing clean-install journey through actual product boundaries. |
 
-This is an explanation of outcomes, not a production conformance table, fixed test count, or new runtime gate. Do not repeat every runtime/source/access/output/fault combination or label an unimplemented required capability unsupported. Keep existing relevant negative cases and actual scope/accounting protection.
+This is an explanation of outcomes, not a production conformance table, fixed test count, or new runtime gate. Do not repeat duplicated prose or matrix rows for every runtime/source/access/output/fault combination, but retain executable evidence for every supported combination through its actual boundaries; an unimplemented required capability is never silently relabeled unsupported to close the work. Keep existing relevant negative cases and actual scope/accounting protection.
 
 Request models, import scans, source inspection, synthetic receipts, and mock publishers prove narrower facts than a served workflow or durable restore. Tests should state what they exercise. Required failures, missing execution, cancellation, and unexpected skips remain non-success. Pure prose needs review and lightweight link checks, not tests of wording or headings.
 
