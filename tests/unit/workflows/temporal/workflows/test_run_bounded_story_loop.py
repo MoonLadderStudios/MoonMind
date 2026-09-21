@@ -1746,7 +1746,11 @@ def test_native_missing_action_legacy_replay_stays_human(monkeypatch) -> None:
         "_patched_or_false_outside_workflow",
         lambda patch: (
             False
-            if patch == run_module.RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH
+            if patch
+            in (
+                run_module.RUN_MOONSPEC_VERIFY_REPORT_RECOVERY_PATCH,
+                run_module.RUN_MOONSPEC_GATE_BLOCKED_CONTINUATION_PATCH,
+            )
             else True
         ),
     )
