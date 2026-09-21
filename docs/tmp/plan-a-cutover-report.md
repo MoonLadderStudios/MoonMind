@@ -72,14 +72,112 @@ counts, so a full host count never blocks an agent's own test job.
    schema — dropped rows are not restored, so rollback needing that data
    must restore a pre-upgrade backup.
 
-## Verification that could not run in this environment
+## Verification evidence (MoonLadderStudios/MoonMind#4457)
 
-No pytest, Docker, PostgreSQL, or Temporal here (offline sandbox), so suites
-were verified by compilation, targeted logic checks (slot parsing/admission,
-settings resolution, host-capacity decisions, historical decoding), doc-link
-and doc-architecture checks, and careful replay-boundary review. CI must run:
-targeted unit suites, `integration_ci`, the container-job authority and
-recurring-cleanup reliability journeys, and the hermetic container-job path
-(2 CPU / 4 GiB default; agent-alive-while-test-runs; final-slot race; worker
-loss during launch; wait/cancel; historical replay; fixed-limit Docker
-inspection; truthful limit/launch failures; Batch PR Resolver preset route).
+Tested content: `b40c0141cf63c5de01b06182485da8f44f2d734f` (qualification
+journey + handoff, committed: production `LABEL_CONTAINER_JOB` import fix
+for Docker-gated pre-creates and hermetic OS-level before-start worker-death
+test) plus the working-tree remediation to
+`tests/integration/reliability/test_container_job_plan_a_qualification_journey.py`:
+a new hermetic OS-level during/after-start worker-death test
+(`test_worker_sigkill_after_start_reconciles_without_duplicate`: a real
+worker process applies the container start, dies by SIGKILL while holding
+the backend capacity-lock key with no userspace cleanup, the survivor
+observes the daemon ledger holding its slot and reconciles with no
+duplicate start) and this handoff revision-line fix.
+21 test defs, 3 of them Docker-gated, so the expected journey result at the
+reviewed revision is **18 passed, 3 skipped**. No production-code change in
+the remediation pass:
+the new boundary tests confirm the existing daemon/lock mechanism, so it
+is retained. Preserved hermetic suites untouched.
+
+Executed via the managed container path (`moonmind container python-tests`,
+per AGENTS.md), all green:
+
+- `moonmind container python-tests
+  tests/integration/reliability/test_container_job_plan_a_qualification_journey.py
+  --timeout-seconds 900` → expected **18 passed, 3 skipped** at the reviewed
+  revision `b40c0141` (21 test defs; prior recorded run
+  (`container-job:eb6a946172a242d5937e32bdbbfd2118`, logsRef
+  `art_01M3093PTWJ5PZS0DWJ3TEXPPP`) covered the earlier 20-test revision
+  with 17 passed plus 3 skipped, so the new after-start SIGKILL case is
+  covered by the required-CI rerun at `b40c0141`, not by the earlier
+  evidence). The skips are the three Docker-gated
+  cases (`test_real_docker_inspect_shows_stock_fixed_limits`,
+  `test_real_docker_two_workers_race_final_slot`,
+  `test_real_docker_lost_start_ack_reconciles_before_retry`): no reachable
+  Docker daemon in the managed container, so they skip instead of failing
+  and run in Docker-backed required CI.
+- `moonmind container python-tests
+  tests/unit/workflows/temporal/test_container_job_backend.py
+  tests/unit/test_container_job_cli.py
+  tests/unit/omnigent/test_resolver_verification_capability.py
+  --timeout-seconds 600` → **112 passed**
+  (`container-job:8002f266945e4b8992bc2bfed4a4c197`, logsRef
+  `art_01M3094K8GA25QXX4TPAVBFS6D`).
+- `moonmind container python-tests
+  tests/integration/reliability/test_container_job_authority_journey.py
+  --timeout-seconds 900` → **1 passed**
+  (`container-job:755b1e794b684f2b9d0809e5d35d2832`, logsRef
+  `art_01M30953ZFG59130H7PH7PEWPQ`).
+- `printf '<journey + handoff>' | python3 tools/select_test_suites.py`
+  selects `reliability_journey=true`, so the existing required CI workflow
+  (`.github/workflows/pytest-unit-tests.yml`, `tests/integration/reliability
+  -m reliability_journey`) runs the new journeys once published.
+
+New focused coverage (all in the journey file, preserved hermetic suites
+untouched):
+
+- R1: free-slot race at limit 1 (exactly one start, peak overlap <= 1),
+  created-waiter forward progress (one claims the slot, the other parks, then
+  proceeds after release), a two-**process** flock-serialization test, and a
+  Docker-gated two-worker-process race on real pre-created containers that
+  observes overlapping running containers through the daemon (cap <= 1,
+  loser parks, proceeds after the winner stops).
+- R2: lost start acknowledgment reconciles with one real side effect; worker
+  death before the start leaves no side effect and the next worker proceeds;
+  a real worker process killed by SIGKILL while holding the backend
+  capacity-lock key frees the OS-held flock, and the survivor admits and
+  starts with exactly one side effect (no fd-close simulation); a second
+  real worker process killed by SIGKILL after applying the container start
+  is reconciled by the survivor with no duplicate start (daemon-ledger
+  slot holder observed first);
+  worker death releases the shared lock; container finishing between
+  observation and retry frees its slot; own paused-holder retry keeps its
+  slot (covers the `_admit_job_slot` fix admitting any slot-holding own
+  state, not just running; `created` exclusion preserved). A Docker-gated
+  variant injects the lost ack on the real `docker start` path, reconciles
+  via `docker inspect`/`_slot_holders`, asserts no duplicate container, and
+  proves a stopped container frees its slot for the next waiter. The
+  Docker-gated pre-creates label real containers with the production
+  `LABEL_CONTAINER_JOB` (imported, not a test-local string) so the
+  daemon-ledger `ps` filter observes them.
+- R3: wait/release/restart, non-waitable refusal class, and agent-host vs
+  job-ledger separation at the backend boundary; a production
+  `MoonMindContainerJobWorkflow` wait/cancel journey (parks in
+  `WAITING_FOR_CAPACITY`, honors `cancel`, stops the created container,
+  terminates `canceled`); a release/proceed/restart journey (holder
+  released, waiter proceeds to `succeeded`, a second workflow restarts on
+  the freed slot, overlap <= 1); and a host-full subordinate journey (all 8
+  generic hosts occupied, the workflow still runs its test job to
+  `succeeded` through the same Activities).
+- R4: stock CLI submission asserts 2000 cpuMillis / 4096 memoryMiB / 512 pids
+  with no pool content; the start path issues one `ps` and no `info` probe;
+  a hermetic `create` test asserts `--cpus 2.0` / `--memory 4096m` /
+  `--pids-limit 512` reach `docker create` verbatim with no cgroup parent;
+  a Batch PR Resolver preset-route test drives the resolver run request
+  with isolated fixtures through the scoped capability environment and the
+  canonical submission into the production create/start boundary (stock
+  limits verbatim, no `info` probe); the Docker-gated case inspects
+  `NanoCpus`/`Memory`/`PidsLimit` on a `moonmind-test-*` container when a
+  daemon is reachable and skips otherwise.
+
+## Still requiring Docker-backed required CI (not runnable in this sandbox)
+
+No reachable Docker daemon and no GitHub Actions run from this sandbox, so
+the following still need existing required CI at the published revision:
+the Docker-gated real-Docker race, lost-ack reconcile, and inspect passes
+(R1/R2/R4, all skip-guarded and green-skipped here), and the required-CI
+run of the new journeys with recorded run URLs (R5). The candidate branch is
+unmerged; on publication, re-resolve `refs/heads/main` and verify the actual
+target content.
