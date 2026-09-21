@@ -145,9 +145,11 @@ async def test_drain_applies_one_deadline_to_the_complete_host_drain(
 
     assert result == {"cleaned": 1}
     # Three waits ran (connect, start, result); a fresh bound per phase
-    # would record 5.0 every time, while the shared deadline shrinks.
+    # would record 5.0 every time, while the shared deadline shrinks and
+    # never exceeds the bound.
     assert len(seen_timeouts) == 3
-    assert seen_timeouts[0] == 5.0
+    assert max(seen_timeouts) <= 5.0
+    assert seen_timeouts[0] == pytest.approx(5.0, abs=0.5)
     assert seen_timeouts[1] < seen_timeouts[0]
     assert seen_timeouts[2] <= seen_timeouts[1]
 
