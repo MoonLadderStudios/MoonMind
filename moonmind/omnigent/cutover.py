@@ -400,15 +400,17 @@ class EffectivePhase:
     def _direct_launch_allowed(self) -> bool:
         """Return whether direct launch is currently admitted.
 
-        The rollout phase is the rollout authority, but the deployment-owned
-        direct-retirement cutoff (MoonLadderStudios/MoonMind#3931,
-        ``MOONMIND_CODEX_DIRECT_RETIRED_AT``) closes the direct lane to new
-        work once it passes. Both must permit direct work; the published
-        readiness must match the admission decision in ``select_runtime``.
+        The single deployment-owned direct-retirement cutoff
+        (MoonLadderStudios/MoonMind#3931,
+        ``MOONMIND_CODEX_DIRECT_RETIRED_AT``) is the only deployment-owned
+        retirement decision for the direct lane: it closes the lane to new
+        work once it passes and preserves it while unset. The rollout phase
+        governs defaults promotion, not direct admission, so clearing or
+        postponing the cutoff preserves the direct path without coordinating
+        a second phase control. The published readiness matches the
+        admission decision in ``select_runtime``.
         """
 
-        if self.phase >= CutoverPhase.DIRECT_LAUNCH_DISABLED:
-            return False
         try:
             from moonmind.omnigent.codex_cutover_drain import (
                 direct_retired_by_cutoff,
@@ -498,25 +500,26 @@ def select_runtime(
     """Apply rollout defaults without ever rewriting an explicit selection.
 
     Create/edit/rerun defaults advance at phase 2; schedule and preset defaults
-    advance at phase 3.  Explicit direct launch is rejected from phase 5.  This
-    helper never performs automatic fallback: callers must persist the returned
-    evidence on the run before launch.
+    advance at phase 3. This helper never performs automatic fallback: callers
+    must persist the returned evidence on the run before launch.
 
     When ``versioned_default`` is true the caller already resolved the default
     through the versioned rollout boundary, so the legacy phase promotion must
     not rewrite it (MoonLadderStudios/MoonMind#3988): a restored direct default
     stays direct instead of being promoted back to Omnigent.
 
-    The rollout phase and the code-owned retirement class are separate
-    authorities and both must permit a runtime before it becomes a new
-    selection (#3835). Neither ever affects an already-recorded plan.
+    The code-owned retirement class remains a separate authority and must
+    permit a runtime before it becomes a new selection (#3835). Neither it
+    nor this boundary ever affects an already-recorded plan.
 
     The deployment-owned direct-retirement cutoff
     (MoonLadderStudios/MoonMind#3931,
-    ``MOONMIND_CODEX_DIRECT_RETIRED_AT``) is a third authority: once the
-    cutoff passes, no new direct work is admitted regardless of phase. It is
-    evaluated here so the retired lane rejects at the same selection boundary
-    without rewriting already-recorded plans.
+    ``MOONMIND_CODEX_DIRECT_RETIRED_AT``) is the single deployment-owned
+    retirement decision for the direct lane: once the cutoff passes, no new
+    direct work is admitted; while unset, the direct path is preserved
+    without coordinating a second phase control. It is evaluated here so
+    the retired lane rejects at the same selection boundary without
+    rewriting already-recorded plans.
     """
 
     from moonmind.omnigent.codex_cutover_drain import assert_new_admission_allowed
@@ -524,8 +527,6 @@ def select_runtime(
     explicit = str(authored_runtime or "").strip().lower()
     if explicit:
         explicit = normalize_runtime_id(explicit)
-        if explicit == "codex_cli" and phase >= CutoverPhase.DIRECT_LAUNCH_DISABLED:
-            raise ValueError("codex_direct_launch_disabled_by_cutover_phase")
         assert_new_admission_allowed(explicit, env=env, now=now)
         assert_runtime_new_admission(explicit, rollback_generation=rollback_generation)
         return RuntimeSelection(

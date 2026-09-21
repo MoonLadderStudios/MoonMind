@@ -270,18 +270,33 @@ def test_explicit_selection_is_preserved_and_direct_launch_eventually_rejected()
     assert explicit.runtime_id == "omnigent"
     assert explicit.authored is True
 
-    with pytest.raises(ValueError, match="codex_direct_launch_disabled"):
+    # The single deployment-owned cutoff retires the direct lane, not the
+    # rollout phase: phase alone never rejects direct work, so clearing or
+    # postponing the cutoff preserves the direct path.
+    preserved = select_runtime(
+        authored_runtime="codex_cli",
+        configured_default="codex_cli",
+        phase=CutoverPhase.DIRECT_LAUNCH_DISABLED,
+        env={},
+    )
+    assert preserved.runtime_id == "codex_cli"
+
+    with pytest.raises(ValueError, match="codex_direct_retired_by_deployment_cutoff"):
         select_runtime(
             authored_runtime="codex_cli",
             configured_default="codex_cli",
             phase=CutoverPhase.DIRECT_LAUNCH_DISABLED,
+            env={"MOONMIND_CODEX_DIRECT_RETIRED_AT": "2026-01-01T00:00:00Z"},
+            now=datetime(2026, 6, 1, tzinfo=timezone.utc),
         )
 
-    with pytest.raises(ValueError, match="codex_direct_launch_disabled"):
+    with pytest.raises(ValueError, match="codex_direct_retired_by_deployment_cutoff"):
         select_runtime(
             authored_runtime="codex",
             configured_default="codex_cli",
             phase=CutoverPhase.DIRECT_LAUNCH_DISABLED,
+            env={"MOONMIND_CODEX_DIRECT_RETIRED_AT": "2026-01-01T00:00:00Z"},
+            now=datetime(2026, 6, 1, tzinfo=timezone.utc),
         )
 
 
