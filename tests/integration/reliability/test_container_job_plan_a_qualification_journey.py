@@ -308,8 +308,6 @@ def _capacity_lock_worker(lock_root: str, key: str, tag: str, order_path: str) -
     the OS-held flock, never on shared in-process state.
     """
 
-    import asyncio
-
     from moonmind.workflows.temporal.container_job_backend import (
         FilesystemCapacityAdmissionLock,
     )
@@ -339,8 +337,6 @@ def _hold_capacity_lock_until_killed(
     so the OS must release the flock with the file description -- the
     real worker-death path, not an fd-close simulation.
     """
-
-    import asyncio
 
     from moonmind.workflows.temporal.container_job_backend import (
         FilesystemCapacityAdmissionLock,
@@ -378,7 +374,6 @@ def _hold_lock_apply_start_until_killed(
     and the survivor must reconcile the existing container first.
     """
 
-    import asyncio
     from pathlib import Path
 
     from moonmind.workflows.temporal.container_job_backend import (
@@ -1185,10 +1180,19 @@ def _require_real_docker_image() -> None:
         timeout=300,
     )
     if pulled.returncode != 0:
-        pytest.skip(
+        detail = (
             f"requires fixture image {_REAL_TEST_IMAGE}: "
             f"{pulled.stderr.strip()[:200]}"
         )
+        # In required CI the fixture image must be provisioned: a registry
+        # outage must fail the check instead of silently skipping the
+        # concurrency/lost-ack coverage. Local daemon-less runs still skip.
+        if (
+            os.environ.get("GITHUB_ACTIONS") == "true"
+            or os.environ.get("CI") == "true"
+        ):
+            pytest.fail(detail)
+        pytest.skip(detail)
 
 
 async def _real_docker_run(raw: Any) -> tuple[int, bytes, bytes]:
@@ -1234,8 +1238,6 @@ def _real_docker_race_worker(
     production ``docker`` command path.
     """
 
-    import asyncio
-
     from moonmind.config.container_backend_settings import (
         resolve_container_backend_settings,
     )
@@ -1246,9 +1248,8 @@ def _real_docker_race_worker(
         DockerContainerJobBackend,
         FilesystemCapacityAdmissionLock,
     )
-    from tests.integration.reliability.test_container_job_plan_a_qualification_journey import (
-        _real_docker_run,
-    )
+    # ``_real_docker_run`` is a module global in this same file, so the
+    # spawn re-import makes it available without a self-import.
 
     async def _main() -> None:
         backend = DockerContainerJobBackend(
@@ -1365,8 +1366,11 @@ async def test_real_docker_two_workers_race_final_slot(tmp_path: Path) -> None:
         # its slot and the parked loser proceeds without deadlock.
         winner = next(o["job_id"] for o in started)
         loser = next(o["job_id"] for o in parked)
+        # Map the winning job back through ``requests`` (completion order in
+        # ``outcomes`` does not match ``names`` order).
+        winner_name = names[[r.job_id for r in requests].index(winner)]
         subprocess.run(
-            ["docker", "stop", names[[o["job_id"] for o in outcomes].index(winner)]],
+            ["docker", "stop", winner_name],
             capture_output=True,
             timeout=120,
         )
@@ -1669,6 +1673,11 @@ async def test_subordinate_test_job_runs_while_hosts_full_through_workflow(
         cold_launch_window_seconds=30,
     )
     assert hosts_full.admitted is False
+    # The denial comes from the host-capacity layer, not the container-job
+    # ledger: agent-host leases and subordinate test-job slots are counted
+    # separately by design, so this full host ledger must not block the
+    # subordinate job submitted below through the production Activities.
+    assert hosts_full.limiting_layer == "generic_host_capacity"
     daemon = _PlanAWorkflowDaemon(
         holder_name=None,
         ownership_token="container-job:holder:v1",
@@ -1740,6 +1749,18 @@ async def test_batch_pr_resolver_preset_route_reaches_host_execution(
             "targetRuntime": "omnigent",
             "executionProfileRef": selected_profile,
         },
+    )
+    # The resolver child must carry the production planning outcome: the
+    # compiled profile and omnigent runtime flow into the child request
+    # (not just into the locally compiled plan), so a misrouted Batch PR
+    # Resolver parameter would fail here.
+    assert child["initial_parameters"]["targetRuntime"] == "omnigent"
+    assert child["initial_parameters"]["task"]["runtime"] == {
+        "mode": "omnigent",
+        "executionProfileRef": selected_profile,
+    }
+    assert child["initial_parameters"]["task"]["skill"]["args"]["mergeMethod"] == (
+        "squash"
     )
     request = AgentExecutionRequest.model_validate(
         {
