@@ -33,19 +33,25 @@ def recorded_attempt_result(binding):
         return None
     result = AgentRunResult.model_validate(max(turns, key=lambda item: item[0])[1])
     saved = phases.get("saved")
+    preservation = {
+        "unfinishedPhase": "finalization",
+        "workPreserved": bool(saved),
+        "savedWorkspaceCheckpoint": saved,
+    }
+    if result.failure_class is not None:
+        # Failed/canceled compute remains failed/canceled even when its files
+        # can be saved. Attach only preservation evidence, never a new verdict.
+        return result.model_copy(
+            update={"metadata": {**(result.metadata or {}), **preservation}}
+        )
     return result.model_copy(
         update={
             "failure_class": "integration_error",
             "provider_error_code": "ATTEMPT_FINALIZATION_INTERRUPTED",
             "retry_recommendation": "do_not_retry",
             "summary": "The provider turn completed; finalization needs recovery from its saved candidate.",
-            "metadata": {
-                **(result.metadata or {}),
-                "unfinishedPhase": "finalization",
-                "workPreserved": bool(saved),
-                "savedWorkspaceCheckpoint": saved,
-            },
-        }
+            "metadata": {**(result.metadata or {}), **preservation},
+        },
     )
 
 

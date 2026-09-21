@@ -346,6 +346,25 @@ def _replace_artifact_refs(value: Any, replacements: Mapping[str, str]) -> Any:
     return value
 
 
+def branch_capture_failure_outcome(
+    *,
+    child_result: AgentRunResult | None,
+    terminal_handoff_started: bool,
+) -> str | None:
+    """Decide the terminal outcome after a branch capture/checkpoint failure.
+
+    The child's compute result is preserved when later capture fails: return
+    the outcome to persist for that exact child result without launching a
+    second child. Return None when there is no child to preserve (failure
+    before the child ran) or when the terminal handoff itself already started
+    (re-raise so no second payload is authored under immutable artifact keys).
+    """
+
+    if terminal_handoff_started or child_result is None:
+        return None
+    return "canceled" if child_result.failure_class == "canceled" else "failed"
+
+
 def checkpoint_branch_turn_terminal_disposition(
     *,
     result: AgentRunResult,
@@ -1356,6 +1375,7 @@ class MoonMindCheckpointBranchTurnWorkflow:
         terminal_handoff_started = False
         try:
             self._phase = "running"
+            child_result: AgentRunResult | None = None
             raw_result = await workflow.execute_child_workflow(
                 "MoonMind.AgentRun",
                 agent_request,
@@ -1368,6 +1388,7 @@ class MoonMindCheckpointBranchTurnWorkflow:
                 if isinstance(raw_result, AgentRunResult)
                 else AgentRunResult.model_validate(raw_result)
             )
+            child_result = result
             if result.failure_class or result.provider_error_code:
                 self._phase = "failed"
                 terminal_handoff_started = True
@@ -1486,6 +1507,21 @@ class MoonMindCheckpointBranchTurnWorkflow:
             # payload under its immutable artifact keys.
             if terminal_handoff_started:
                 raise
+            capture_outcome = branch_capture_failure_outcome(
+                child_result=child_result,
+                terminal_handoff_started=terminal_handoff_started,
+            )
+            if capture_outcome is not None and child_result is not None:
+                # Capture/checkpoint failed after real compute: preserve the
+                # child's result without launching a second child. Persisting
+                # the exact child classifies a successful child without a
+                # checkpoint as failed/terminal_checkpoint_missing and keeps a
+                # failed/canceled child on its original verdict.
+                self._phase = "failed"
+                self._result = await self._persist_terminal(
+                    payload, result=child_result, outcome=capture_outcome
+                )
+                return self._result
             self._phase = "failed"
             self._result = await self._persist_terminal(
                 payload,
@@ -1505,6 +1541,7 @@ __all__ = [
     "CHECKPOINT_BRANCH_CANCELLATION_TERMINAL_PATCH",
     "MoonMindCheckpointBranchTurnWorkflow",
     "WORKFLOW_NAME",
+    "branch_capture_failure_outcome",
     "mark_checkpoint_branch_turn_running",
     "persist_checkpoint_branch_turn_terminal",
     "persist_checkpoint_branch_turn_terminal_rejection",
