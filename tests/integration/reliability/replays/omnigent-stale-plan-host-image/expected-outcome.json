@@ -1,5 +1,5 @@
 {
-  "invariant": "an exact rerun must prove that its immutable OpenCode host image is still the deployment-qualified image before any provider lease or host launch",
+  "invariant": "an exact rerun must prove that its immutable OpenCode host image family is still the deployed family before any provider lease or host launch (same-repository digest drift is a compatible rebuild per #4503 and proceeds; a genuinely different family is stale)",
   "code": "exact_rerun_execution_plan_stale",
   "nextAction": "edit_for_rerun",
   "hostLaunchAttempted": false
