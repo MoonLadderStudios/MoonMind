@@ -8,6 +8,10 @@ import re
 from pathlib import Path
 from typing import Any, Awaitable, Protocol
 
+from moonmind.omnigent.git_identity import (
+    ensure_workspace_git_identity,
+    resolve_git_identity,
+)
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -325,6 +329,24 @@ class OmnigentWorkspaceMaterializer:
                 raise HarnessPlatformError(str(exc), code=exc.code) from exc
         paths_by_ref = {item["ref"]: item["path"] for item in attachment_evidence}
         named_paths = {name: paths_by_ref[ref] for name, ref in named_refs.items()}
+        # Clone-time commit identity does not survive workspace reconciliation:
+        # retries reuse the attempt workspace so no clone runs, an
+        # authoritative restore replaces ``.git/config``, and an additive
+        # restore can overwrite it with the imported config. Reapply the
+        # resolved identity to the final writable Git workspace without
+        # discarding the preserved work. Read-only mounts never commit, so
+        # they keep whatever the source carried.
+        writable = mutation != "read_only" and not (
+            source.kind == "existing_workspace"
+            and source.existing_grant is not None
+            and source.existing_grant.mode == "read_only"
+        )
+        if writable:
+            ensure_workspace_git_identity(
+                candidate,
+                runtime_uid=runtime_uid,
+                runtime_gid=runtime_gid,
+            )
         # An advanced selected directory is never permission for an arbitrary
         # host mount: the qualified locator/daemon mapping below is the only
         # path from a worker path to a daemon-resolvable mount authority.
@@ -639,17 +661,23 @@ class OmnigentWorkspaceMaterializer:
                 code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
             )
         image = os.getenv("MOONMIND_WORKSPACE_GIT_IMAGE", "alpine/git:v2.43.0")
+        git_user_name, git_user_email = resolve_git_identity()
         argv = build_daemon_git_clone_argv(
             volume=self._workspace_volume,
             target_in_volume=rel.as_posix(),
             source=source,
             branch=branch,
             image=image,
+            git_user_name=git_user_name,
+            git_user_email=git_user_email,
         )
         # The one-shot container reads the token on stdin and exposes it to Git
         # through an ephemeral credential helper. The clean source URL is the
         # only remote persisted in the authoritative workspace; credentials do
         # not enter Docker argv, container environment, or ``.git/config``.
+        # The commit identity does persist there: it is deployment
+        # configuration rather than a secret, and a skill that owns its own
+        # publication has nowhere else to read one from.
         code, _stdout, stderr = await self._runner(argv, token.encode("utf-8"))
         if code != 0:
             detail = (stderr or "").strip()[-300:]
@@ -682,8 +710,16 @@ def build_daemon_git_clone_argv(
     source: str,
     branch: str,
     image: str,
+    git_user_name: str,
+    git_user_email: str,
 ) -> list[str]:
-    """Build a stdin-authenticated Docker argv for an in-volume git clone."""
+    """Build a stdin-authenticated Docker argv for an in-volume git clone.
+
+    The clone also writes the repository-local commit identity. The shared
+    host image carries a credential helper and no ``[user]`` section, so a
+    skill that owns its own publication has no identity to read unless the
+    materialized repository already carries one.
+    """
 
     if not _SAFE_VOLUME.fullmatch(volume):
         raise HarnessPlatformError(
@@ -693,6 +729,13 @@ def build_daemon_git_clone_argv(
     if normalize_github_clone_source(source) != source:
         raise HarnessPlatformError(
             "sandbox workspace clone source is unavailable or unsafe",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+        )
+    identity_name = str(git_user_name or "").strip()
+    identity_email = str(git_user_email or "").strip()
+    if not identity_name or not identity_email:
+        raise HarnessPlatformError(
+            "sandbox workspace commit identity is incomplete",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
     script = (
@@ -705,7 +748,9 @@ def build_daemon_git_clone_argv(
         "cat \"$MM_GIT_TOKEN_FILE\"; printf \"\\n\"; }; f'; "
         "MM_GIT_TOKEN_FILE=\"$token_file\" git "
         "-c \"credential.helper=$credential_helper\" clone "
-        "--branch \"$1\" --single-branch -- \"$2\" \"$3\""
+        "--branch \"$1\" --single-branch -- \"$2\" \"$3\"; "
+        "git -C \"$3\" config --local user.name \"$4\"; "
+        "git -C \"$3\" config --local user.email \"$5\""
     )
     return [
         "docker",
@@ -723,6 +768,8 @@ def build_daemon_git_clone_argv(
         branch,
         source,
         "/work/" + target_in_volume.lstrip("/"),
+        identity_name,
+        identity_email,
     ]
 
 

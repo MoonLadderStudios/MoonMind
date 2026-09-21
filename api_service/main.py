@@ -98,6 +98,9 @@ from api_service.api.routers.temporal_artifacts import (
 )
 from api_service.api.routers.workflows import router as workflows_router
 from api_service.api.routers.secrets import router as secrets_router
+from api_service.api.routers.repository_connections import (
+    router as repository_connections_router,
+)
 from api_service.api.routers.settings import router as settings_router
 from api_service.api.routers.system_operations import (
     router as system_operations_router,
@@ -1431,6 +1434,9 @@ app.include_router(oauth_sessions_router, prefix="/api/v1")
 # never /api/v1/auth/*, which stays unmounted per the #4129 removal manifest.
 app.include_router(advanced_auth_4124_router)
 app.include_router(secrets_router, prefix="/api/v1/secrets")
+app.include_router(
+    repository_connections_router, prefix="/api/v1/repository-connections"
+)
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(proxy_router, prefix="/api/v1")
 app.include_router(system_operations_router)

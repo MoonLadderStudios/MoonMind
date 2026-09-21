@@ -525,64 +525,9 @@ def test_required_ci_collects_this_qualification_suite() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Plan-coverage ledger: every matrix/plan rule maps to a test or obligation.
+# Plan-coverage ledger retired: the removal plan requires no fixed test count,
+# permanent ledger, or documentation-wording test. Qualification rests on the
+# executable guard, admission, history, migration, and ordinary-workflow
+# boundary coverage above, with remaining deployment obligations tracked in
+# #4189. The former ledger/gap count tests are intentionally absent.
 # ---------------------------------------------------------------------------
-
-
-def test_plan_coverage_ledger_is_explicit() -> None:
-    """Map every #4187/MR1-MR6 acceptance rule to its owner.
-
-    Repository qualification can complete while #4189's actual deployment
-    milestone remains pending, but #4187 cannot claim cutover until per-device
-    evidence exists. Missing protected/live observations are explicit here
-    and are not waived as passes.
-    """
-    ledger = {
-        "admission": "sibling-removal (#4188/#4190/#4191/#4192)",
-        "side-effect-ordering": "sibling-removal",
-        "schedules-control": "sibling-cutover + #4189 (ordinary recurrence proven here)",
-        "runtime-graph": "sibling-removal (guard defined here)",
-        "historical-reads": "#4189 A/B (shapes named here)",
-        "upgrade-data": "#4189 + protected PG/artifact handoff (not claimed here)",
-        "ordinary-product-journey": "this module (hermetic boundary)",
-        "shared-primitives": "this module (hermetic boundary)",
-        "security": "sibling-removal + #4189 (not claimed here)",
-        "defaults-build-docs": "this module (hermetic boundary)",
-        "no-reintroduction": "guard defined here; real-repo absence sibling-owned",
-        "evidence-requirements-1-8": "partial: real boundaries + #4114 reuse here; "
-        "live/PG/replay/drain protected",
-        "closure": "blocked: candidate + per-device cutover evidence pending",
-    }
-    assert len(ledger) == 13
-    assert ledger["ordinary-product-journey"].startswith("this module")
-    assert ledger["closure"].startswith("blocked")
-
-
-def test_qualification_gaps_are_explicit() -> None:
-    """Pin the verification boundary: hermetic guards are not live proof.
-
-    The following require protected deployment/live evidence owned with the
-    sibling removals and #4189, and are NOT claimed qualified by this module:
-    real admission against served API/CLI, side-effect ordering on real
-    writers, Temporal schedule/trigger/backfill/catch-up, production worker
-    composition, historical reads after removal, PostgreSQL migration/decoding
-    and artifact-backend handoffs, cancellation/restart/ack-loss journeys,
-    old-release replay/drain on pinned release, cross-tenant security probes,
-    frontend build + generated catalogs on the exact candidate, and browser
-    journeys. This test exists so future edits cannot silently widen the
-    claim without updating the mapping above.
-    """
-    protected = {
-        "real-admission",
-        "side-effect-ordering-live",
-        "schedules-control-live",
-        "runtime-graph-live",
-        "historical-reads-live",
-        "upgrade-data-live",
-        "cancellation-restart-ack-loss",
-        "old-release-replay-drain",
-        "security-probes",
-        "build-catalogs-candidate",
-        "browser-journeys",
-    }
-    assert len(protected) == 11

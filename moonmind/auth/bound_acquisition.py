@@ -472,7 +472,7 @@ class ActiveRevision:
     connection_revision: int
     policy_revision: int
     status: str  # "active" | "disabled" | "revoked"
-    adapter_kind: str  # "pat" | "expiring"
+    adapter_kind: str  # "pat" | "expiring" | "github_app" (#4022 production App)
 
 
 SecretRevisionReader = Callable[[str], Awaitable[ActiveRevision] | ActiveRevision]
