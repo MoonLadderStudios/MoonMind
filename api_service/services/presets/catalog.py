@@ -3405,6 +3405,12 @@ class PresetCatalogService:
             item.pop("version", None)
             item.pop("presetVersion", None)
             scope = str(item.get("scope", "global")).strip() or "global"
+            # Deployment provenance: seed-synced rows are deployment-owned
+            # catalog entries, which the single-user conversion inventory
+            # (#4346) must not mistake for unattested unowned human data.
+            # An explicit YAML seedSource is preserved; otherwise the sync
+            # stamps its own marker.
+            seed_source = item.get("seedSource") or "seed-catalog"
             try:
                 await self.create_template(
                     slug=str(
@@ -3422,7 +3428,7 @@ class PresetCatalogService:
                     required_capabilities=item.get("requiredCapabilities") or [],
                     created_by=None,
                     release_status=PresetReleaseStatus.ACTIVE,
-                    seed_source=item.get("seedSource"),
+                    seed_source=seed_source,
                     auto_commit=False,
                 )
                 created += 1
@@ -3449,6 +3455,11 @@ class PresetCatalogService:
             item.pop("presetVersion", None)
             scope = _normalize_scope(str(item.get("scope", "global")).strip() or "global")
             scope_ref = _normalize_scope_ref(scope, item.get("scopeRef"))
+            # Same deployment-provenance marker as import_seed_templates:
+            # seed-synced rows are deployment-owned, never unattested
+            # unowned human data. Existing rows without a marker are
+            # backfilled on the next sync below.
+            seed_source = item.get("seedSource") or "seed-catalog"
             slug = str(item.get("slug") or _slugify_from_title(item.get("title", "")))
             normalized_slug = _normalize_slug(slug)
             title = str(item.get("title") or "").strip()
@@ -3492,7 +3503,7 @@ class PresetCatalogService:
                     required_capabilities=derived_capabilities,
                     created_by=None,
                     release_status=PresetReleaseStatus.ACTIVE,
-                    seed_source=item.get("seedSource"),
+                    seed_source=seed_source,
                     auto_commit=False,
                 )
                 result.created += 1
@@ -3532,8 +3543,8 @@ class PresetCatalogService:
             if template.release_status is not PresetReleaseStatus.ACTIVE:
                 template.release_status = PresetReleaseStatus.ACTIVE
                 updated = True
-            if template.seed_source != item.get("seedSource"):
-                template.seed_source = item.get("seedSource")
+            if template.seed_source != seed_source:
+                template.seed_source = seed_source
                 updated = True
             if updated:
                 result.updated += 1

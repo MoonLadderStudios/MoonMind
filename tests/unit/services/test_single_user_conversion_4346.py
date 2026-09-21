@@ -85,7 +85,9 @@ async def test_proven_aliases_convert_but_matching_email_does_not(tmp_path):
         assert refused.eligible is False
         # Durable trustworthy alias evidence groups them as one operator.
         ok = await evaluate_disposition(
-            session, alias_groups=[{str(u1.id), str(u2.id)}]
+            session,
+            alias_groups=[{str(u1.id), str(u2.id)}],
+            operator_authorized=True,
         )
         assert ok.disposition == "eligible_conversion"
         assert ok.eligible is True

@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -29,6 +29,7 @@ from api_service.db.models import (
     Preset,
     PresetScopeType,
     RecurringWorkflowDefinition,
+    SecretStatus,
     SettingsOverride,
     TemporalArtifact,
     TemporalExecutionOwnerType,
@@ -180,7 +181,7 @@ async def test_postgres_four_dispositions(pg_maker) -> None:
         refused = await evaluate_disposition(session)
         assert refused.disposition == "multi_person_refusal"
         ok = await evaluate_disposition(
-            session, alias_groups=[{u1_id, u2_id}]
+            session, alias_groups=[{u1_id, u2_id}], operator_authorized=True
         )
         assert ok.disposition == "eligible_conversion"
 
@@ -223,7 +224,9 @@ async def test_postgres_four_dispositions(pg_maker) -> None:
 
 
 @pytest.mark.asyncio
-async def test_postgres_staleness_ledger_rerun_and_contention(pg_maker) -> None:
+async def test_postgres_staleness_ledger_rerun_and_contention(
+    pg_maker, conversion_postgres_url
+) -> None:
     """Stale attribution, same-digest rerun, in-progress contention, advisory."""
     from api_service.services import single_user_conversion as suc
 
@@ -234,9 +237,9 @@ async def test_postgres_staleness_ledger_rerun_and_contention(pg_maker) -> None:
         pre = await suc.preflight(session)
         assert pre.decision.eligible is True
 
-        # Advisory claim works on real PostgreSQL (not the sqlite fallback).
-        assert await suc._try_advisory_claim(session, pre.digest) is True
-        await suc._release_advisory_claim(session, pre.digest)
+        # Conversion-wide claim works on real PostgreSQL (sqlite fallback).
+        assert await suc._try_conversion_claim(session) is True
+        await suc._release_conversion_claim(session)
 
         # Intervening ownership change invalidates the preflight.
         u2 = await _mk_user(session)
@@ -274,10 +277,12 @@ async def test_postgres_staleness_ledger_rerun_and_contention(pg_maker) -> None:
         assert second.published is True
         assert second.digest == first.digest
 
-        # A concurrent holder (in_progress ledger row) fails closed. Use the
+        # A stale in_progress row (no live writer) is reclaimed while the
+        # apply holds the conversion-wide claim; a live writer holding the
+        # claim elsewhere fails closed and the row is never stolen. Use the
         # real preflight digest so the staleness gate passes and the ledger
-        # mutual-exclusion path is what refuses. Clear the completed row
-        # first to simulate a crash-interrupted attempt holding the digest.
+        # path is what decides. Clear the completed row first to simulate a
+        # crash-interrupted attempt holding the digest.
         await session.execute(SingleUserConversionRun.__table__.delete())
         await session.commit()
         pre3 = await suc.preflight(session)
@@ -289,10 +294,41 @@ async def test_postgres_staleness_ledger_rerun_and_contention(pg_maker) -> None:
             )
         )
         await session.commit()
-        with pytest.raises(suc.ConcurrentConversionError):
-            await suc.apply_conversion(
-                session, pre3, operator_authorized=True, transforms={"t": _t}
-            )
+        holder_engine = create_async_engine(conversion_postgres_url)
+        try:
+            async with holder_engine.connect() as held:
+                await held.execute(
+                    text("SELECT pg_advisory_lock(:key)"),
+                    {"key": suc._conversion_advisory_key()},
+                )
+                with pytest.raises(suc.ConcurrentConversionError):
+                    await suc.apply_conversion(
+                        session, pre3, operator_authorized=True,
+                        transforms={"t": _t},
+                    )
+                stale = (
+                    await session.execute(
+                        select(SingleUserConversionRun).where(
+                            SingleUserConversionRun.preflight_digest
+                            == pre3.digest
+                        )
+                    )
+                ).scalars().one()
+                assert stale.status == "in_progress"
+                # Explicit unlock while still holding the connection: pool
+                # checkout alone does not release a session-level lock.
+                await held.execute(
+                    text("SELECT pg_advisory_unlock(:key)"),
+                    {"key": suc._conversion_advisory_key()},
+                )
+        finally:
+            await holder_engine.dispose()
+        # Lock released (no live writer): the retry reclaims and publishes.
+        recovered = await suc.apply_conversion(
+            session, pre3, operator_authorized=True, transforms={"t": _t}
+        )
+        assert recovered.published is True
+        assert recovered.digest == pre3.digest
 
 
 @pytest.mark.asyncio
@@ -347,3 +383,154 @@ async def test_postgres_migration_386_ledger_ddl(pg_maker) -> None:
         with pytest.raises(IntegrityError):
             await session.flush()
         await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_postgres_unavailable_inventory_refuses(
+    pg_maker, conversion_postgres_url
+) -> None:
+    """A failed required read is unknown evidence, never empty/eligible."""
+    from api_service.services import single_user_conversion as suc
+
+    ddl = create_async_engine(conversion_postgres_url)
+    try:
+        async with ddl.begin() as conn:
+            await conn.execute(text("DROP TABLE settings_overrides"))
+        async with pg_maker() as session:
+            inv = await suc.collect_inventory(session)
+            assert inv.inventory_errors, "failed read must be recorded"
+            decision = await suc.evaluate_disposition(session)
+            assert decision.disposition == "unresolved_refusal"
+            assert decision.reason_code == "inventory_unavailable"
+            assert decision.eligible is False
+    finally:
+        async with ddl.begin() as conn:
+            await conn.run_sync(
+                SettingsOverride.__table__.create, checkfirst=True
+            )
+        await ddl.dispose()
+
+
+@pytest.mark.asyncio
+async def test_postgres_same_count_value_change_is_stale(pg_maker) -> None:
+    """Owner sets/counts alone do not bind the source; values do too."""
+    from api_service.services import single_user_conversion as suc
+
+    async with pg_maker() as session:
+        u = await _mk_user(session)
+        row = SettingsOverride(
+            scope="user", user_id=u.id, key="theme", value_json={"v": 1}
+        )
+        session.add(row)
+        await session.commit()
+        pre = await suc.preflight(session)
+        row.value_json = {"v": 2}
+        await session.commit()
+        with pytest.raises(suc.StaleAttributionError):
+            await suc.apply_conversion(
+                session, pre, operator_authorized=True, transforms={}
+            )
+
+
+@pytest.mark.asyncio
+async def test_postgres_concurrent_proposals_serialize(pg_maker) -> None:
+    """Two different conversion proposals for one database serialize."""
+    import asyncio
+
+    from api_service.services import single_user_conversion as suc
+
+    async with pg_maker() as session_a, pg_maker() as session_b:
+        pre_a = await suc.preflight(session_a)
+        pre_b = await suc.preflight(
+            session_a,
+            deployment_owned_tables={"presets"},
+            operator_authorized=True,
+        )
+        assert pre_a.digest != pre_b.digest
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _slow(s, eligible):
+            started.set()
+            await release.wait()
+            return {"outcome": "slow"}
+
+        task_a = asyncio.create_task(
+            suc.apply_conversion(
+                session_a, pre_a, operator_authorized=True,
+                transforms={"t": _slow},
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=30)
+        # A holds the conversion-wide claim: B fails closed, never publishes.
+        with pytest.raises(suc.ConcurrentConversionError):
+            await suc.apply_conversion(
+                session_b, pre_b, operator_authorized=True, transforms={}
+            )
+        release.set()
+        result_a = await asyncio.wait_for(task_a, timeout=60)
+        assert result_a.published is True
+
+
+@pytest.mark.asyncio
+async def test_postgres_interruption_rolls_back_and_retry_publishes(
+    pg_maker,
+) -> None:
+    """Interruption before commit leaves nothing; the retry converges."""
+    from api_service.services import single_user_conversion as suc
+
+    async with pg_maker() as session:
+        u = await _mk_user(session)
+        session.add(UserProfile(user_id=u.id))
+        await session.commit()
+        pre = await suc.preflight(session)
+        calls = {"n": 0}
+
+        async def _flaky(s, eligible):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                s.add(
+                    ManagedSecret(
+                        slug="pg-partial",
+                        ciphertext="x",
+                        status=SecretStatus.ACTIVE,
+                    )
+                )
+                await s.flush()
+                raise RuntimeError("simulated crash after progress")
+            return {"outcome": "recovered"}
+
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            await suc.apply_conversion(
+                session, pre, operator_authorized=True,
+                transforms={"t": _flaky},
+            )
+        assert (
+            await session.execute(select(SingleUserConversionRun))
+        ).scalars().all() == []
+        assert (await session.execute(select(ManagedSecret))).scalars().all() == []
+        result = await suc.apply_conversion(
+            session, pre, operator_authorized=True, transforms={"t": _flaky}
+        )
+        assert result.published is True
+        assert calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_postgres_rerun_replays_through_cutover(pg_maker) -> None:
+    """Eligible rerun through the shared entrypoint replays one completion."""
+    from api_service.services import single_user_conversion as suc
+
+    async with pg_maker() as session:
+        u = await _mk_user(session)
+        session.add(UserProfile(user_id=u.id, openai_api_key_encrypted="pg-cut"))
+        await session.commit()
+        first = await suc.run_guarded_upgrade(session, operator_authorized=True)
+        assert first.published is True
+        second = await suc.run_guarded_upgrade(session, operator_authorized=True)
+        assert second.published is True
+        assert second.digest == first.digest
+        secrets = (await session.execute(select(ManagedSecret))).scalars().all()
+        assert len(secrets) == 1
+        blob = str(second.to_sanitized_dict())
+        assert "pg-cut" not in blob
