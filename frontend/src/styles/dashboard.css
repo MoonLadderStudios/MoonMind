@@ -6740,9 +6740,8 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding-left: 2.35rem;
 }
 
-/* The branch search action lives inside the branch grid cell so the floating
- * row keeps its four-column contract (repo, branch, publish, submit) at every
- * breakpoint. The cell splits into input + action without affecting the outer grid. */
+/* The branch cell keeps the floating row contract (repo, branch, publish,
+ * submit) at every breakpoint. */
 .queue-inline-selector--branch {
   display: flex;
   gap: 0.4rem;
@@ -6752,11 +6751,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .queue-inline-selector--branch input {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.queue-branch-search {
-  flex: 0 0 auto;
-  white-space: nowrap;
 }
 
 .queue-step-authoring-controls {
@@ -8324,12 +8318,18 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .skills-catalog-page .data-table thead th {
   background: rgb(var(--mm-panel) / 0.98);
   border-bottom: 0;
-  box-shadow: 0 1px 0 rgb(var(--mm-border) / 0.6);
+  box-shadow: 0 1px 0 var(--workflow-list-divider-color);
 }
 
 .skills-catalog-page .data-table tbody tr,
 .skills-catalog-page .data-table tbody tr:nth-child(2n) {
   background: transparent;
+}
+
+/* Match the workflow list: row dividers use the shared list token rather than
+ * the generic 0.65 table rule, so both tables draw the same 0.72 divider. */
+.skills-catalog-page .data-table td {
+  border-bottom-color: var(--workflow-list-divider-color);
 }
 
 .skills-catalog-page .data-table tbody tr:hover {

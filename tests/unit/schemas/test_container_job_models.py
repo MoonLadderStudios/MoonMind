@@ -436,3 +436,57 @@ def test_resource_limits_admit_and_validate_a_shared_memory_request() -> None:
             ResourceLimits.model_validate(
                 {"cpuMillis": 1000, "memoryMiB": 512, "shmSize": invalid}
             )
+
+
+def test_legacy_fixed_successor_resolves_only_retired_semantics() -> None:
+    """MoonLadderStudios/MoonMind#4456: legacy jobs gain an executable successor.
+
+    A never-started historical request (shared-pool ``cpuMillis=0`` or retired
+    ``minimumMemoryMiB`` range) resolves to one deterministic fixed-resource
+    successor: stock 2 CPUs for a zero CPU value, the persisted ``memoryMiB``
+    as the single fixed limit, and every other explicit field preserved. An
+    already-explicit request has no successor.
+    """
+
+    from moonmind.schemas.container_job_models import (
+        is_historical_shared_or_adaptive,
+        legacy_fixed_successor_resources,
+    )
+
+    stock_legacy = ResourceLimits.model_validate(
+        {"cpuMillis": 0, "memoryMiB": 4096, "minimumMemoryMiB": 2048}
+    )
+    successor = legacy_fixed_successor_resources(stock_legacy)
+    assert successor is not None
+    assert successor.cpu_millis == 2000
+    assert successor.memory_mib == 4096
+    assert successor.minimum_memory_mib is None
+    assert successor.pids == stock_legacy.pids
+    # Deterministic: repeated resolution converges on the same successor.
+    assert legacy_fixed_successor_resources(stock_legacy) == successor
+    # The original document is never rewritten by resolution.
+    assert stock_legacy.cpu_millis == 0
+    assert stock_legacy.minimum_memory_mib == 2048
+
+    cpu_only_legacy = ResourceLimits.model_validate(
+        {"cpuMillis": 0, "memoryMiB": 3072, "pids": 512}
+    )
+    custom = legacy_fixed_successor_resources(cpu_only_legacy)
+    assert custom is not None
+    assert custom.cpu_millis == 2000
+    # Custom positive limits are preserved, not reset to stock.
+    assert custom.memory_mib == 3072
+    assert custom.pids == 512
+
+    adaptive_only = ResourceLimits.model_validate(
+        {"cpuMillis": 3000, "memoryMiB": 8192, "minimumMemoryMiB": 4096}
+    )
+    assert is_historical_shared_or_adaptive(adaptive_only) is True
+    adaptive_successor = legacy_fixed_successor_resources(adaptive_only)
+    assert adaptive_successor is not None
+    assert adaptive_successor.cpu_millis == 3000
+    assert adaptive_successor.memory_mib == 8192
+    assert adaptive_successor.minimum_memory_mib is None
+
+    explicit = ResourceLimits.model_validate({"cpuMillis": 2000, "memoryMiB": 4096})
+    assert legacy_fixed_successor_resources(explicit) is None

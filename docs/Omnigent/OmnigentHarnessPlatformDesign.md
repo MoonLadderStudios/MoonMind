@@ -678,7 +678,7 @@ Operators reason about these limits separately because they are owned by differe
 | --- | --- | --- | --- |
 | **Configured profile capacity** | Operator | The ceiling this Provider Profile may ever admit. Never lowered by runtime behavior. | `max_parallel_runs` on the Provider Profile |
 | **Effective provider capacity** | Runtime | The limit currently applied, at or below the ceiling. Lowered by adaptive rate-limit backpressure or operator policy, and restored toward the ceiling as the provider recovers. | Derived; reported as `effective_capacity` |
-| **Host capacity** | Deployment | How many on-demand generic hosts the machine may carry at once. | `MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY` |
+| **Host capacity** | Deployment | How many on-demand generic hosts the machine may carry at once. Fresh-install default: 1 (conservative). | `MOONMIND_OMNIGENT_GENERIC_HOST_CAPACITY` |
 | **Cold-launch rate** | Deployment | How many host launches may *start* per window. | `MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_BURST`, `MOONMIND_OMNIGENT_GENERIC_HOST_COLD_LAUNCH_WINDOW_SECONDS` |
 | **Container-job slots** | Deployment | How many container-job containers may be launching or running at once. Agent hosts and their subordinate test jobs use separate counts. | `MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_JOBS` |
 | **Worker capacity** | Deployment | How many Activities one worker fleet executes concurrently. | `TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY` |
@@ -699,6 +699,8 @@ min(
 A configured ceiling of `N` is not a promise of `N` concurrent runs. It is a promise that nothing above `N` is admitted. Any of the other layers may hold the run lower, and readiness must name which one did — the admission decision reports the `limitingLayer`.
 
 Host capacity and the cold-launch rate are deliberately distinct. Host capacity bounds how many hosts exist; the cold-launch rate bounds how many launches *start* per window. Container jobs are bounded separately by the container-job slot count, admitted under the backend-scoped capacity lock against the daemon's owned containers.
+
+The shipped fresh-install default for host capacity is one agent host (MoonLadderStudios/MoonMind#4458). The default is conservative, not a host-capacity guarantee: a fixed count cannot promise fit on every machine, so operators size the configured concurrency for their host. Values an existing deployment already exports remain active until the operator changes them; larger deployments raise the same setting.
 
 #### Configured versus effective
 
@@ -762,7 +764,14 @@ The retired aggregate settings (`MOONMIND_MACHINE_*`,
 `MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB`) are ignored when still
 exported and must be removed — never reinterpreted as per-container limits.
 The `machine_capacity_reservations` table is no longer read or written at
-runtime; it is dropped in a forward migration after the rollback window. Fixed
+runtime; forward migration `386_drop_machine_capacity_4459`
+(MoonLadderStudios/MoonMind#4459) drops it with its table-owned indexes
+after the rollback window, and current ORM metadata omits it. The
+downgrade recreates only the empty schema — dropped rows are not
+restored, so old-code rollback that needs that data must restore a
+pre-upgrade backup. Applying the drop to a deployment follows the
+existing release process after the release owner's rollback/consumer
+disposition, not the migration landing alone. Fixed
 limits and concurrency reduce exposure but do not guarantee that every
 deployment configuration fits its host: size the host count, the job count,
 and the per-container limits so the configured concurrency fits its host.

@@ -290,7 +290,7 @@ async def test_steward_preserves_live_current_route(monkeypatch):
         "status": "awaiting_promotion",
         "currentVersion": old,
         "candidateVersion": new,
-        "recoveryOwner": "deployment-control",
+        "recoveryOwner": "workflow-fleet-startup",
     }
     assert server.canaries_started == []
     assert server.set_current_calls == []
@@ -362,7 +362,7 @@ async def test_steward_parks_on_lost_promotion_race(monkeypatch):
         "status": "awaiting_promotion",
         "currentVersion": rival,
         "candidateVersion": new,
-        "recoveryOwner": "deployment-control",
+        "recoveryOwner": "workflow-fleet-startup",
     }
     # The losing compare-and-set attempt must not move routing itself.
     assert server.current == rival
@@ -395,6 +395,112 @@ async def test_bootstrap_current_needs_no_stewardship(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status",
+    [
+        RPCStatusCode.RESOURCE_EXHAUSTED,
+        RPCStatusCode.UNAVAILABLE,
+        RPCStatusCode.DEADLINE_EXCEEDED,
+    ],
+)
+@pytest.mark.parametrize("after_promotion", [False, True])
+async def test_bootstrap_recovers_transient_observation_without_repeating_promotion(
+    monkeypatch, status, after_promotion, caplog
+):
+    monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
+    clock = _use_fake_clock(monkeypatch)
+    server, old, new = _server_with_current_old_new()
+    client = _FakeClient(server)
+    describe = client.workflow_service.describe_worker_deployment
+    failures = []
+
+    async def overloaded(request):
+        if not failures and server.current == (new if after_promotion else old):
+            failures.append(status)
+            raise RPCError("consistent query buffer is full", status, None)
+        return await describe(request)
+
+    monkeypatch.setattr(
+        client.workflow_service, "describe_worker_deployment", overloaded
+    )
+    result = await bootstrap_version_routing(client, _spec("new"))
+
+    assert failures == [status]
+    assert clock.sleeps
+    assert "consistent query buffer is full" in caplog.text
+    assert result["status"] == "current"
+    assert server.current == new
+    assert server.set_current_calls == [new]
+    # Observing a successful CAS after a lost acknowledgement must still
+    # prove unpinned traffic before startup can report ready.
+    assert any("-ordinary-" in value for value in server.canaries_started)
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_transient_failure_does_not_waive_ordinary_verification(
+    monkeypatch,
+):
+    monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
+    _use_fake_clock(monkeypatch)
+    server, _old, new = _server_with_current_old_new()
+    client = _FakeClient(server)
+    describe = client.workflow_service.describe_worker_deployment
+    failures = []
+
+    async def overloaded(request):
+        if server.current == new and not failures:
+            failures.append(True)
+            raise RPCError(
+                "consistent query buffer is full",
+                RPCStatusCode.RESOURCE_EXHAUSTED,
+                None,
+            )
+        return await describe(request)
+
+    monkeypatch.setattr(
+        client.workflow_service, "describe_worker_deployment", overloaded
+    )
+    server.fail_ordinary_canaries = True
+    with pytest.raises(ValueError, match="failed verification"):
+        await bootstrap_version_routing(client, _spec("new"))
+    assert server.set_current_calls == [new]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status", [RPCStatusCode.RESOURCE_EXHAUSTED, RPCStatusCode.PERMISSION_DENIED]
+)
+async def test_bootstrap_failure_is_bounded_and_preserves_original_error(
+    monkeypatch, status
+):
+    monkeypatch.delenv("MOONMIND_RELEASE_QUALIFICATION", raising=False)
+    clock = _use_fake_clock(monkeypatch)
+    server, old, _new = _server_with_current_old_new()
+    client = _FakeClient(server)
+    error = RPCError("original server failure", status, None)
+    calls = []
+
+    async def unavailable(request):
+        calls.append(request)
+        raise error
+
+    monkeypatch.setattr(
+        client.workflow_service, "describe_worker_deployment", unavailable
+    )
+    with pytest.raises(RPCError) as caught:
+        await bootstrap_version_routing(client, _spec("new"))
+    assert caught.value is error
+    if status == RPCStatusCode.RESOURCE_EXHAUSTED:
+        assert 1 < len(calls) <= 60
+        assert len(clock.sleeps) == len(calls) - 1
+    else:
+        assert len(calls) == 1
+        assert not clock.sleeps
+    assert server.current == old
+    assert not server.set_current_calls
+
+
+@pytest.mark.asyncio
 async def test_steward_parks_on_partial_outage(monkeypatch):
     """A degraded route is not an abandoned route.
 
@@ -412,7 +518,7 @@ async def test_steward_parks_on_partial_outage(monkeypatch):
         "status": "awaiting_promotion",
         "currentVersion": old,
         "candidateVersion": new,
-        "recoveryOwner": "deployment-control",
+        "recoveryOwner": "workflow-fleet-startup",
     }
     assert server.canaries_started == []
     assert server.set_current_calls == []

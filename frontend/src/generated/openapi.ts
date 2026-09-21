@@ -7994,6 +7994,11 @@ export interface components {
             closeStatus?: string | null;
             /** Workflowtype */
             workflowType?: string | null;
+            /**
+             * Attentionrequired
+             * @default false
+             */
+            attentionRequired: boolean;
         };
         /**
          * ExecutionFacetItemModel

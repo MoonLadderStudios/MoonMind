@@ -323,6 +323,7 @@ from moonmind.workflows.executions.execution_contract import (
     reject_workflow_capability_identity_versions,
     resolve_publish_mode_for_skill,
     strip_absent_vector_fields,
+    validate_publish_mode_repository_authority,
 )
 from moonmind.workflows.executions.repository_contract import (
     RepositoryContractError,
@@ -1064,7 +1065,7 @@ async def _instruction_identity(
         return instruction_ref, instruction_digest
     return await CheckpointBranchTurnExecutionOwner(
         session,
-        principal=_owner_id(user),
+        principal=_execution_principal(user),
     ).persist_instruction_text(
         text=text,
         branch_turn_id=branch_turn_id,
@@ -2104,33 +2105,29 @@ def _owner_id(user: User | None) -> str | None:
     return str(value) if value is not None else None
 
 
+def _execution_principal(user: User | None) -> str:
+    """Single-user (#4351) execution principal with instance fallback.
+
+    The admitted operator without a persisted account row acts as the
+    stable ``system`` principal; legacy human-owner id strings persist as
+    non-authoritative provenance on retained records.
+    """
+    return _owner_id(user) or "system"
+
+
 def _effective_execution_owner_scope(
     *,
     user: User,
     owner_type: str | None,
     owner_id: str | None,
 ) -> tuple[str | None, str | None]:
-    if _is_execution_admin(user):
-        return owner_type, owner_id
-
-    normalized_owner_type = str(owner_type or "").strip().lower()
-    if owner_type is not None and normalized_owner_type != "user":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "execution_forbidden",
-                "message": "Cannot list non-user executions.",
-            },
-        )
-    if owner_id is not None and owner_id != _owner_id(user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "execution_forbidden",
-                "message": "Cannot list executions for another user.",
-            },
-        )
-    return ("user" if normalized_owner_type == "user" else None), _owner_id(user)
+    # Single-user (#4351): executions are instance resources. The admitted
+    # operator lists any execution without a human-owner lookup; requested
+    # owner filters pass through as provenance selectors, never 403 gates.
+    # State, source, and approval validation stay at their owning
+    # boundaries. ``user`` remains accepted as the shared admission
+    # boundary (get_current_user).
+    return owner_type, owner_id
 
 
 def _normalize_temporal_list_scope(
@@ -4313,7 +4310,10 @@ def _serialize_execution(
         memo.get("merge_automation") or memo.get("mergeAutomation")
     )
     pr_url = _extract_execution_pr_url(memo, search_attributes, params)
-    is_admin = _is_execution_admin(user)
+    # Single-user (#4351): the admitted operator sees instance diagnostics
+    # (manifest/plan/run-index/checkpoint refs) without a human-owner
+    # lookup. Approval and state validation stay at their owning boundaries.
+    is_admin = True
     steps_href = (
         settings.temporal_dashboard.steps_endpoint.replace(
             "{workflowId}", record.workflow_id
@@ -5352,14 +5352,11 @@ def _execution_record_visible_to_user(
     record: TemporalExecutionRecord,
     user: User,
 ) -> bool:
-    search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    record_owner_type = _enum_value(getattr(record, "owner_type", None))
-    if record_owner_type is None:
-        record_owner_type = _normalize_owner_type(record, search_attributes)
-    record_owner_id = str(getattr(record, "owner_id", "") or "").strip()
-    if not record_owner_id:
-        record_owner_id = _coerce_temporal_scalar(search_attributes.get("mm_owner_id"))
-    return record_owner_type == "user" and record_owner_id == _owner_id(user)
+    # Single-user (#4351): every instance execution is visible to the
+    # admitted operator without a human-owner lookup. Record owner fields
+    # persist as non-authoritative provenance. Retained for call-site
+    # compatibility.
+    return True
 
 
 async def _append_linked_continuations(
@@ -5407,12 +5404,8 @@ async def _append_linked_continuations(
             destination = None
         if destination is None:
             continue
-        if (
-            user is not None
-            and not _is_execution_admin(user)
-            and not _execution_record_visible_to_user(destination, user)
-        ):
-            continue
+        # Single-user (#4351): instance visibility; related runs are no
+        # longer filtered by human ownership.
         metadata = _execution_related_run_metadata(destination)
         hydrated.append(
             ExecutionRelatedRunModel(
@@ -5460,13 +5453,8 @@ async def _hydrate_related_run_metadata(
         if record is None:
             hydrated.append(related_run)
             continue
-        if (
-            user is not None
-            and not _is_execution_admin(user)
-            and not _execution_record_visible_to_user(record, user)
-        ):
-            hydrated.append(related_run)
-            continue
+        # Single-user (#4351): instance visibility; related-run metadata is
+        # hydrated without a human-owner lookup.
         metadata = _execution_related_run_metadata(record)
         hydrated.append(
             related_run.model_copy(
@@ -5946,6 +5934,9 @@ async def _enrich_execution_dependencies(
                     state=item.state,
                     closeStatus=item.close_status,
                     workflowType=item.workflow_type,
+                    attentionRequired=bool(
+                        getattr(item, "attention_required", False)
+                    ),
                 )
                 for item in prerequisites
             ],
@@ -5957,6 +5948,9 @@ async def _enrich_execution_dependencies(
                     state=item.state,
                     closeStatus=item.close_status,
                     workflowType=item.workflow_type,
+                    attentionRequired=bool(
+                        getattr(item, "attention_required", False)
+                    ),
                 )
                 for item in dependents
             ],
@@ -8766,7 +8760,15 @@ async def _resolve_step_runtime_selections(
             # without this check an allowed top-level runtime plus a legacy
             # ``steps[i].runtime.mode`` would keep creating new legacy work
             # after the direct strategy's retirement class stopped admitting it.
+            # The deployment-owned direct-retirement cutoff
+            # (MoonLadderStudios/MoonMind#3931) applies here too so a per-step
+            # direct runtime cannot bypass the cutoff after it passes.
             try:
+                from moonmind.omnigent.codex_cutover_drain import (
+                    assert_new_admission_allowed,
+                )
+
+                assert_new_admission_allowed(canonical_step_runtime)
                 assert_runtime_new_admission(canonical_step_runtime)
             except ValueError as exc:
                 raise _invalid_workflow_request(
@@ -9231,6 +9233,28 @@ def _first_present_publish_mode(
         if key in source and source[key] is not None:
             return source[key]
     return None
+
+def _validate_publish_authority_for_payload(payload: Mapping[str, Any]) -> None:
+    """Reject an authored publish mode no step in the payload can satisfy."""
+
+    task_payload = _coerce_mapping(payload.get("workflow")) or _coerce_mapping(
+        payload.get("task")
+    )
+    if not task_payload:
+        return
+    publish = _coerce_mapping(task_payload.get("publish"))
+    publish_mode = publish.get("mode")
+    if publish_mode is None:
+        publish_mode = task_payload.get("publishMode") or payload.get("publishMode")
+    raw_steps = task_payload.get("steps")
+    try:
+        validate_publish_mode_repository_authority(
+            publish_mode=publish_mode,
+            steps=raw_steps if isinstance(raw_steps, list) else None,
+        )
+    except WorkflowContractError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
+
 
 def _resolve_workflow_publish_payload(
     *,
@@ -11153,6 +11177,10 @@ async def _create_execution_from_workflow_request(
     elif isinstance(raw_schedule, ScheduleParameters):
         schedule = raw_schedule
 
+    # A recurring schedule returns before the task-shaped publish check below,
+    # so validate the same invariant first: an unsatisfiable publish mode would
+    # otherwise repeat its guaranteed late failure on every tick.
+    _validate_publish_authority_for_payload(payload)
     route = await _resolve_schedule_routing(
         schedule,
         request_payload=payload,
@@ -11289,6 +11317,13 @@ async def _create_execution_from_workflow_request(
         skill_publish_metadata=publish_metadata,
         skill_side_effect_metadata=side_effect_metadata,
     )
+    try:
+        validate_publish_mode_repository_authority(
+            publish_mode=publish_payload.get("mode"),
+            steps=normalized_steps,
+        )
+    except WorkflowContractError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
     _validate_repository_submission_compatibility(
         repository_payload=repository_payload,
         task_payload=task_payload,
@@ -11983,9 +12018,18 @@ async def _create_execution_from_workflow_request(
 
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
+        # Single-user (#4351): ordinary operator creates are instance-owned
+        # (SYSTEM default) with no human-owner lookup. Workflow-scoped
+        # fan-out children keep their contract (§6.5) same-owner
+        # inheritance: the scoped authority user already carries the
+        # parent's authoritative owner.
+        fanout_principal = (principal_context or {}).get("verified_principal")
         record = await service.create_execution(
             workflow_type=start_contract.workflow_type,
-            owner_id=user.id,
+            owner_id=getattr(user, "id", None) if fanout_principal is not None else None,
+            owner_type=getattr(user, "owner_type", None)
+            if fanout_principal is not None
+            else None,
             title=derived_task_title,
             input_artifact_ref=input_artifact_ref,
             plan_artifact_ref=plan_artifact_ref,
@@ -12161,61 +12205,10 @@ async def _get_owned_execution(
             },
         ) from exc
 
-    if _is_execution_admin(user):
-        return record
-
-    search_attributes = dict(getattr(record, "search_attributes", None) or {})
-    record_owner_type = _enum_value(getattr(record, "owner_type", None))
-    if record_owner_type is None:
-        record_owner_type = _normalize_owner_type(
-            record, search_attributes
-        )
-    record_owner_id = str(getattr(record, "owner_id", "") or "").strip()
-    if not record_owner_id:
-        record_owner_id = _coerce_temporal_scalar(search_attributes.get("mm_owner_id"))
-
-    if record_owner_type != "user" or record_owner_id != _owner_id(user):
-        # Fallback to parent workflow ownership for child workflows missing search_attributes
-        if not record_owner_id:
-            parent_id = None
-            if ":agent:" in workflow_id:
-                parent_id = workflow_id.split(":agent:")[0]
-            else:
-                parts = workflow_id.split(":")
-                if workflow_id.startswith("mm:") and len(parts) >= 2:
-                    parent_id = f"{parts[0]}:{parts[1]}"
-                elif len(parts) >= 1:
-                    parent_id = parts[0]
-            
-            if parent_id and parent_id != workflow_id:
-                try:
-                    parent_record = await service.describe_execution(
-                        parent_id,
-                        include_orphaned=include_orphaned_projection,
-                    )
-                    parent_attrs = dict(getattr(parent_record, "search_attributes", None) or {})
-                    p_type = _enum_value(getattr(parent_record, "owner_type", None))
-                    if p_type is None:
-                        p_type = _normalize_owner_type(parent_record, parent_attrs)
-                    p_id = str(getattr(parent_record, "owner_id", "") or "").strip()
-                    if not p_id:
-                        p_id = _coerce_temporal_scalar(parent_attrs.get("mm_owner_id"))
-                    
-                    if p_type == "user" and p_id == _owner_id(user):
-                        return record
-                except Exception:
-                    # Best-effort parent-ownership fallback: ignore lookup
-                    # failures and fall through to the 404 below.
-                    pass
-
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "execution_not_found",
-                "message": f"Workflow execution {workflow_id} was not found",
-            },
-        )
-
+    # Single-user (#4351): instance visibility. The admitted operator reads
+    # any execution without a human-owner lookup; record owner fields
+    # persist as non-authoritative provenance. State, source, and approval
+    # validation stay at their owning boundaries.
     return record
 
 def _compute_schedule_delay(
@@ -12650,15 +12643,10 @@ async def _handle_recurring_schedule(
         RecurringWorkflowsService,
     )
 
+    # Single-user (#4351): no human-owner gate. The admitted operator
+    # authors every scope; scope persists as history-compatible provenance.
+    # The shared admission boundary (get_current_user) owns operator access.
     scope_type = schedule.scope_type or "personal"
-    if scope_type == "global" and not _is_execution_admin(user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={
-                "code": "operator_role_required",
-                "message": "Operator privileges are required for global schedules.",
-            },
-        )
     svc = RecurringWorkflowsService(session)
     runtime_metadata = await _resolve_recurring_runtime_metadata(
         request_payload,
@@ -12683,7 +12671,9 @@ async def _handle_recurring_schedule(
             timezone=schedule.timezone or "UTC",
             scope_type=scope_type,
             scope_ref=None,
-            owner_user_id=user.id,
+            # Single-user (#4351): new schedules carry no human owner;
+            # legacy owner values persist as provenance on old rows.
+            owner_user_id=None,
             target=target,
             policy=schedule.policy,
             agent_profile_selection=agent_profile_selection,
@@ -13741,7 +13731,7 @@ async def list_execution_remediations(
             _attach_remediation_capability_projection(
                 link,
                 session=session,
-                principal=_owner_id(user) or "system",
+                principal=_execution_principal(user) or "system",
             )
             for link in links
         )
@@ -13810,7 +13800,7 @@ async def create_remediation_checkpoint_branch(
         context_artifact_ref=link.context_artifact_ref,
         target_workflow_id=link.target_workflow_id,
         target_run_id=link.target_run_id,
-        principal=_owner_id(user),
+        principal=_execution_principal(user),
     )
     selected_checkpoint = _context_selected_checkpoint(context_payload, checkpoint_ref)
     if selected_checkpoint is None:
@@ -13901,7 +13891,7 @@ async def create_remediation_checkpoint_branch(
         if existing_turn is not None:
             try:
                 await CheckpointBranchTurnExecutionOwner(
-                    session, principal=_owner_id(user)
+                    session, principal=_execution_principal(user)
                 ).launch(
                     workflow_id=link.target_workflow_id,
                     branch_id=branch.branch_id,
@@ -13961,7 +13951,7 @@ async def create_remediation_checkpoint_branch(
         idempotency_key=payload.idempotencyKey,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
-        principal=_owner_id(user),
+        principal=_execution_principal(user),
         requested_work_branch=payload.gitWorkBranch,
         source_run_id=link.target_run_id,
         source_execution_ordinal=source.execution_ordinal,
@@ -14054,7 +14044,7 @@ async def create_remediation_checkpoint_branch(
     await session.commit()
     try:
         await CheckpointBranchTurnExecutionOwner(
-            session, principal=_owner_id(user)
+            session, principal=_execution_principal(user)
         ).launch(
             workflow_id=link.target_workflow_id,
             branch_id=branch_id,
@@ -14426,8 +14416,16 @@ async def create_execution(
 
         record = await service.create_execution(
             workflow_type=request.workflow_type,
-            owner_id=user.id,
-            owner_type="user",
+            # Single-user (#4351): ordinary operator creates are
+            # instance-owned (SYSTEM default) with no human-owner lookup.
+            # Workflow-scoped fan-out children keep their contract (§6.5)
+            # same-owner inheritance via the scoped authority user.
+            owner_id=getattr(user, "id", None)
+            if (principal_context or {}).get("verified_principal") is not None
+            else None,
+            owner_type=getattr(user, "owner_type", None)
+            if (principal_context or {}).get("verified_principal") is not None
+            else None,
             title=request.title,
             input_artifact_ref=request.input_artifact_ref,
             plan_artifact_ref=request.plan_artifact_ref,
@@ -15179,29 +15177,10 @@ async def list_execution_facets(
                 "message": "facets currently support source=temporal only.",
             },
         )
-    if _is_execution_admin(user):
-        effective_owner_type = owner_type
-        effective_owner = owner_id
-    else:
-        normalized_owner_type = str(owner_type or "").strip().lower()
-        if owner_type is not None and owner_type != "user":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "code": "execution_forbidden",
-                    "message": "Cannot list non-user executions.",
-                },
-            )
-        if owner_id is not None and owner_id != _owner_id(user):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "code": "execution_forbidden",
-                    "message": "Cannot list executions for another user.",
-                },
-            )
-        effective_owner = _owner_id(user)
-        effective_owner_type = "user" if normalized_owner_type == "user" else None
+    # Single-user (#4351): instance visibility; owner filters pass through
+    # as provenance selectors without a human-owner 403 gate.
+    effective_owner_type = owner_type
+    effective_owner = owner_id
 
     try:
         facet_attr = _EXECUTION_FACET_ATTRS.get(facet)
@@ -15726,7 +15705,7 @@ async def create_checkpoint_branch(
         if existing_turn is not None:
             try:
                 await CheckpointBranchTurnExecutionOwner(
-                    session, principal=_owner_id(user)
+                    session, principal=_execution_principal(user)
                 ).launch(
                     workflow_id=workflow_id,
                     branch_id=branch.branch_id,
@@ -15786,7 +15765,7 @@ async def create_checkpoint_branch(
         idempotency_key=payload.idempotency_key,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
-        principal=_owner_id(user),
+        principal=_execution_principal(user),
         requested_work_branch=payload.git_work_branch,
         source_run_id=payload.source.run_id,
         source_execution_ordinal=payload.source.execution_ordinal,
@@ -15847,7 +15826,7 @@ async def create_checkpoint_branch(
     await session.commit()
     try:
         await CheckpointBranchTurnExecutionOwner(
-            session, principal=_owner_id(user)
+            session, principal=_execution_principal(user)
         ).launch(
             workflow_id=workflow_id,
             branch_id=branch_id,
@@ -15964,7 +15943,7 @@ async def launch_checkpoint_branch_turn(
         try:
             replayed = await CheckpointBranchTurnExecutionOwner(
                 session,
-                principal=_owner_id(user),
+                principal=_execution_principal(user),
             ).launch(
                 workflow_id=workflow_id,
                 branch_id=branch_id,
@@ -16035,7 +16014,7 @@ async def launch_checkpoint_branch_turn(
     try:
         launched = await CheckpointBranchTurnExecutionOwner(
             session,
-            principal=_owner_id(user),
+            principal=_execution_principal(user),
         ).launch(
             workflow_id=workflow_id,
             branch_id=branch_id,
@@ -16110,7 +16089,7 @@ async def _record_branch_turn_operation(
         turn = result.scalar_one()
         try:
             launched = await CheckpointBranchTurnExecutionOwner(
-                session, principal=_owner_id(user)
+                session, principal=_execution_principal(user)
             ).launch(
                 workflow_id=workflow_id,
                 branch_id=branch.branch_id,
@@ -16149,7 +16128,7 @@ async def _record_branch_turn_operation(
         idempotency_key=payload.idempotency_key,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
-        principal=_owner_id(user),
+        principal=_execution_principal(user),
         requested_work_branch=branch.git_work_branch,
         parent_branch_id=branch.parent_branch_id,
         parent_turn_id=parent_turn_id or accepted_parent_turn_id,
@@ -16190,7 +16169,7 @@ async def _record_branch_turn_operation(
     await session.commit()
     try:
         launched = await CheckpointBranchTurnExecutionOwner(
-            session, principal=_owner_id(user)
+            session, principal=_execution_principal(user)
         ).launch(
             workflow_id=workflow_id,
             branch_id=branch.branch_id,
@@ -16395,7 +16374,7 @@ async def fork_checkpoint_branch(
         if existing_turn is not None:
             try:
                 await CheckpointBranchTurnExecutionOwner(
-                    session, principal=_owner_id(user)
+                    session, principal=_execution_principal(user)
                 ).launch(
                     workflow_id=workflow_id,
                     branch_id=branch.branch_id,
@@ -16432,7 +16411,7 @@ async def fork_checkpoint_branch(
         idempotency_key=payload.idempotency_key,
         instruction_ref=instruction_ref,
         instruction_digest=instruction_digest,
-        principal=_owner_id(user),
+        principal=_execution_principal(user),
         parent_branch_id=parent.branch_id,
         parent_turn_id=selected_parent_turn_id,
         source_run_id=parent.source_run_id,
@@ -16502,7 +16481,7 @@ async def fork_checkpoint_branch(
     await session.commit()
     try:
         await CheckpointBranchTurnExecutionOwner(
-            session, principal=_owner_id(user)
+            session, principal=_execution_principal(user)
         ).launch(
             workflow_id=workflow_id,
             branch_id=forked_branch_id,

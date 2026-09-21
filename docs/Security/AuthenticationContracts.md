@@ -385,12 +385,14 @@ The reusable upstream boundary follows the pin recorded in
 before any behavior is relied upon; qualification results name the exact
 pin they ran against.
 
-[KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) stays at
-`Status: Proposed` until execution is complete (see the point-in-time
+[KeycloakRemovalPlan.md](../tmp/KeycloakRemovalPlan.md) is a superseded
+scoped legacy retirement reference; its account-replacement execution is not
+required (see the point-in-time
 ledger in [KeycloakRemovalStatus-4130.md](../tmp/KeycloakRemovalStatus-4130.md)).
-Clean it up only then: retain the accepted contracts in this document and
+Retain the accepted contracts in this document and
 its adapter companion, resolve backlinks, and archive or remove the
-temporary plan. Do not erase necessary operator upgrade guidance
+temporary plan once its remaining backlinks and real recovery consumers have
+another home. Do not erase necessary operator upgrade guidance
 prematurely.
 
 ### 12.4 Advanced-mode logout limitations and MFA qualification (#4124)
@@ -439,3 +441,70 @@ MOONMIND_PROXY_IDENTITY_NAMESPACE="corp-sso"
 
 Selecting `oidc` or `header` without these inputs fails startup with an
 actionable error; omitted values never silently select a mode.
+
+## 13. Operator-admission boundary (single-user, #4347)
+
+Owner: `moonmind/security/operator_admission.py` (boundary),
+`api_service/operator_admission.py` (FastAPI adapter),
+`api_service/api/routers/operator_boundary_4347.py` (mounted surfaces).
+This section describes implemented behavior, not a proposal.
+
+There is one shared operator admission boundary. Admission establishes
+permission to use the operator interface; it never resolves, imports,
+or creates a persisted person. Business services receive resources and
+requested actions, not an always-admin `User` substitute. No new
+`AUTH_PROVIDER` value, native password/unlock product, principal
+framework, default container, account identity/session store, or mode
+matrix was introduced.
+
+### 13.1 Admitted paths
+
+| Deployment | Admission rule |
+| --- | --- |
+| Fresh local (no `MOONMIND_PUBLIC_BASE_URL`) | Loopback transport only: the connecting client address must be `127.0.0.0/8` or `::1`. No database, cookie, token, or always-on service is consulted. |
+| Remote (`MOONMIND_PUBLIC_BASE_URL` configured) | Only the deployment's approved trusted ingress: `MOONMIND_TRUSTED_INGRESS=1` with `MOONMIND_TRUSTED_PROXIES` matching the connecting peer, plus a single well-formed proxy identity assertion, admitted as a boolean (no local account mapping, no role/subject import). |
+
+Mounted enforcement covers HTTP queries and mutations
+(`/api/v1/operator/status`, `/api/v1/operator/control`), artifact
+previews/downloads (`/api/v1/operator/artifacts/{name}`), SSE
+(`/api/v1/operator/events`), WebSocket handshake and reconnects
+(`/ws/v1/operator/console`), and control actions of the chat-control
+class. Intentionally public probes are narrow: `/healthz`, `/health`,
+`/ready`, `/api/health`, `/api/v1/health` only.
+
+### 13.2 Denied paths (fail closed, never a default user)
+
+- Direct-backend, forged-header, worker-credential
+  (`Authorization: Bearer` worker material, `X-Moonmind-Execution-Fanout`),
+  container-local loopback, and query-string material never confer
+  operator access; untrusted `X-Forwarded-*`/`X-Real-IP` headers are never
+  admission inputs.
+- A `Host` disagreeing with the configured operator URL, or a
+  present-but-foreign `Origin`/`Referer` on an unsafe method, is denied
+  (403) independently of any account lifecycle. CORS is not the admission
+  control. Credentials are never read from URLs (WebSocket handshakes
+  ignore query parameters entirely).
+- Absent/invalid presented credentials return 401
+  (`auth_required`/`auth_invalid`); a remote URL without a configured
+  trusted ingress returns 503 `unavailable` with the missing inputs
+  named. No path mints a synthetic administrator, falls back to an
+  account, or weakens access.
+
+### 13.3 Stream policy and limitations
+
+- Reconnects are admitted again through the same boundary. Revoked
+  admission closes streams within `STREAM_REVALIDATION_SECONDS` (the
+  existing 5-minute session-authority bound reused, not a second session
+  authority). Losing browser admission never cancels already-admitted
+  durable work, which continues under its own recorded intent and scoped
+  machine authority.
+- Limitations: full route-by-route consumer migration off the
+  account session authority and deletion of the obsolete login modules
+  belong to the final-removal child; the predecessor account stack
+  remains mounted alongside this boundary until all consumers move.
+  Activating the new boundary on retained data additionally requires the
+  #4346 conversion and the coordinated release. The test-only bypass
+  topology (`docker-compose.operator-admission-test.yaml`, rendered and
+  pinned by `tests/unit/security/test_operator_isolation_4347.py`) runs
+  live in CI; this checkout proves the rendered isolation plus the
+  application-layer denials hermetically.

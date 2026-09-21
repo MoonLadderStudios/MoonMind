@@ -56,11 +56,14 @@ from moonmind.schemas.temporal_payload_policy import compact_temporal_ref_metada
 from moonmind.workflows.adapters.managed_agent_adapter import (
     ManagedAgentAdapter,
     ManagedProfileLaunchContext,
+    _PR_RESOLVER_HUMAN_APPROVAL_REASON,
+    _PR_RESOLVER_HUMAN_APPROVAL_SUMMARY,
     _derive_pr_resolver_failure,
     _derive_pr_resolver_metadata,
     _current_time,
     _generate_run_id,
     _is_generic_process_exit_summary,
+    _normalized_pr_resolver_reason,
     _load_auto_publish_result_payload,
     _load_pr_resolver_terminal_result,
     _pr_resolver_disposition,
@@ -1380,16 +1383,26 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     failure_class = result.failure_class
                     summary = str(result.summary or "").strip()
                     metadata = dict(result.metadata)
+                    # Codex sessions reuse a workspace across turns, so an
+                    # earlier turn's terminal artifact is indistinguishable from
+                    # this turn's unless the loader is given the run identity
+                    # and start time to validate freshness against.
                     metadata.update(
                         _derive_pr_resolver_metadata(
                             record.workspace_path,
                             merge_gate_owned=pr_resolver_merge_gate_owned,
+                            run_id=record.run_id,
+                            workflow_id=record.workflow_id,
+                            not_before=record.started_at,
                         )
                     )
                     derived_failure_class, derived_summary = (
                         _derive_pr_resolver_failure(
                             record.workspace_path,
                             merge_gate_owned=pr_resolver_merge_gate_owned,
+                            run_id=record.run_id,
+                            workflow_id=record.workflow_id,
+                            not_before=record.started_at,
                         )
                     )
                     resolver_disposition = str(
@@ -1427,6 +1440,25 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                                 "summary": (
                                     "pr-resolver requested merge automation re-entry."
                                 ),
+                                "metadata": metadata,
+                            }
+                        )
+                        updated_result = True
+                    elif (
+                        resolver_disposition == "manual_review"
+                        and pr_resolver_merge_gate_owned
+                        and _normalized_pr_resolver_reason(
+                            metadata.get("prResolverFinalReason")
+                        )
+                        == _PR_RESOLVER_HUMAN_APPROVAL_REASON
+                        and record.status == "failed"
+                        and failure_class in {None, "execution_error"}
+                        and _is_generic_process_exit_summary(summary)
+                    ):
+                        result = result.model_copy(
+                            update={
+                                "failure_class": None,
+                                "summary": _PR_RESOLVER_HUMAN_APPROVAL_SUMMARY,
                                 "metadata": metadata,
                             }
                         )

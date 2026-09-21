@@ -22,7 +22,11 @@ from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
 from moonmind.omnigent.execution_support_evidence import (
     load_protected_execution_support_evidence,  # re-export for hermetic test patching
 )
-from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
+from moonmind.omnigent.harness_platform.agent_profile import (
+    OmnigentAgentProfileV2,
+    stable_imported_content_digest,
+    stable_upstream_snapshot_digest,
+)
 from moonmind.omnigent.harness_platform.catalog import (
     HarnessImplementationIdentity,
     HarnessRecord,
@@ -587,12 +591,18 @@ def _build_v2_profile(
     snapshot_digest = str(snapshot.get("digest") or "").strip()
     if not snapshot_digest.startswith("sha256:"):
         raise ValueError("Agent Profile snapshot digest is invalid")
+    # ``stable_upstream_snapshot_digest`` / ``stable_imported_content_digest``
+    # own this derivation; launch-time plan verification recomputes the same
+    # identity from the same document, so writer and reader cannot diverge.
     if source.get("upstreamId"):
+        stable_upstream_digest = stable_upstream_snapshot_digest(
+            source, snapshot_digest
+        )
         agent_source: dict[str, Any] = {
             "kind": "upstream",
             "upstreamId": str(source["upstreamId"]),
             "upstreamVersion": str(source.get("upstreamVersion") or "0.0.0"),
-            "upstreamSnapshotDigest": snapshot_digest,
+            "upstreamSnapshotDigest": stable_upstream_digest,
         }
     else:
         bundle_ref = str(source.get("bundleArtifactRef") or "").strip()
@@ -605,14 +615,21 @@ def _build_v2_profile(
         )
         if not bundle_ref or not bundle_digest or not import_receipt:
             raise ValueError("bundle Agent Profile lacks immutable import authority")
+        stable_content_digest = stable_imported_content_digest(source, snapshot_digest)
+        stable_agent_id = str(
+            source.get("importedAgentId") or snapshot.get("agentId") or ""
+        ).strip()
+        stable_agent_version = str(
+            source.get("importedAgentVersion") or snapshot.get("version") or ""
+        ).strip()
         agent_source = {
             "kind": "bundle",
             "bundleArtifactRef": bundle_ref,
             "bundleDigest": bundle_digest,
             "importReceiptRef": import_receipt,
-            "importedAgentId": str(snapshot.get("agentId") or ""),
-            "importedAgentVersion": str(snapshot.get("version") or ""),
-            "importedContentDigest": snapshot_digest,
+            "importedAgentId": stable_agent_id,
+            "importedAgentVersion": stable_agent_version,
+            "importedContentDigest": stable_content_digest,
         }
     required = list(document.get("requiredCapabilities") or [])
     workspace = document.get("workspace")

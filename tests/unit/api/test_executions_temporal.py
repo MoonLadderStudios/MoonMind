@@ -199,9 +199,10 @@ def test_list_executions_source_temporal_defaults_to_workflow_scope(client) -> N
         assert response.status_code == 200
         expected_query = (
             'ExecutionStatus!="ContinuedAsNew" AND '
-            'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
-            'AND mm_owner_id="user-123"'
+            'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow"'
         )
+        # Single-user (#4351): temporal lists are instance-wide; no
+        # human-owner scoping is injected for the admitted operator.
         # MoonLadderStudios/MoonMind#3947: no count RPC on the direct-Temporal
         # list path; the upstream query still carries the registry product
         # domain and the total is reported unknown.
@@ -269,9 +270,10 @@ def test_list_executions_source_temporal_default_scope_uses_workflow_query(
         assert response.status_code == 200
         expected_query = (
             'ExecutionStatus!="ContinuedAsNew" AND '
-            'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
-            'AND mm_owner_id="user-123"'
+            'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow"'
         )
+        # Single-user (#4351): temporal lists are instance-wide; no
+        # human-owner scoping is injected for the admitted operator.
         mock_client.count_workflows.assert_not_awaited()
         assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
 
@@ -430,9 +432,10 @@ def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_workf
         assert response.status_code == 200
         expected_query = (
             'ExecutionStatus!="ContinuedAsNew" AND '
-            'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
-            'AND mm_owner_id="user-123"'
+            'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow"'
         )
+        # Single-user (#4351): temporal lists are instance-wide; no
+        # human-owner scoping is injected for the admitted operator.
         mock_client.count_workflows.assert_not_awaited()
         assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
 

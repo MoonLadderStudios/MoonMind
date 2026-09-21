@@ -397,8 +397,10 @@ def build_resolver_run_request(
                     else (
                         f"Resolve every actionable item on pull request {pr.url} "
                         "and stop without merging it: this run has no merge "
-                        "authority, so report review_clean once the merge gate "
-                        "opens with nothing left to address. "
+                        "authority, so report review_clean once there is "
+                        "nothing left to address. Merge authorization is not "
+                        "this run's blocker, so do not wait for the merge gate "
+                        "to open. "
                     )
                 )
                 + "Use pr-resolver and do not create another pull request."

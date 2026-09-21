@@ -241,6 +241,18 @@ flowchart TD
 
 Implementation sequencing, cutover and migration work, exact adapter support, and qualification evidence belong in existing issues or `docs/tmp/`. A saved definition or rendered form is not proof that the runtime honors its publication policy.
 
+### 10.1 Single-user operation (#4351)
+
+Recurring schedules are instance resources: the admitted operator creates,
+inspects, and controls every definition without a human-owner lookup. New
+definitions carry no `owner_user_id`; retained `owner_user_id`/`scope`
+values persist as non-authoritative provenance. Schedule IDs, enabled
+state, cadence/timezone, next-execution semantics, frozen runtime/profile/
+preset inputs, and publication intent survive restart/cutover without
+duplicate or lost launches. The admitted-vs-projection owner comparison in
+recovery remains a source-integrity gate. Serialized `ownerUserId` fields
+stay for history compatibility. See [Single-User Application Design](../SingleUserApplicationDesign.md).
+
 ## 11. Canonical Scheduling Semantics
 
 ### 11.1 Mechanism matrix

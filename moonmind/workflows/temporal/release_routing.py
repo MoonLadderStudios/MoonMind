@@ -15,6 +15,7 @@ from temporalio.api.workflowservice.v1 import (
     SetWorkerDeploymentCurrentVersionRequest,
 )
 from temporalio.common import PinnedVersioningOverride, WorkerDeploymentVersion
+from temporalio.exceptions import TemporalError
 from temporalio.service import RPCError, RPCStatusCode
 
 logger = logging.getLogger(__name__)
@@ -46,14 +47,6 @@ def current_version(snapshot) -> str:
     return f"{current.deployment_name}.{current.build_id}" if current.build_id else ""
 
 
-def ramping_version(snapshot) -> str:
-    routing = snapshot.worker_deployment_info.routing_config
-    if routing.ramping_version:
-        return routing.ramping_version
-    ramping = routing.ramping_deployment_version
-    return f"{ramping.deployment_name}.{ramping.build_id}" if ramping.build_id else ""
-
-
 async def version_availability(
     client, version: str, *, live_container_ids=None
 ) -> dict:
@@ -65,6 +58,7 @@ async def version_availability(
     """
     import re
     from datetime import datetime, timezone
+
     from temporalio.api.enums.v1 import DescribeTaskQueueMode
     from temporalio.api.taskqueue.v1 import TaskQueue
     from temporalio.api.workflowservice.v1 import DescribeTaskQueueRequest
@@ -122,7 +116,13 @@ async def version_availability(
 
 
 async def version_drained(client, version: str) -> bool:
-    """Only Temporal's terminal drainage evidence releases old pollers."""
+    """Only Temporal's terminal drainage evidence releases old pollers.
+
+    Production routing no longer waits on drainage: recreate-in-place serves
+    one version at a time. This remains the supported observation of Temporal's
+    drainage status for the release-routing reliability journeys, which cover
+    the startup promotion path that is still live.
+    """
     from temporalio.api.enums.v1 import VersionDrainageStatus
 
     try:
@@ -139,44 +139,6 @@ async def version_drained(client, version: str) -> bool:
         response.worker_deployment_version_info.drainage_info.status
         == VersionDrainageStatus.VERSION_DRAINAGE_STATUS_DRAINED
     )
-
-
-async def qualification_closed_without_activation(
-    client, *, version: str, canary_id: str
-) -> bool:
-    """A private candidate's only admitted workflow is its named canary.
-
-    Inactive versions never enter Temporal's drainage state machine. They can
-    retire after the release owner is terminal, its canary is closed (or was
-    never started), and the service confirms this version never took traffic.
-    """
-    from temporalio.api.enums.v1 import WorkerDeploymentVersionStatus
-    from temporalio.client import WorkflowExecutionStatus
-
-    try:
-        response = await client.workflow_service.describe_worker_deployment_version(
-            DescribeWorkerDeploymentVersionRequest(
-                namespace=client.namespace, version=version
-            )
-        )
-        if (
-            response.worker_deployment_version_info.status
-            != WorkerDeploymentVersionStatus.WORKER_DEPLOYMENT_VERSION_STATUS_INACTIVE
-        ):
-            return False
-    except RPCError as exc:
-        if exc.status != RPCStatusCode.NOT_FOUND:
-            raise
-    try:
-        execution = await client.get_workflow_handle(canary_id).describe()
-        return execution.status not in {
-            WorkflowExecutionStatus.RUNNING,
-            WorkflowExecutionStatus.CONTINUED_AS_NEW,
-        }
-    except RPCError as exc:
-        if exc.status != RPCStatusCode.NOT_FOUND:
-            raise
-        return True
 
 
 async def await_registered_queues(
@@ -217,6 +179,7 @@ async def await_registered_queues(
 async def verify_ordinary_route(client, *, version, canary_id, timeout_seconds=120):
     """Prove ordinary unpinned traffic on every registered workflow queue."""
     import hashlib
+
     from temporalio.api.enums.v1 import TaskQueueType
     from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
     from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -325,7 +288,13 @@ async def promote_version(
             ),
             id=execution_id,
             task_queue=task_queue,
-            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+            # A failed canary must not pin this ID forever. REJECT_DUPLICATE
+            # made every later retry reattach to the closed failed run and
+            # re-raise its error, so a transient canary failure left the old
+            # route current with no pollers even after the outage cleared.
+            # FAILED_ONLY still refuses to re-run a successful canary, and
+            # USE_EXISTING still dedupes concurrent stewards.
+            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
             id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
             execution_timeout=timedelta(seconds=max(90, 65 * len(task_queues))),
             versioning_override=PinnedVersioningOverride(
@@ -374,7 +343,11 @@ def _parked(current: str, target: str) -> dict[str, str]:
         "status": "awaiting_promotion",
         "currentVersion": current,
         "candidateVersion": target,
-        "recoveryOwner": "deployment-control",
+        # The fleet that parks is the fleet that retries: startup spawns
+        # reconcile_parked_routing in this worker. The deployment-control
+        # supervisor that used to own this no longer exists, and naming it
+        # sent operators to the wrong service during an outage.
+        "recoveryOwner": "workflow-fleet-startup",
     }
 
 
@@ -500,15 +473,23 @@ async def steward_abandoned_routing(
                     raise
                 _registered = set()
             if served <= _registered:
+                # The outgoing version served queues this process does not
+                # declare -- on a multi-fleet deployment the other workers
+                # host them -- and the target has registered all of them.
+                # Promotion therefore converges to a release ordinary work can
+                # use, and it is qualified below across the full served
+                # surface rather than this fleet's own queues. This used to
+                # park for the release controller that owned promotion; there
+                # is no such controller now, so parking here left routing on
+                # the dead version forever.
                 logger.info(
                     "Release routing current version %s served queues %s beyond "
-                    "this fleet's declared %s; preserving its route for the "
-                    "authorized release controller",
+                    "this fleet's declared %s; the target registered them, "
+                    "promoting across the full served surface",
                     current,
                     sorted(served - declared),
                     sorted(declared),
                 )
-                return _parked(current, target)
     else:
         workflow_queues = ()
         activity_queues = tuple(spec.task_queues)
@@ -573,6 +554,8 @@ async def bootstrap_version_routing(client, spec):
     if not spec.workflows:
         return {"status": "workflow_fleet_owns_routing"}
     target = f"{spec.deployment_id}.{spec.build_id}"
+    verification_owed = False
+    verification_canary_id = f"mm-startup-reverify-{uuid4().hex}"
     for attempt in range(60):
         try:
             snapshot = await routing_snapshot(client, spec.deployment_id)
@@ -583,6 +566,16 @@ async def bootstrap_version_routing(client, spec):
             )
             if current and not never_routed:
                 if current == target:
+                    if verification_owed:
+                        # A prior attempt may have changed routing before its
+                        # acknowledgement or verification read failed. Observe
+                        # that effect instead of promoting again, but still
+                        # prove ordinary traffic before reporting readiness.
+                        await verify_ordinary_route(
+                            client,
+                            version=target,
+                            canary_id=verification_canary_id,
+                        )
                     return {
                         "status": "current",
                         "currentVersion": current,
@@ -607,9 +600,104 @@ async def bootstrap_version_routing(client, spec):
                 RPCStatusCode.NOT_FOUND,
                 RPCStatusCode.FAILED_PRECONDITION,
                 RPCStatusCode.ABORTED,
+                RPCStatusCode.RESOURCE_EXHAUSTED,
+                RPCStatusCode.UNAVAILABLE,
+                RPCStatusCode.DEADLINE_EXCEEDED,
             }:
                 raise
             if attempt == 59:
                 raise
+            verification_owed = True
+            logger.warning(
+                "Release routing startup observation failed (%s); "
+                "retrying with pollers running (attempt %s/60): %s",
+                exc.status.name,
+                attempt + 1,
+                exc,
+            )
             await _routing_sleep(1)
     raise RuntimeError("Release routing initialization did not converge")
+
+
+# A recreated worker can observe the outgoing fleet's pollers for as long as
+# Compose lets it drain (stop_grace_period: 6m), which outlasts the route-death
+# wait above.
+_PARKED_RECONCILE_POLL_SECONDS = 30
+
+
+async def reconcile_parked_routing(client, spec, readiness_metadata=None):
+    """Finish a promotion that startup had to park, without a supervisor.
+
+    ``bootstrap_version_routing`` parks when the recorded current version
+    still has live pollers, because a live route must never be displaced.
+    During recreate-in-place that route is the outgoing fleet, which is
+    draining and will disappear. Nothing else retries now that the
+    availability supervisor is gone, so a parked startup would leave
+    Temporal's current version pointing at a version with no workers and
+    ordinary workflows would stall.
+
+    There is deliberately no retry budget. A budget only converts one outage
+    into a second, quieter one: the task ends, the worker keeps serving, and
+    routing stays on a version with no pollers with nothing left to fix it.
+    Retrying until it succeeds -- or until shutdown cancels this task -- is
+    both simpler and the only behaviour that cannot abandon promotion. A
+    still-live route keeps parking, so this converges only once the old fleet
+    is really gone.
+    """
+    # A promotion can move routing and then fail its ordinary-route check.
+    # bootstrap_version_routing reports an already-current target as converged
+    # without repeating that check, so once an attempt has failed this loop
+    # must prove ordinary traffic itself before accepting convergence.
+    verification_owed = False
+    while True:
+        await _routing_sleep(_PARKED_RECONCILE_POLL_SECONDS)
+        try:
+            result = await bootstrap_version_routing(client, spec)
+        except asyncio.CancelledError:
+            raise
+        except (
+            TemporalError,
+            OSError,
+            RuntimeError,
+            ValueError,
+            asyncio.TimeoutError,
+        ) as exc:
+            # A pinned canary that times out or fails raises
+            # WorkflowFailureError, which shares only TemporalError with
+            # RPCError. Every one of these is retried rather than ending the
+            # only reconciler this deployment has.
+            logger.info("Parked release routing retry did not converge: %s", exc)
+            verification_owed = True
+            continue
+        if result.get("status") != "awaiting_promotion":
+            if verification_owed:
+                target = f"{spec.deployment_id}.{spec.build_id}"
+                try:
+                    await verify_ordinary_route(
+                        client,
+                        version=target,
+                        canary_id=f"mm-steward-reverify-{uuid4().hex}",
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except (
+                    TemporalError,
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                    asyncio.TimeoutError,
+                ) as exc:
+                    logger.info(
+                        "Release routing reports %s current, but ordinary "
+                        "traffic is not verified yet: %s",
+                        target,
+                        exc,
+                    )
+                    continue
+            if readiness_metadata is not None:
+                readiness_metadata["releaseRouting"] = result
+            logger.info(
+                "Parked release routing converged to %s",
+                result.get("currentVersion"),
+            )
+            return result

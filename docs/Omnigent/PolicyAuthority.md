@@ -100,3 +100,14 @@ Related: [settings](../Security/SettingsSystem.md), [Provider Profiles](../Secur
 [adapter](OmnigentAdapter.md), [workspaces](../Workflows/WorkspaceLocators.md),
 [checkpoints](../Workflows/CheckpointBranchSystem.md), [remediation](../Workflows/WorkflowRemediation.md),
 and [RAG](../Rag/WorkflowRag.md).
+
+## Single-user operation (#4351)
+
+Policies are instance resources: the admitted operator reads and manages
+every policy without a human-owner lookup. New policies carry no
+`owner_user_id`; retained `owner_user_id`/`visibility` values persist as
+non-authoritative provenance while versions, compiled/runtime bindings, and
+operational restrictions are preserved. Settings-permission gates and
+secret-handling policy stay at their owning boundaries; raw secret access
+and agent policy permissions are not broadened. See
+[Single-User Application Design](../SingleUserApplicationDesign.md).

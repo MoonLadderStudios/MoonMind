@@ -50,6 +50,8 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
     RUN_WORKFLOW_HEADLESS_REMEDIATION_PATCH,
     RUN_WORKFLOW_OWNED_REMEDIATION_HEAD_PATCH,
+    RUN_MOONSPEC_ENVIRONMENT_ALWAYS_DRAFT_PUBLISH_PATCH,
+    RUN_MOONSPEC_DRAFT_COMPLETION_OUTCOME_PATCH,
     MoonMindRunWorkflow,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -7735,24 +7737,61 @@ def test_moonspec_gate_draft_publish_qualification(
     assert mock_run_workflow._moonspec_gate_qualifies_for_draft_publish() is False
 
 
-def test_moonspec_environment_blocked_publish_action_defaults_to_fail(
+def test_environment_blocked_draft_policy_applies_without_operator_setting(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # MoonLadderStudios/MoonMind#4442: an environment-class BLOCKED gate
+    # drafts by default. No operator setting gates the completing outcome.
+    # MoonLadderStudios/MoonMind#4446: the always-draft semantic is versioned;
+    # new histories record the new marker.
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        == RUN_MOONSPEC_ENVIRONMENT_ALWAYS_DRAFT_PUBLISH_PATCH,
+    )
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "BLOCKED"},
+    )
+    assert (
+        mock_run_workflow._moonspec_draft_publication_policy(
+            environment_blocked_enabled=True,
+            additional_work_enabled=False,
+        )
+        == "draft_pr_on_environment_blocked"
+    )
+
+
+def test_environment_blocked_draft_policy_preserves_fail_snapshot_on_replay(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
+    # MoonLadderStudios/MoonMind#4446: retained histories without the new
+    # always-draft marker keep their snapshotted "fail" policy and stay
+    # fail-closed instead of gaining draft-publication commands on replay.
+    # mock_run_workflow fixture patches workflow.patched to False for all ids.
+    mock_run_workflow._moonspec_environment_blocked_publish_action_snapshot = "fail"
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "BLOCKED"},
+    )
     assert (
-        mock_run_workflow._moonspec_environment_blocked_publish_action() == "fail"
+        mock_run_workflow._moonspec_draft_publication_policy(
+            environment_blocked_enabled=True,
+            additional_work_enabled=False,
+        )
+        is None
     )
     mock_run_workflow._moonspec_environment_blocked_publish_action_snapshot = (
         "draft_pr"
     )
     assert (
-        mock_run_workflow._moonspec_environment_blocked_publish_action()
-        == "draft_pr"
-    )
-    mock_run_workflow._moonspec_environment_blocked_publish_action_snapshot = (
-        "unsupported_value"
-    )
-    assert (
-        mock_run_workflow._moonspec_environment_blocked_publish_action() == "fail"
+        mock_run_workflow._moonspec_draft_publication_policy(
+            environment_blocked_enabled=True,
+            additional_work_enabled=False,
+        )
+        == "draft_pr_on_environment_blocked"
     )
 
 
@@ -7837,7 +7876,17 @@ def test_additional_work_draft_publish_patch_preserves_old_history_behavior(
 
 def test_moonspec_draft_publication_supersedes_blocking_gate(
     mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            RUN_MOONSPEC_ENVIRONMENT_ALWAYS_DRAFT_PUBLISH_PATCH,
+            RUN_MOONSPEC_DRAFT_COMPLETION_OUTCOME_PATCH,
+        },
+    )
     mock_run_workflow._record_moonspec_verify_gate(
         node_id="verify-final",
         outputs={
@@ -7859,7 +7908,12 @@ def test_moonspec_draft_publication_supersedes_blocking_gate(
     assert mock_run_workflow._plan_blocked_message is None
 
     # Simulate the state the run loop records after native draft-PR creation.
+    # MoonLadderStudios/MoonMind#4442: a preserved draft completes the run
+    # with attention_required instead of failing it.
     mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/7"
+    mock_run_workflow._publish_context["pullRequestUrl"] = (
+        "https://github.com/org/repo/pull/7"
+    )
     mock_run_workflow._publish_status = "published"
     mock_run_workflow._authoritative_publish_outcome_enabled = True
     status, _message, publish_failure = (
@@ -7867,9 +7921,9 @@ def test_moonspec_draft_publication_supersedes_blocking_gate(
             parameters={"publishMode": "pr"}
         )
     )
-    assert publish_failure is True
-    assert status == "failed"
-    assert "preserved in draft pull request" in _message
+    assert publish_failure is False
+    assert status == "success"
+    assert "https://github.com/org/repo/pull/7" in _message
 
     assert mock_run_workflow._attention_required is True
     draft_context = mock_run_workflow._publish_context["moonSpecDraftPublication"]
@@ -7884,9 +7938,15 @@ def test_moonspec_draft_publication_supersedes_blocking_gate(
     assert "art_verify_blocked" in body_section
 
 
-def test_pushed_commits_supersede_stale_no_commit_before_draft_failure(
+def test_pushed_commits_supersede_stale_no_commit_before_draft_completion(
     mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_MOONSPEC_DRAFT_COMPLETION_OUTCOME_PATCH,
+    )
     mock_run_workflow._authoritative_publish_outcome_enabled = True
 
     mock_run_workflow._record_publish_result(
@@ -7918,7 +7978,42 @@ def test_pushed_commits_supersede_stale_no_commit_before_draft_failure(
         "MoonSpec verdict ADDITIONAL_WORK_NEEDED."
     )
     mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/8"
+    mock_run_workflow._publish_context["pullRequestUrl"] = (
+        "https://github.com/org/repo/pull/8"
+    )
     mock_run_workflow._publish_status = "published"
+
+    status, message, publish_failure = (
+        mock_run_workflow._determine_publish_completion(
+            parameters={"publishMode": "pr"}
+        )
+    )
+
+    # MoonLadderStudios/MoonMind#4442: preserved work completes, it does not
+    # fail. Finalization adds attention_required and the verification reason.
+    assert status == "success"
+    assert publish_failure is False
+    assert "https://github.com/org/repo/pull/8" in message
+
+
+def test_moonspec_draft_publication_without_pr_still_fails(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # MoonLadderStudios/MoonMind#4442: draft publication that preserved
+    # nothing is still a failure with the preservation failure as the reason.
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_MOONSPEC_DRAFT_COMPLETION_OUTCOME_PATCH,
+    )
+    mock_run_workflow._moonspec_draft_publication_reason = (
+        "MoonSpec verdict ADDITIONAL_WORK_NEEDED."
+    )
+    mock_run_workflow._pull_request_url = None
+    mock_run_workflow._publish_context.pop("pullRequestUrl", None)
+    mock_run_workflow._publish_status = "published"
+    mock_run_workflow._authoritative_publish_outcome_enabled = True
 
     status, message, publish_failure = (
         mock_run_workflow._determine_publish_completion(
@@ -7928,7 +8023,64 @@ def test_pushed_commits_supersede_stale_no_commit_before_draft_failure(
 
     assert status == "failed"
     assert publish_failure is True
-    assert "https://github.com/org/repo/pull/8" in message
+    assert "did not complete" in message
+
+
+def test_moonspec_draft_completion_patch_preserves_failed_outcome_on_replay(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    # MoonLadderStudios/MoonMind#4446: retained histories without the new
+    # completion marker keep the recorded failed outcome so replay cannot flip
+    # FailWorkflow to CompleteWorkflow.
+    # mock_run_workflow fixture patches workflow.patched to False for all ids.
+    mock_run_workflow._moonspec_draft_publication_reason = (
+        "MoonSpec verdict ADDITIONAL_WORK_NEEDED."
+    )
+    mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/10"
+    mock_run_workflow._publish_context["pullRequestUrl"] = (
+        "https://github.com/org/repo/pull/10"
+    )
+    mock_run_workflow._publish_status = "published"
+    mock_run_workflow._authoritative_publish_outcome_enabled = True
+
+    status, message, publish_failure = (
+        mock_run_workflow._determine_publish_completion(
+            parameters={"publishMode": "pr"}
+        )
+    )
+
+    assert status == "failed"
+    assert publish_failure is True
+    assert "preserved in draft pull request" in message
+
+
+def test_dependency_signal_blocks_completed_with_attention(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    # MoonLadderStudios/MoonMind#4446: a completed prerequisite that still
+    # requires operator review must not satisfy the dependency gate.
+    from datetime import datetime, timezone
+
+    mock_run_workflow._declared_dependencies = ["prereq-1"]
+    mock_run_workflow._unresolved_dependency_ids = {"prereq-1"}
+    mock_run_workflow._dependency_outcomes_by_id = {}
+    mock_run_workflow._dependency_failure_counts = {}
+    mock_run_workflow._dependency_last_failed_at = {}
+    mock_run_workflow._dependency_resolution = None
+    mock_run_workflow._dependency_failure = None
+    payload = {
+        "prerequisiteWorkflowId": "prereq-1",
+        "terminalState": "completed",
+        "closeStatus": "completed",
+        "resolvedAt": datetime.now(timezone.utc).isoformat(),
+        "failureCategory": "dependency_attention_required",
+        "message": "Workflow completed with a draft pull request.",
+    }
+    mock_run_workflow._record_dependency_signal(payload)
+    assert "prereq-1" in mock_run_workflow._unresolved_dependency_ids or (
+        mock_run_workflow._dependency_failure is not None
+    )
+    assert mock_run_workflow._dependency_resolution != "satisfied"
 
 
 def test_pushed_commits_supersede_empty_stale_no_change_evidence(
@@ -7972,7 +8124,7 @@ def test_moonspec_blocking_gate_unchanged_without_draft_activation(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
     # In-flight compatibility: when the draft-publish path never activates
-    # (patch off or policy 'fail'), the gate blocks exactly as before.
+    # (patch off or no draft policy), the gate blocks exactly as before.
     mock_run_workflow._record_moonspec_verify_gate(
         node_id="verify-final",
         outputs={"verdict": "BLOCKED", "diagnostics_ref": "art_verify_blocked"},

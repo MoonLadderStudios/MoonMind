@@ -52,6 +52,13 @@ account lifecycle. Renaming `User` to `Operator` or `Tenant` would retain the sa
 model. None is the target design. Remote access is a deployment concern rather
 than a reason to rebuild accounts inside MoonMind.
 
+Each replacement migrates its real callers and removes the account machinery it
+makes obsolete. Necessary transitional readers have identified consumers and a
+removal condition. A separate final-cleanup issue is not a reason to leave two
+live systems indefinitely. Useful changes can be developed and verified at their
+own boundaries without waiting for every migration task. This does not permit an
+incomplete or unprotected cutover to be labeled the completed single-user release.
+
 ## 2. Application and resource boundaries
 
 Operator-facing APIs and services operate on instance resources without a human
@@ -107,9 +114,12 @@ merely by being set.
 
 The operator-facing API has one shared admission boundary, separate from
 business logic. Admission establishes permission to use the operator interface,
-not a persisted person. The implementation uses the existing API and deployment
-mechanisms wherever sufficient. This design does not require a new access
-service, new selector family, or prescribed credential format.
+not a persisted person. Apply it through the existing product routes and shared
+dependencies. A parallel demonstration API, echo socket, synthetic artifact, or
+in-memory work ledger does not replace the real workflow, artifact, or chat
+consumer. Test scaffolding stays in tests rather than becoming another production
+surface. This design requires no new access service, selector family, or
+prescribed credential format.
 
 ### No bypass through the internal network
 
@@ -137,10 +147,13 @@ where applicable. CORS alone is not the admission or cross-site request forgery
 boundary. Existing reusable browser-security helpers can survive without their
 account lifecycle machinery.
 
-Remote transport protects credentials and content. Long-lived streams cannot
-outlive the authority that admits them without a bounded revalidation or closure
-policy at the owning boundary. Reconnects are admitted again. Broad reusable
-credentials do not travel in URLs or application logs.
+Remote transport protects credentials and content. Long-lived streams use the
+existing admitting boundary's bounded revalidation or closure policy. Rechecking
+an unchanged cached header does not establish upstream revocation detection.
+Where that authority cannot be queried during a stream, bound the connection
+lifetime and require fresh admission on reconnect, with the limitation stated
+honestly. Do not add a second session authority to hide the distinction. Broad
+reusable credentials do not travel in URLs or application logs.
 
 Losing browser access or closing a browser does not cancel already-admitted
 workflows. Durable work uses its own recorded intent and scoped machine
@@ -162,7 +175,11 @@ remains bound to the intended runtime session, not an arbitrary upstream proxy.
 Existing signing, revocation, and credential-materialization mechanisms remain
 where they serve these machine contracts. Removing application login is not a
 blanket deletion of `auth` modules, JWT libraries, signing keys, OAuth workflows,
-or every field containing `owner` or `session`.
+or every field containing `owner` or `session`. Each protocol retains the
+restrictions its real trust boundary requires, not every possible lease,
+generation, introspection, or registry mechanism. Adapt existing issuers and
+validators together rather than introducing a universal principal translator,
+second token store, or parallel chat/runtime lifecycle.
 
 The [Docker Backend Service](ManagedAgents/DockerBackendService.md),
 [Provider Profiles](Security/ProviderProfiles.md), and
@@ -235,6 +252,10 @@ All of the operator's devices see the same server-held resources. Cache keys and
 query layers no longer partition by human identity. Reconnect handling, draft
 preservation, duplicate-submission protection, and conflicting-edit detection
 remain because a single operator can use multiple tabs and concurrent workflows.
+Remove obsolete API scope inputs with their actual clients rather than hiding a
+personal/global default in the shared client. Reuse existing cache, idempotency,
+and transport owners; account removal does not require a new synchronization or
+retry framework.
 
 Application errors identify real problems with admission, data availability,
 configuration, execution, or machine authority. Routine requests do not fail
@@ -279,6 +300,13 @@ references. Existing resource IDs and relationships remain stable where other
 records or external references depend on them. Legacy creator information may
 remain as provenance, but never as an operator-access predicate.
 
+Legacy conversion is a versioned migration, not a permanent startup qualification
+system. Use existing schema/migration state to select it when needed. Fresh and
+successfully converted installations start normally without inventorying removed
+account tables, requiring alias declarations again, or creating a default person.
+Reuse the existing migration and deployment owners, not independent startup
+converters or a new transformation registry requiring no-op plugins.
+
 ### Upgrade eligibility and disposition
 
 In-place conversion is supported only when the complete retained data set is
@@ -296,23 +324,42 @@ export as an alternate migration mode.
 | Retained data attributable to multiple people | Block before conversion or access cutover, leaving source data and its existing protections unchanged |
 | Missing, conflicting, or incomplete ownership evidence | Block on the same boundary until the source attribution is resolved through authorized evidence or a separately authorized data disposition |
 
-Attribution covers all retained resources and their dependencies, not just active
-login rows. It includes disabled or deleted users' remaining data, profile-held
-credentials, settings, presets, artifacts, schedules, serialized ownership, and
-in-flight execution references. A durable mapping to the same existing person
-can establish an alias. Matching email, display name, administrator status, one
-remaining active account, or merely selecting a preferred account cannot.
-Unowned rows require evidence that they are deployment-owned, not an assumption
-that they are safe to expose. Multiple provider accounts are not multiple people.
+Attribution covers retained resources and dependencies, not just active login
+counts or UUID-shaped values. Include disabled/deleted users' remaining data,
+profile-held credentials, settings, presets, artifacts, schedules, serialized
+ownership, and in-flight references. Unavailable required reads are unknown,
+never an empty inventory or proof of eligibility. Existing trusted records may
+establish deployment ownership or a same-person alias without new declarations.
+An arbitrary UUID list, caller boolean, matching email/display name, admin flag,
+or one remaining active account cannot manufacture that authority. Genuinely
+unresolved human data remains protected. Multiple provider accounts are not
+multiple people, and historical provenance is not automatically a live owner.
 
-The eligibility decision uses a consistent source snapshot and remains valid
-through cutover. A newly observed identity, resource, or conflicting reference
-invalidates the decision before the candidate can expose the converted data.
+The authoritative eligibility read and conversion share the existing migration
+serialization and appropriate transaction/locks or bounded writer quiescence.
+Acquire that boundary before reading and retain it through coherent commit and
+cutover, covering all writers that can change relevant data. Serialize by the
+actual deployment/database being converted, not a digest that changes with each
+proposal. An earlier report, owner-set hash, or row count does not prove that
+values and references stayed unchanged. Prevent the race rather than adding a
+larger fingerprint system. Continuous old/new fleet availability is not required.
+
 The block precedes removal of access predicates, credential rebinding, destructive
-schema changes, and replacement of the serving application. The existing release
-and its protected operator URL remain available. Already-admitted work continues
-under its existing authority. A failed conversion is not a partial success or a
-reason to bring up the candidate against an unconverted database.
+schema changes, and replacement of the serving application. On refusal, preserve
+the source data and access protection, release only owned temporary migration
+resources, and resume safely paused work under its original authority. All
+supported startup/update paths that could expose the new model use this owner.
+Logging conversion failure and continuing ordinary account-free service is not
+enforcement. Protected diagnostics and the independent host repair path may
+remain available without exposing the unconverted data.
+
+Use ordinary versioned migrations and a small explicit sequence of required
+transforms with coherent reference updates. Prefer rollback of incomplete
+transactional work. If existing durable progress is needed for an external effect,
+reconcile it before retry and preserve the actual operation's authority. A stale
+`in_progress` marker cannot permanently prohibit recovery, and an unknown result
+cannot default to success. Do not steal an active writer or create another lease,
+ledger, or general migration service to repair avoidable bookkeeping complexity.
 
 Blocked conversion reports the reason and redacted evidence through the existing
 migration or deployment result. It does not disclose another person's resource
@@ -327,21 +374,24 @@ against isolated fixtures.
 
 ### Data preservation within an eligible upgrade
 
-Within a verified single-operator data set, instance settings preserve the
-operator's previously effective values and applicable project or runtime
-contexts. If conflicting same-person defaults cannot be represented without an
-arbitrary choice, conversion remains blocked until that choice has an explicit
-disposition. The migrator does not pick the newest row or an administrator's
-profile merely for convenience.
+Within a verified single-operator data set, preserve previously effective settings
+and real project/runtime contexts through the existing resolver's precedence.
+Different raw overrides or independent contexts are not automatically conflicting
+effective choices. Preserve absent/null/reset semantics. Block only where genuinely
+incompatible effective defaults require an explicit disposition, not because more
+than one historical row exists. Do not choose the newest row or an administrator's
+profile for convenience, or add a generic scope framework to retain unused modes.
 
-Different same-person presets retain their IDs, contents, and versions. A name
-collision is resolved with a deterministic, collision-free name derived from the
-original scope and stable resource ID, with references preserved or updated
-transactionally. Credentials remain separate managed-secret references with
-their original provider and billing bindings. Identical-value deduplication is
-not permission to merge different credentials. Favorites are deduplicated by
-resource identity and recents retain their latest recorded use. These rules do
-not apply across people because such a source is ineligible for conversion.
+Different same-person presets retain their IDs, contents, and versions. Resolve
+actual name collisions deterministically from the original scope and stable ID,
+with references preserved or updated transactionally. Unaffected names need no
+migration alias or rename. Existing seed synchronization preserves custom edits
+and does not reconstruct private/global duplicates. Credentials remain separate
+managed-secret references with their original provider and billing bindings.
+Identical-value deduplication is not permission to merge different credentials.
+Favorites are deduplicated by resource identity and recents retain their latest
+recorded use. These rules do not apply across people because such a source is
+ineligible for conversion.
 
 ### History and deployment continuity
 
@@ -355,6 +405,19 @@ Historical migrations required for database upgrades remain. Runtime account
 machinery does not. Any necessary transitional reader has a specific persisted
 payload or replay purpose rather than a general legacy-auth mode.
 
+Preserve schedule IDs, cadence, paused state, and explicit execution/publication
+choices. Update stored actions only when their actual interface changes; use
+compatible existing payload readers where sufficient. Account removal does not
+require re-admitting every schedule or freezing deployment image bookkeeping.
+Future managed launches follow the installed runtime under the existing deployment
+owner, while historical attempts retain their actual artifacts and provider intent.
+
+The [Docker Compose update system](Steps/DockerComposeUpdateSystem.md) owns
+in-place recreation and recovery independent of healthy application orchestration.
+This design does not require retained fleets, version-promotion canaries, or a
+second migration coordinator. Real replay incompatibility still needs a controlled
+transition before removing the execution capability that retained work needs.
+
 Deployment changes preserve the operator's configured dashboard URL and a
 working, protected access path. They do not silently replace LAN access with
 localhost-only access or turn authenticated access into public access. Existing
@@ -364,21 +427,27 @@ incompatible schema.
 
 Backup, restoration, and rollback preserve data and execution authority. Broad
 volume deletion, resetting Temporal, silently weakening access, or discarding
-credential encryption material is not an account-removal strategy. Verification
-uses isolated populated fixtures and replay evidence. Production migration is a
+credential encryption material is not an account-removal strategy. Reconcile and
+retry committed conversion through the existing owner. Backward rollback is valid
+only where schema/data/history compatibility and subsequent writes permit it;
+otherwise use forward repair, not a shared database restore that discards newer
+work or a bespoke rollback engine for every phase. Verification uses isolated
+populated fixtures and applicable replay evidence. Production migration is a
 separate authorized operation, not a prerequisite for proving the implementation.
 
 ## 10. Observable acceptance behavior
 
-These are product outcomes, not implementation phases or a new runtime gating
-framework. Automated verification exercises the relevant production boundaries
-in isolated environments and retains truthful results.
+These are product outcomes, not implementation phases, a fixed test count, or a
+new runtime gating framework. A representative default-path journey can cover
+several outcomes; focused negative cases exercise the relevant owning boundary.
+Reuse existing tests and add only missing integration coverage instead of a
+cross-product of every client, credential, transport, and historical release mode.
 
 | Scenario | Required outcome |
 | --- | --- |
 | Fresh local instance | Dashboard and ordinary operator actions work without account setup, login, user seeding, or an identity service |
 | Eligible single-operator populated instance | Retained resources, effective settings, preset versions, and credential bindings survive without owner-based visibility, including proven same-person aliases and collision handling |
-| Multiple people or unresolved attribution | Conversion is blocked before source mutation or access cutover, without exposing, combining, exporting, or deleting another person's data; the protected source release and admitted work remain available |
+| Multiple people or unresolved attribution | Conversion is blocked before source mutation or access cutover, without exposing, combining, exporting, or deleting another person's data; the protected source release and admitted work remain recoverable under their existing authority |
 | Source changes during conversion | The candidate is not exposed using a stale eligibility decision; inconsistent conversion has no partially published result |
 | Approved remote access | The configured operator URL works through its protected boundary without a local user registry |
 | Unapproved or bypass access | Direct-backend, forged-header, hostile-origin, and invalid-credential requests cannot acquire operator authority |
@@ -391,6 +460,24 @@ A hidden singleton user, an always-allow authorization helper, or a smaller
 account UI does not satisfy the last outcome. Conversely, surviving workflow
 owners, provider identities, scoped machine credentials, and historical
 migrations are not evidence that multi-user support remains.
+
+Evidence must exercise the boundary claimed: sample payload decoding is not
+Temporal event-history replay, metadata creation is not a populated PostgreSQL
+upgrade, and a policy helper or demonstration endpoint is not browser-to-API
+workflow execution. Running-container bypass and actual migration interruption
+need tests at those boundaries, not only rendered YAML or fabricated receipts.
+Use existing replay machinery only for replay-sensitive changes, not a new
+history matrix for unchanged orchestration. Do not retain account fixtures
+solely because an old test named them.
+
+A short PR explanation can map outcomes to actual results and remaining gaps.
+Do not package this table as production conformance state or add tests for row
+counts, issue references, headings, or test filenames. Targeted development tests
+and broader current-candidate GitHub Actions results follow AGENTS.md. Missing
+sandbox capability or pending CI stays unverified without burning repeated
+implementation attempts. No new evidence registry, approval step, or manual
+rehearsal prerequisite is required. Every required outcome still needs relevant
+evidence before claiming the single-user migration complete.
 
 ## 11. Documentation authority and scope
 
@@ -429,7 +516,16 @@ credential isolation, publication approval, or Temporal compatibility contracts.
 Their owning documents change with their implementations when needed. A design
 paragraph is not permission to bypass a currently enforced security boundary.
 
+Each feature updates its own contracts alongside the implementation. Cross-document
+reconciliation removes remaining contradictions and repairs links, not another
+approval gate or full-tree rewrite for every child. Documentation-only changes
+need review and lightweight link checks, not unit tests of wording or structure
+or new broad-suite selection. Generated API types, configuration, and CLI behavior
+are executable contracts and stay with their implementation tests.
+
 When the design is implemented, its settled behavior belongs in the owning
 architecture and subsystem documents under the documentation promotion rule.
 This design is then superseded or removed rather than becoming a second
-permanent architecture authority.
+permanent architecture authority. Do not present accepted or partially implemented
+behavior as shipped, or recreate an obsolete documentation test as a promotion
+prerequisite.

@@ -1614,6 +1614,54 @@ class TemporalArtifactService:
         return principal.startswith("service:")
 
     @staticmethod
+    def _is_workflow_principal(principal: str) -> bool:
+        return principal.startswith("workflow:")
+
+    @staticmethod
+    def _is_instance_operator_principal(principal: str | None) -> bool:
+        """Single-user (#4351): admitted-operator instance visibility.
+
+        The operator is the HTTP operator identity: the stable ``operator``
+        principal (local single-user admission without a persisted account
+        row) and legacy human-owner UUID strings (persisted operator
+        accounts). ``system`` is a machine owner value, never an operator
+        identity: workflow executions run with an execution-scoped
+        ``workflow:<id>`` principal and remain execution-bound.
+        ``workflow:``/``service:`` machine principals are never instance
+        operators. Raw restricted bytes, quarantine, and mutation of
+        execution-owned links keep their owning checks; this predicate only
+        widens metadata/collection visibility and operator control, never
+        raw secrets or agent policy permissions.
+        """
+        text = str(principal or "").strip()
+        if not text:
+            return False
+        if text.startswith("service:") or text.startswith("workflow:"):
+            return False
+        if text == "operator":
+            return True
+        # Legacy human-owner strings (UUIDs) are operator provenance for the
+        # HTTP operator identity. The bare ``system`` owner value is not.
+        if text == "system":
+            return False
+        try:
+            from uuid import UUID as _UUID
+
+            _UUID(text)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _workflow_id_for_principal(principal: str | None) -> str | None:
+        """Return the workflow id for an execution-scoped principal."""
+        text = str(principal or "").strip()
+        if not text.startswith("workflow:"):
+            return None
+        candidate = text[len("workflow:"):].strip()
+        return candidate or None
+
+    @staticmethod
     def _read_candidates(
         principal: str, admitted_principal: str | None = None
     ) -> set[str]:
@@ -1674,6 +1722,30 @@ class TemporalArtifactService:
         principal: str,
         admitted_principal: str | None = None,
     ) -> None:
+        # Single-user (#4351): instance-operator visibility. The admitted
+        # HTTP operator inspects any instance artifact without a human-owner
+        # lookup; legacy owner strings stay as provenance. Machine
+        # (workflow:/service:, bare system) readers remain execution-bound
+        # below.
+        if self._is_instance_operator_principal(
+            principal
+        ) or self._is_instance_operator_principal(admitted_principal):
+            return
+        # Execution-scoped workflow principals may read artifacts linked to
+        # their own execution without an operator bypass.
+        for candidate in (principal, admitted_principal):
+            workflow_id = self._workflow_id_for_principal(candidate)
+            if workflow_id is None:
+                continue
+            try:
+                links = await self._repository.list_links(artifact.artifact_id)
+            except Exception:
+                links = []
+            if any(
+                str(getattr(link, "workflow_id", "") or "").strip() == workflow_id
+                for link in links
+            ):
+                return
         try:
             self._assert_read_access(
                 artifact, principal=principal, admitted_principal=admitted_principal
@@ -1701,6 +1773,10 @@ class TemporalArtifactService:
         principal: str,
     ) -> None:
         if is_disabled_local_mode():
+            return
+        # Single-user (#4351): the admitted operator controls instance
+        # artifacts; machine (workflow:/service:) mutation stays owner-bound.
+        if self._is_instance_operator_principal(principal):
             return
         owner = self._owner_principal(artifact)
         if owner and owner != principal and not self._is_service_principal(principal):
@@ -1833,8 +1909,21 @@ class TemporalArtifactService:
         user/execution scope explicitly via ``admitted_principal``.
         Source-connection provenance, content-hash equality, and knowledge of
         an artifact/manifest id grant nothing on their own.
+
+        Single-user (#4351): the admitted operator inspects any instance
+        saved-work artifact without a human-owner lookup; legacy owner
+        strings stay as provenance. Machine (``workflow:``/``service:``)
+        readers remain execution-bound below; raw restricted bytes,
+        quarantine, and redaction checks keep their owning gates.
         """
         if is_disabled_local_mode():
+            return
+        # Single-user (#4351): instance-operator visibility, consistent with
+        # _assert_artifact_read_access. Never classifies machine principals
+        # as operators (see _is_instance_operator_principal).
+        if self._is_instance_operator_principal(
+            principal
+        ) or self._is_instance_operator_principal(admitted_principal):
             return
         owner = self._owner_principal(artifact)
         candidates = {principal, *( [admitted_principal] if admitted_principal else [])}
@@ -3222,8 +3311,19 @@ class TemporalArtifactService:
         execution_ref: dict[str, Any] | ExecutionRef,
     ) -> db_models.TemporalArtifactLink:
         artifact = await self._repository.get_artifact(artifact_id)
-        self._assert_mutation_access(artifact, principal=principal)
         coerced_execution_ref = self._coerce_execution_ref(execution_ref)
+        # Single-user (#4351): execution-scoped workflow principals may link
+        # to their own execution without an operator bypass; linking to any
+        # other execution still requires owner/operator mutation access.
+        workflow_id = self._workflow_id_for_principal(principal)
+        if (
+            workflow_id is not None
+            and str(getattr(coerced_execution_ref, "workflow_id", "") or "").strip()
+            == workflow_id
+        ):
+            pass
+        else:
+            self._assert_mutation_access(artifact, principal=principal)
         from moonmind.workflows.temporal.report_artifacts import (
             validate_report_artifact_contract,
         )
@@ -4525,6 +4625,7 @@ class TemporalArtifactActivities:
                 "state": item.state,
                 "closeStatus": item.close_status,
                 "workflowType": item.workflow_type,
+                "attentionRequired": bool(item.attention_required),
             }
             for workflow_id, item in snapshot.items()
         }
@@ -4555,6 +4656,7 @@ class TemporalArtifactActivities:
                     error_category=model.error_category,
                     finish_outcome_code=model.finish_outcome_code,
                     finish_summary=model.finish_summary,
+                    attention_required=model.attention_required,
                 )
             except TemporalExecutionNotFoundError:
                 # Internally-started child workflows can reach terminal state
@@ -5284,42 +5386,78 @@ class TemporalArtifactActivities:
                 "inspection_succeeded": True,
             }
 
-        try:
-            state = await asyncio.wait_for(
-                handle.query("get_state"),
-                timeout=_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS,
-            )
-        except TimeoutError:
-            return {
-                "running": True,
-                "workflow_id": workflow_id,
-                "runtime_id": runtime_id,
-                "status": status_name,
-                "inspection_succeeded": False,
-                "inspection_status": "QUERY_TIMEOUT",
-            }
-        except RPCError as exc:
-            return {
-                "running": True,
-                "workflow_id": workflow_id,
-                "runtime_id": runtime_id,
-                "status": status_name,
-                "inspection_succeeded": False,
-                "inspection_status": f"RPC_ERROR_{exc.status.name}",
-                "error_type": type(exc).__name__,
-                "error": str(exc),
-            }
+        # A manager that runs while every query fails is the replay-wedge
+        # signature. MoonLadderStudios/MoonMind#4363: ordinary AgentRun
+        # admission reaches the manager by *signal*, and Temporal appends a
+        # signal to a still-RUNNING execution even when every workflow task
+        # fails, so no Update RPC ever fails and the caller-side recovery in
+        # ProviderProfileLeaseClient is never entered. Without a repair here,
+        # a runtime whose only traffic is managed AgentRuns waits in
+        # awaiting_provider_capacity forever. Attempt the same bounded,
+        # ledger-gated replacement once, then re-inspect the successor.
+        state: Any = None
+        inspection: dict[str, Any] | None = None
+        for attempt in range(2):
+            inspection = None
+            try:
+                state = await asyncio.wait_for(
+                    handle.query("get_state"),
+                    timeout=_PROVIDER_PROFILE_MANAGER_QUERY_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                state = None
+                inspection = {
+                    "running": True,
+                    "workflow_id": workflow_id,
+                    "runtime_id": runtime_id,
+                    "status": status_name,
+                    "inspection_succeeded": False,
+                    "inspection_status": "QUERY_TIMEOUT",
+                }
+            except RPCError as exc:
+                state = None
+                inspection = {
+                    "running": True,
+                    "workflow_id": workflow_id,
+                    "runtime_id": runtime_id,
+                    "status": status_name,
+                    "inspection_succeeded": False,
+                    "inspection_status": f"RPC_ERROR_{exc.status.name}",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            if inspection is None and not isinstance(state, dict):
+                inspection = {
+                    "running": True,
+                    "workflow_id": workflow_id,
+                    "runtime_id": runtime_id,
+                    "status": status_name,
+                    "inspection_succeeded": False,
+                    "inspection_status": "INVALID_QUERY_PAYLOAD",
+                    "error_type": "InvalidQueryPayload",
+                }
+            if inspection is None:
+                break
+            if attempt == 0:
+                from moonmind.provider_profiles.manager_recovery import (
+                    recover_manager_for_runtime,
+                )
 
-        if not isinstance(state, dict):
-            return {
-                "running": True,
-                "workflow_id": workflow_id,
-                "runtime_id": runtime_id,
-                "status": status_name,
-                "inspection_succeeded": False,
-                "inspection_status": "INVALID_QUERY_PAYLOAD",
-                "error_type": "InvalidQueryPayload",
-            }
+                recovery = await recover_manager_for_runtime(
+                    adapter, runtime_id
+                )
+                if recovery is not None and recovery.recovered:
+                    handle = client.get_workflow_handle(workflow_id)
+                    continue
+                if recovery is not None and recovery.nondeterminism_failures > 0:
+                    # Only a confirmed wedge that recovery declined to repair
+                    # tells a waiter something new. A busy or slow manager
+                    # gets its ordinary snapshot, unchanged.
+                    inspection["recovery_refusal"] = recovery.refusal
+                    inspection["recovery_detail"] = recovery.detail
+            break
+        if inspection is not None:
+            return inspection
 
         profiles = state.get("profiles")
         pending_requests = state.get("pending_requests")

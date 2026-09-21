@@ -483,3 +483,85 @@ async def test_a_caller_without_a_binding_cannot_claim_a_reservation(
         is False
     )
     assert session.requested == []
+
+
+# --- Conservative fresh-install default (MoonLadderStudios/MoonMind#4458) ---
+#
+# Plan A defaults fresh installations to one agent host. Omitted, empty, and
+# whitespace-only values resolve to 1 through the runtime settings parser;
+# every explicit positive value, including 8 or 16, round-trips unchanged.
+# Lowering the configured count waits new work without evicting owners, and
+# agent hosts never consume the separate container-job count.
+
+
+def test_missing_empty_and_whitespace_resolve_to_single_host() -> None:
+    assert generic_host_capacity(env={}) == 1
+    assert generic_host_capacity(env={OMNIGENT_GENERIC_HOST_CAPACITY_ENV: ""}) == 1
+    assert (
+        generic_host_capacity(env={OMNIGENT_GENERIC_HOST_CAPACITY_ENV: "   "}) == 1
+    )
+    assert OMNIGENT_GENERIC_HOST_DEFAULT_CAPACITY == 1
+
+
+@pytest.mark.parametrize("raw", ["1", "2", "8", "16"])
+def test_explicit_positive_values_round_trip_unchanged(raw: str) -> None:
+    assert (
+        generic_host_capacity(env={OMNIGENT_GENERIC_HOST_CAPACITY_ENV: raw})
+        == int(raw)
+    )
+
+
+def test_single_host_waits_then_proceeds_after_release() -> None:
+    """A second new host waits while one agent holds the single slot."""
+
+    waiting = _decision(active_hosts=1, host_capacity=1)
+
+    assert waiting.admitted is False
+    assert waiting.limiting_layer == LIMITING_LAYER_HOST_CAPACITY
+    assert _decision(active_hosts=0, host_capacity=1).admitted is True
+
+
+@pytest.mark.asyncio
+async def test_lowered_ceiling_preserves_already_allocated_work() -> None:
+    """A lower configured count waits new work; it never evicts owners."""
+
+    factory, _ = _session_factory([1, 0])
+    admission = GenericHostCapacityAdmission(
+        session_factory=factory,
+        host_capacity=1,
+        cold_launch_burst=2,
+        cold_launch_window_seconds=30,
+    )
+
+    waiting = await admission.evaluate()
+
+    assert waiting.admitted is False
+    assert waiting.limiting_layer == LIMITING_LAYER_HOST_CAPACITY
+
+    factory, _ = _session_factory([1, 0])
+    retaining = GenericHostCapacityAdmission(
+        session_factory=factory,
+        host_capacity=1,
+        cold_launch_burst=2,
+        cold_launch_window_seconds=30,
+    )
+
+    owned = await retaining.evaluate(already_allocated=True)
+
+    assert owned.admitted is True
+    assert owned.limiting_layer is None
+
+
+def test_full_agent_host_does_not_consume_container_job_slot() -> None:
+    """Agent hosts and subordinate test jobs use separate counts."""
+
+    from moonmind.config.container_backend_settings import (
+        resolve_container_backend_settings,
+    )
+
+    assert _decision(active_hosts=1, host_capacity=1).admitted is False
+    assert resolve_container_backend_settings({}).max_active_jobs == 1
+    assert (
+        OMNIGENT_GENERIC_HOST_CAPACITY_ENV
+        != "MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_JOBS"
+    )

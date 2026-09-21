@@ -8921,7 +8921,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Jira Breakdown (Global)",
+          (option) => option.text === "Jira Breakdown",
         ),
       ).toBe(true);
     });
@@ -8985,7 +8985,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Jira Breakdown and Orchestrate (Global)",
+          (option) => option.text === "Jira Breakdown and Orchestrate",
         ),
       ).toBe(true);
     });
@@ -10072,7 +10072,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "PR Resolver (Global)",
+          (option) => option.text === "PR Resolver",
         ),
       ).toBe(true);
     });
@@ -10239,35 +10239,31 @@ describe.skip("Task Create Entrypoint", () => {
       .toBeTruthy();
   });
 
-  it("disables preset deletion for global presets", async () => {
+  it("deletes a listed preset from the unified instance catalog regardless of scope", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const presetsSection = await screen.findByLabelText("Task Presets");
-    await within(presetsSection).findByRole("option", {
-      name: "Spec Kit Demo (Global)",
-    });
-    fireEvent.change(within(presetsSection).getByLabelText("Preset"), {
-      target: { value: "global::::speckit-demo" },
-    });
+    const presetsSection = await screen.findByLabelText("Preset Management");
+    fireEvent.click(
+      within(presetsSection).getByRole("button", { name: "Delete preset" }),
+    );
 
-    const deleteButton = within(presetsSection).getByRole("button", {
-      name: "Delete preset",
-    }) as HTMLButtonElement;
+    const dialog = await screen.findByRole("dialog", { name: "Delete preset" });
+    fireEvent.change(within(dialog).getByLabelText("Preset Name"), {
+      target: { value: "Spec Kit Demo" },
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Confirm delete preset" }),
+    );
+
     await waitFor(() => {
-      expect(deleteButton.disabled).toBe(true);
-      expect(deleteButton.getAttribute("title")).toBe(
-        "Only personal presets can be deleted",
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/presets/speckit-demo?scope=global",
+        expect.objectContaining({
+          method: "DELETE",
+        }),
       );
     });
-    fireEvent.click(deleteButton);
-
-    expect(
-      fetchSpy.mock.calls.some(
-        ([url, init]) =>
-          String(url).startsWith("/api/presets/speckit-demo") &&
-          init?.method === "DELETE",
-      ),
-    ).toBe(false);
+    expect(await screen.findByText("Deleted preset 'Spec Kit Demo'.")).toBeTruthy();
   });
 
   it("deletes a preset entered via the delete preset dialog", async () => {
@@ -12286,7 +12282,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Spec Kit Demo (Global)",
+          (option) => option.text === "Spec Kit Demo",
         ),
       ).toBe(true);
     });
@@ -12452,7 +12448,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Spec Kit Demo (Global)",
+          (option) => option.text === "Spec Kit Demo",
         ),
       ).toBe(true);
     });
@@ -12502,7 +12498,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Spec Kit Demo (Global)",
+          (option) => option.text === "Spec Kit Demo",
         ),
       ).toBe(true);
     });
@@ -12525,7 +12521,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Spec Kit Demo (Global)",
+          (option) => option.text === "Spec Kit Demo",
         ),
       ).toBe(true);
     });
@@ -12569,7 +12565,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Spec Kit Demo (Global)",
+          (option) => option.text === "Spec Kit Demo",
         ),
       ).toBe(true);
     });
@@ -12653,7 +12649,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Spec Kit Demo (Global)",
+          (option) => option.text === "Spec Kit Demo",
         ),
       ).toBe(true);
     });
@@ -12758,7 +12754,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Spec Kit Demo (Global)",
+          (option) => option.text === "Spec Kit Demo",
         ),
       ).toBe(true);
     });
@@ -14213,7 +14209,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Spec Kit Demo (Global)",
+          (option) => option.text === "Spec Kit Demo",
         ),
       ).toBe(true);
     });
@@ -14274,7 +14270,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Spec Kit Demo (Global)",
+          (option) => option.text === "Spec Kit Demo",
         ),
       ).toBe(true);
     });
@@ -14320,7 +14316,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Spec Kit Demo (Global)",
+          (option) => option.text === "Spec Kit Demo",
         ),
       ).toBe(true);
     });
@@ -14384,7 +14380,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Spec Kit Demo (Global)",
+          (option) => option.text === "Spec Kit Demo",
         ),
       ).toBe(true);
     });
@@ -14907,7 +14903,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         Array.from((presetSelect as HTMLSelectElement).options).some(
-          (option) => option.text === "Spec Kit Demo (Global)",
+          (option) => option.text === "Spec Kit Demo",
         ),
       ).toBe(true);
     });
@@ -17564,7 +17560,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     await waitFor(() => {
       expect(
         Array.from(presetSelect.options).some(
-          (option) => option.text === "Jira Orchestrate (Global)",
+          (option) => option.text === "Jira Orchestrate",
         ),
       ).toBe(true);
     });
@@ -17724,7 +17720,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       expect(
         Array.from(stepPresetSelect.options).some(
           (option) =>
-            option.text === "Jira Breakdown and Orchestrate (Global)",
+            option.text === "Jira Breakdown and Orchestrate",
         ),
       ).toBe(true);
     });
@@ -17990,7 +17986,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       expect(
         Array.from(stepPresetSelect.options).some(
           (option) =>
-            option.text === "Jira Breakdown and Orchestrate (Global)",
+            option.text === "Jira Breakdown and Orchestrate",
         ),
       ).toBe(true);
     });

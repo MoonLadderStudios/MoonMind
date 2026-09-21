@@ -979,6 +979,23 @@ profile.enabled = False
 
 The raw candidate key must not be persisted in workflow payloads, profile rows, diagnostics, audit rows, or artifacts.
 
+Failure to acquire the credential-maintenance lease is an infrastructure failure,
+before key validation. Temporal RPC failures and acquisition timeouts return HTTP
+503 with `provider_credential_manager_unavailable` and a safe retry diagnostic
+for Settings. Existing credentials, generation, and profile readiness remain
+unchanged; the failure does not classify the submitted key as invalid.
+
+The acquisition outcome is ambiguous: Temporal may have accepted
+`AcquireCredentialMaintenanceLease` before the result was lost, so the
+deterministic owner derived from the request identity may hold a waiter or
+lease. The 503 therefore echoes `retry_idempotency_key` — the exact
+`operation_id` the owner was derived from (`Idempotency-Key`, else
+`X-Request-ID`, else a generated value). A retry must reuse it as
+`Idempotency-Key` so it reattaches to the same owner (`already_held`) instead
+of orphaning a competing owner behind the original. The key carries no
+credential material. The Settings OpenCode drawer stores it from the 503 and
+resends it on the next submit for that profile.
+
 ### 9.4 Recommended first-party API-key mappings
 
 ```yaml
@@ -1596,21 +1613,53 @@ Before routing an ambiguous cohort to the patched worker, detect it: an open
 redrive re-issue) but records no `provider-profile-manager-lease-cleanup-
 redrive-v1` marker must not be replayed on the patched worker — replay would
 skip the recorded redrive commands and wedge the singleton manager with
-Activity-vs-Timer nondeterminism. Either cut over with state preserved:
+Activity-vs-Timer nondeterminism
+(`test_unmarked_cleanup_redrive_history_is_refused_and_recovered`).
 
-- keep the #4330 worker until the manager's state-preserving Continue-As-New
-  handoff (the rollover payload carries requested cleanups with their
-  original reasons and delivery attempts), then route the new run to the
-  patched worker before it starts; or
-- terminate the ambiguous run and start fresh on the patched worker. The
-  fresh start restores held leases and `cleanup_requested` rows from the
-  durable ledger with their recorded reasons, so the redrive resumes the
-  same stable claim instead of re-requesting or freeing the slot
-  (`test_a_fresh_restart_restores_cleanup_requested_obligations`).
+The marker cannot be taught to separate this cohort after the fact. It is read
+once at startup, before any redrive command exists in the history to read, so
+a third generation is indistinguishable from the first by markers alone. That
+is a property of the mechanism, not a missing marker, and adding another
+marker reproduces it one generation later. When the cohort can be identified
+ahead of a release, keep the #4330 worker until the manager's state-preserving
+Continue-As-New handoff (the rollover payload carries requested cleanups with
+their original reasons and delivery attempts) and route the new run to the
+patched worker before it starts. When it cannot — the usual case, since the
+wedge is discovered by the first blocked caller — §11.9 replaces the run
+automatically from the durable ledger.
 
 The post-marker redrive path itself is pinned by production replay with an
 outstanding obligation
 (`test_lease_cleanup_redrive_replays_with_outstanding_obligation`).
+
+Orphaned validation cleanup has a separate marker,
+`provider-profile-manager-orphaned-validation-cleanup-v1`. The redrive marker
+predates this additional verification and release sequence and cannot authorize
+it during replay. Histories without the new marker retain their recorded order
+through the tombstone-purge marker, lease verification, and timer; normal
+Continue-As-New carries their obligations into a run that uses the new cleanup
+path. The retained OpenCode history and a fresh cleanup-to-maintenance-Update
+journey both have replay coverage. This repair lets the affected pre-cleanup
+history replay without terminating or resetting its manager.
+
+Histories recorded between #4431 and this marker (unguarded orphan cleanup
+with an eligible validation claim) already contain unmarked
+`verify_lease_holders` and possibly `release_verified` commands. They are
+ambiguous with the pre-cleanup generation by markers alone and must not replay
+on the patched worker: the worker would skip the recorded orphan commands and
+wedge the singleton with Activity-vs-Timer nondeterminism (review #4434,
+comment 4052362810). Detect the cohort before routing: an open
+`provider-profile-manager:<runtime>` history that contains
+`verify_lease_holders` for a validation probe owner or a `sync_slot_leases`
+`release_verified` command but records no
+`provider-profile-manager-orphaned-validation-cleanup-v1` marker takes the
+same controlled cutover as the ambiguous redrive cohort above — keep the
+pre-marker worker until the state-preserving Continue-As-New handoff, then
+route the new run to the patched worker before it starts, or let the
+automatic replacement in 11.9 rebuild the run from the durable ledger.
+`test_unguarded_validation_cleanup_history_needs_migration_cutover` pins both
+directions: the parent behavior replays the cohort, while the patched worker
+refuses it instead of silently skipping its recorded commands.
 
 Periodic released-lease tombstone cleanup has its own workflow marker,
 `provider-profile-manager-lease-tombstone-purge-v1`. Both DB lease persistence and
@@ -1619,15 +1668,26 @@ on replay. Histories without cleanup proceed directly to lease verification at
 that boundary. New executions record the cleanup marker and perform periodic
 cleanup, with failures contained so lease verification and admission can proceed.
 
-Deployment requires replaying every active singleton manager history against the
-candidate worker. Histories that already contain an unmarked `purge_released`
-activity cannot be distinguished from the older generation by its maintenance
-marker. Those histories require a controlled cutover: retain their compatible
-worker until its state-preserving Continue-As-New handoff, then route the new run
-to the patched worker before it starts. The handoff must retain held leases,
-fencing counters, pending slot requests and maintenance queue order. A direct
-worker replacement, termination, or reset is not a safe substitute. Managers
-whose histories contain no purge can upgrade directly after successful replay.
+Deployment replaces the manager's worker directly. It does not retain a second
+worker to carry old histories, and it must not: a retained worker is another
+code version polling the same task queue, which is how
+MoonLadderStudios/MoonMind#4363 wedged this manager in the first place. The
+recorded failure was `Non-deprecated patch marker encountered for change
+provider-profile-manager-lease-tombstone-purge-v1, but there is no
+corresponding change command` -- a marker present in history that the
+*replaying* code did not emit, which happens only when the code is older than
+the history. One version at a time, moving forward only, makes that
+unreachable; the newer code replays an older history through `workflow.patched`
+exactly as Temporal intends.
+
+An earlier revision of this document required a controlled cutover for
+histories containing an unmarked `purge_released` activity, on the grounds that
+only the pre-patch generation could replay them. That shape stopped existing
+when `provider-profile-manager-lease-tombstone-purge-v1` shipped on 2026-09-05:
+these singletons Continue-As-New every two to three hours, so every live
+history has rolled over hundreds of times and carries the marker. The
+requirement outlived the hazard, and the machinery it justified was itself the
+larger risk.
 
 A grant that moved under a recorded history would emit a reservation — and, under
 DB lease persistence, a `provider_profile.sync_slot_leases` activity — where the
@@ -1637,89 +1697,146 @@ capacity ledger for that runtime is wedged. The one pre-marker behaviour that is
 empty while its scope was cooling down woke immediately and re-evaluated without
 suspending, so it recorded no commands to replay.
 
-### 11.9 Wedged-singleton recovery runbook (#4363)
+### 11.9 Wedged-singleton recovery (#4363)
 
-When `update-moonmind` blocks on `provider_manager_liveness_blocked`, or when
-`AgentRun` waiters park in `AWAITING SLOT` / `awaiting_provider_capacity` while
-the ledger shows free capacity and the wait reason names
-`manager_unqueryable`, the `provider-profile-manager:<runtime>` singleton is
-wedged (running, history not advancing, `get_state` query failing — typically
-`Unable to query workflow due to Workflow Task in failed state` after a
-nondeterminism loop). Automatic code deliberately never terminates the
-singleton itself: killing the run while a credential consumer is live would
-revoke authority out from under it. An operator performs the cutover below.
-`<runtime>` is the runtime family (for example `opencode`).
+`provider-profile-manager:<runtime>` is a singleton whose history outlives any
+one release, and it is the single credential-capacity ledger for its runtime.
+A release whose worker cannot replay a recorded history wedges it in a
+`WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR` loop: the run stays
+`RUNNING`, its history stops advancing, `get_state` fails with
+`Unable to query workflow due to Workflow Task in failed state`, and Temporal
+answers every Update with `FAILED_PRECONDITION`. Execution admission, OAuth
+connect, credential validation and API-key enrollment all fail for that
+runtime until the run is replaced. Replay compatibility across an evolving
+6,000-line workflow cannot be guaranteed by review discipline alone, so the
+wedge is treated as a recoverable fault rather than an outage.
 
-1. Verify the DB lease ledger first. Terminating is only safe when no live
-   consumer holds a slot; a held row means a real run is executing.
+#### Automatic replacement
+
+`moonmind.provider_profiles.manager_recovery` owns the replacement and is the
+only thing that performs it. Two callers reach it, because a wedge can be
+discovered two ways:
+
+- `ProviderProfileLeaseClient` invokes it when a manager **Update** fails at
+  the RPC level — an HTTP credential submission, an admission Activity, an
+  OAuth session — then retries its own idempotent owner request against the
+  fresh run.
+- The `provider_profile.manager_state` inspection invokes it for the
+  **signal** path. Managed `AgentRun` admission sends `request_slot` as a
+  signal, and Temporal appends a signal to a still-`RUNNING` execution even
+  while every workflow task fails, so no Update RPC ever fails. A runtime
+  whose only traffic is managed AgentRuns would otherwise wait in
+  `awaiting_provider_capacity` forever.
+Replacement is deliberately narrow:
+
+- **Confirmed evidence only.** The trailing run of failed workflow tasks must
+  name a nondeterminism cause. The scan is
+  `scan_workflow_task_failure_tail` in
+  `moonmind.workflows.skills.provider_manager_liveness`.
+- **The observed run only.** Termination quotes the run ID the describe
+  returned, so a healthy replacement started by a concurrent caller between
+  the describe and the terminate is never killed.
+- **Free capacity only.** The durable `provider_profile_slot_leases` ledger —
+  read directly, never through the component being recovered — must report no
+  row for the runtime outside the `released` tombstone. `held` and
+  `cleanup_requested` rows name a consumer that may still be executing, a
+  legacy `NULL` state is read as held exactly as the `sync_slot_leases` loader
+  reads it, and a state outside the durable contract is unreconciled evidence.
+  Counting only `held` would let a legacy or unknown row read as free and be
+  destroyed by a replacement that cannot restore it.
+- **A restored successor only.** `start_workflow` merely submits the
+  replacement; its `run()` restores profiles and durable leases through
+  Activities while Temporal is already dispatching Update handlers. Recovery
+  waits for the successor's own `startup_restored` flag (exposed on
+  `get_state`) before reporting success, so no request is admitted against
+  empty in-memory state over a restored cleanup obligation.
+- **Evidence, not silence.** An unreadable ledger refuses the replacement; it
+  is not evidence of free capacity. Each refusal is returned with what was
+  observed, and the original nondeterminism message is preserved in the
+  termination reason and the warning log, so curing the symptom never erases
+  its cause.
+
+The fresh start restores held and `cleanup_requested` rows from the durable
+ledger with their recorded reasons (`fresh-start-db-lease-restore`), so the
+redrive resumes the same stable claim instead of re-requesting or freeing the
+slot (`test_a_fresh_restart_restores_cleanup_requested_obligations`). What a
+replacement does not carry over is the wedged run's in-memory queue of pending
+slot requests; those requesters keep their own durable slot request and
+re-queue through their existing 120s slot-wait timeout without operator
+action.
+
+A refused replacement surfaces as HTTP 503 with
+`code: provider_credential_manager_unavailable` and a `refusal` naming the
+condition (`held_lease_present`, `ledger_unreadable`, `no_replay_wedge`,
+`manager_not_running`, `recovery_failed`, or `manager_unreachable` when the
+manager never answered at all). The response repeats the stable
+`retry_idempotency_key` and states that saved credentials are unchanged. A
+`held_lease_present` refusal does not ask the operator to retry later: a
+wedged manager cannot process the holder's `release_slot` signal, so the row
+stays unreleased and every later attempt refuses identically. That response
+directs the operator to verify teardown and reconcile the row below.
+
+#### Operator cutover (refused replacement)
+
+Automatic replacement refuses while the ledger reports a held lease, because
+capacity may be genuinely spent by a run that is still executing. Confirm
+which it is before acting. `<runtime>` is the runtime family (for example
+`opencode`).
+
+1. Read the ledger. Any row that is not `released` blocks replacement.
 
    ```sql
    SELECT lease_state, count(*)
      FROM provider_profile_slot_leases
     WHERE runtime_id = '<runtime>'
     GROUP BY lease_state;
-   SELECT profile_id, enabled, max_parallel_runs
-     FROM managed_agent_provider_profiles
-    WHERE runtime_id = '<runtime>';
    ```
 
-   Proceed only when the held count is `0`. If any row is `held`, stop: the
-   manager is not the problem, capacity is genuinely spent.
+   Waiting does not clear this: the holder's release travels to the same
+   wedged run, which completes no workflow task. Verify whether each
+   unreleased row's consumer is actually still running, then reconcile or
+   release the row — it is the authority, and the manager only mirrors it. A
+   `NULL` state is a pre-contract row and counts as held; a state outside the
+   contract is unreconciled and needs an operator decision before anything
+   destructive happens.
 
-2. Confirm the wedge signature on the singleton (failing run ID,
-   nondeterminism message, no progress):
+2. Confirm the wedge signature on the singleton:
 
    ```bash
    temporal workflow describe --workflow-id provider-profile-manager:<runtime>
-   temporal workflow query --workflow-id provider-profile-manager:<runtime> \
-     --query-type get_state
+   temporal workflow show --workflow-id provider-profile-manager:<runtime>
    ```
 
-   Expect `RUNNING` with the query failing (for example
-   `RPC_ERROR_FAILED_PRECONDITION`), plus repeated
-   `WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR` in
-   `temporal workflow show --workflow-id provider-profile-manager:<runtime>`.
+   Expect `RUNNING` with repeated
+   `WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR` and no progress.
 
-3. Terminate the wedged run and start fresh on the current worker. The fresh
-   start restores held leases and `cleanup_requested` rows from the durable
-   ledger with their recorded reasons (`fresh-start-db-lease-restore`), so
-   the redrive resumes the same stable claim instead of re-requesting or
-   freeing the slot.
-
-    ```bash
-    temporal workflow terminate --workflow-id provider-profile-manager:<runtime> \
-      --reason "nondeterministic workflow-task loop (<event-id-and-cause>); operator cutover per ProviderProfiles.md 11.9"
-    TASK_QUEUE="$(python3 -c 'from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue; print(get_workflow_task_queue())')"
-    temporal workflow start --workflow-id provider-profile-manager:<runtime> \
-      --type MoonMind.ProviderProfileManager \
-      --task-queue "$TASK_QUEUE" \
-      --input '{"runtime_id":"<runtime>"}'
-    ```
-
-    Derive the task queue with `get_workflow_task_queue()` (honoring
-    `TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE`) instead of hard-coding
-    `mm.workflow.user.v2`; a hard-coded queue starts the replacement on an
-    unpolled queue whenever an installation overrides that setting.
-
-4. Verify the fresh manager: the query succeeds, the fencing generation
-   resumes above every number the old run issued, and a slot grants:
+3. With the ledger reconciled, retry the operation. Recovery now finds zero
+   held rows and replaces the run. The manual equivalent, if Temporal must be
+   driven directly, is a terminate plus a fresh start on the derived task
+   queue:
 
    ```bash
-   temporal workflow query --workflow-id provider-profile-manager:<runtime> \
-     --query-type get_state
+   temporal workflow terminate --workflow-id provider-profile-manager:<runtime> \
+     --reason "nondeterministic workflow-task loop (<event-id-and-cause>)"
+   TASK_QUEUE="$(python3 -c 'from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue; print(get_workflow_task_queue())')"
+   temporal workflow start --workflow-id provider-profile-manager:<runtime> \
+     --type MoonMind.ProviderProfileManager \
+     --task-queue "$TASK_QUEUE" \
+     --input '{"runtime_id":"<runtime>"}'
    ```
 
-   Expect `current_leases` restored from the ledger (empty when step 1 showed
-   `0` held), `fencingGeneration` at or above the pre-cutover high-water
-   mark, and `total ... fails 0` on `temporal workflow describe`.
+   Derive the task queue with `get_workflow_task_queue()` (honoring
+   `TEMPORAL_USER_WORKFLOW_V2_TASK_QUEUE`) instead of hard-coding
+   `mm.workflow.user.v2`; a hard-coded queue starts the replacement on an
+   unpolled queue whenever an installation overrides that setting.
 
-5. Do not manually re-signal waiting `AgentRun` workflows. Each waiter keeps
-   its durable slot request and re-queues through its existing 120s slot-wait
-   timeout without operator action; the first timeout after the fresh start
-   grants against the restored ledger and moves the parent from
-   `awaiting_slot` to `executing`. Watch `mm_state='awaiting_slot'` drain
-   instead of poking signals (a duplicate signal is harmless but useless —
-   the manager already holds the request).
+4. Verify: `get_state` succeeds, the fencing generation resumes at or above
+   every number the old run issued, `current_leases` matches the ledger, and
+   `temporal workflow describe` reports `total ... fails 0`.
+
+5. Do not manually re-signal waiting `AgentRun` workflows. Watch
+   `mm_state='awaiting_slot'` drain instead; the manager already holds each
+   durable request.
 
 ---
 
@@ -2431,3 +2548,12 @@ Most importantly, it cleanly fits alongside the newer MoonMind architecture:
 - [SecretsSystem.md](./SecretsSystem.md) owns secret references, storage, and resolution
 - [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md) owns interactive OAuth session transport
 - `ProviderProfiles.md` owns the durable runtime/provider launch contract and Settings activation semantics
+
+A wedged manager no longer gates a deployment update. The release path used to
+refuse promotion until every manager singleton answered `get_state`, which made
+the deployment unfixable exactly when it was broken: the repair could not
+become current because the fault the repair addresses blocked it. Updates
+recreate the installed fleet in place and do not consult manager liveness; the
+automatic replacement above owns this fault, on the credential and admission
+paths where it actually shows up. See
+[Docker Compose Deployment Update System](../Steps/DockerComposeUpdateSystem.md).
