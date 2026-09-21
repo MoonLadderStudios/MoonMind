@@ -7338,7 +7338,13 @@ def _degraded_step_execution_projection_payload(
 
 
 def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
-    raw_state = str(record.state.value).strip().lower()
+    # MoonLadderStudios/MoonMind#4189: old-release rows may carry a blank,
+    # unknown, or newly introduced lifecycle value that is not a
+    # MoonMindWorkflowState enum member. Decode tolerantly (like both
+    # serializers) so historical reads degrade to a safe read-only generic
+    # response instead of failing serialization; unknown states enable no
+    # state-gated actions.
+    raw_state = str(_enum_value(getattr(record, "state", None)) or "").strip().lower()
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
     memo = dict(getattr(record, "memo", None) or {})
     persisted_finish_summary = getattr(record, "finish_summary_json", None)
@@ -7673,7 +7679,9 @@ def _build_debug_fields(
         legacy_run_id=None,
         namespace=record.namespace,
         temporal_status=temporal_status,
-        raw_state=record.state.value,
+        # MoonLadderStudios/MoonMind#4189: tolerate degraded lifecycle values
+        # on old-release rows (see _build_action_capabilities).
+        raw_state=str(_enum_value(getattr(record, "state", None)) or ""),
         close_status=close_status,
         waiting_reason=waiting_reason,
         attention_required=attention_required,
@@ -18999,7 +19007,10 @@ async def reschedule_execution(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "reschedule_rejected",
-                "message": f"Cannot reschedule workflow in state {record.state.value}",
+                # MoonLadderStudios/MoonMind#4189: tolerate degraded lifecycle
+                # values on old-release rows; the rejection must stay
+                # actionable instead of failing while rendering the message.
+                "message": f"Cannot reschedule workflow in state {_enum_value(record.state)}",
             },
         )
     
