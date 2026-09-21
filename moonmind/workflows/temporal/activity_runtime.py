@@ -8320,12 +8320,29 @@ class TemporalAgentRuntimeActivities:
             )
             if not canonical_action:
                 return canonical_payload
+            # MoonLadderStudios/MoonMind#4472: a native NO_DETERMINATION result
+            # without current-runtime recovery must not implicitly acquire a
+            # human decision. The canonical helper defaults that case to
+            # ``needs_human``; derive ``blocked`` instead when the producer
+            # did not supply an explicit valid action. Genuine explicit
+            # ``needs_human``/``blocked`` decisions are preserved above.
+            declared_verdict = (
+                str(canonical_payload.get("verdict") or "").strip().upper()
+            )
+            if declared_verdict == "INCONCLUSIVE":
+                declared_verdict = "NO_DETERMINATION"
             raw_action = canonical_payload.get("recommendedNextAction")
             if raw_action is None:
                 raw_action = canonical_payload.get("recommended_next_action")
             raw_action_text = (
                 raw_action.strip() if isinstance(raw_action, str) else None
             )
+            if (
+                declared_verdict == "NO_DETERMINATION"
+                and not recoverable
+                and raw_action_text not in recommended_next_actions()
+            ):
+                canonical_action = "blocked"
             if raw_action_text in recommended_next_actions():
                 canonical_payload["recommendedNextAction"] = raw_action_text
                 canonical_payload.pop("recommended_next_action", None)
