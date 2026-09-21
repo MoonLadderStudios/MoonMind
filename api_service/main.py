@@ -3106,6 +3106,12 @@ async def startup_event():
     _assert_omnigent_configuration_is_current()
     await _initialize_oidc_provider(app)  # Fail fast on retired selectors; no discovery fetch
     _register_settings_change_subscribers()
+    # Single-user (#4346): conversion eligibility runs before the
+    # deployment preset seed sync. The sync creates global presets with
+    # created_by=None, and evaluating the guard first keeps those
+    # deployment-owned rows from ever gating the cutover; the unowned
+    # probe additionally excludes seed-stamped rows on later restarts.
+    await _run_guarded_single_user_upgrade()
     await _sync_preset_seed_catalog()
     # Provider defaults are input authority for the Omnigent bootstrap. Seed
     # them before the first reconciliation pass so a fresh restart can validate
@@ -3117,7 +3123,9 @@ async def startup_event():
     # HTTP listener closed; execution admission still requires their evidence.
     await _sync_env_managed_secrets()
     await _sweep_secret_invalidation_outbox()
-    await _run_guarded_single_user_upgrade()
+    # The guarded upgrade already ran before the preset seed sync above;
+    # it is not repeated here: a second run on the same startup could only
+    # re-read the just-seeded catalog, never improve the decision.
     # MoonLadderStudios/MoonMind#3955 retired the experimental embedded host
     # transport: startup no longer runs an embedded host-auth preflight or
     # gates on it. Proxy mode is the only supported transport; retained
@@ -3132,8 +3140,12 @@ async def startup_event():
     # and never seeds a default user or bypasses eligibility: fresh
     # databases initialize without an account, eligible sources convert
     # through the explicit entrypoint (preflight/apply_conversion), and
-    # refused sources keep serving unchanged. A restart therefore cannot
-    # seed a default user or publish a candidate on stale attribution.
+    # refused sources without a conversion record stay fail-closed on
+    # ordinary routes (the disabled-mode boundary serves account-free
+    # only on ledger-proven fresh/converted state) while protected
+    # diagnostics and independent host recovery remain available. A
+    # restart therefore cannot seed a default user or publish a candidate
+    # on stale attribution.
     from moonmind.security.auth_modes_4120 import is_disabled_local_mode as _is_disabled
 
     if getattr(app.state, "auth_production_mode", "") == "disabled" or _is_disabled():

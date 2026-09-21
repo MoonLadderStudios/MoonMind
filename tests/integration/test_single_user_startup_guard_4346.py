@@ -131,3 +131,40 @@ async def test_refused_release_workflows_and_operator_access_still_function(
         blob = str(decision.to_sanitized_dict())
         assert "rel-a@example.com" not in blob
         assert "rel-b@example.com" not in blob
+
+
+@pytest.mark.asyncio
+async def test_disabled_boundary_serves_after_proven_fresh_conversion(
+    disabled_env_keys, tmp_path
+):
+    """Ledger-proven fresh state serves without minting a User row."""
+    from api_service.auth_providers import _load_disabled_user
+    from api_service.services.single_user_conversion import run_guarded_upgrade
+
+    await _seed_db(tmp_path, "boundary-fresh.db")
+    async with db_base.async_session_maker() as session:
+        result = await run_guarded_upgrade(session, operator_authorized=True)
+        assert result.published is True
+    async with db_base.async_session_maker() as session:
+        user = await _load_disabled_user(session)
+        assert user.is_superuser is True
+        assert user.is_active is True
+        # No synthetic account was minted to satisfy the boundary.
+        assert (await session.execute(select(User))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_disabled_boundary_stays_setup_required_without_conversion(
+    disabled_env_keys, tmp_path
+):
+    """Failed/missing conversion must not expose account-free data."""
+    from fastapi import HTTPException
+
+    from api_service.auth_providers import _load_disabled_user
+
+    await _seed_db(tmp_path, "boundary-blocked.db")
+    async with db_base.async_session_maker() as session:
+        with pytest.raises(HTTPException) as exc:
+            await _load_disabled_user(session)
+        assert exc.value.status_code == 503
+        assert exc.value.detail == "setup_required"
