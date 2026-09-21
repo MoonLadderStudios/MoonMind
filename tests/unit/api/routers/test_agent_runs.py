@@ -661,12 +661,13 @@ def test_observability_summary_allows_parent_workflow_owner() -> None:
 
     assert response.status_code == 200
     assert response.json()["summary"]["supportsLiveStreaming"] is True
-    assert [call.args[0] for call in exact_lookup.await_args_list] == [
-        child_workflow_id,
-        agent_run_id,
-    ]
+    # Single-user (#4351): instance visibility; owner bindings are
+    # provenance and are no longer consulted for the admitted operator.
+    assert exact_lookup.await_args_list == []
 
-def test_observability_summary_child_owner_blocks_parent_fallback() -> None:
+def test_observability_summary_allows_operator_despite_owner_mismatch() -> None:
+    # Single-user (#4351): the admitted operator reads every instance
+    # run without a human-owner lookup; retained bindings are provenance.
     owner_id = uuid4()
     child_owner_id = uuid4()
     agent_run_id = f"mm:{uuid4()}"
@@ -711,12 +712,12 @@ def test_observability_summary_child_owner_blocks_parent_fallback() -> None:
                     f"{_agent_run_api_path(agent_run_id)}/observability-summary"
                 )
 
-    assert response.status_code == 403
-    assert [call.args[0] for call in exact_lookup.await_args_list] == [
-        child_workflow_id,
-    ]
+    assert response.status_code == 200
+    assert response.json()["summary"]["supportsLiveStreaming"] is True
 
-def test_get_observability_summary_forbids_cross_owner_access() -> None:
+def test_get_observability_summary_allows_operator_cross_owner_access() -> None:
+    # Single-user (#4351): owner filters are provenance selectors, never
+    # 403 gates; the admitted operator lists every instance execution.
     owner_id = uuid4()
     other_id = uuid4()
     app = FastAPI()
@@ -746,7 +747,7 @@ def test_get_observability_summary_forbids_cross_owner_access() -> None:
                     f"/api/agent-runs/{uuid4()}/observability-summary"
                 )
 
-    assert response.status_code == 403
+    assert response.status_code == 200
 
 # ---------------------------------------------------------------------------
 # Log artifact retrieval (stdout / stderr)
@@ -2567,7 +2568,8 @@ def test_get_agent_run_observability_events_allows_owner_access() -> None:
         for call in metrics.increment.call_args_list
     )
 
-def test_get_agent_run_observability_events_forbids_cross_owner_access_without_success_metrics() -> None:
+def test_get_agent_run_observability_events_allows_operator_cross_owner_access() -> None:
+    # Single-user (#4351): admitted-operator instance visibility.
     owner_id = uuid4()
     other_id = uuid4()
     app = FastAPI()
@@ -2602,9 +2604,7 @@ def test_get_agent_run_observability_events_forbids_cross_owner_access_without_s
                         f"/api/agent-runs/{uuid4()}/observability/events"
                     )
 
-    assert response.status_code == 403
-    assert metrics.observe.call_count == 0
-    assert metrics.increment.call_count == 0
+    assert response.status_code == 200
 
 def test_load_agent_run_session_record_uses_targeted_standard_paths(
     tmp_path,
@@ -3148,7 +3148,8 @@ def test_list_session_resource_files_alias_reads_durable_degraded_session() -> N
     assert response.json()["session_epoch"] == 2
     assert len(response.json()["resources"]) == 7
 
-def test_list_session_resources_forbids_cross_owner_access() -> None:
+def test_list_session_resources_allows_operator_cross_owner_access() -> None:
+    # Single-user (#4351): admitted-operator instance visibility.
     owner_id = uuid4()
     other_id = uuid4()
     user = SimpleNamespace(id=other_id, email="other@example.com", is_superuser=False)
@@ -3168,8 +3169,7 @@ def test_list_session_resources_forbids_cross_owner_access() -> None:
                     "/api/sessions/sess:wf-task-1:codex_cli/resources"
                 )
 
-    assert response.status_code == 403
-    artifact_service.get_metadata.assert_not_called()
+    assert response.status_code == 200
 
 def test_session_resource_content_requires_artifact_in_session_projection() -> None:
     user_id = uuid4()
@@ -3368,7 +3368,8 @@ def test_get_agent_run_artifact_session_projection_allows_owner_access() -> None
 
     assert response.status_code == 200
 
-def test_get_agent_run_artifact_session_projection_forbids_cross_owner_access() -> None:
+def test_get_agent_run_artifact_session_projection_allows_operator_cross_owner_access() -> None:
+    # Single-user (#4351): admitted-operator instance visibility.
     owner_id = uuid4()
     other_id = uuid4()
     app = FastAPI()
@@ -3394,11 +3395,7 @@ def test_get_agent_run_artifact_session_projection_forbids_cross_owner_access() 
                     "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli"
                 )
 
-    assert response.status_code == 403
-    assert (
-        response.json()["detail"]
-        == "You do not have permission to access this agent run or its session projection."
-    )
+    assert response.status_code == 200
 
 def test_post_agent_run_artifact_session_control_routes_same_session_continuation_and_returns_projection(
     client: tuple[TestClient, AsyncMock],
