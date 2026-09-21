@@ -308,6 +308,8 @@ All source kinds use server-generated locators, authoritative workspace storage,
 
 Scratch code initializes local Git only when its output/checkpoint profile needs it, with a neutral local identity, empty baseline, and no remote. Report-only work can remain an ordinary directory. Non-Git checkpoints do not fabricate commits or repository IDs to satisfy a Git-shaped schema.
 
+A materialized repository carries the deployment's commit identity in its repository-local configuration. A Skill that owns its own publication commits inside the host, where the shared image provides a credential helper and no identity, so clone preparation writes one and workspace reconciliation reapplies it to the final writable Git workspace after checkpoint and attachment projection: retries reuse the attempt workspace so no clone runs, an authoritative restore replaces the cloned config, and an additive restore can overwrite it with the imported config. Only the identity entries are rewritten; preserved work is kept. The deployment already determines this value; an undeclared identity resolves to the documented default rather than blocking a commit-capable run.
+
 Artifact and checkpoint import verify authorization and digest, bound expanded size/file count, and reject traversal, escaping links, device files, and privileged metadata. Imported executable content and Git configuration remain untrusted. Runtime credential paths, hooks, helpers, and old session authority are not restored.
 
 ### INV-006 Content restoration does not restore external authority
