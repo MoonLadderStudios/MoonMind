@@ -3291,28 +3291,37 @@ async def main_async() -> None:
             "Temporal executable worker specification: %s",
             json.dumps(spec.readiness_payload(), sort_keys=True),
         )
+        routing_task = None
+
         async def mark_ready():
-            from moonmind.workflows.temporal.release_routing import bootstrap_version_routing
-            health_state.readiness_metadata["releaseRouting"] = await bootstrap_version_routing(client, spec)
+            nonlocal routing_task
+            from moonmind.workflows.temporal.release_routing import (
+                bootstrap_version_routing,
+                reconcile_parked_routing,
+            )
+            routing = await bootstrap_version_routing(client, spec)
+            health_state.readiness_metadata["releaseRouting"] = routing
+            if routing.get("status") == "awaiting_promotion":
+                # The outgoing fleet can drain for longer than the route-death
+                # wait, so readiness must not depend on it disappearing. Keep
+                # a bounded reconciler instead of leaving routing parked on a
+                # version that is going away; nothing else retries now that
+                # the availability supervisor is gone.
+                routing_task = asyncio.create_task(
+                    reconcile_parked_routing(
+                        client, spec, health_state.readiness_metadata
+                    ),
+                    name="release-routing-reconcile",
+                )
             health_state.pollers_started = True
             logger.info(
                 "Worker ready, polling task queues: %s",
                 ", ".join(topology.task_queues),
             )
-        recovery_task = None
-        if (
-            topology.fleet == DEPLOYMENT_FLEET
-            and spec.versioning_enabled
-            and os.environ.get("MOONMIND_RELEASE_QUALIFICATION") != "1"
-        ):
-            from moonmind.workflows.skills.deployment_availability import (
-                supervise_availability,
-            )
 
-            recovery_task = asyncio.create_task(
-                supervise_availability(client, spec, health_state.readiness_metadata),
-                name="deployment-availability",
-            )
+        # Recreate-in-place serves one fleet at one version, so there is no
+        # retained cohort to relaunch and no route to restore. A fleet that is
+        # down is started by Compose, not by a background supervisor.
         try:
             await serve_workers(
                 workers,
@@ -3320,9 +3329,9 @@ async def main_async() -> None:
                 stopping=lambda: setattr(health_state, "pollers_started", False),
             )
         finally:
-            if recovery_task is not None:
-                recovery_task.cancel()
-                await asyncio.gather(recovery_task, return_exceptions=True)
+            if routing_task is not None:
+                routing_task.cancel()
+                await asyncio.gather(routing_task, return_exceptions=True)
     except Exception as exc:
         health_state.startup_error = exc.__class__.__name__
         raise

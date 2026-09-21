@@ -1,0 +1,225 @@
+"""MoonLadderStudios/MoonMind#4356 R2: seed-free first-run journey (hermetic subset).
+
+Exercises the real production boundaries of a fresh local instance without
+seeding any application user or session: an empty schema contains no User or
+UserProfile rows, provider-profile composition never provisions UserProfile
+(see _ensure_profile no-op), synthetic credential material is redacted from
+logs, and default-user provisioning requires an explicit caller (it never
+runs ambiently at import).
+
+Full journey evidence (submit work, observe logs/chat/artifacts,
+cancel/recover, recurring execution against built API/frontend artifacts)
+consumes the integrated #4346-4355 cohort; this file proves the seed-free
+foundation hermetically with test-only isolation and synthetic credentials.
+"""
+
+from __future__ import annotations
+
+import uuid
+from unittest.mock import MagicMock
+
+import pytest
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
+from api_service.db.models import Base, User, UserProfile
+
+
+def _factory(tmp_path, name="first_run_4356.db"):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/{name}")
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    return engine, factory
+
+
+@pytest.mark.asyncio
+async def test_fresh_schema_has_no_user_or_session_seeding(tmp_path) -> None:
+    """Fresh create_all must not seed User/UserProfile rows."""
+    engine, factory = _factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with factory() as session:
+        user_count = (await session.execute(select(func.count(User.id)))).scalar()
+        profile_count = (
+            await session.execute(select(func.count(UserProfile.id)))
+        ).scalar()
+    assert user_count == 0
+    assert profile_count == 0
+
+
+@pytest.mark.asyncio
+async def test_provider_composition_never_provisions_user_profile(tmp_path) -> None:
+    """Registration/login composition leaves UserProfile empty (real boundary)."""
+    from api_service.auth import UserManager
+
+    engine, factory = _factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with factory() as session:
+        user = User(id=uuid.uuid4(), email="operator-first-run-4356@example.com")
+        session.add(user)
+        await session.commit()
+        manager = UserManager(MagicMock())
+        assert await manager.on_after_register(user) is None
+        assert await manager.on_after_login(user) is None
+        assert await manager._ensure_profile(user) is None
+        rows = (await session.execute(select(UserProfile))).scalars().all()
+        assert rows == []
+
+
+def test_synthetic_credential_never_survives_log_scrubbing() -> None:
+    """Synthetic provider credential is redacted from logs/artifacts."""
+    from moonmind.utils.logging import SecretRedactor
+
+    synthetic = "sk-test-synthetic-4356-first-run-xyz987"
+    redactor = SecretRedactor(secrets=[synthetic])
+    sample = f"provider profile configured key={synthetic} for first run"
+    scrubbed = redactor.scrub(sample)
+    assert synthetic not in scrubbed
+    assert scrubbed == sample.replace(synthetic, "***")
+
+
+def test_default_user_provisioning_requires_explicit_caller() -> None:
+    """No ambient seeding: helper needs an explicit session; import is inert."""
+    import inspect
+
+    from api_service import auth as auth_module
+
+    assert hasattr(auth_module, "get_or_create_default_user")
+    params = inspect.signature(auth_module.get_or_create_default_user).parameters
+    assert "db_session" in params
+    # Claiming the reserved default admin additionally requires explicit
+    # operator authorization -- it must refuse without it.
+    claim_params = inspect.signature(auth_module.claim_default_admin).parameters
+    assert "operator_authorized" in claim_params
+
+
+@pytest.mark.asyncio
+async def test_default_admin_claim_refuses_without_operator_authorization(
+    tmp_path,
+) -> None:
+    """Whoever reaches setup first cannot claim the default administrator."""
+    from api_service.auth import (
+        DefaultAdminClaimAuthorizationError,
+        UserManager,
+        claim_default_admin,
+    )
+
+    engine, factory = _factory(tmp_path)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    async with factory() as session:
+        with pytest.raises(DefaultAdminClaimAuthorizationError):
+            await claim_default_admin(
+                session, UserManager(MagicMock()), operator_authorized=False
+            )
+
+
+def test_recurring_policy_omitted_inputs_match_documented_defaults() -> None:
+    """First-run recurring execution needs no explicit policy to be safe.
+
+    Omitted inputs must behave like their documented default equivalents
+    (AGENTS.md principle 7): skip/1/last/3/900s/0s. Exercises the real
+    production normalization boundary, not a copy of its defaults.
+    """
+    from api_service.services.recurring_workflows_service import (
+        RecurringPolicy,
+        _normalize_policy,
+    )
+
+    assert _normalize_policy(None, global_max_backfill=10) == RecurringPolicy(
+        overlap_mode="skip",
+        max_concurrent_runs=1,
+        catchup_mode="last",
+        max_backfill=3,
+        misfire_grace_seconds=900,
+        jitter_seconds=0,
+    )
+    assert _normalize_policy({}, global_max_backfill=10) == _normalize_policy(
+        None, global_max_backfill=10
+    )
+
+
+def test_recurring_policy_invalid_modes_fail_closed() -> None:
+    """An invalid recurring policy is refused, never partially scheduled."""
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowValidationError,
+        _normalize_policy,
+    )
+
+    with pytest.raises(RecurringWorkflowValidationError):
+        _normalize_policy({"overlap": {"mode": "bogus-4356"}}, global_max_backfill=10)
+    with pytest.raises(RecurringWorkflowValidationError):
+        _normalize_policy({"catchup": {"mode": "bogus-4356"}}, global_max_backfill=10)
+    with pytest.raises(RecurringWorkflowValidationError):
+        _normalize_policy(
+            {"misfireGraceSeconds": "not-a-number"}, global_max_backfill=10
+        )
+
+
+def test_recurring_policy_backfill_clamped_to_global_max() -> None:
+    """A first-run backfill request cannot exceed the deployment bound."""
+    from api_service.services.recurring_workflows_service import _normalize_policy
+
+    policy = _normalize_policy(
+        {"catchup": {"maxBackfill": 99}}, global_max_backfill=4
+    )
+    assert policy.max_backfill == 4
+
+
+def test_recurring_policy_cancel_recover_primitive_accepted() -> None:
+    """Cancel-previous overlap is an admitted recover primitive, not a refusal.
+
+    A first-run operator that cancels in-flight work and reschedules with
+    ``cancel_previous`` must normalize cleanly through the real production
+    boundary; an unknown mode must still fail closed.
+    """
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowValidationError,
+        _normalize_policy,
+    )
+
+    admitted = _normalize_policy(
+        {"overlap": {"mode": "cancel_previous", "maxConcurrentRuns": 2}},
+        global_max_backfill=10,
+    )
+    assert admitted.overlap_mode == "cancel_previous"
+    assert admitted.max_concurrent_runs == 2
+    with pytest.raises(RecurringWorkflowValidationError):
+        _normalize_policy(
+            {"overlap": {"mode": "cancel-everything-4356"}},
+            global_max_backfill=10,
+        )
+
+
+def test_recurring_policy_negative_bounds_clamped_not_scheduled() -> None:
+    """Negative misfire/jitter bounds clamp to zero instead of scheduling."""
+    from api_service.services.recurring_workflows_service import _normalize_policy
+
+    policy = _normalize_policy(
+        {"misfireGraceSeconds": -30, "jitterSeconds": -5},
+        global_max_backfill=10,
+    )
+    assert policy.misfire_grace_seconds == 0
+    assert policy.jitter_seconds == 0
+
+
+def test_recurring_policy_defaults_survive_temporal_round_trip() -> None:
+    """Documented defaults map to the Temporal overlap/catchup vocabulary.
+
+    The first-run omitted-input policy (skip/last) must translate to the
+    Temporal ``SKIP`` overlap and a last-only catchup window so the
+    scheduled work the operator observes matches the documented defaults.
+    """
+    from api_service.services.recurring_workflows_service import (
+        _catchup_mode_from_temporal_window,
+        _normalize_policy,
+        _overlap_mode_from_temporal,
+    )
+
+    policy = _normalize_policy(None, global_max_backfill=10)
+    assert policy.overlap_mode == "skip"
+    assert _overlap_mode_from_temporal(policy.overlap_mode) == "skip"
+    assert _overlap_mode_from_temporal("SKIP") == "skip"
+    assert _catchup_mode_from_temporal_window(None) == "last"
+    assert policy.catchup_mode == "last"

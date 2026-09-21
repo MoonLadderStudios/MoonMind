@@ -717,13 +717,30 @@ runtime substrate and credential compatibility class. Per-run model/options
 and Required Capabilities are admitted independently through class admission,
 provider/runtime validation, and exact-host model attestation, so selecting a
 valid launch-ready Provider Profile does not require changing the runtime
-default or manual requalification. The credentialless `none@1` fast-path
-additionally ignores volatile build digests (server/host builds, harness
-implementation, vendor runtime, agent source), which are covered by catalog
-sync, trust, and launch preflight; auth-bearing materializers stay exact.
-The deployment evidence publication retains
-one independently signed entry per launchable materializer class; entries are
-replaced only by a newly qualified entry for the same deployment-scoped class.
+default or manual requalification.
+
+The agent source is admitted the same way and is likewise excluded, for every
+materializer class. A deployment qualifies a harness, host, image, realizer,
+and credential class; which agent runs on it is per-run work identity, proven
+at launch by plan verification against the presented Agent Profile artifact
+and by catalog sync and the trust record. Binding it here instead qualified
+only the Agent Profile version that happened to be active, so a schedule,
+checkpoint, or in-flight execution pinned to an earlier snapshot could never
+be requalified. The credentialless `none@1` fast-path additionally ignores
+volatile build digests (server/host builds, harness implementation, vendor
+runtime); auth-bearing materializers keep every build digest exact, so a
+secret mount never qualifies across builds.
+
+The deployment evidence publication retains one independently signed entry per
+exact support combination, across every launchable materializer class. A
+publish replaces only the exact combination it requalifies: another entry in
+the same deployment-scoped class is evidence it did not supersede, and may be
+the only document a retained or rolled-back worker generation can match.
+Expired and unverifiable entries are dropped on the next publish, which bounds
+the file to the evidence TTL. Admission selects the most recently generated
+usable document for the requested class and reports the bounded reason when
+none is usable, so routine expiry stays distinguishable from a combination
+this deployment never qualified.
 
 Conformance tiers and live-smoke boundaries are owned by
 [`ConformanceAndLiveSmoke.md`](./ConformanceAndLiveSmoke.md); rollout states

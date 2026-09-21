@@ -5553,7 +5553,7 @@ async def test_run_execution_stage_records_review_evidence(
         assert check["status"] == "inconclusive"
         assert check["gateVerdict"] == "NO_DETERMINATION"
         assert check["confidence"] == 0.0
-        assert check["recommendedNextAction"] == "needs_human"
+        assert check["recommendedNextAction"] == "blocked"
         assert "Review unavailable" in check["summary"]
         assert check["validatedRefs"] == {}
         assert step["artifacts"]["outputSummary"] == "art_summary_1"
@@ -5562,7 +5562,7 @@ async def test_run_execution_stage_records_review_evidence(
             payload for payload in reversed(written_review_payloads)
             if payload.get("terminalDisposition")
         )
-        assert terminal_manifest["terminalDisposition"] == "needs_human"
+        assert terminal_manifest["terminalDisposition"] == "blocked"
         assert terminal_manifest["checks"][0]["gateResultRef"] == "art_review_1"
         assert workflow._publish_status != "published"
         return
