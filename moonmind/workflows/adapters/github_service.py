@@ -664,7 +664,12 @@ class GitHubService:
                 if isinstance(head_repo, Mapping)
                 else ""
             )
-            return bool(full_name) and full_name.startswith(f"{expected_repo_owner}/")
+            # #4010 W3: fork identity is the complete exact source
+            # repository (owner + repo name), never an owner-name prefix.
+            # ``owner:branch`` addresses ``owner/<target repo name>``.
+            repo_name = repo.split("/", 1)[1] if "/" in repo else repo
+            expected_full_name = f"{expected_repo_owner}/{repo_name}".lower()
+            return bool(full_name) and full_name.lower() == expected_full_name
         head_repo = head_data.get("repo")
         if isinstance(head_repo, Mapping):
             full_name = str(head_repo.get("full_name") or "")
@@ -680,6 +685,50 @@ class GitHubService:
         base: str,
         headers: Mapping[str, str],
     ) -> Mapping[str, Any] | None:
+        return await self._find_pull_request_in_state(
+            client,
+            repo=repo,
+            head=head,
+            base=base,
+            headers=headers,
+            state="open",
+        )
+
+    async def _find_closed_pull_request(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        repo: str,
+        head: str,
+        base: str,
+        headers: Mapping[str, str],
+    ) -> Mapping[str, Any] | None:
+        """Inspect prior closed/merged results for the same head/base (#4010 W4).
+
+        Read-only reconciliation for ambiguous PR creation: a positively
+        matched closed/merged outcome is adopted instead of POSTing a
+        duplicate. Lookup failure raises (unavailable, not absence) so no
+        POST may follow it.
+        """
+        return await self._find_pull_request_in_state(
+            client,
+            repo=repo,
+            head=head,
+            base=base,
+            headers=headers,
+            state="closed",
+        )
+
+    async def _find_pull_request_in_state(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        repo: str,
+        head: str,
+        base: str,
+        headers: Mapping[str, str],
+        state: str,
+    ) -> Mapping[str, Any] | None:
         get = getattr(client, "get", None)
         if not callable(get):
             return None
@@ -688,7 +737,7 @@ class GitHubService:
                 f"https://api.github.com/repos/{repo}/pulls",
                 headers=dict(headers),
                 params={
-                    "state": "open",
+                    "state": state,
                     "head": self._head_query_for_repo(repo=repo, head=head),
                     "base": base,
                     "per_page": 10,
@@ -972,8 +1021,19 @@ class GitHubService:
         body: str,
         draft: bool = False,
         github_token: str | None = None,
+        reconcile_only: bool = False,
     ) -> CreatePRResult:
-        """Create a GitHub pull request via REST API."""
+        """Create a GitHub pull request via REST API.
+
+        Ambiguous creation first reconciles read-only against the same
+        operation's existing result — open, then closed/merged priors
+        positively matched on exact head/base/source identity — and adopts
+        the match instead of POSTing a duplicate (#4010 W4). Adopting never
+        overwrites the existing title/body: a later actor's metadata edits
+        are preserved, and title/body updates belong to a separate metadata
+        operation, not creation. With ``reconcile_only=True`` no write
+        (POST or PATCH) is ever performed.
+        """
 
         token, resolution_error = await self.resolve_github_token(
             github_token,
@@ -990,8 +1050,19 @@ class GitHubService:
         payload = {"title": title, "head": head, "base": base, "body": body}
         if draft:
             # Only applies to the create branch below; GitHub does not allow
-            # flipping an existing PR to draft via the PATCH metadata update.
+            # flipping an existing PR to draft via a metadata update, and
+            # reconciliation never overwrites existing metadata to adopt it.
             payload["draft"] = True
+
+        def _adopted(summary: str, pr: Mapping[str, Any]) -> CreatePRResult:
+            existing_url = str(pr.get("html_url") or "") or None
+            return CreatePRResult(
+                url=existing_url,
+                created=False,
+                adopted=True,
+                summary=summary,
+                head_sha=(pr.get("head") or {}).get("sha"),
+            )
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             try:
@@ -1030,24 +1101,45 @@ class GitHubService:
                             ),
                             head_sha=(existing_pr.get("head") or {}).get("sha"),
                         )
-                    update_response = await client.patch(
-                        f"{api_url}/{pr_number}",
-                        headers=headers,
-                        json={"title": title, "body": body},
+                    # Read-only adoption: never overwrite a later actor's
+                    # title/body merely to adopt the PR.
+                    return _adopted(
+                        "adopted existing open pull request for "
+                        f"{head} -> {base}: {existing_url or 'unknown URL'} "
+                        "(existing title/body preserved; no metadata update)",
+                        existing_pr,
                     )
-                    update_response.raise_for_status()
-                    updated_pr = update_response.json()
+                prior_pr = await self._find_closed_pull_request(
+                    client,
+                    repo=repo,
+                    head=head,
+                    base=base,
+                    headers=headers,
+                )
+                if prior_pr is not None:
+                    prior_url = str(prior_pr.get("html_url") or "")
+                    if prior_pr.get("merged") is True:
+                        return _adopted(
+                            "adopted previously merged pull request for "
+                            f"{head} -> {base}: {prior_url or 'unknown URL'} "
+                            "(no duplicate created)",
+                            prior_pr,
+                        )
+                    return _adopted(
+                        "adopted previously closed (unmerged) pull request for "
+                        f"{head} -> {base}: {prior_url or 'unknown URL'} "
+                        "(no duplicate created)",
+                        prior_pr,
+                    )
+                if reconcile_only:
                     return CreatePRResult(
-                        url=str(updated_pr.get("html_url") or existing_url) or None,
                         created=False,
-                        adopted=True,
+                        adopted=False,
                         summary=(
-                            "updated existing PR metadata: "
-                            f"{updated_pr.get('html_url') or existing_url}"
+                            "no existing pull request found for "
+                            f"{head} -> {base} in {repo}; "
+                            "reconciliation-only, no write performed"
                         ),
-                        head_sha=(
-                            updated_pr.get("head") or existing_pr.get("head") or {}
-                        ).get("sha"),
                     )
                 response = await client.post(
                     api_url, headers=headers, json=payload

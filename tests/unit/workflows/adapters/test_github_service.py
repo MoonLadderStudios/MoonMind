@@ -113,26 +113,20 @@ async def test_create_pr_draft_flag_reaches_rest_payload(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_pr_adopts_existing_head_base_pr(monkeypatch):
-    """MM-680: existing PRs for the same head/base are adopted before create."""
+    """MM-680 / #4010 W4: existing PRs are adopted read-only before create."""
     monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
 
     existing_pr = {
         "number": 42,
         "html_url": "https://github.com/o/r/pull/42",
+        "title": "Later title",
+        "body": "Later body",
         "head": {"ref": "feature", "sha": "abc123", "repo": {"full_name": "o/r"}},
         "base": {"ref": "main"},
     }
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(return_value=_mock_get_response(200, [existing_pr]))
-    mock_client.patch = AsyncMock(
-        return_value=_mock_response(
-            200,
-            {
-                "html_url": "https://github.com/o/r/pull/42",
-                "head": {"sha": "def456"},
-            },
-        )
-    )
+    mock_client.patch = AsyncMock()
     mock_client.post = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
@@ -152,13 +146,9 @@ async def test_create_pr_adopts_existing_head_base_pr(monkeypatch):
     assert result.created is False
     assert result.adopted is True
     assert result.url == "https://github.com/o/r/pull/42"
-    assert result.head_sha == "def456"
-    assert "updated existing PR metadata" in result.summary
-    mock_client.patch.assert_awaited_once()
-    assert mock_client.patch.await_args.args == (
-        "https://api.github.com/repos/o/r/pulls/42",
-    )
-    assert mock_client.patch.await_args.kwargs["json"] == {"title": "T", "body": "B"}
+    assert result.head_sha == "abc123"
+    assert "adopted existing open pull request" in result.summary
+    mock_client.patch.assert_not_awaited()
     mock_client.post.assert_not_awaited()
 
 
@@ -1556,3 +1546,228 @@ def test_github_primary_rate_limit_preserves_reset_time():
     event = GitHubService._github_rate_limit_event(response)
     assert event is not None
     assert event.reset_at == datetime.fromtimestamp(1800000000, timezone.utc).isoformat()
+
+
+# ---------------------------------------------------------------------------
+# #4010 W3: exact fork source-repository identity
+# ---------------------------------------------------------------------------
+
+def test_pull_request_fork_identity_requires_exact_source_repository() -> None:
+    """#4010 W3: owner-name prefix match must not adopt a foreign fork repo."""
+    svc = GitHubService()
+
+    # Exact fork identity still matches.
+    assert svc._pull_request_matches_head_base(
+        {
+            "head": {"ref": "feature", "repo": {"full_name": "forkowner/r"}},
+            "base": {"ref": "main"},
+        },
+        repo="o/r",
+        head="forkowner:feature",
+        base="main",
+    )
+    # Same-owner different-repo must not match (prefix collision).
+    assert not svc._pull_request_matches_head_base(
+        {
+            "head": {"ref": "feature", "repo": {"full_name": "forkowner/other-repo"}},
+            "base": {"ref": "main"},
+        },
+        repo="o/r",
+        head="forkowner:feature",
+        base="main",
+    )
+    # Exact match is case-insensitive on the full name.
+    assert svc._pull_request_matches_head_base(
+        {
+            "head": {"ref": "feature", "repo": {"full_name": "ForkOwner/R"}},
+            "base": {"ref": "main"},
+        },
+        repo="o/r",
+        head="forkowner:feature",
+        base="main",
+    )
+
+
+# ---------------------------------------------------------------------------
+# #4010 W4: reconcile before POST, never overwrite later metadata
+# ---------------------------------------------------------------------------
+
+def _open_pr(number=42, title="Later title", body="Later body"):
+    return {
+        "number": number,
+        "html_url": f"https://github.com/o/r/pull/{number}",
+        "title": title,
+        "body": body,
+        "head": {"ref": "feature", "sha": "abc123", "repo": {"full_name": "o/r"}},
+        "base": {"ref": "main"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_pr_adopts_existing_without_metadata_overwrite(monkeypatch):
+    """#4010 W4: adopting an open PR is read-only; later edits are preserved."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=_mock_get_response(200, [_open_pr()]))
+    mock_client.patch = AsyncMock()
+    mock_client.post = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().create_pull_request(
+            repo="o/r", head="feature", base="main",
+            title="Requested title", body="Requested body",
+        )
+
+    assert result.created is False
+    assert result.adopted is True
+    assert result.url == "https://github.com/o/r/pull/42"
+    mock_client.patch.assert_not_awaited()
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_pr_adopts_previously_merged_pr_without_post(monkeypatch):
+    """#4010 W4: a positively matched merged prior is adopted, not duplicated."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    merged_pr = _open_pr(number=77)
+    merged_pr["state"] = "closed"
+    merged_pr["merged"] = True
+
+    async def _get(url, **kwargs):
+        params = kwargs.get("params") or {}
+        if params.get("state") == "open":
+            return _mock_get_response(200, [])
+        return _mock_get_response(200, [merged_pr])
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=_get)
+    mock_client.patch = AsyncMock()
+    mock_client.post = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().create_pull_request(
+            repo="o/r", head="feature", base="main", title="T", body="B",
+        )
+
+    assert result.created is False
+    assert result.adopted is True
+    assert result.url == "https://github.com/o/r/pull/77"
+    assert "merged" in result.summary.lower()
+    mock_client.patch.assert_not_awaited()
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_pr_adopts_previously_closed_pr_without_post(monkeypatch):
+    """#4010 W4: a positively matched closed (unmerged) prior is adopted."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    closed_pr = _open_pr(number=78)
+    closed_pr["state"] = "closed"
+    closed_pr["merged"] = False
+
+    async def _get(url, **kwargs):
+        params = kwargs.get("params") or {}
+        if params.get("state") == "open":
+            return _mock_get_response(200, [])
+        return _mock_get_response(200, [closed_pr])
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=_get)
+    mock_client.patch = AsyncMock()
+    mock_client.post = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().create_pull_request(
+            repo="o/r", head="feature", base="main", title="T", body="B",
+        )
+
+    assert result.created is False
+    assert result.adopted is True
+    assert result.url == "https://github.com/o/r/pull/78"
+    assert "closed" in result.summary.lower()
+    mock_client.patch.assert_not_awaited()
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_pr_reconcile_only_makes_no_writes(monkeypatch):
+    """#4010 W4: reconciliation-only calls never POST or PATCH."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=_mock_get_response(200, []))
+    mock_client.patch = AsyncMock()
+    mock_client.post = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().create_pull_request(
+            repo="o/r", head="feature", base="main", title="T", body="B",
+            reconcile_only=True,
+        )
+
+    assert result.created is False
+    assert result.adopted is False
+    assert result.url is None
+    mock_client.patch.assert_not_awaited()
+    mock_client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_pr_closed_lookup_failure_makes_no_post(monkeypatch):
+    """#4010 W4: failed prior-result lookup is unavailable, never absence."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    lookup_response = _mock_get_response(503, {"message": "try later"})
+
+    async def _get(url, **kwargs):
+        params = kwargs.get("params") or {}
+        if params.get("state") == "open":
+            return _mock_get_response(200, [])
+        raise httpx.HTTPStatusError(
+            "503", request=lookup_response.request, response=lookup_response
+        )
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=_get)
+    mock_client.post = AsyncMock(
+        return_value=_mock_response(
+            201, {"html_url": "https://github.com/o/r/pull/43"}
+        )
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().create_pull_request(
+            repo="o/r", head="feature", base="main", title="T", body="B",
+        )
+
+    assert result.created is False
+    assert result.retryable is True
+    mock_client.post.assert_not_awaited()
