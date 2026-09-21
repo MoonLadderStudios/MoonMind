@@ -69,10 +69,11 @@ async def test_unreadable_inventory_refuses_as_unknown(tmp_path):
     engine, factory = _factory(tmp_path)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    # The table stays in metadata but disappears from storage, so the
-    # SELECT fails with a real database error instead of a skip.
+    # The table stays present but loses a column (schema drift), so the
+    # full-row SELECT fails with a real database error while the table
+    # itself still exists: this is unknown evidence, not an empty table.
     async with engine.begin() as conn:
-        await conn.execute(text("DROP TABLE settings_overrides"))
+        await conn.execute(text("ALTER TABLE settings_overrides DROP COLUMN value_json"))
     async with factory() as session:
         inv = await collect_inventory(session)
         assert inv.inventory_errors, "failed read must be recorded"

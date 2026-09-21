@@ -341,7 +341,29 @@ def _record_inventory_error(inv: ConversionInventory, surface: str) -> None:
     logger.warning("single-user conversion inventory unreadable: %s", surface)
 
 
-async def _probe_count(session: AsyncSession, table, column) -> int | None:
+def _is_absent_table_error(exc: BaseException) -> bool:
+    """True when a failed read proves the table itself is absent.
+
+    An absent table provably holds no rows, so its surfaces are empty
+    evidence rather than unknown evidence (partial schemas, such as the
+    hermetic PostgreSQL fixture that creates only the tables under
+    test, skip them exactly like a missing metadata entry). Any other
+    failure -- a missing column, permissions, a transient outage --
+    leaves attribution unknown and must be recorded.
+    """
+    cursor: BaseException | None = exc
+    while cursor is not None:
+        if type(cursor).__name__ in ("UndefinedTableError", "UndefinedTable"):
+            return True
+        if "no such table" in str(cursor).lower():
+            return True
+        cursor = cursor.__cause__ or cursor.__context__
+    return False
+
+
+async def _probe_count(
+    session: AsyncSession, table, column, *, inv: ConversionInventory, surface: str
+) -> int | None:
     probe = await session.begin_nested()
     try:
         count = (
@@ -351,15 +373,18 @@ async def _probe_count(session: AsyncSession, table, column) -> int | None:
         ).scalar() or 0
         await probe.commit()
         return int(count)
-    except Exception:
-        # The savepoint alone is rolled back; the caller records the
-        # surface as unknown so a missing count cannot hide retained data.
+    except Exception as exc:
+        # The savepoint alone is rolled back. An absent table holds no
+        # rows (skip like a missing metadata entry); any other failure
+        # is recorded so a missing count cannot hide retained data.
         try:
             await probe.rollback()
         except Exception:
             # Rollback of a failed savepoint is best effort: the probe is
-            # already dead and the caller still records the error.
+            # already dead and the caller still classifies the error.
             pass
+        if not _is_absent_table_error(exc):
+            _record_inventory_error(inv, surface)
         return None
 
 
@@ -409,43 +434,48 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                         )
                     ).all()
                     values = [str(r[0]) for r in rows if r[0] is not None]
-            except Exception:
+            except Exception as exc:
                 # A failed principal read leaves attribution unknown: roll
-                # back only this surface and record it so the disposition
-                # refuses instead of converting without this evidence.
+                # back only this surface, then classify. An absent table
+                # holds no rows (skip); any other failure is recorded so
+                # the disposition refuses instead of converting without
+                # this evidence.
                 try:
                     await session.rollback()
                 except Exception:
                     # The surface read already failed; a failed rollback
-                    # must not mask the recorded inventory error.
+                    # must not mask the classification below.
                     pass
-                _record_inventory_error(inv, f"{table_name}.{column_name}")
+                if not _is_absent_table_error(exc):
+                    _record_inventory_error(inv, f"{table_name}.{column_name}")
                 continue
             for raw in values:
                 norm = _looks_like_uuid(raw)
                 if norm:
                     principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
-            total = await _probe_count(session, table, col)
+            total = await _probe_count(
+                session, table, col,
+                inv=inv, surface=f"count:{table_name}.{column_name}",
+            )
             if total is not None:
                 resource_counts[f"{table_name}.{column_name}"] = total
-            else:
-                _record_inventory_error(inv, f"count:{table_name}.{column_name}")
             continue
         if kind == "uuid_text":
             try:
                 rows = (
                     await session.execute(select(col).where(col.is_not(None)))
                 ).all()
-            except Exception:
-                # Same unknown-evidence rule as above: record the unreadable
-                # surface instead of treating its owners as absent.
+            except Exception as exc:
+                # Same classify-and-record rule as above: an absent table
+                # is empty evidence, any other failure is unknown evidence.
                 try:
                     await session.rollback()
                 except Exception:
                     # The surface read already failed; a failed rollback
-                    # must not mask the recorded inventory error.
+                    # must not mask the classification below.
                     pass
-                _record_inventory_error(inv, f"{table_name}.{column_name}")
+                if not _is_absent_table_error(exc):
+                    _record_inventory_error(inv, f"{table_name}.{column_name}")
                 continue
             for (raw,) in rows:
                 if raw is None or str(raw).strip() == "":
@@ -453,27 +483,29 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                 norm = _looks_like_uuid(str(raw).strip())
                 if norm:
                     principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
-            total = await _probe_count(session, table, col)
+            total = await _probe_count(
+                session, table, col,
+                inv=inv, surface=f"count:{table_name}.{column_name}",
+            )
             if total is not None:
                 resource_counts[f"{table_name}.{column_name}"] = total
-            else:
-                _record_inventory_error(inv, f"count:{table_name}.{column_name}")
             continue
         # uuid_fk
         try:
             rows = (
                 await session.execute(select(col).where(col.is_not(None)))
             ).all()
-        except Exception:
-            # Same unknown-evidence rule as above: record the unreadable
-            # surface instead of treating its owners as absent.
+        except Exception as exc:
+            # Same classify-and-record rule as above: an absent table is
+            # empty evidence, any other failure is unknown evidence.
             try:
                 await session.rollback()
             except Exception:
                 # The surface read already failed; a failed rollback must
-                # not mask the recorded inventory error.
+                # not mask the classification below.
                 pass
-            _record_inventory_error(inv, f"{table_name}.{column_name}")
+            if not _is_absent_table_error(exc):
+                _record_inventory_error(inv, f"{table_name}.{column_name}")
             continue
         for (raw,) in rows:
             if raw is None:
@@ -484,11 +516,12 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             if norm == DEPLOYMENT_SUBJECT_ID:
                 continue
             principals.setdefault(f"{table_name}.{column_name}", set()).add(norm)
-        total = await _probe_count(session, table, col)
+        total = await _probe_count(
+            session, table, col,
+            inv=inv, surface=f"count:{table_name}.{column_name}",
+        )
         if total is not None:
             resource_counts[f"{table_name}.{column_name}"] = total
-        else:
-            _record_inventory_error(inv, f"count:{table_name}.{column_name}")
 
     inv.principals = {k: sorted(v) for k, v in principals.items()}
     all_principals = sorted({p for vs in principals.values() for p in vs})
@@ -550,16 +583,18 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                 await session.execute(select(func.count()).select_from(table))
             ).scalar() or 0
             await probe.commit()
-        except Exception:
-            # An unreadable unowned probe is unknown evidence, not proof of
-            # attribution: record it so the disposition refuses.
+        except Exception as exc:
+            # Classify the probe failure: an absent table holds no rows
+            # (skip); any other failure is unknown evidence, not proof of
+            # attribution, so the disposition refuses.
             try:
                 await probe.rollback()
             except Exception:
                 # The probe already failed; a failed savepoint rollback
-                # must not mask the recorded inventory error.
+                # must not mask the classification below.
                 pass
-            _record_inventory_error(inv, f"unowned:{table_name}.{column_name}")
+            if not _is_absent_table_error(exc):
+                _record_inventory_error(inv, f"unowned:{table_name}.{column_name}")
             continue
         if int(total) > 0 and int(nulls) > 0:
             unowned[f"{table_name}.{column_name}"] = int(nulls)
@@ -598,18 +633,20 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
                         f"{user_hex}\x00{column}\x00{ciphertext_hash}"
                     )
         inv.secret_holders = sorted(holders)
-    except Exception:
-        # The whole profile-secret surface is unreadable: no holder set is
-        # trustworthy, so clear it and record the failure rather than
-        # converting without secret attribution.
+    except Exception as exc:
+        # The whole profile-secret surface is unreadable. An absent table
+        # holds no secrets (clear and continue); any other failure leaves
+        # secret attribution unknown, so clear the holders and record it
+        # rather than converting without secret attribution.
         inv.secret_holders = []
         try:
             await session.rollback()
         except Exception:
             # The surface read already failed; a failed rollback must not
-            # mask the recorded inventory error.
+            # mask the classification below.
             pass
-        _record_inventory_error(inv, "profile_secrets")
+        if not _is_absent_table_error(exc):
+            _record_inventory_error(inv, "profile_secrets")
 
     # Same-person settings collisions: one effective value context, several
     # distinct values. A collision is about incompatible effective values,
@@ -652,17 +689,20 @@ async def collect_inventory(session: AsyncSession) -> ConversionInventory:
             for (key, _scope, _workspace), per_user in by_context.items()
             if len({v for vs in per_user.values() for v in vs}) > 1
         )
-    except Exception:
-        # Unreadable settings are unknown evidence: clear collisions and
-        # record the failure rather than converting blind.
+    except Exception as exc:
+        # Same classification: an absent settings table holds no
+        # overrides (clear and continue); any other failure is unknown
+        # evidence, so clear collisions and record it rather than
+        # converting blind.
         inv.settings_collisions = []
         try:
             await session.rollback()
         except Exception:
             # The surface read already failed; a failed rollback must not
-            # mask the recorded inventory error.
+            # mask the classification below.
             pass
-        _record_inventory_error(inv, "settings")
+        if not _is_absent_table_error(exc):
+            _record_inventory_error(inv, "settings")
 
     inv.source_content_hash = hashlib.sha256(
         (

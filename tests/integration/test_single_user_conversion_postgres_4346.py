@@ -392,10 +392,15 @@ async def test_postgres_unavailable_inventory_refuses(
     """A failed required read is unknown evidence, never empty/eligible."""
     from api_service.services import single_user_conversion as suc
 
+    # Fresh ephemeral cluster per test: drift the existing settings table
+    # (drop a column the SELECT needs) instead of dropping the table, so
+    # the failure is a genuinely unreadable surface, not an empty schema.
     ddl = create_async_engine(conversion_postgres_url)
     try:
         async with ddl.begin() as conn:
-            await conn.execute(text("DROP TABLE settings_overrides"))
+            await conn.execute(
+                text("ALTER TABLE settings_overrides DROP COLUMN value_json")
+            )
         async with pg_maker() as session:
             inv = await suc.collect_inventory(session)
             assert inv.inventory_errors, "failed read must be recorded"
@@ -404,10 +409,6 @@ async def test_postgres_unavailable_inventory_refuses(
             assert decision.reason_code == "inventory_unavailable"
             assert decision.eligible is False
     finally:
-        async with ddl.begin() as conn:
-            await conn.run_sync(
-                SettingsOverride.__table__.create, checkfirst=True
-            )
         await ddl.dispose()
 
 

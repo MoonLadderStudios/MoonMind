@@ -48,7 +48,10 @@ def test_migration_graph_keeps_single_head_at_new_revision() -> None:
     config = Config("api_service/migrations/alembic.ini")
     config.set_main_option("script_location", "api_service/migrations")
     script = ScriptDirectory.from_config(config)
-    assert tuple(script.get_heads()) == (_migration().revision,)
+    # PR #4461 merged the two 386 branches (machine-capacity drain and the
+    # single-user conversion ledger) into 387_merge_386_heads_4461, which is
+    # now the single head; both 386 branches remain valid parents.
+    assert tuple(script.get_heads()) == ("387_merge_386_heads_4461",)
 
 
 def test_upgrade_drops_only_retired_table_and_keeps_unrelated_rows(
