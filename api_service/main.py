@@ -286,64 +286,53 @@ async def _sweep_secret_invalidation_outbox() -> int:
         return 0
 
 
-async def _convert_legacy_profile_secrets() -> dict:
-    """Run the gated #4349 legacy profile-secret conversion on startup.
+async def _run_guarded_single_user_upgrade() -> dict:
+    """Run the #4346 shared guarded upgrade entrypoint on startup.
 
-    Single-user design, sections 6 and 9: eligible legacy ``UserProfile``-held
-    secrets are converted into managed-secret references exactly once; reruns
-    converge without duplicating or changing slugs. Multi-operator databases
-    are blocked without mutation (attribution stays owned by #4346's guarded
-    migration). Resilient by design: conversion must never fail startup, so
-    every failure (including the multi-operator block) is logged and startup
-    continues. Returns the metadata-only conversion summary.
+    Single-user design, sections 9-10: this is the only startup upgrade
+    route that may publish a conversion candidate. It runs preflight plus
+    apply through versioned migration 386 + ledger idempotency with the
+    registered production subsystem transforms (``profile_secrets`` via
+    #4349). Alembic revision 386 creates only the ledger table and never
+    applies a destructive conversion as a schema-upgrade side effect, so
+    CLI, worker, and HTTP startup routes all converge here instead of
+    invoking subsystem conversions directly. Refusals (multi-person,
+    unresolved evidence, missing transform coverage) perform no
+    conversion-side writes and preserve the serving release. Resilient by
+    design: conversion must never fail startup, so every failure is logged
+    and startup continues. Returns a metadata-only summary.
     """
     try:
-        from api_service.services.profile_secret_migration import (
-            MultiOperatorAttributionError,
-            run_single_operator_profile_secret_conversion,
-        )
+        from api_service.services.single_user_conversion import run_guarded_upgrade
 
         async with get_async_session_context() as session:
             try:
-                summary = await run_single_operator_profile_secret_conversion(
-                    session
+                result = await run_guarded_upgrade(
+                    session, operator_authorized=True
                 )
-            except MultiOperatorAttributionError as exc:
+            except Exception as exc:
                 logger.warning(
-                    "Legacy profile secret conversion deferred: %s",
-                    exc,
+                    "Single-user guarded upgrade deferred: %s",
+                    type(exc).__name__,
                 )
-                logger.warning(
-                    "Multi-operator legacy database: provider profiles stay "
-                    "visible as instance resources pending #4346 guarded "
-                    "migration; resolve attribution before relying on "
-                    "single-operator access cutover."
+                return {"deferred": True, "reason": type(exc).__name__}
+            summary = result.to_sanitized_dict()
+            if result.published:
+                logger.info(
+                    "Single-user guarded upgrade published (%s)",
+                    result.decision.disposition,
                 )
-                return {"deferred": True, "reason": "multi_operator_attribution"}
-            if summary.get("migration", {}).get("migrated"):
-                # Metadata counts are intentionally not logged: the
-                # migration summary is tainted by secret handling and
-                # CodeQL flags any logged derived value as clear-text
-                # sensitive data. Conversion outcome stays observable via
-                # the returned summary, not log arguments.
-                logger.info("Converted legacy profile secrets on startup")
-                # Single-user (#4349): the startup upgrade path migrates
-                # eligible legacy secrets without implicit profile rewires
-                # (no UserProfile->provider-profile mapping exists). The
-                # new ProfileAuthProvider requires an explicit
-                # provider-profile secret_ref, so converted secrets stay
-                # unreferenced until the operator (or #4346's guarded
-                # migration) publishes transactional rewires via
-                # rewire_provider_profile_secret_refs.
+            else:
                 logger.warning(
-                    "Legacy profile secrets converted without profile rewires: "
-                    "publish explicit provider-profile secret_refs to restore "
-                    "effective access."
+                    "Single-user guarded upgrade blocked (%s); preserving "
+                    "source data, serving release, and operator access "
+                    "without conversion-side mutation.",
+                    result.decision.reason_code,
                 )
             return summary
     except Exception as exc:  # pragma: no cover - bounded startup conversion
         logger.warning(
-            "Legacy profile secret conversion deferred: %s",
+            "Single-user guarded upgrade deferred: %s",
             type(exc).__name__,
         )
         return {"deferred": True, "reason": type(exc).__name__}
@@ -3133,6 +3122,12 @@ async def startup_event():
     _assert_omnigent_configuration_is_current()
     await _initialize_oidc_provider(app)  # Fail fast on retired selectors; no discovery fetch
     _register_settings_change_subscribers()
+    # Single-user (#4346): conversion eligibility runs before the
+    # deployment preset seed sync. The sync creates global presets with
+    # created_by=None, and evaluating the guard first keeps those
+    # deployment-owned rows from ever gating the cutover; the unowned
+    # probe additionally excludes seed-stamped rows on later restarts.
+    await _run_guarded_single_user_upgrade()
     await _sync_preset_seed_catalog()
     # Provider defaults are input authority for the Omnigent bootstrap. Seed
     # them before the first reconciliation pass so a fresh restart can validate
@@ -3144,7 +3139,9 @@ async def startup_event():
     # HTTP listener closed; execution admission still requires their evidence.
     await _sync_env_managed_secrets()
     await _sweep_secret_invalidation_outbox()
-    await _convert_legacy_profile_secrets()
+    # The guarded upgrade already ran before the preset seed sync above;
+    # it is not repeated here: a second run on the same startup could only
+    # re-read the just-seeded catalog, never improve the decision.
     # MoonLadderStudios/MoonMind#3955 retired the experimental embedded host
     # transport: startup no longer runs an embedded host-auth preflight or
     # gates on it. Proxy mode is the only supported transport; retained
@@ -3152,57 +3149,52 @@ async def startup_event():
     # probes after startup instead of blocking it.
 
     # Ensure default user exists if auth is disabled.
-    # Single-user (#4349): the default User row lifecycle stays owned by
-    # #4346/#4347 (disabled local mode). Legacy UserProfile seeding from
-    # env keys was removed here: provider credentials resolve from
-    # explicit provider profiles + managed-secret references, and legacy
-    # UserProfile-held values are converted by
-    # api_service.services.profile_secret_migration. This startup path
-    # must not create or update a UserProfile row.
+    # Single-user (#4346, parent #4345; design sections 9-10): the guarded
+    # conversion entrypoint in api_service.services.single_user_conversion
+    # owns upgrade eligibility and the default-User lifecycle (#4346/#4347,
+    # disabled local mode). This startup route consults that guard first
+    # and never seeds a default user or bypasses eligibility: fresh
+    # databases initialize without an account, eligible sources convert
+    # through the explicit entrypoint (preflight/apply_conversion), and
+    # refused sources without a conversion record stay fail-closed on
+    # ordinary routes (the disabled-mode boundary serves account-free
+    # only on ledger-proven fresh/converted state) while protected
+    # diagnostics and independent host recovery remain available. A
+    # restart therefore cannot seed a default user or publish a candidate
+    # on stale attribution.
     from moonmind.security.auth_modes_4120 import is_disabled_local_mode as _is_disabled
 
     if getattr(app.state, "auth_production_mode", "") == "disabled" or _is_disabled():
-        logger.info(
-            "Auth provider is 'disabled'. Ensuring default user exists on startup."
-        )
-        from api_service.auth import (
-            _DEFAULT_USER_ID,
-            get_or_create_default_user,
-            get_user_manager_context,
-        )
+        try:
+            from api_service.services.single_user_conversion import (
+                startup_guard_decision,
+            )
 
-        async with get_async_session_context() as db_session:
-            async with get_user_manager_context(db_session) as user_manager:
-                try:
-                    if (
-                        not settings.oidc.DEFAULT_USER_ID
-                        or not settings.oidc.DEFAULT_USER_EMAIL
-                    ):
-                        logger.warning(
-                            "DEFAULT_USER_ID or DEFAULT_USER_EMAIL not configured. Using built-in defaults."
-                        )
-                    logger.info(
-                        f"Attempting to get/create default user ID: {settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID} on startup."
-                    )
-                    default_user = await get_or_create_default_user(
-                        db_session=db_session, user_manager=user_manager
-                    )
-                    if default_user:
-                        logger.info(
-                            f"Default user {default_user.email} (ID: {default_user.id}) ensured."
-                        )
-                    else:
-                        logger.error("Failed to get or create default user on startup.")
-                except ValueError as ve:
-                    logger.error(
-                        f"Configuration error during default user setup on startup: {ve}"
-                    )
-                except Exception as e:
-                    redacted_error = SecretRedactor.from_environ().scrub(str(e))
-                    logger.error(
-                        "Error ensuring default user/profile on startup: %s",
-                        redacted_error,
-                    )
+            async with get_async_session_context() as guard_session:
+                guard_decision = await startup_guard_decision(guard_session)
+            logger.info(
+                "Single-user conversion guard: disposition=%s reason=%s (%s)",
+                guard_decision.disposition,
+                guard_decision.reason_code,
+                guard_decision.detail or "no further detail",
+            )
+            if not guard_decision.eligible:
+                logger.warning(
+                    "Single-user conversion blocked (%s); preserving source "
+                    "data, serving release, and operator access without "
+                    "conversion-side mutation.",
+                    guard_decision.reason_code,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Single-user conversion guard unreadable (%s); refusing to "
+                "seed a default user without eligibility evidence.",
+                type(exc).__name__,
+            )
+        logger.info(
+            "Skipping default user seeding on startup: User-row lifecycle "
+            "is owned by the #4346 guarded conversion entrypoint."
+        )
     else:
         logger.info(
             f"Auth provider is '{getattr(app.state, 'auth_production_mode', settings.oidc.AUTH_PROVIDER)}'. Skipping default user creation on startup."
