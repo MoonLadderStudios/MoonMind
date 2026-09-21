@@ -83,7 +83,21 @@ capacity-owner removal assertions plus independently resolvable retirement
 evidence refs. It also remains compile-time blocked by
 `DIRECT_LAUNCH_REMOVAL_VERSION` until the cohesive retirement change removes
 those paths and enables its absence guards; protected-live evidence alone
-cannot authorize removal. The API publishes desired/deployed/effective phase,
+cannot authorize removal. The single deployment-owned retirement cutoff
+`MOONMIND_CODEX_DIRECT_RETIRED_AT` (MoonLadderStudios/MoonMind#3931,
+`moonmind.omnigent.codex_cutover_drain`) closes the direct lane to new work
+once its instant passes, regardless of phase; unset preserves the usable path
+until its qualified replacement is available. The bounded drain procedure in
+the same module inventories schedules, queued starts, open parent/child
+workflows, retries, pending interventions, serialized launch inputs, resource
+leases, and publication/cleanup work with clean/active/unknown/blocked
+reporting, and records the explicit retained-history disposition per branch
+with its consumer and removal condition. Operators inject live Temporal
+visibility, schedule, lease, publication, and cleanup queries through
+`run_live_codex_drain`/`operator_drain_sources`, which normalize
+heterogeneous rows to the same four states (raising sources become
+`unknown`); the report itself never terminates workflows, erases evidence,
+or deletes credential volumes. The API publishes desired/deployed/effective phase,
 policy/profile versions, generation/expiry, image digests, architectures,
 thresholds, evidence refs, blockers, and direct-launch status in
 `/api/omnigent/codex-catalog-readiness`. Create/edit/rerun defaults

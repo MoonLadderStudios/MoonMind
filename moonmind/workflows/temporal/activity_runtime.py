@@ -1108,6 +1108,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "github_issue_plan_legacy_repair",
     ),
+    "codex.direct_drain_report": (
+        "integrations",
+        "codex_direct_drain_report",
+    ),
     "pr_resolver.resolve_selector": (
         "integrations",
         "pr_resolver_resolve_selector",
@@ -5433,6 +5437,35 @@ class TemporalIntegrationActivities:
         )
         return {
             "status": "succeeded" if result.get("allowed") else "failed",
+            **result,
+        }
+
+    async def codex_direct_drain_report(self, payload, /, **kwargs):
+        """Run the bounded direct-Codex drain from the operator activity boundary.
+
+        Production Temporal entrypoint for
+        ``codex_direct_drain_report`` (MoonLadderStudios/MoonMind#3931 R3/R6):
+        callers pass ready per-category row lists under ``queries`` and
+        receive the four-state drain payload with fail-closed missing
+        categories. Pure evidence only: never terminates workflows, erases
+        evidence, or deletes credential volumes.
+        """
+        from moonmind.workflows.temporal.activities.github_issue_legacy_cutover_activities import (
+            codex_direct_drain_report as run_drain_report,
+        )
+
+        if not isinstance(payload, Mapping):
+            raise TemporalActivityRuntimeError(
+                "codex.direct_drain_report requires an object"
+            )
+        config = payload.get("drain")
+        if not isinstance(config, Mapping):
+            config = payload
+        raw_queries = config.get("queries")
+        queries = dict(raw_queries) if isinstance(raw_queries, Mapping) else None
+        result = run_drain_report(queries=queries, store=None)
+        return {
+            "status": "succeeded" if result.get("ok") else "failed",
             **result,
         }
 

@@ -21,6 +21,10 @@ and mixed-deployment qualification
 (:func:`evaluate_legacy_cutover_deployment`) are pure wrappers over
 ``drainage_plan_for_pending`` and ``evaluate_mixed_deployment`` so every
 cutover entrypoint is reachable through this existing tooling boundary.
+The direct-Codex drain (:func:`codex_direct_drain_report`) is the production
+operator caller for the bounded drain procedure: it probes a live store for
+conventional drain readers and merges explicit live queries, then reports the
+four-state drain payload with fail-closed missing categories.
 """
 
 from __future__ import annotations
@@ -235,9 +239,58 @@ def evaluate_legacy_cutover_deployment(devices: Sequence[Mapping[str, Any]] | No
     return cutover.evaluate_mixed_deployment(devices)
 
 
+def codex_direct_drain_report(
+    queries: Mapping[str, Any] | None = None,
+    store: Any | None = None,
+) -> dict[str, Any]:
+    """Run the bounded direct-Codex drain from the operator activity boundary.
+
+    MoonLadderStudios/MoonMind#3931 R3/R6: this is the production caller the
+    verifier requires for ``run_codex_drain_procedure``. Live Temporal
+    visibility, schedule, lease, publication, and cleanup readers are resolved
+    in two layers without adding I/O here:
+
+    * a live ``store``/client is probed for the conventional zero-argument
+      readers in :mod:`moonmind.omnigent.codex_cutover_drain`
+      (``operator_drain_sources``);
+    * explicit ``queries`` (zero-argument callables or ready row lists) are
+      normalized through ``live_drain_sources`` and override probed readers
+      per category, so async live clients are resolved by the operator into
+      ready lists before calling.
+
+    Categories with no reader stay missing so the report fails closed; raising
+    readers become ``unknown`` downstream. Pure evidence only: never
+    terminates workflows, erases evidence, or deletes credential volumes.
+    """
+
+    from moonmind.omnigent.codex_cutover_drain import (
+        DRAIN_INVENTORY_CATEGORIES,
+        live_drain_sources,
+        operator_drain_sources,
+        run_codex_drain_procedure,
+    )
+
+    sources: dict[str, Any] = {}
+    if store is not None:
+        sources.update(operator_drain_sources(store))
+    if queries:
+        sources.update(live_drain_sources(dict(queries)))
+    report = run_codex_drain_procedure(sources)
+    bound = sorted(sources)
+    missing = [name for name in DRAIN_INVENTORY_CATEGORIES if name not in sources]
+    return {
+        "ok": True,
+        "reasonCode": "codex_direct_drain_reported",
+        "report": report,
+        "categoriesBound": bound,
+        "categoriesMissing": missing,
+    }
+
+
 __all__ = [
     "assess_legacy_cutover_issue",
     "plan_legacy_cutover_repair",
+    "codex_direct_drain_report",
     "legacy_cutover_drainage_plan",
     "evaluate_legacy_cutover_deployment",
 ]
