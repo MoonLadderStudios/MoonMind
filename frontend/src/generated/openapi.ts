@@ -703,6 +703,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/provider-profiles/{profile_id}/credential-maintenance-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Credential Maintenance Status
+         * @description Report one profile's credential-maintenance queue position.
+         *
+         *     Best-effort polling surface for the enrollment drawer while it shows
+         *     "validating token": waiter identities other than the caller's
+         *     deterministic owner are never projected, and manager unavailability
+         *     degrades to ``known: False`` instead of failing the poll.
+         */
+        get: operations["credential_maintenance_status_api_v1_provider_profiles__profile_id__credential_maintenance_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/provider-profiles/{profile_id}/credentials/api-key": {
         parameters: {
             query?: never;
@@ -15736,6 +15761,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderProfileTierPreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    credential_maintenance_status_api_v1_provider_profiles__profile_id__credential_maintenance_status_get: {
+        parameters: {
+            query?: {
+                idempotency_key?: string | null;
+            };
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
