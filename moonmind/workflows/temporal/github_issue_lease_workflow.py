@@ -9,15 +9,33 @@ from temporalio.exceptions import ApplicationError, is_cancelled_exception
 RENEW_SECONDS = 300
 STOP_MARGIN_SECONDS = 60
 
+#: Typed backoff when the run never held runnable capacity. This is a
+#: deployment fault (no slot was ever granted), not evidence about the issue:
+#: recovery records it as ``runtime_unavailable`` with a portable cooldown
+#: instead of spending the issue's retry allowance the way an expired active
+#: attempt does. The code travels in the failure message so the recovery sweep
+#: can match it from the controlling history without a new taxonomy.
+CAPACITY_BLOCKED_CODE = "ISSUE_CLAIM_CAPACITY_BLOCKED"
+
+
+def _capacity_blocked_error() -> ApplicationError:
+    return ApplicationError(
+        f"{CAPACITY_BLOCKED_CODE}: queued behind unavailable local capacity; "
+        "releasing the issue reservation and backing off",
+        type="CapacityBlocked",
+        non_retryable=True,
+    )
+
 
 async def execute_with_issue_lease(*, lease, execute, renew, should_renew=None):
     """All runtimes use their existing cancellation and preservation owner.
 
     ``should_renew`` reports whether this deployment currently holds the local
     capacity the reservation was acquired for. Waiting for unavailable capacity
-    must not keep an issue reserved: the lease simply lapses, the issue returns
-    to assessment for anyone, and this deployment backs off instead of holding
-    the backlog behind a queue it cannot drain.
+    must not keep an issue reserved: the run backs off promptly with a typed
+    capacity-blocked error, the issue returns to assessment for anyone, and
+    this deployment backs off instead of holding the backlog behind a queue
+    it cannot drain.
     """
     expires = None
 
@@ -58,19 +76,22 @@ async def execute_with_issue_lease(*, lease, execute, renew, should_renew=None):
         raise ApplicationError("GitHub issue claim lease unavailable before launch")
 
     async def maintain():
+        # Fast backoff: a run queued behind unavailable capacity never held
+        # runnable capacity, so release promptly instead of idling to expiry.
+        # The check rides the existing renew cadence (no new timers): at most
+        # one renew interval elapses before the reservation is released.
+        if should_renew is not None and not should_renew():
+            raise _capacity_blocked_error()
         delay = RENEW_SECONDS
         while True:
+            if should_renew is not None and not should_renew():
+                raise _capacity_blocked_error()
             remaining = (expires - workflow.now()).total_seconds() - STOP_MARGIN_SECONDS
             if remaining <= 0:
                 raise ApplicationError(
                     "GitHub issue claim lease expired", non_retryable=True
                 )
             await workflow.sleep(min(delay, remaining))
-            if should_renew is not None and not should_renew():
-                # Queued behind unavailable local capacity: stop renewing and
-                # let the reservation lapse on its own deadline.
-                delay = min(30, remaining)
-                continue
             delay = RENEW_SECONDS if await refresh() else min(30, remaining)
 
     execution = asyncio.create_task(execute())

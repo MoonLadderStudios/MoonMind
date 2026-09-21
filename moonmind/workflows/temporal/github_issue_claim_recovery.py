@@ -265,8 +265,19 @@ def runtime_provisioning_failure(detail: Any) -> bool:
     These are MoonMind's own enumerated codes, not vendor log text: the
     taxonomy exists precisely so decisions key on a bounded code instead of
     provider prose. A test asserts this tuple stays a subset of the enum.
+
+    A capacity-blocked issue-claim backoff (no provider slot was ever
+    granted, so no agent could have started) is the same class of deployment
+    fault: it says nothing about the issue and must not spend the retry
+    allowance either.
     """
+    from moonmind.workflows.temporal.github_issue_lease_workflow import (
+        CAPACITY_BLOCKED_CODE,
+    )
+
     text = str(detail or "")
+    if CAPACITY_BLOCKED_CODE in text:
+        return True
     return any(code in text for code in RUNTIME_PROVISIONING_FAILURES)
 
 
