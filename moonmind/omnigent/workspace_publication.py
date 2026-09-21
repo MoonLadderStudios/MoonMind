@@ -17,6 +17,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from moonmind.auth.github_credentials import resolve_github_credential
 from moonmind.config.settings import settings
+from moonmind.omnigent.git_identity import resolve_git_identity
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.workspace_intent import (
     authored_repository_source,
@@ -40,8 +41,6 @@ from moonmind.workflows.temporal.runtime.workspace_locators import (
     resolve_sandbox_workspace_locator,
 )
 
-_DEFAULT_PUBLISH_GIT_USER_NAME = "MoonMind Worker"
-_DEFAULT_PUBLISH_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
 _LOGGER = logging.getLogger(__name__)
 _REMOTE_READ_ATTEMPTS = 4
 # Git collapses libcurl errors into exit 128 and exposes no typed transport
@@ -405,14 +404,7 @@ class OmnigentWorkspacePublicationService:
         safe_workspace = workspace.resolve(strict=True)
         token = str(github_token or "").strip()
         command_env = build_github_token_git_environment(token, base_env=os.environ)
-        git_user_name = (
-            str(settings.workflow.git_user_name or "").strip()
-            or _DEFAULT_PUBLISH_GIT_USER_NAME
-        )
-        git_user_email = (
-            str(settings.workflow.git_user_email or "").strip()
-            or _DEFAULT_PUBLISH_GIT_USER_EMAIL
-        )
+        git_user_name, git_user_email = resolve_git_identity()
         command_env.update(
             {
                 "GIT_AUTHOR_NAME": git_user_name,

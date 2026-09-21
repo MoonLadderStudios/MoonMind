@@ -61,13 +61,17 @@ def test_daemon_git_clone_argv_pins_target():
         source="https://github.com/org/repo.git",
         branch="feature/branch",
         image="alpine/git:v2.43.0",
+        git_user_name="MoonMind Worker",
+        git_user_email="moonmind-worker@users.noreply.github.com",
     )
     assert argv[:4] == ["docker", "run", "--rm", "-i"]
     assert "agent_workspaces:/work" in argv
-    assert argv[-3:] == [
+    assert argv[-5:] == [
         "feature/branch",
         "https://github.com/org/repo.git",
         "/work/ws-1/repo",
+        "MoonMind Worker",
+        "moonmind-worker@users.noreply.github.com",
     ]
     assert "alpine/git:v2.43.0" in argv
     joined = " ".join(argv)
@@ -75,6 +79,50 @@ def test_daemon_git_clone_argv_pins_target():
     assert 'git check-ref-format --branch "$1"' in joined
     assert "--entrypoint" in argv
     assert all("x-access-token:tok" not in part for part in argv)
+
+
+def test_daemon_git_clone_argv_configures_repo_local_commit_identity():
+    """The clone leaves behind a repository able to author a commit.
+
+    The shared host image carries a credential helper and no ``[user]``
+    section, so a repository-local identity written at clone time is what
+    lets a commit-capable skill commit instead of stopping as blocked.
+    """
+
+    argv = build_daemon_git_clone_argv(
+        volume="agent_workspaces",
+        target_in_volume="ws-1/repo",
+        source="https://github.com/org/repo.git",
+        branch="feature/branch",
+        image="alpine/git:v2.43.0",
+        git_user_name="MoonMind Worker",
+        git_user_email="moonmind-worker@users.noreply.github.com",
+    )
+
+    script = argv[argv.index("-ceu") + 1]
+    assert 'git -C "$3" config --local user.name "$4"' in script
+    assert 'git -C "$3" config --local user.email "$5"' in script
+    # Identity is data, never interpolated into the executed script.
+    assert "MoonMind Worker" not in script
+
+
+@pytest.mark.parametrize(
+    ("name", "email"),
+    [("", "worker@example.test"), ("MoonMind Worker", "   ")],
+)
+def test_daemon_git_clone_argv_rejects_incomplete_commit_identity(
+    name: str, email: str
+):
+    with pytest.raises(HarnessPlatformError, match="commit identity"):
+        build_daemon_git_clone_argv(
+            volume="agent_workspaces",
+            target_in_volume="ws-1/repo",
+            source="https://github.com/org/repo.git",
+            branch="feature/branch",
+            image="alpine/git:v2.43.0",
+            git_user_name=name,
+            git_user_email=email,
+        )
 
 
 @pytest.mark.parametrize(
@@ -88,9 +136,11 @@ def test_daemon_git_clone_argv_preserves_git_valid_branch_names(branch: str):
         source="https://github.com/org/repo.git",
         branch=branch,
         image="alpine/git:v2.43.0",
+        git_user_name="MoonMind Worker",
+        git_user_email="moonmind-worker@users.noreply.github.com",
     )
 
-    assert argv[-3] == branch
+    assert argv[-5] == branch
 
 
 def test_daemon_git_clone_argv_rejects_credentialed_source():
@@ -101,6 +151,8 @@ def test_daemon_git_clone_argv_rejects_credentialed_source():
             source="https://x-access-token:fixture@github.com/org/repo.git",
             branch="feature/branch",
             image="alpine/git:v2.43.0",
+            git_user_name="MoonMind Worker",
+            git_user_email="moonmind-worker@users.noreply.github.com",
         )
 
 
@@ -142,7 +194,7 @@ async def test_materializer_clones_missing_sandbox_workspace_via_daemon(
         if input_bytes is None:
             return 0, "", ""
         # Simulate git creating the checkout inside the volume.
-        target = argv[-1]
+        target = argv[-3]
         assert target.startswith("/work/")
         import pathlib
 
@@ -209,6 +261,83 @@ async def test_materializer_clones_missing_sandbox_workspace_via_daemon(
         expected_workflow_id="workflow-1",
         expected_step_execution_id="step-1",
     ) == tmp_path / "temporal_sandbox" / workspace_id / "repo"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        (
+            ("Deployment Operator", "operator@example.test"),
+            ("Deployment Operator", "operator@example.test"),
+        ),
+        (
+            (None, None),
+            ("MoonMind Worker", "moonmind-worker@users.noreply.github.com"),
+        ),
+    ],
+)
+async def test_materializer_provisions_commit_identity_for_the_clone(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured: tuple[str | None, str | None],
+    expected: tuple[str, str],
+):
+    """A materialized repository can author a commit without operator setup.
+
+    Agent-owned publication skills commit inside the host, where no global
+    identity exists. An undeclared identity resolves to the documented
+    default rather than blocking the run.
+    """
+
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(settings.workflow, "git_user_name", configured[0])
+    monkeypatch.setattr(settings.workflow, "git_user_email", configured[1])
+
+    captured: list[list[str]] = []
+
+    async def runner(argv, input_bytes=None):
+        captured.append(argv)
+        if input_bytes is None:
+            return 0, "", ""
+        import pathlib
+
+        local = tmp_path / pathlib.Path(argv[-3].removeprefix("/work/"))
+        local.mkdir(parents=True, exist_ok=True)
+        return 0, "", ""
+
+    async def fake_token(*args, **kwargs):
+        return "tok" + "e" * 10
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "resolve_github_token_for_launch",
+        fake_token,
+    )
+
+    materializer = OmnigentWorkspaceMaterializer(
+        command_runner=runner, workspace_root=tmp_path
+    )
+    await materializer.materialize(
+        _request(
+            {
+                "workspaceLocator": {
+                    "kind": "sandbox",
+                    "workspaceId": _workspace_id(),
+                    "relativePath": "repo",
+                },
+                "repository": "MoonLadderStudios/MoonMind",
+                "branch": "codex/automated-verification-handoffs",
+            }
+        )
+    )
+
+    clone_argv = captured[0]
+    assert clone_argv[-2:] == list(expected)
+    script = clone_argv[clone_argv.index("-ceu") + 1]
+    assert 'config --local user.name "$4"' in script
+    assert 'config --local user.email "$5"' in script
 
 
 @pytest.mark.asyncio
