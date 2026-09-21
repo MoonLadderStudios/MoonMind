@@ -1204,6 +1204,93 @@ def _submit_jobs(
     ]
 
 
+def _submit_issue_jobs_gated(
+    submissions: list[ChildSubmission],
+    *,
+    max_concurrency: int,
+    polls: int,
+    interval: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[SkippedTarget]]:
+    """Queue issue children behind the shared admitted-concurrency gate.
+
+    This is the same gate the repository batch uses (``_wait_for_capacity`` +
+    ``gate_on_capacity``): a bounded wait refreshing owned children in place,
+    then a truthful ``capacity_exhausted`` block instead of submitting past the
+    cap. Admission is verified per child (never count unverified queueing), and
+    ambiguous admissions retain a capacity slot without a refreshable
+    workflowId so a response loss cannot leave the whole batch running
+    concurrently.
+    """
+
+    moonmind_url = _text(os.getenv("MOONMIND_URL"))
+    if not moonmind_url:
+        message = (
+            "MOONMIND_URL is not set; batch-workflows requires the MoonMind Temporal "
+            "execution API and cannot submit via the removed legacy DB queue."
+        )
+        return [], [
+            {"provider": submission.provider, "ref": submission.ref, "error": message}
+            for submission in submissions
+        ], []
+    cap = max(1, int(max_concurrency))
+    created: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    blocked: list[SkippedTarget] = []
+    owned: dict[str, str] = {}
+    for submission in submissions:
+        _wait_for_capacity(
+            moonmind_url=moonmind_url,
+            owned=owned,
+            max_concurrency=cap,
+            polls=int(polls),
+            interval=float(interval),
+        )
+        active = sum(
+            1
+            for status in owned.values()
+            if status in {"queued", "running", "unknown", "waiting"}
+        )
+        hold = _BATCH_TARGETS.gate_on_capacity(
+            running_owned=active,
+            max_concurrency=cap,
+            target_ref=submission.ref,
+        )
+        if hold is not None:
+            blocked.append(
+                SkippedTarget(ref=submission.ref, reason="capacity_exhausted")
+            )
+            continue
+        workflow_id, error = _submit_repository_child(
+            moonmind_url=moonmind_url, envelope=submission.queue_request
+        )
+        idempotency_key = str(
+            submission.queue_request.get("payload", {}).get("idempotencyKey") or ""
+        )
+        if workflow_id is None:
+            if error and error.startswith("submission_unconfirmed:"):
+                owned[f"unconfirmed:{submission.ref}:{len(owned)}"] = "unknown"
+            errors.append(
+                {
+                    "provider": submission.provider,
+                    "ref": submission.ref,
+                    "error": error or "submission failed",
+                }
+            )
+            continue
+        owned[workflow_id] = "queued"
+        created.append(
+            {
+                "provider": submission.provider,
+                "ref": submission.ref,
+                "workflowId": workflow_id,
+                "executionId": workflow_id,
+                "targetRef": submission.ref,
+                "idempotencyKey": idempotency_key,
+            }
+        )
+    return created, errors, blocked
+
+
 def _write_artifacts(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -1431,6 +1518,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Cancel owned queued/running children recorded in the prior "
             "aggregate instead of dispatching."
+        ),
+    )
+    parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=3,
+        help=(
+            "Admitted concurrency cap for queued children (default 3, shared "
+            "with the repository-batch gate). Excess targets wait for a "
+            "bounded capacity gate, then block truthfully instead of "
+            "thundering-herding one provider slot."
         ),
     )
     parser.add_argument(
@@ -2257,7 +2355,14 @@ def main(argv: list[str] | None = None) -> int:
         inherit_runtime_from_caller=inherit_from_caller,
         default_repository=batch_repository,
     )
-        created, errors = _submit_jobs(submissions)
+        skipped = list(skipped)
+        created, errors, capacity_blocked = _submit_issue_jobs_gated(
+        submissions,
+        max_concurrency=int(args.max_concurrency),
+        polls=int(args.capacity_polls),
+        interval=float(args.capacity_poll_interval),
+    )
+        skipped.extend(capacity_blocked)
     except Exception as exc:  # evidence must survive every reachable preflight failure
         failure_code = (
             "BATCH_FANOUT_INPUT_INVALID"
