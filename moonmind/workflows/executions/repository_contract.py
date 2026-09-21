@@ -196,13 +196,23 @@ class GitHubAppCredential(BaseModel):
 
     PATs use typed ``SecretRef`` (``SecretRefCredential``); App configuration
     is a distinct discriminated variant carrying only references (definition
-    and installation identity), never raw token material.
+    and installation identity), never raw token material. ``keyRef`` names
+    the managed secret holding the App signing key; ``account`` optionally
+    pins the expected installation account owner. ``permittedRepositories``
+    records the enrollment-time repository restriction inside the persisted
+    credential metadata so issuance scope survives a database reload (the
+    connection-level ``allowedRepositoryIds`` is not a persisted column).
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
     source: Literal["github_app"]
     app_ref: str = Field(alias="appRef", min_length=1)
     installation_ref: str = Field(alias="installationRef", min_length=1)
+    key_ref: str | None = Field(default=None, alias="keyRef")
+    account: str | None = Field(default=None)
+    permitted_repositories: tuple[str, ...] = Field(
+        default=(), alias="permittedRepositories"
+    )
 
 
 RepositoryCredential = Annotated[
