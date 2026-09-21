@@ -1,1 +1,107 @@
-{"description": "Retained payload examples for MoonLadderStudios/MoonMind#4351 R3 (not Temporal event histories). Each shape carries a legacy human-owner string plus scheduling/execution identity fields that payload decoders must never rewrite. Decoders run without consulting a present-day user table; orchestration is unchanged so no Replayer history is required.", "shapes": [{"identity": {"cron": "0 6 * * *", "definitionId": "def-4351", "schedule_id": "mm-schedule:def-4351", "timezone": "UTC"}, "name": "parent_workflow", "payload": {"cron": "0 6 * * *", "definitionId": "def-4351", "initial_parameters": {"system": {"recurrence": {"definitionId": "def-4351"}}}, "mm_owner_id": "11111111-1111-4111-8111-111111111111", "mm_owner_type": "user", "owner_user_id": "11111111-1111-4111-8111-111111111111", "schedule_id": "mm-schedule:def-4351", "timezone": "UTC", "workflow_type": "MoonMind.UserWorkflow"}}, {"identity": {"parent_workflow_id": "mm:4351:parent"}, "name": "child_workflow", "payload": {"mm_owner_id": "11111111-1111-4111-8111-111111111111", "mm_owner_type": "user", "parent_workflow_id": "mm:4351:parent", "workflow_type": "MoonMind.UserWorkflow"}}, {"identity": {}, "name": "activity_payload", "payload": {"activity_type": "RenderStep", "mm_owner_id": "11111111-1111-4111-8111-111111111111", "mm_owner_type": "user", "owner_user_id": "11111111-1111-4111-8111-111111111111"}}, {"identity": {}, "name": "update_payload", "payload": {"mm_owner_id": "11111111-1111-4111-8111-111111111111", "mm_owner_type": "user", "owner_user_id": "11111111-1111-4111-8111-111111111111", "update_name": "approve-step"}}, {"identity": {}, "name": "signal_payload", "payload": {"mm_owner_id": "11111111-1111-4111-8111-111111111111", "mm_owner_type": "user", "owner_user_id": "11111111-1111-4111-8111-111111111111", "signal_name": "resume-signal"}}, {"identity": {"continued_from_run_id": "run-1"}, "name": "continue_as_new", "payload": {"continued_from_run_id": "run-1", "mm_owner_id": "11111111-1111-4111-8111-111111111111", "mm_owner_type": "user"}}, {"identity": {"close_status": "cancelled"}, "name": "cancelled", "payload": {"close_status": "cancelled", "mm_owner_id": "11111111-1111-4111-8111-111111111111", "mm_owner_type": "user"}}, {"identity": {"recovery_kind": "retry"}, "name": "recovery", "payload": {"mm_owner_id": "11111111-1111-4111-8111-111111111111", "mm_owner_type": "user", "recovery_kind": "retry"}}], "sourceRef": "MoonLadderStudios/MoonMind#4351"}
+{
+  "description": "Decoder payload examples for MoonLadderStudios/MoonMind#4351 R3 (not Temporal event histories; no events key). Each shape carries a legacy human-owner string plus scheduling/execution identity fields that the real payload decoders (TemporalExecutionService.decode_previous_execution_owner, RecurringWorkflowsService.decode_recurring_workflow_input) must never rewrite. Decoders run without consulting a present-day user table. Workflow-visible orchestration is unchanged, so no Replayer history is required; when orchestration changes, use the existing temporal-boundary/Replayer fixtures instead of extending this payload matrix.",
+  "shapes": [
+    {
+      "identity": {
+        "cron": "0 6 * * *",
+        "definitionId": "def-4351",
+        "schedule_id": "mm-schedule:def-4351",
+        "timezone": "UTC"
+      },
+      "name": "parent_workflow",
+      "payload": {
+        "cron": "0 6 * * *",
+        "definitionId": "def-4351",
+        "initial_parameters": {
+          "system": {
+            "recurrence": {
+              "definitionId": "def-4351"
+            }
+          }
+        },
+        "mm_owner_id": "11111111-1111-4111-8111-111111111111",
+        "mm_owner_type": "user",
+        "owner_user_id": "11111111-1111-4111-8111-111111111111",
+        "schedule_id": "mm-schedule:def-4351",
+        "timezone": "UTC",
+        "workflow_type": "MoonMind.UserWorkflow"
+      }
+    },
+    {
+      "identity": {
+        "parent_workflow_id": "mm:4351:parent"
+      },
+      "name": "child_workflow",
+      "payload": {
+        "mm_owner_id": "11111111-1111-4111-8111-111111111111",
+        "mm_owner_type": "user",
+        "parent_workflow_id": "mm:4351:parent",
+        "workflow_type": "MoonMind.UserWorkflow"
+      }
+    },
+    {
+      "identity": {},
+      "name": "activity_payload",
+      "payload": {
+        "activity_type": "RenderStep",
+        "mm_owner_id": "11111111-1111-4111-8111-111111111111",
+        "mm_owner_type": "user",
+        "owner_user_id": "11111111-1111-4111-8111-111111111111"
+      }
+    },
+    {
+      "identity": {},
+      "name": "update_payload",
+      "payload": {
+        "mm_owner_id": "11111111-1111-4111-8111-111111111111",
+        "mm_owner_type": "user",
+        "owner_user_id": "11111111-1111-4111-8111-111111111111",
+        "update_name": "approve-step"
+      }
+    },
+    {
+      "identity": {},
+      "name": "signal_payload",
+      "payload": {
+        "mm_owner_id": "11111111-1111-4111-8111-111111111111",
+        "mm_owner_type": "user",
+        "owner_user_id": "11111111-1111-4111-8111-111111111111",
+        "signal_name": "resume-signal"
+      }
+    },
+    {
+      "identity": {
+        "continued_from_run_id": "run-1"
+      },
+      "name": "continue_as_new",
+      "payload": {
+        "continued_from_run_id": "run-1",
+        "mm_owner_id": "11111111-1111-4111-8111-111111111111",
+        "mm_owner_type": "user"
+      }
+    },
+    {
+      "identity": {
+        "close_status": "cancelled"
+      },
+      "name": "cancelled",
+      "payload": {
+        "close_status": "cancelled",
+        "mm_owner_id": "11111111-1111-4111-8111-111111111111",
+        "mm_owner_type": "user"
+      }
+    },
+    {
+      "identity": {
+        "recovery_kind": "retry"
+      },
+      "name": "recovery",
+      "payload": {
+        "mm_owner_id": "11111111-1111-4111-8111-111111111111",
+        "mm_owner_type": "user",
+        "recovery_kind": "retry"
+      }
+    }
+  ],
+  "sourceRef": "MoonLadderStudios/MoonMind#4351"
+}

@@ -435,16 +435,16 @@ class RecurringWorkflowsService:
     async def list_definitions(
         self,
         *,
-        scope: str | None = None,
-        user_id: UUID | None = None,
         include_disabled: bool = True,
         limit: int = 200,
         offset: int = 0,
     ) -> list[RecurringWorkflowDefinition]:
-        # Single-user (#4351): schedules are instance resources. ``scope``
-        # and ``user_id`` remain accepted for caller compatibility but are
-        # never visibility predicates; legacy scope/``owner_user_id`` values
-        # are provenance and stay readable. Every scope is listed together.
+        # Single-user (#4351): schedules are instance resources. There is no
+        # scope/user visibility predicate; legacy scope/``owner_user_id``
+        # values are stored provenance and stay readable. Every scope is
+        # listed together. Obsolete ``scope``/``user_id`` inputs were removed
+        # with their callers; residual HTTP ``scope`` query compat lives only
+        # in the router as a deprecated ignored value (#4354 owns its removal).
         stmt: Select[tuple[RecurringWorkflowDefinition]] = select(RecurringWorkflowDefinition)
         if not include_disabled:
             stmt = stmt.where(RecurringWorkflowDefinition.enabled.is_(True))
@@ -458,12 +458,10 @@ class RecurringWorkflowsService:
     async def count_definitions(
         self,
         *,
-        scope: str | None = None,
-        user_id: UUID | None = None,
         include_disabled: bool = True,
     ) -> int:
-        # Single-user (#4351): instance visibility; ``scope``/``user_id``
-        # ignored. Every scope is counted together.
+        # Single-user (#4351): instance visibility. Every scope is counted
+        # together; obsolete scope/user inputs were removed with their callers.
         stmt = select(func.count()).select_from(RecurringWorkflowDefinition)
         if not include_disabled:
             stmt = stmt.where(RecurringWorkflowDefinition.enabled.is_(True))
@@ -471,6 +469,10 @@ class RecurringWorkflowsService:
         return int(result.scalar_one() or 0)
 
     async def get_definition(self, definition_id: UUID) -> RecurringWorkflowDefinition:
+        # Single-user (#4351): the admitted operator sees every schedule.
+        # Admission owns access; legacy owner/scope values are provenance.
+        # Execution-state, source-authority, and approval validation still
+        # apply at their owning boundaries.
         stmt: Select[tuple[RecurringWorkflowDefinition]] = (
             select(RecurringWorkflowDefinition)
             .where(RecurringWorkflowDefinition.id == definition_id)
@@ -483,20 +485,6 @@ class RecurringWorkflowsService:
                 f"Recurring workflow definition '{definition_id}' was not found"
             )
         return definition
-
-    async def require_authorized_definition(
-        self,
-        *,
-        definition_id: UUID,
-        user_id: UUID | None = None,
-        can_manage_global: bool = True,
-    ) -> RecurringWorkflowDefinition:
-        # Single-user (#4351): the admitted operator sees every schedule.
-        # ``user_id``/``can_manage_global`` are accepted for compatibility but
-        # never gate access; legacy owner/scope values are provenance.
-        # Execution-state, source-authority, and approval validation still
-        # apply at their owning boundaries.
-        return await self.get_definition(definition_id)
 
     def _workflow_bundle_for_target(
         self,

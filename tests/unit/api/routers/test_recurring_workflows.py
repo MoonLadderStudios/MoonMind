@@ -128,7 +128,8 @@ def test_recurring_workflow_version_conflict_maps_to_409() -> None:
 @pytest.mark.asyncio
 async def test_list_recurring_workflows_global_requires_operator() -> None:
     # Single-user (#4351): global scope is instance-visible; no human-owner
-    # gate. The shared admission boundary owns access.
+    # gate. The shared admission boundary owns access. The deprecated scope
+    # value is accepted but never partitions.
     service = AsyncMock()
     service.list_definitions.return_value = []
     service.count_definitions.return_value = 0
@@ -144,6 +145,7 @@ async def test_list_recurring_workflows_global_requires_operator() -> None:
 
     assert response.count == 0
     service.list_definitions.assert_awaited()
+    service.count_definitions.assert_awaited()
 
 @pytest.mark.asyncio
 async def test_list_recurring_workflows_uses_runtime_schedule_summary() -> None:
@@ -184,14 +186,10 @@ async def test_list_recurring_workflows_uses_runtime_schedule_summary() -> None:
     assert response.active_count == 1
     service.runtime_summaries_for_definitions.assert_awaited_once_with([definition])
     service.list_definitions.assert_any_await(
-        scope="personal",
-        user_id=definition.owner_user_id,
         limit=50,
         offset=0,
     )
     service.list_definitions.assert_any_await(
-        scope="personal",
-        user_id=definition.owner_user_id,
         limit=500,
         offset=0,
     )
@@ -322,7 +320,7 @@ async def test_get_recurring_workflow_serializes_action_permissions() -> None:
     service = AsyncMock()
     user = SimpleNamespace(id=uuid4(), is_superuser=False)
     definition = _definition(owner_user_id=user.id)
-    service.require_authorized_definition.return_value = definition
+    service.get_definition.return_value = definition
     service.runtime_summary_for_definition.return_value = None
 
     response = await recurring_router.get_recurring_workflow(
@@ -349,11 +347,9 @@ async def test_global_recurring_workflow_action_permissions_require_operator() -
 
     operator_permissions = recurring_router._action_permissions_for_definition(
         definition,
-        user=operator,
     )
     viewer_permissions = recurring_router._action_permissions_for_definition(
         definition,
-        user=viewer,
     )
 
     assert operator_permissions.can_edit is True
@@ -371,7 +367,7 @@ async def test_run_recurring_workflow_now_returns_run_row() -> None:
         definition_id=definition.id,
         temporal_workflow_id="workflow-from-schedule",
     )
-    service.require_authorized_definition.return_value = definition
+    service.get_definition.return_value = definition
     service.create_manual_run.return_value = run_row
     user = SimpleNamespace(id=uuid4(), is_superuser=False)
 
@@ -390,7 +386,7 @@ async def test_run_recurring_workflow_now_returns_run_row() -> None:
 async def test_delete_recurring_workflow_deletes_authorized_definition() -> None:
     service = AsyncMock()
     definition = _definition()
-    service.require_authorized_definition.return_value = definition
+    service.get_definition.return_value = definition
     user = SimpleNamespace(id=definition.owner_user_id, is_superuser=False)
 
     response = await recurring_router.delete_recurring_workflow(
@@ -400,11 +396,7 @@ async def test_delete_recurring_workflow_deletes_authorized_definition() -> None
     )
 
     assert response.status_code == 204
-    service.require_authorized_definition.assert_awaited_once_with(
-        definition_id=definition.id,
-        user_id=user.id,
-        can_manage_global=True,
-    )
+    service.get_definition.assert_awaited_once_with(definition.id)
     service.delete_definition.assert_awaited_once_with(definition)
 
 @pytest.mark.asyncio
@@ -416,7 +408,7 @@ async def test_list_recurring_workflow_runs_hydrates_actual_start_time() -> None
         definition_id=definition.id,
         temporal_workflow_id="workflow-from-schedule",
     )
-    service.require_authorized_definition.return_value = definition
+    service.get_definition.return_value = definition
     service.list_runs.return_value = [run_row]
     service.started_at_by_workflow_id.return_value = {
         "workflow-from-schedule": started_at

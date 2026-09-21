@@ -116,18 +116,19 @@ async def test_recurring_create_without_owner_and_instance_visibility(tmp_path: 
             assert str(legacy.owner_user_id) == str(legacy_owner)
 
             other_user = uuid4()
-            personal = await service.list_definitions(scope="personal", user_id=other_user)
+            _ = other_user
+            # Instance listing: no scope/user predicate; every scope together.
+            personal = await service.list_definitions()
             ids = {row.id for row in personal}
             assert created.id in ids
             assert legacy.id in ids
 
-            count = await service.count_definitions(scope="personal", user_id=None)
+            count = await service.count_definitions()
             assert count >= 2
 
-            # Control paths authorize without owner/is_superuser.
-            fetched = await service.require_authorized_definition(
-                definition_id=legacy.id, user_id=None, can_manage_global=False
-            )
+            # Control paths read the instance record directly (admission owns
+            # access; no owner/is_superuser gate).
+            fetched = await service.get_definition(legacy.id)
             assert fetched.id == legacy.id
 
 
@@ -158,15 +159,11 @@ def test_recurring_action_permissions_are_instance_wide():
     definition = SimpleNamespace(
         scope_type=RecurringWorkflowScopeType.PERSONAL, owner_user_id=uuid4()
     )
-    permissions = recurring_router._action_permissions_for_definition(
-        definition, user=SimpleNamespace(id=uuid4(), is_superuser=False)
-    )
+    permissions = recurring_router._action_permissions_for_definition(definition)
     assert permissions.can_edit and permissions.can_run_now and permissions.can_delete
     assert permissions.disabled_reasons == {}
-    recurring_router._require_operator_for_global_scope(
-        scope=RecurringWorkflowScopeType.GLOBAL,
-        user=SimpleNamespace(id=uuid4(), is_superuser=False),
-    )
+    # No scope gate remains: the deprecated HTTP scope value is ignored and
+    # the authorization facade was removed with its callers.
 
 
 def test_policy_instance_visibility_preserves_versions_and_permissions():
@@ -336,9 +333,7 @@ async def test_eligible_conversion_preserves_ids_links_and_provenance(tmp_path: 
             await session.commit()
 
             # Eligible conversion: operator visibility without rewriting IDs.
-            fetched = await service.require_authorized_definition(
-                definition_id=definition_id, user_id=None, can_manage_global=False
-            )
+            fetched = await service.get_definition(definition_id)
             assert fetched.id == definition_id
             assert fetched.temporal_schedule_id == schedule_id
             assert str(fetched.owner_user_id) == legacy_owner_str
@@ -469,9 +464,7 @@ async def test_recurring_cutover_preserves_cadence_and_frozen_inputs(tmp_path: P
             restarted = RecurringWorkflowsService(
                 session, temporal_client_adapter=_adapter()
             )
-            refetched = await restarted.require_authorized_definition(
-                definition_id=snapshot["id"], user_id=None, can_manage_global=False
-            )
+            refetched = await restarted.get_definition(snapshot["id"])
             assert refetched.temporal_schedule_id == snapshot["temporal_schedule_id"]
             assert refetched.enabled is True
             assert refetched.cron == "15 9 * * *"
@@ -482,18 +475,14 @@ async def test_recurring_cutover_preserves_cadence_and_frozen_inputs(tmp_path: P
             initial = (dict(refetched.target or {}).get("initialParameters") or {})
             assert (initial.get("task") or {}).get("publish") == {"mode": "none"}
 
-            # Concurrent triggers: two authorized control reads observe the
+            # Concurrent triggers: two control reads observe the
             # same schedule identity with no duplicate schedule row and no
             # silent version/default change.
-            first = await restarted.require_authorized_definition(
-                definition_id=snapshot["id"], user_id=None, can_manage_global=False
-            )
-            second = await restarted.require_authorized_definition(
-                definition_id=snapshot["id"], user_id=uuid4(), can_manage_global=False
-            )
+            first = await restarted.get_definition(snapshot["id"])
+            second = await restarted.get_definition(snapshot["id"])
             assert first.temporal_schedule_id == second.temporal_schedule_id
             assert first.version == second.version
-            visible = await restarted.list_definitions(scope="personal", user_id=uuid4())
+            visible = await restarted.list_definitions()
             assert {row.id for row in visible} >= {snapshot["id"]}
 
 
@@ -649,7 +638,13 @@ def test_r2_owner_columns_nullable_and_backend_agnostic():
 
 
 def test_r3_retained_history_replay_is_deterministic_without_user_table():
-    """R3: retained payload examples decode deterministically (not event histories)."""
+    """R3: decoder payload examples decode deterministically (not replay).
+
+    Payload shapes only; not Temporal event histories and not a Replayer
+    matrix. Orchestration is unchanged, so the existing
+    temporal-boundary/Replayer fixtures remain the replay path when
+    workflow-visible behavior changes.
+    """
     temporal = TemporalExecutionService.__new__(TemporalExecutionService)
     legacy_id = str(uuid4())
     retained = [
@@ -1163,17 +1158,14 @@ async def test_r2b_scope_cleanup_neither_hides_nor_orphans_legacy(tmp_path: Path
             )
             await session.commit()
 
-            # An unrelated operator sees the legacy schedule: no hiding.
-            for viewer in (None, uuid4(), legacy_owner):
-                personal = await service.list_definitions(
-                    scope="personal", user_id=viewer
-                )
+            # An unrelated operator sees the legacy schedule: no hiding and no
+            # personal/global partition; every viewer lists the same instance.
+            for _viewer in (None, uuid4(), legacy_owner):
+                personal = await service.list_definitions()
                 assert {row.id for row in personal} >= {legacy.id}
-            assert await service.count_definitions(scope="personal", user_id=uuid4()) >= 1
+            assert await service.count_definitions() >= 1
             # The legacy owner value persists as provenance, not a hidden FK.
-            fetched = await service.require_authorized_definition(
-                definition_id=legacy.id, user_id=None, can_manage_global=False
-            )
+            fetched = await service.get_definition(legacy.id)
             assert str(fetched.owner_user_id) == str(legacy_owner)
             assert (
                 await session.get(TemporalArtifact, "a-4351-scope")
@@ -1291,7 +1283,13 @@ async def test_r2c_eligible_conversion_pg_parity():
 
 
 def test_r3c_retained_history_fixture_replays_without_user_table():
-    """R3: fixture payload examples decode deterministically via real decoders."""
+    """R3: fixture decoder payloads decode deterministically via real decoders.
+
+    The fixture holds payload examples, not Temporal event histories (no
+    ``events`` key), and proves decoder determinism only. Orchestration is
+    unchanged so no Replayer history is required; workflow-visible changes
+    use the existing temporal-boundary/Replayer fixtures.
+    """
     import json
 
     temporal = TemporalExecutionService.__new__(TemporalExecutionService)
@@ -1300,6 +1298,7 @@ def test_r3c_retained_history_fixture_replays_without_user_table():
     )
     bundle = json.loads(fixture.read_text())
     assert bundle["sourceRef"] == "MoonLadderStudios/MoonMind#4351"
+    assert "events" not in bundle
     assert len(bundle["shapes"]) == 8
 
     seen = set()
