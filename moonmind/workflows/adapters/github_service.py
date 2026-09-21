@@ -338,11 +338,47 @@ class GitHubService:
 
     @staticmethod
     def _github_headers(token: str) -> dict[str, str]:
-        return {
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
+        """Build the GitHub REST headers through the shared bound helper.
+
+        Existing read/clone/hosting/publication HTTP consumes App-issued
+        bound credentials through this same path (see
+        :meth:`headers_from_bound_credential`): the wire shape is owned once
+        by ``moonmind.auth.github_app.build_bound_http_headers`` so PAT and
+        App tokens cannot drift into a parallel App-only implementation.
+        """
+
+        from moonmind.auth.github_app import build_bound_http_headers
+
+        if not str(token or "").strip():
+            # Preserve the historical empty-token shape for callers that
+            # branch on the resolved flag separately; real tokens always go
+            # through the shared bound helper below.
+            return {
+                "Accept": "application/vnd.github+json",
+                "Authorization": "Bearer ",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+        return build_bound_http_headers(str(token).strip().encode("utf-8"))
+
+    @staticmethod
+    def headers_from_bound_credential(acquired: Any) -> dict[str, str]:
+        """Build headers from a bound acquisition without exposing material.
+
+        Consumes ``AcquiredCredential`` (PAT or ``github_app``) through the
+        trusted ``use_now`` boundary; the opaque token never leaves the
+        boundary except inside the returned header mapping held by the
+        server-held caller.
+        """
+
+        from moonmind.auth.github_app import build_bound_http_headers
+
+        holder: dict[str, str] = {}
+
+        def _build(raw: bytes) -> None:
+            holder.update(build_bound_http_headers(raw))
+
+        acquired.credential.use_now(_build)
+        return dict(holder)
 
     async def get_authenticated_user(
         self,

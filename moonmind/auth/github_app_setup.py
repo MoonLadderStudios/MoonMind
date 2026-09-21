@@ -260,8 +260,149 @@ def reconcile_setup_save(
     return connection_id.strip()
 
 
+async def save_verified_app_connection(
+    *,
+    setup_service: GitHubAppSetupService,
+    connection_service: Any,
+    request_id: str,
+    connection_id: str,
+    provider_installation: Mapping[str, Any],
+    expected_app_ref: str,
+    expected_account: str = "",
+    permitted_repositories: Sequence[str] = (),
+    existing_by_request: Mapping[str, str] | None = None,
+    # Setup-callback path (single-use state bound to the admitted interaction).
+    state: str | None = None,
+    installation_ref: str | None = None,
+    caller_principal: str = "",
+    caller_scope: tuple[str, str | None] | None = None,
+    destination_connection_id: str = "",
+    # Explicitly authorized operator-import path (no public self-service).
+    operator_import: bool = False,
+    # Connection metadata persisted through the existing writer.
+    display_name: str = "GitHub App connection",
+    endpoint_ref: str = "https://github.com",
+    allowed_operations: Sequence[str] = ("read",),
+    owner_ref: str = "",
+    principal_ref: str = "",
+    principal_scope: tuple[str, str | None] | None = None,
+    actor_ref: str = "",
+    key_ref: str | None = None,
+) -> Any:
+    """Verify one enrollment and persist it through the existing writer.
+
+    Mounts :class:`GitHubAppSetupService` at the existing Source Control
+    setup boundary: the ``RepositoryConnectionService`` (``api_service``
+    database/service writer) remains the single writable authority for
+    connections. ``ConnectionChangeRequest.request_id`` is the stable
+    operation identity: ambiguous save retries converge on the first
+    recorded connection via :func:`reconcile_setup_save` instead of
+    creating a second connection. Shared installations are never
+    uninstalled as cleanup (there is deliberately no uninstall call here;
+    :meth:`GitHubAppSetupService.uninstall_installation_as_cleanup`
+    refuses if ever invoked).
+    """
+
+    from moonmind.workflows.executions.repository_contract import (
+        REPOSITORY_SETUP_REQUIRED,
+        RepositoryConnection,
+    )
+
+    if not (request_id or "").strip() or not (connection_id or "").strip():
+        raise _route_error(REPOSITORY_SETUP_REQUIRED, "stable request identity required")
+    if not isinstance(provider_installation, Mapping):
+        raise _route_error(REPOSITORY_SETUP_REQUIRED, "installation verification failed")
+    if operator_import:
+        setup_service.verify_operator_import(
+            provider_installation=provider_installation,
+            expected_app_ref=expected_app_ref,
+            expected_account=expected_account,
+            permitted_repositories=permitted_repositories,
+        )
+    else:
+        if state is None or installation_ref is None or caller_scope is None:
+            raise _route_error(REPOSITORY_SETUP_REQUIRED, "setup callback needs state")
+        setup_service.verify_setup_callback(
+            state=state,
+            installation_ref=installation_ref,
+            provider_installation=provider_installation,
+            caller_principal=caller_principal,
+            caller_scope=caller_scope,
+            destination_connection_id=destination_connection_id or connection_id,
+        )
+    # Converge ambiguous retries before touching the existing writer.
+    stable_connection_id = reconcile_setup_save(
+        request_id=request_id,
+        connection_id=connection_id,
+        existing_by_request=dict(existing_by_request or {}),
+    )
+    app_ref = str(provider_installation.get("app_ref") or expected_app_ref or "").strip()
+    resolved_installation = str(
+        provider_installation.get("installation_ref") or installation_ref or ""
+    ).strip()
+    account = str(provider_installation.get("account") or expected_account or "").strip()
+    credential: dict[str, Any] = {
+        "source": "github_app",
+        "appRef": app_ref,
+        "installationRef": resolved_installation,
+    }
+    if (key_ref or "").strip():
+        credential["keyRef"] = str(key_ref).strip()
+    if account:
+        credential["account"] = account
+    scope = principal_scope or ("system", None)
+    connection = RepositoryConnection.model_validate(
+        {
+            "schemaVersion": "moonmind.repository-connection.v1",
+            "id": stable_connection_id,
+            "provider": "git",
+            "displayName": display_name,
+            "endpointRef": endpoint_ref,
+            "allowedOperations": list(allowed_operations),
+            "allowedRepositoryIds": [
+                str(name).strip() for name in permitted_repositories if str(name).strip()
+            ],
+            "clientPolicy": {
+                "pinnedVersion": "2.46.0",
+                "toolBundleRef": "tool-bundle:git-2.46",
+                "executableSha256": "sha256:git",
+            },
+            "credential": credential,
+            "lifecycle": "active",
+            "policyRevision": 1,
+            "credentialRevision": 1,
+            "ownership": {
+                "ownerRef": (owner_ref or principal_ref or caller_principal).strip()
+                or "owner:operator",
+                "scopeType": scope[0],
+                **({"scopeRef": scope[1]} if scope[1] is not None else {}),
+                "allowedPrincipalRefs": [
+                    (principal_ref or caller_principal).strip()
+                ]
+                if (principal_ref or caller_principal).strip()
+                else [],
+            },
+            "hostingService": "github",
+        }
+    )
+    # Existing writer: RepositoryConnectionService.create_connection with the
+    # same request identity (replay returns the recorded row; a reused
+    # identity for another connection is a conflict, never a suffix).
+    result = connection_service.create_connection(
+        connection,
+        actor_ref=(actor_ref or principal_ref or caller_principal or "owner:operator"),
+        request_id=request_id.strip(),
+        principal_ref=(principal_ref or caller_principal).strip() or "principal:operator",
+        principal_scope=scope,
+    )
+    if hasattr(result, "__await__"):
+        result = await result
+    return result
+
+
 __all__ = [
     "GitHubAppSetupService",
     "SetupPending",
     "reconcile_setup_save",
+    "save_verified_app_connection",
 ]
