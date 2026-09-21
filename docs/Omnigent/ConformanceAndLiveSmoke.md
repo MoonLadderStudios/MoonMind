@@ -1,350 +1,135 @@
 # Omnigent Conformance and Live Smoke
 
-**Document Class:** Canonical declarative
-**Status:** Current
-**Updated:** 2026-08-19
-**Authority:** MoonLadderStudios/MoonMind#3508 browser-to-host product acceptance, MoonLadderStudios/MoonMind#3480 cumulative-remediation evidence contract, MoonLadderStudios/MoonMind#3642 native Workflow Chat release matrix, and MoonLadderStudios/MoonMind#3710 exact-artifact CI and verification tiers
+**Document Class:** Canonical declarative  
+**Status:** Desired verification policy with existing executable consumers still requiring migration  
+**Updated:** 2026-09-21  
+**Authority:** Verification scope and evidence for the shared Omnigent runtime, native interaction, and recovery. Runtime selection and action authority stay with their providing modules.
 
-MoonMind uses the versioned profile at
-`tests/fixtures/omnigent/conformance-v4.json` as the single inventory for the
-Omnigent bridge conformance program. Deterministic unit, fake-server, API, and
-frontend tests run in normal PR CI. Credentialed stock-image, static Compose
-Codex OAuth, and on-demand Codex OAuth cases remain provider verification and
-must emit results for the same case identifiers.
+Related: [AGENTS.md](../../AGENTS.md), [Primary Runtime Provider Strategy](PrimaryRuntimeProviderStrategy.md), [runtime selection and transition](RuntimeProviderRollout.md), [Workflow Remediation](../Workflows/WorkflowRemediation.md), [Repository Access and Workspace Design](../RepositoryAccessAndWorkspaceDesign.md), [review and continuation](../Workflows/StepReviewGateSystem.md), and [deployment updates](../Steps/DockerComposeUpdateSystem.md).
+
+Verification must demonstrate the behavior claimed without becoming a second orchestration platform or an unrelated source of production outages. Reuse existing tests, runners, reports, and actual module owners. A useful small fix does not wait for every harness, optional host mode, provider account, or full release matrix.
+
+This document revises the earlier blanket exact-combination and protected-runner obligations. It does not disable current enforcement or claim that the revised runtime behavior is implemented. The [earlier full contract](https://github.com/MoonLadderStudios/MoonMind/blob/6fdaab848e8f9fd9c5279ea36186482cab05733d/docs/Omnigent/ConformanceAndLiveSmoke.md) remains available for exact historical case IDs, report fields, and operational details while their real consumers still need them. Change those consumers coherently, preserving meaningful security and recorded evidence.
+
+## Existing owners and current baseline
+
+At reviewed main `6fdaab848e8f9fd9c5279ea36186482cab05733d`, the shared-host conformance module explicitly contains pure inventory/validation logic and pending live rows. The remediation matrix distinguishes action delivery from repair and keeps autonomous mutation closed. Those are implemented foundations, not full product verification or an instruction to create more catalogs.
+
+| Responsibility | Existing owner to reuse |
+| --- | --- |
+| Focused bridge, API, and frontend behavior | Existing unit, integration, browser, and conformance fixtures. |
+| Deployable-image behavior | `tools/run_omnigent_exact_artifact_conformance.py` and its current CI job. |
+| Provider-controlled live observations | `tools/run_omnigent_live_conformance.py` and the protected workflow/action-adapter boundary. |
+| Existing aggregate report format | `tools/build_omnigent_conformance_report.py` and the owning schema/validator. |
+| Useful generic runtime verification | #3832, consuming the actual providing feature tests. |
+| Recovery/action verification | #3626 with #3510, #3621, #3622, and #3624. |
+| Shared-provider accounting and release | Existing ProviderProfileManager/lease owners, #3882 and #1089. |
+| Save, restore, and publication | #4014–#4018 and the existing artifact/workspace/publisher owners. |
+| Removal of overlapping selection/retirement gates | #3833, #3931, #3932, and #3925. |
+
+These links are not a serial approval pipeline. Completed feature tests can supply evidence to several consumers. A coordinator should not run another copy of every child suite or build a permanent ledger of claim completion.
 
 ## Terminal evidence
 
-Every complete run produces one JSON report with the profile and report schema
-versions, immutable server and host image references, host architecture, auth
-mode, advertised capabilities, every declared case result, and durable evidence
-references. Generate it from runner evidence with:
+A result must identify what ran, what it observed, and what remains unknown. Reuse the current result schema and artifact references. Keep the tested source/artifact, relevant harness/credential/protocol boundary, scenario/input, observed outcome, and required saved-content references. Record the actual immutable image used, not a mutable selector or another artifact's identity.
 
-```bash
-python tools/build_omnigent_conformance_report.py \
-  artifacts/omnigent-conformance/runner-evidence.json \
-  artifacts/omnigent-conformance/report.json
-```
+Evidence may establish different facts: a parser accepted a payload, a real process started, a served browser used the admitted API, a saved workspace restored after host removal, or an authorized live provider answered. Do not promote one into another. A self-asserted success field, fake host identifier, helper result, or installed CLI is not a complete journey.
 
-The report gate fails when either stock image is not identified by an immutable
-`sha256` digest, a profile case is absent, an undeclared case is present, a case
-status is invalid, or secret-like content occurs anywhere in report evidence.
-Unknown fixture versions must explicitly declare whether consumers fail or
-degrade; the profile itself fails closed on unknown versions.
+### Reuse without relabeling
 
-The deterministic runner executes the unit/fake/API and Workflow Detail suites
-and emits both `runner-evidence.json` and `report.json`:
+Use current-candidate CI for affected code. Previously collected evidence can support an unchanged boundary only with a clear explanation of its scope and relationship to the candidate. Do not rewrite its source SHA, image, timestamp, or subject to make it appear new. Evidence from a different credential or session protocol does not establish the changed protocol.
 
-```bash
-python tools/run_omnigent_conformance.py \
-  --server-image fake-server@sha256:<64-hex-digest> \
-  --host-image fake-host@sha256:<64-hex-digest> \
-  --host-architecture linux/amd64
-```
+Shared mechanisms can share representative integration tests. A new alias or prose edit does not require the same provider/browser/host matrix as a changed OAuth materializer. A substantive new credential, storage, or network boundary needs its relevant tests. This is not permission to drop a still-required behavior or rename an unfinished required capability as unsupported.
 
-The aggregate report command defaults to the complete live gate: a failed case
-or a skipped critical case returns nonzero. `--allow-partial` is reserved for
-the deterministic runner, where all skipped provider cases remain explicit in
-the report. The canonical profile includes
-`workflow-chat.native-release-matrix`, so the documented/default `--mode all`
-report always carries the protected Workflow Chat result instead of leaving it
-only in the dedicated mode report.
+### Honest partial results
+
+Missing mandatory evidence, a failed case, cancellation, unexpected skip, truncated output, or unavailable service remains explicit. A partial report is not a full qualification pass. Use existing supported runner modes for a narrower observation and state their scope. Do not use `--allow-partial`, edited expected-case lists, or removed assertions to turn an incomplete requested journey into success.
+
+Current consumers of `tests/fixtures/omnigent/conformance-v4.json` and its report schema still enforce their actual version/case rules until changed together. Retain original decoding for stored reports. The old full inventory is not an obligation to run every case for each small change or to add another report/schema family. A concise summary can link existing evidence rather than duplicate it.
+
+### Failure preservation and confidentiality
+
+Preserve confirmed compute, saved content, and remote effects when later verification or reporting fails. Retry only the unfinished evidence/implementation phase through its existing owner. A repaired report must not erase recognized failures or invent observations. Missing local tooling calls for an authorized existing CI/container route, not routine human signoff or another implementation attempt.
+
+Bound and redact evidence before ordinary storage/publication. Keep raw credentials, cookies, private configuration, and sensitive source out of public logs and reports. Use existing artifact access policy for legitimately required restricted material. Hashing a secret-bearing file does not make publishing its contents safe. Scan the final publication tree after the last report/cleanup output is added, without introducing another scanning engine.
 
 ## Live-run boundaries
 
-The controlling product case begins with the normal `/api/executions` create
-payload produced by `/workflows/new`. Its evidence must bind authored intent and
-the task-input snapshot to compilation as `external/omnigent`, the selected
-Provider Profile, execution profile, policy/host mode, and workspace authority.
-It then follows the production Temporal/activity route and the Workflow Detail
-and SSE read surfaces. A raw `AgentExecutionRequest`, manually selected host, or
-action-adapter-only execution cannot satisfy this case.
+The normal product journey starts at the real served Create/Workflow Detail and public admission path. It carries the selected Runtime/Profile, actual model/cost/privacy policy, authorized source, and publication intent into session execution. A lower-level adapter test remains useful but must not be called that whole journey.
 
-The static runner uses canonical `docker-compose.yaml` and the
-`omnigent-host-codex` profile. The on-demand runner uses the production Provider
-Profile lease and host lifecycle. Both must validate the already-enrolled OAuth
-profile without reading or archiving its contents. A successful run proves one
-first-message post, active events, terminal snapshot and resource harvest,
-Workflow Detail replay after host removal or restart, and cleanup of only the
-lease-owned host/state. Credential volumes and unrelated containers or volumes
-must survive cleanup. Provider Profile lease release is the last lifecycle
-action.
+Browser coverage belongs at the real interaction boundary. It proves rendered native conversation, scoped requests, relevant follow-up/control, visible errors, and readable results. A loaded iframe or a route-shaped string is not enough. It does not follow that each low-level validation or permission-denial test needs a separate complete browser/provider run.
 
-Failure cases archive bounded redacted diagnostics and lifecycle events. Before
-publication, the report gate scans the aggregate evidence; runners must also
-scan their raw logs, Temporal history export, screenshots, and archive manifest,
-and reference those scan results from `failures.lifecycle-and-redaction`.
+### Provider and host scope
 
-The credentialed entrypoint is `tools/run_omnigent_live_conformance.py`. It
-requires immutable image references and an already-enrolled OAuth profile:
+Credentialed live runs use an already authorized environment and selected Profile. Do not enroll another account, copy an OAuth home, use untrusted-fork secrets, or switch billing routes to get a green result. Credentialless services are still external dependencies, with availability and data-use constraints that must be reported honestly.
 
-```bash
-MOONMIND_OMNIGENT_ACTION_COMMAND=/path/to/live-action-adapter \
-python tools/run_omnigent_live_conformance.py --mode all \
-  --server-image ghcr.io/omnigent-ai/omnigent-server@sha256:<digest> \
-  --host-image ghcr.io/omnigent-ai/omnigent-host@sha256:<digest> \
-  --source-commit "$(git rev-parse HEAD)"
-```
+On-demand shared-host behavior is the primary path. Optional static operation is tested only where it remains a supported claim or has actual retained consumers. Images may be shared across harnesses. Record what each scenario actually used; do not require separate image names or independent promotion infrastructure merely to preserve an old report layout.
 
-The runner requires `MOONMIND_OMNIGENT_ACTION_COMMAND` to name an
-operator-provisioned adapter that performs the real live actions. No
-repository semantic backend is accepted as live evidence. Action responses must include
-durable `evidenceRefs` using `https` or
-run-output-scoped `file` URLs. Each referenced JSON document uses
-`moonmind.omnigent.action-evidence/v1`, names the scenario and action, records
-`observed: true`, and repeats any returned durable identifiers. The runner
-resolves and secret-scans every document and rejects missing, malformed,
-mismatched, or opaque references. Product and failure documents must also carry
-`sourceRecords`; every record names its production record type, durable ref, and
-SHA-256 digest. The runner requires action-specific records (for example the
-create request and authored workflow for `workflow_created`, Temporal history,
-host binding, and profile lease for `temporal_routed`, and injection control,
-terminal projection, and side-effect audit for every failure). Bare success
-booleans and repository-synthesized identifiers are rejected as evidence.
+The existing live runner uses `MOONMIND_OMNIGENT_ACTION_COMMAND` where its contract calls for an external action adapter. The adapter must execute real authorized actions and provide independently resolvable observations, not generated success payloads. Keep existing subject/digest/reference verification at this boundary. Do not build another orchestration framework solely to populate a matrix. An unavailable adapter means the live observation has not run, not that all repository implementation is defective.
 
-Runs use the isolated `moonmind-test-omnigent-live` Compose project. Cleanup
-removes that project's containers and networks only; it intentionally never
-passes `--volumes`, so enrolled OAuth and unrelated volumes survive. The live
-runner always attempts cleanup and evidence scanning, including after a failed
-startup or journey. `--mode browser` is the controlling #3508 journey. It
-drives `/workflows/new` through an operator-provisioned headless browser and
-independently proves the static, restart/replay, on-demand, repository read,
-controlled mutation, admission failure, host-readiness failure, cancellation,
-and cleanup-reconciliation rows. Every row resolves the full profile, policy,
-runtime, host, session, workspace, artifact, cleanup, janitor, and lease
-authority chain and fails on any direct-Codex or alternate-authority fallback.
+### Recovery and cleanup
 
-`--mode workflow_chat` is the #3642 protected controller. It runs the complete
-matrix of native Workflow Chat support combinations declared by
-`moonmind.omnigent.workflow_chat_acceptance.WORKFLOW_CHAT_COMBINATIONS`: the
-Codex-through-Omnigent on-demand combination, the Codex static-connected host
-mode (whose transport and cleanup behavior differ materially), and OpenCode
-through `generic-omnigent-host@1`. For each claimed combination it runs the
-native-conversation, scoped-transport/resource, authority/security-denial, and
-terminal/evidence/continuation actions in order against the digest-pinned stock
-host. A combination MoonMind does not claim for native chat is reported as
-`unsupported` with its stable code-owned reason; it is never silently omitted.
+Use existing real storage and runtime journeys to verify interrupted work, lost acknowledgments, restoration, and publication recovery. Demonstrate preserved bytes and invocation counts. A C0-to-C1-to-C2 recovery claim needs actual cumulative content, with the old source removed only after C1 is durably saved. A repeated successful agent run is not restoration.
 
-The controller resolves the typed source records returned by the live action
-adapter, derives assertions from those records, scans the logs, Temporal
-history, screenshots, and archives, builds and validates the commit-bound
-`moonmind.omnigent.workflow-chat-acceptance/v2` artifact, and then invokes the
-dedicated provider gate. A missing combination, row, source record, raw
-evidence channel, digest correlation, or provider-test result fails the mode
-before its evidence can enter the publication job. The final publication-tree
-scan runs after per-mode cleanup and final report generation, and therefore
-covers the cleanup logs and the exact report tree uploaded by the workflow.
+Keep session reattachment distinct from workspace restoration. Restored files do not revive old leases, credentials, approvals, or permission to repeat remote effects. A failed source remains failed even when a corrective branch produces a verified result.
 
-Host images are pinned per host class rather than shared: `--host-image` pins
-the Codex stock host and `--opencode-host-image` pins the dedicated OpenCode
-host, and each claimed combination publishes the digest-pinned image that
-actually executed it. Each per-combination report publishes that combination's
-own authentication mode and exactly the four case ids and row evidence refs of
-the combination it qualifies, so one passing report cannot cover another
-combination.
+Stop actual credential consumers and record the safe release decision before reusing their authority. Release of model capacity need not wait for unrelated non-sensitive retention or optional reporting after consumers have stopped. Do not enforce a ceremonial rule that release must be the final loggable event. A static host that still consumes an OAuth home is not safely released merely because no turn is queued.
 
-Each passing combination binds its evidence to the exact support-combination
-identity that ran: Omnigent server and host build refs, harness implementation
-and vendor runtime refs, agent source, materializers, provider compatibility
-class, Host Class, architecture, launch policy, normalized model-configuration
-digest, execution realizer, required-capability digest, and the Provider Profile
-class. The recorded `supportCombinationKey` must recompute from those fields,
-and the Provider Profile class, credential materializer, and authentication mode
-are pinned by the claimed inventory, so evidence for one combination can never
-qualify another. The manifest also carries the scenario and route-inventory
-versions, the deployed dashboard and
-Omnigent UI bundle digests, each case's measured duration, the durable operator
-timeline ref for the terminal cleaned-up session, the cleanup outcome, and the
-superseded report ref.
+Cleanup is bounded and limited to positively owned test resources. Preserve Profile-owned credential homes, unrelated volumes, and the only recoverable workspace. A failed capture cannot authorize destructive teardown. Hard process loss may prevent a final upload; report missing evidence rather than fabricate it. No global Docker prune or production cleanup is part of verification.
 
-The advertised capability contract for a combination is derived from declared
-authority rather than a constant: Host Class features gate terminal and
-workspace capabilities, Launch Policy control capabilities gate interrupt,
-stop, and clear-context, capture gates evidence harvest, and only a `remove`
-cleanup mode advertises session cleanup. The `capabilitySnapshot` record must
-cover exactly that set and record one observed enforcement outcome per
-advertised capability that matches the effective intersection.
+### Remediation and shared capacity
 
-Cleanup evidence is derived the same way. A `remove` cleanup mode must show the
-live host stopped and its live resources removed; a `drain` cleanup mode retires
-a static-connected host that keeps serving, so it shows a drain and retains its
-live resources. Both orders end with Provider Profile release, and the observed
-step order must match the required order exactly.
+Operator-initiated remediation is an authority mode, not a requirement for a human to execute the tests. Automated browser/API tests can drive the supported normal flow. Reuse the existing action, approval, exact-result verification, and saved-work owners. Pending verification survives browser closure and does not resend the original action.
 
-`MOONMIND_OMNIGENT_WORKFLOW_CHAT_SUPERSEDED_REPORT` optionally names the report
-this run supersedes. When it is omitted the manifest records no superseded ref
-and takes the same production path.
+The existing `operator-remediation-support-matrix/v1` and its readers still need coherent migration where they impose unrelated all-matrix conditions. Keep the distinction between accepted delivery, confirmed operational effect, and verified coding objective. A low-level action does not need a new record database or every evidence channel for every row if existing authoritative records prove its relevant postconditions.
 
-`#3712` retirement guards consume the published manifest directly through
-`moonmind.omnigent.legacy_retirement.criteria_from_native_chat_acceptance`,
-which returns `native_chat_acceptance_passed` only for a manifest that
-revalidates against its evidence tree, so a missing, incomplete, failed, or
-expired report yields no criterion.
+Read-only diagnosis and existing historical evidence should remain usable under normal admission even when unrelated live certification is unavailable. Mutating operations require their actual execution, verification, approval, and security prerequisites. Unsupported actions remain unavailable. Autonomous mutation stays separately closed unless explicitly authorized and implemented through its providing policy. Passing operator-initiated evidence never grants `admin_auto`.
 
-`--mode static` covers restart and replay; `stock`, `product`, `cumulative`,
-`ondemand`, `failures`, and `workflow_chat` can be gated independently in
-provider environments.
-
-The cumulative mode is the controlling gate for #3480. It begins at the same
-normal create boundary as the product mode and records authored state,
-`external/omnigent` compilation, and the exact selected profile. It then proves
-C0 → C1 → C2 across distinct workspaces, leases, hosts, sessions, and first
-messages. The attempt-one source workspace, process, session, host, and
-host-local state are removed after C1 is durable and before attempt two
-restores it. Verification is read-only, Workflow Detail remains available
-after cleanup, and Provider Profile release is the final owned side effect.
-
-The same evidence records idempotent terminal control-stop continuation,
-preservation of prior side effects, the integrated failure matrix, and canary,
-disable-new-selection, rollback, historical-read, and worker-version replay
-outcomes. A missing or false assertion fails publication; there is no
-fresh-root, alternate-profile, direct-Codex, or lower-level fallback.
-
-New control-stop destinations are disabled unless
-`FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_ENABLED=true`, shadow mode is false,
-and `FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_GENERATION` matches the frozen
-contract generation. The comma-separated `CANARY_OWNER_IDS`,
-`ALLOWED_PROVIDER_PROFILE_IDS`, `ALLOWED_EXECUTION_PROFILE_REFS`, and
-`ALLOWED_LAUNCH_POLICY_REFS` values under the same
-`FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_` prefix are exact allowlists.
-Disabling the feature or changing its generation blocks new admissions without
-changing replay or historical reads for already-started destinations.
+Shared-capacity scenarios use the existing manager and durable lease accounting. Verify the actual admitted scope, purpose, duplicate throttle effects, and release boundaries. Do not create a provider-health service or a second concurrency ledger inside conformance. A cooldown expiry permits only the configured bounded retry policy, not a claim that the provider has fully recovered.
 
 ## Verification tiers
 
-Omnigent verification is separated into four tiers with distinct reliability and
-credential needs (MoonLadderStudios/MoonMind#3710). A higher-tier outage never
-flips a lower required tier closed, but it does keep rollout readiness closed
-where the protected tier is required.
+The existing tier names describe evidence scope, not a required promotion state machine.
 
-- **Tier 1 — required noncredentialed exact-artifact conformance.** The
-  `omnigent-exact-artifact` job in `.github/workflows/pytest-unit-tests.yml`
-  runs for every affected PR on standard Docker-enabled merge infrastructure
-  with no protected credentials. It builds the exact deployable image and tests
-  that immutable artifact through its real entrypoints:
-  - the in-image capability probe (`tools/omnigent_exact_artifact_probe.py`,
-    which proves Uvicorn resolves an installed WebSocket implementation so a
-    #3697-style drop fails closed);
-  - HTTP/SSE/WebSocket route handshakes against the running container, where a
-    fall-through 404 fails the gate;
-  - clean and prior-schema PostgreSQL migrations, each against its **own**
-    freshly created database, invoked with the repository's explicit
-    `api_service/migrations/alembic.ini`; the prior-schema case materializes the
-    revision preceding head and then upgrades, which is what a deployment onto
-    an existing database does (for a merge-point head it materializes the first
-    declared parent branch and upgrades through the sibling branch and the
-    merge revision, naming both in the signal detail);
-  - a restart of the deployable process against the schema it just migrated;
-  - worker task-queue and readiness advertisement against a real Temporal
-    server, which the worker must connect to before it can report ready; and
-  - a browser capture proving the compiled native UI baked into the image is
-    fetched from the deployable origin, renders from its injected boot payload,
-    and issues no root `/v1/*` or cross-origin upstream request.
+| Tier | What it can establish | Limits |
+| --- | --- | --- |
+| Required hermetic and exact-artifact checks | Actual selected code, packaged entrypoints, browser/API, database/Temporal, process/mount, and owned cleanup behavior with controlled external dependencies. | A substituted provider does not establish live-provider availability. |
+| Protected live-provider observation | The selected account, provider, model, and relevant real external interaction in the authorized environment. | Not an implicit paid call or a universal prerequisite for unrelated PRs. |
+| Post-deployment synthetic | A bounded observed journey on that installation and installed artifacts. | Does not certify another independent deployment. |
+| Scheduled soak/failure work | Longer behavior or changed failure boundaries not already covered by relevant tests. | An unrelated outage does not redefine completed lower-tier evidence or ordinary runtime compatibility. |
 
-  The image is referenced by its immutable content id for every `docker run`
-  (a locally built image has no registry repo digest, so `name@sha256:<id>` is
-  unpullable), and probe assets reach the container through an explicit
-  read-only `/probe` mount with `PYTHONPATH=/app`, so the deployable image
-  carries no test-only assets and the mount never shadows the artifact under
-  test. The browser controller's Playwright runtime lives on the CI host for the
-  same reason.
+Reuse existing GitHub Actions selection and required aggregation. Selected required jobs cannot pass by being skipped, canceled, or absent. Do not add a new mandatory conformance workflow, duplicate image build, or blanket local suite. Narrow tests run locally for development; broader affected suites run in CI.
 
-  **Not asserted by Tier 1:** restart and terminal replay *after a fake provider
-  host is removed*. This job runs no provider execution, so claiming that
-  boundary would mean deriving it from an unrelated exit status. It is owned by
-  the reliability-journey and embedded-recovery gates, which the Omnigent
-  contract gate selects on the same commit.
+Packaged-artifact verification must use the actual built image, with probes mounted separately rather than replacing application code. Keep real migrations, restart, native transport, and required poller checks where those boundaries change. A database-locking claim needs the supported database, not SQLite alone. A Workflow command change needs appropriate retained-history replay or a controlled transition, not helper equivalence.
 
-  `tools/run_omnigent_exact_artifact_conformance.py` is the authoritative
-  fail-closed decision (`moonmind.omnigent.exact_artifact_conformance`).
-  Dependency, lockfile, Dockerfile, Compose, and runtime-entrypoint changes
-  (including `api_service/entrypoint.sh`, the image `CMD`) always select this
-  gate, and the `ci-required` aggregator fails when it is selected but skipped,
-  cancelled, or neutral.
-- **Tier 2 — credentialed protected provider canary.** The credentialed
-  publication gate below, run on the dedicated
-  `omnigent-provider-verification` runner.
-- **Tier 3 — post-deployment synthetic.** A bounded disposable execution
-  against the deployed commit and actual image digests through the normal
-  product API, requiring no operator to copy session identifiers.
-- **Tier 4 — scheduled soak and failure matrix.** Broader browser, product,
-  cumulative-remediation, restart, cleanup, and fault scenarios.
-
-`moonmind.omnigent.live_verification_health` projects `tier1Ready` and
-`protectedTierReady` from non-secret runner/queue/freshness/matrix signals; the
-publication/readiness support gate reuses `rolloutReady` so a Tier-4 outage
-fails rollout closed while leaving Tier 1 protecting PRs.
-
-`tools/assemble_omnigent_live_status.py` retrieves the acceptance manifest
-published by the newest passing live-conformance run before evaluation, so
-freshness and digest signals reflect real published evidence rather than a
-permanently absent manifest. Runner health is aggregated across the whole
-provider-verification fleet: the tier is online when at least one labeled runner
-is online, and busy only when no online runner is idle.
+Choose evidence at the right boundary. The exact-artifact job does not by itself prove provider execution or host-loss restoration when those actions did not occur. Reuse the existing reliability and saved-work journeys for those claims instead of expanding every image probe into another whole-product test.
 
 ### Deployed release-support evidence
 
-The Omnigent catalog and execution admission consume four published documents:
-the #3508 acceptance manifest, protected exact-combination execution support,
-the Tier-1 exact-artifact projection, and the protected-live readiness
-projection. The protected execution-support document qualifies the exact
-support-combination key, immutable host image, policy and effective-launch
-digests, feature generation, replay contract, rollback policy, and realizer;
-it also records the fixed `moonmind-protected-omnigent-conformance@1` issuer.
-The API fails closed before scheduling when that evidence is absent, stale,
-issued by another authority, insufficient, or mismatched. Compose bind-mounts
-`${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}` read-only at
-`/workspace/omnigent-evidence` and defaults all four refs to files inside it,
-so the default deployment needs no per-file configuration. Populate it with:
+**Runtime requirements and release certification are different decisions.** The default path should validate the actual installed interfaces, selected authority, required capability, and safe resource state. It should not depend on the continued health of an unrelated protected CI runner or on a fresh report for every harmless SHA/patch change.
 
-```bash
-python tools/materialize_omnigent_evidence.py --commit "$DEPLOYED_COMMIT"
-```
+Current source/settings still expose the existing `deployment`, `protected`, and `either` evidence policies; the reviewed Compose/template default is `either`. The older protected document chain and the `tools/materialize_omnigent_evidence.py` path are still real consumers. Do not describe all deployments as requiring only the old protected chain, and do not bypass their actual validation because this document changes the target.
 
-which copies the newest unexpired document *published for that commit* into the
-mounted directory. Evidence for another commit, an expired artifact, or a
-missing document is never written, so the catalog keeps its fail-closed support
-reason instead of reading stale authority.
+#3832 and #3833 coordinate separating incidental certification/readiness coupling at the existing admission/evidence boundary, with #3931 owning redundant runtime-gate removal. Preserve explicitly chosen stricter certification policy and current security stops during migration. Do not introduce another compatibility hash, ready-flag service, or automatic policy downgrade.
 
-Freshness is revalidated at **consumption**, not only at publication:
-`assert_live_health_projection` checks the versioned schema, the ready verdict,
-the deployed commit, the projection's own age against the hourly publication
-cadence, and the acceptance expiry it inherits. A once-ready file therefore stops
-being accepted when its manifest expires, the protected runner goes offline, or
-scheduled monitoring stops publishing.
+Evidence freshness is meaningful for the claim it qualifies. Expired live evidence cannot be advertised as current certification, but does not by itself prove an installed interface incompatible. Revoked credentials, an unsupported interface, known unsafe behavior, or missing required security enforcement still blocks the affected action. A report outage is neither permission to ignore those conditions nor proof they exist.
 
-Retained failure evidence is redacted through the canonical
-`moonmind.omnigent.conformance.redact_secrets`, whose patterns span the complete
-credential — the whole session-bearing header value, JWTs, cookies, and token
-bodies — so a bounded `logTail` cannot publish a credential that survived a
-header-name-only substitution.
+Original report bytes, hashes, and historical results remain unchanged. New compatible work follows installed runtime selection with meaningful operator choices intact. Future schedule occurrences do not require independent image/report pins or recreation after ordinary updates. A genuinely incompatible persisted plan uses the existing migration/recovery path.
 
 ## Credentialed CI publication
 
-`.github/workflows/omnigent-live-conformance.yml` is the scheduled and manually
-dispatchable publication gate for MoonLadderStudios/MoonMind#3508. It runs on a
-dedicated `omnigent-provider-verification` self-hosted runner so the enrolled
-OAuth profile and live action adapter remain outside GitHub-hosted workers. The
-protected environment supplies the adapter command; repository variables supply
-the digest-pinned server and host images plus the four bounded evidence-channel
-paths. Manual dispatch may override the two image references, but the workflow
-rejects mutable references before provider execution.
+The existing `.github/workflows/omnigent-live-conformance.yml` and protected runner remain the live publication path while their consumers need them. Inspect the actual workflow and runner arguments for the intended scenario. Source documentation is not a promise that an environment, adapter, credential, or trigger is available.
 
-Browser-controlled release rows, normal-create product journey, cumulative remediation, stock proxy, static
-restart/replay, on-demand lifecycle, and failure/redaction run as independent
-matrix jobs. Each job uploads evidence even on failure. The publication job
-runs only after all six
-jobs pass, combines their reports, and uploads a
-`moonmind.omnigent.product-acceptance/v1` manifest with the seven report trees as
-the durable GitHub Actions artifact. It links that passing report from #3508
-and parent #3448. The manifest expires after 30 days; missing, expired,
-malformed, mutable-image, incomplete-row, or incomplete-authority evidence
-keeps the release gate closed. A configured workflow, fixture-generated success, or an
-individual passing case is not published acceptance evidence.
+Publish only what actually passed for its declared subject and scope. Retain failure/partial observations safely. Reuse the existing report builder and scan/access checks, keeping full aggregate publication non-passing when its mandatory cases are missing. To simplify an obsolete aggregate, change the real producer and its consumers together rather than silently edit reports or mark required rows unsupported.
 
-Omnigent selection remains evidence-gated and must not become a general default
-until this report passes for the deployed commit and immutable images. Canary
-enablement is an explicit execution-profile/policy choice. Rollback disables
-new Omnigent selection while preserving Workflow Detail reads for historical
-bridge records; choosing direct Codex is a separate product/deployment decision,
-never a per-request fallback. Cleanup failures retain `janitorRequired` evidence,
-and the Provider Profile is released only after credential-consuming host cleanup.
+Do not couple every narrow fix, basic diagnosis, or default execution to the full protected aggregate. Reuse one valid common journey and add only the adapter-specific evidence the claim needs. Static and experimental topology do not automatically block on-demand support. A new actual security boundary still requires its own enforcement proof.
+
+A report can identify the exact image and source that ran without imposing exact equality across all components. No new promotion dashboard, permanent retirement ledger, all-row matrix, or duplicate live-verification service is required. Keep useful diagnostic records and necessary historical readers as obsolete machinery retires.
+
+## Completion and delivery
+
+#3832 owns missing generic-runtime evidence, #3626 recovery qualification, and each implementation issue its own behavior. This document does not close their remaining requirements, authorize production operations, or enable autonomous remediation. Required live observations remain visibly pending until actually collected.
+
+Document-only changes need review, not unit tests of wording, headings, row counts, or metadata. Preserve tests of actual executable schema, parser, transport, permission, and generator behavior. Update providing documentation with code changes rather than invent a semantic-prose validator.
+
+An incomplete handoff keeps the same candidate, accepted work, concrete missing proof, original error, consumed budget, and next authorized automated action through the existing continuation owner. Distinguish report repair, evidence collection, implementation repair, and genuine user decisions. Do not promise a scheduled continuation until its owner accepted it. Verification should recover useful work, not require rebuilding the machinery that blocked it.
